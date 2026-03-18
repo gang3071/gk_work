@@ -1,0 +1,41 @@
+<?php
+
+namespace app\model;
+
+use app\traits\HasDateTimeFormatter;
+use Illuminate\Database\Eloquent\Model;
+
+/**
+ * Class MachineStrategy
+ * @property int id 主键
+ * @property int type 類型，1=斯洛 2 钢珠
+ * @property string thumbnail 缩略图
+ * @property string content 内容
+ * @property string name 名称
+ * @property int status 状态
+ * @property string created_at 创建时间
+ * @property string updated_at 最后一次修改时间
+ *
+ * @package app\model
+ */
+class MachineStrategy extends Model
+{
+    use HasDateTimeFormatter;
+
+    public function __construct(array $attributes = [])
+    {
+        parent::__construct($attributes);
+        $this->setTable(plugin()->webman->config('database.machine_strategy_table'));
+    }
+
+    /**
+     * 获取器 - 内容图片
+     * @param $value
+     * @return false|string[]
+     */
+    public function getContentAttribute($value)
+    {
+        return json_decode($value, true);
+    }
+
+}

@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <link rel="icon" href="/exadmin/favicon.ico"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>{{Ex-Admin}}</title>
+    <script type="text/javascript">
+        window['App-Name'] = '{{Ex-Admin-App-Name}}'
+    </script>
+    <script type="module" crossorigin src="/exadmin/assets/index.b35f53c6.js"></script>
+    <link rel="modulepreload" href="/exadmin/assets/regenerator-runtime.8e24db72.js">
+    <link rel="modulepreload" href="/exadmin/assets/@babel.6cd0804c.js">
+    <link rel="modulepreload" href="/exadmin/assets/@vue.cb43a243.js">
+    <link rel="modulepreload" href="/exadmin/assets/vue.db505ee4.js">
+    <link rel="modulepreload" href="/exadmin/assets/js-md5.5179c6be.js">
+    <link rel="modulepreload" href="/exadmin/assets/vue-router.a08742b9.js">
+    <link rel="modulepreload" href="/exadmin/assets/js-cookie.31874410.js">
+    <link rel="modulepreload" href="/exadmin/assets/@ctrl.fa7cbd46.js">
+    <link rel="modulepreload" href="/exadmin/assets/@ant-design.bcfb08ae.js">
+    <link rel="modulepreload" href="/exadmin/assets/resize-observer-polyfill.8deb1e21.js">
+    <link rel="modulepreload" href="/exadmin/assets/vue-types.6e6d84ba.js">
+    <link rel="modulepreload" href="/exadmin/assets/dom-align.f1b5d360.js">
+    <link rel="modulepreload" href="/exadmin/assets/lodash-es.0ea26897.js">
+    <link rel="modulepreload" href="/exadmin/assets/dayjs.38e390ea.js">
+    <link rel="modulepreload" href="/exadmin/assets/async-validator.5d25c98b.js">
+    <link rel="modulepreload" href="/exadmin/assets/compute-scroll-into-view.6058b3be.js">
+    <link rel="modulepreload" href="/exadmin/assets/scroll-into-view-if-needed.5191fdbf.js">
+    <link rel="modulepreload" href="/exadmin/assets/ant-design-vue.6b10f349.js">
+    <link rel="modulepreload" href="/exadmin/assets/lodash.c9cf1bdb.js">
+    <link rel="modulepreload" href="/exadmin/assets/spark-md5.2cc5764b.js">
+    <link rel="modulepreload" href="/exadmin/assets/vue-demi.5fb18120.js">
+    <link rel="modulepreload" href="/exadmin/assets/@vueuse.952f4739.js">
+    <link rel="modulepreload" href="/exadmin/assets/axios.e3200588.js">
+    <link rel="modulepreload" href="/exadmin/assets/sortablejs.412b554c.js">
+    <link rel="modulepreload" href="/exadmin/assets/clipboard.099d05c9.js">
+    <link rel="modulepreload" href="/exadmin/assets/entities.0d2c0164.js">
+    <link rel="modulepreload" href="/exadmin/assets/uc.micro.981ceb7b.js">
+    <link rel="modulepreload" href="/exadmin/assets/mdurl.ef76b4dc.js">
+    <link rel="modulepreload" href="/exadmin/assets/linkify-it.92c30060.js">
+    <link rel="modulepreload" href="/exadmin/assets/markdown-it.80c3a67b.js">
+    <link rel="modulepreload" href="/exadmin/assets/markdown-it-emoji.e3e91710.js">
+    <link rel="modulepreload" href="/exadmin/assets/escape-html.e5dfadb9.js">
+    <link rel="modulepreload" href="/exadmin/assets/prismjs.c97a8414.js">
+    <link rel="modulepreload" href="/exadmin/assets/diacritics.6be19c75.js">
+    <link rel="modulepreload" href="/exadmin/assets/markdown-it-container.512a5043.js">
+    <link rel="modulepreload" href="/exadmin/assets/markdown-it-anchor.c88e5394.js">
+    <link rel="modulepreload" href="/exadmin/assets/markdown-it-attrs.3af5ab50.js">
+    <link rel="modulepreload" href="/exadmin/assets/markdown-it-table-of-contents.8a4ce16f.js">
+    <link rel="modulepreload" href="/exadmin/assets/@kangc.86f7507c.js">
+    <link rel="stylesheet" href="/exadmin/assets/@kangc.1dc16e06.css">
+    <link rel="stylesheet" href="/exadmin/assets/index.8c22d4cb.css">
+    <link rel="stylesheet" href="/exadmin/assets/@fortawesome.fe0e4c2f.css">
+    <style>
+        .activity-phase-has-many:hover {
+            border: 1px solid #1677ff;
+        }
+
+        .activity-phase-has-many {
+            margin: 0 0 16px;
+            border: rgba(5, 5, 5, 0.06);
+            border-radius: 2px;
+            padding: 10px;
+        }
+    </style>
+</head>
+<body>
+<div id="app"></div>
+
+<!-- WebSocket Push Manager - Inline Version -->
+<script>
+    (function () {
+        'use strict';
+
+        class PushManager {
+            constructor() {
+                this.connection = null;
+                this.scriptLoaded = false;
+                this.scriptLoading = false;
+                this.scriptPromise = null;
+                this.channels = new Map();
+                this.wsUrl = null;
+                this.appKey = '20f94408fc4c52845f162e92a253c7a3';
+                this.authUrl = '/plugin/webman/push/auth';
+            }
+
+            loadScript() {
+                if (this.scriptLoaded) {
+                    return Promise.resolve();
+                }
+
+                if (this.scriptLoading) {
+                    return this.scriptPromise;
+                }
+
+                this.scriptLoading = true;
+                this.scriptPromise = new Promise((resolve, reject) => {
+                    var script = document.createElement('script');
+                    script.src = '/plugin/webman/push/push.js';
+                    script.onload = () => {
+                        this.scriptLoaded = true;
+                        this.scriptLoading = false;
+                        console.log('[PushManager] Push.js loaded successfully');
+                        resolve();
+                    };
+                    script.onerror = () => {
+                        this.scriptLoading = false;
+                        var error = new Error('Failed to load push.js');
+                        console.error('[PushManager]', error);
+                        reject(error);
+                    };
+                    document.head.appendChild(script);
+                });
+
+                return this.scriptPromise;
+            }
+
+            async init(wsUrl) {
+                if (this.connection && this.wsUrl === wsUrl) {
+                    return this.connection;
+                }
+
+                if (this.connection && this.wsUrl !== wsUrl) {
+                    console.warn('[PushManager] WebSocket URL changed, disconnecting old connection');
+                    this.disconnect();
+                }
+
+                try {
+                    await this.loadScript();
+
+                    this.wsUrl = wsUrl;
+                    this.connection = new Push({
+                        url: this.wsUrl,
+                        app_key: this.appKey,
+                        auth: this.authUrl
+                    });
+
+                    console.log('[PushManager] WebSocket connection created');
+                    return this.connection;
+                } catch (error) {
+                    console.error('[PushManager] Init failed:', error);
+                    throw error;
+                }
+            }
+
+            subscribe(channelName, messageHandler, context) {
+                context = context || null;
+
+                if (!this.connection) {
+                    console.error('[PushManager] No connection available, call init() first');
+                    return null;
+                }
+
+                if (this.channels.has(channelName)) {
+                    var existingChannel = this.channels.get(channelName);
+                    if (messageHandler) {
+                        existingChannel.handlers.push({handler: messageHandler, context: context});
+                    }
+                    return existingChannel.channel;
+                }
+
+                try {
+                    var channel = this.connection.subscribe(channelName);
+
+                    var channelInfo = {
+                        channel: channel,
+                        handlers: messageHandler ? [{handler: messageHandler, context: context}] : []
+                    };
+                    this.channels.set(channelName, channelInfo);
+
+                    if (messageHandler) {
+                        channel.on('message', (data) => {
+                            channelInfo.handlers.forEach(function (item) {
+                                try {
+                                    if (item.context) {
+                                        item.handler.call(item.context, data);
+                                    } else {
+                                        item.handler(data);
+                                    }
+                                } catch (error) {
+                                    console.error('[PushManager] Message handler error:', error);
+                                }
+                            });
+                        });
+                    }
+
+                    console.log('[PushManager] Channel subscribed:', channelName);
+                    return channel;
+                } catch (error) {
+                    console.error('[PushManager] Subscribe failed:', channelName, error);
+                    return null;
+                }
+            }
+
+            unsubscribe(channelName, messageHandler) {
+                if (!this.channels.has(channelName)) {
+                    return;
+                }
+
+                var channelInfo = this.channels.get(channelName);
+
+                if (messageHandler) {
+                    channelInfo.handlers = channelInfo.handlers.filter(function (item) {
+                        return item.handler !== messageHandler;
+                    });
+
+                    if (channelInfo.handlers.length > 0) {
+                        return;
+                    }
+                }
+
+                try {
+                    if (channelInfo.channel && typeof channelInfo.channel.unsubscribe === 'function') {
+                        channelInfo.channel.unsubscribe();
+                    }
+                    this.channels.delete(channelName);
+                    console.log('[PushManager] Channel unsubscribed:', channelName);
+                } catch (error) {
+                    console.error('[PushManager] Unsubscribe failed:', channelName, error);
+                }
+            }
+
+            disconnect() {
+                if (!this.connection) {
+                    return;
+                }
+
+                var self = this;
+                try {
+                    this.channels.forEach(function (channelInfo) {
+                        try {
+                            if (channelInfo.channel && typeof channelInfo.channel.unsubscribe === 'function') {
+                                channelInfo.channel.unsubscribe();
+                            }
+                        } catch (error) {
+                            console.error('[PushManager] Unsubscribe channel failed:', error);
+                        }
+                    });
+                    this.channels.clear();
+
+                    if (typeof this.connection.disconnect === 'function') {
+                        this.connection.disconnect();
+                    }
+                    this.connection = null;
+                    this.wsUrl = null;
+
+                    console.log('[PushManager] Disconnected');
+                } catch (error) {
+                    console.error('[PushManager] Disconnect failed:', error);
+                }
+            }
+
+            isConnected() {
+                return this.connection !== null;
+            }
+
+            getChannels() {
+                return Array.from(this.channels.keys());
+            }
+        }
+
+        // 创建单例实例
+        var pushManagerInstance = new PushManager();
+
+        // 挂载到全局 window 对象
+        window.$pushManager = pushManagerInstance;
+        console.log('[PushManager] Mounted to window.$pushManager');
+
+        // 尝试自动注入到 Vue
+        function installToVue() {
+            // Vue 2
+            if (typeof window.Vue !== 'undefined' && window.Vue.prototype) {
+                window.Vue.prototype.$pushManager = pushManagerInstance;
+                console.log('[PushManager] Auto-installed to Vue 2');
+                return true;
+            }
+
+            // Vue 3
+            if (typeof window.Vue !== 'undefined' && window.Vue.config) {
+                if (window.Vue.config.globalProperties) {
+                    window.Vue.config.globalProperties.$pushManager = pushManagerInstance;
+                    console.log('[PushManager] Auto-installed to Vue 3');
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // 立即尝试安装
+        var installed = installToVue();
+
+        // 如果安装失败，等待 Vue 加载
+        if (!installed) {
+            console.log('[PushManager] Vue not found, waiting...');
+
+            var attempts = 0;
+            var maxAttempts = 100;
+
+            var checkVue = setInterval(function () {
+                attempts++;
+
+                if (installToVue()) {
+                    clearInterval(checkVue);
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(checkVue);
+                    console.warn('[PushManager] Vue not found after 10s, but window.$pushManager is still available');
+                }
+            }, 100);
+        }
+
+        // 同时监听 DOMContentLoaded 事件
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function () {
+                setTimeout(function () {
+                    installToVue();
+                }, 500);
+            });
+        }
+    })();
+</script>
+</body>
+</html>

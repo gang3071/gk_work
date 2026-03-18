@@ -1,0 +1,52 @@
+{
+  "name": "yjb/worker",
+  "type": "project",
+  "keywords": [
+    "high performance",
+    "http service",
+    "wallet api"
+  ],
+  "license": "MIT",
+  "description": "单一钱包API和机台任务进程项目",
+  "require": {
+    "php": ">=8.0",
+    "workerman/webman-framework": "^1.5.0",
+    "workerman/crontab": "^1.0",
+    "webman/gateway-worker": "^1.0",
+    "webman/redis-queue": "^1.2",
+    "webman/push": "^1.1",
+    "webman/event": "^1.0",
+    "webman/rate-limiter": "^1.1",
+    "webman-tech/laravel-http-client": "^1.1",
+    "workerman/validation": "^3.0",
+    "firebase/php-jwt": "^7.0",
+    "tinywan/jwt": "^1.13",
+    "tencentcloud/tencentcloud-sdk-php": "^3.0",
+    "workbunny/webman-ip-attribution": "^1.0",
+    "nesbot/carbon": "^2.0",
+    "monolog/monolog": "^2.0",
+    "ext-pdo": "*",
+    "ext-json": "*",
+    "ext-bcmath": "*",
+    "zjkal/time-helper": "^1.1",
+    "psr/container": "1.1.1",
+    "php-di/php-di": "6",
+    "doctrine/annotations": "1.14",
+    "illuminate/database": "^8.83",
+    "ext-openssl": "*",
+    "webman/log": "^1.1",
+    "yzh52521/webman-lock": "^1.0",
+    "graham-campbell/result-type": "^1.1",
+    "phpoption/phpoption": "^1.9",
+    "vlucas/phpdotenv": "^5.6",
+    "ext-simplexml": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "": "./",
+      "app\\": "./app",
+      "App\\": "./app",
+      "process\\": "./process"
+    }
+  }
+}
