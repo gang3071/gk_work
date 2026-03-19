@@ -62,7 +62,7 @@ class ExternalApp extends Model
      */
     public function channel(): hasOne
     {
-        return $this->hasOne(plugin()->webman->config('database.channel_model'), 'department_id',
+        return $this->hasOne(Channel::class, 'department_id',
             'department_id')->withTrashed();
     }
 }

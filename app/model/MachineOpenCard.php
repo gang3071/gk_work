@@ -30,7 +30,7 @@ class MachineOpenCard extends Model
      */
     public function machine(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_model'), 'machine_id')->withTrashed();
+        return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
     }
 
     /**
@@ -39,6 +39,6 @@ class MachineOpenCard extends Model
      */
     public function user(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.user_model'), 'user_id')->withTrashed();
+        return $this->belongsTo(AdminUser::class, 'user_id')->withTrashed();
     }
 }

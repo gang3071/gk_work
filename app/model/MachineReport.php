@@ -70,7 +70,7 @@ class MachineReport extends Model
      */
     public function machine(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_model'), 'machine_id')->withTrashed();
+        return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
     }
 
     public function playerGameLogs()

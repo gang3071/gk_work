@@ -43,7 +43,7 @@ class MachineCategory extends Model
      */
     public function gameType(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.game_type_model'), 'game_id')->withTrashed();
+        return $this->belongsTo(GameType::class, 'game_id')->withTrashed();
     }
 
     /**
@@ -52,7 +52,7 @@ class MachineCategory extends Model
      */
     public function machineCategoryGiveRule(): hasMany
     {
-        return $this->hasMany(plugin()->webman->config('database.machine_category_give_rule_model'), 'machine_category_id');
+        return $this->hasMany(MachineCategoryGiveRule::class, 'machine_category_id');
     }
 
     /**
@@ -61,6 +61,6 @@ class MachineCategory extends Model
      */
     public function machineCategoryExtend(): hasMany
     {
-        return $this->hasMany(plugin()->webman->config('database.machine_category_extend_model'), 'cate_id');
+        return $this->hasMany(MachineCategoryExtend::class, 'cate_id');
     }
 }

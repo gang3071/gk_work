@@ -36,6 +36,6 @@ class Slider extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id', 'department_id')->withTrashed();
+        return $this->belongsTo(Channel::class, 'department_id', 'department_id')->withTrashed();
     }
 }

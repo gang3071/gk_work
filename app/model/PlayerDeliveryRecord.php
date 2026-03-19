@@ -119,7 +119,7 @@ class PlayerDeliveryRecord extends Model
      */
     public function player(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'player_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'player_id')->withTrashed();
     }
 
     /**
@@ -128,7 +128,7 @@ class PlayerDeliveryRecord extends Model
      */
     public function machine(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_model'), 'machine_id')->withTrashed();
+        return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
     }
 
     /**
@@ -211,7 +211,7 @@ class PlayerDeliveryRecord extends Model
      */
     public function gamePlatform(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.game_platform_model'), 'platform_id')->withTrashed();
+        return $this->belongsTo(GamePlatform::class, 'platform_id')->withTrashed();
     }
 
 
@@ -221,6 +221,6 @@ class PlayerDeliveryRecord extends Model
      */
     public function recharge()
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_recharge_record_model'), 'target_id');
+        return $this->belongsTo(PlayerRechargeRecord::class, 'target_id');
     }
 }

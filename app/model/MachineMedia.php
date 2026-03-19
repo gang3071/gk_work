@@ -42,7 +42,7 @@ class MachineMedia extends Model
      */
     public function machine(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_model'), 'machine_id')->withTrashed();
+        return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
     }
 
     /**
@@ -51,7 +51,7 @@ class MachineMedia extends Model
      */
     public function machineMediaPush(): hasMany
     {
-        return $this->hasMany(plugin()->webman->config('database.machine_media_push_model'), 'media_id');
+        return $this->hasMany(MachineMediaPush::class, 'media_id');
     }
 
     /**

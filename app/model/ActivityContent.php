@@ -38,6 +38,6 @@ class ActivityContent extends Model
      */
     public function activity(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.activity_model'), 'activity_id')->withTrashed();
+        return $this->belongsTo(Activity::class, 'activity_id')->withTrashed();
     }
 }

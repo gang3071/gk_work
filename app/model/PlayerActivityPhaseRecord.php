@@ -86,7 +86,7 @@ class PlayerActivityPhaseRecord extends Model
      */
     public function activity(): belongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.activity_model'), 'activity_id')->withTrashed();
+        return $this->belongsTo(Activity::class, 'activity_id')->withTrashed();
     }
 
     /**
@@ -95,7 +95,7 @@ class PlayerActivityPhaseRecord extends Model
      */
     public function player(): belongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'player_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'player_id')->withTrashed();
     }
 
     /**
@@ -104,7 +104,7 @@ class PlayerActivityPhaseRecord extends Model
      */
     public function activity_phase(): belongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.activity_phase_model'), 'activity_phase_id');
+        return $this->belongsTo(ActivityPhase::class, 'activity_phase_id');
     }
 
     /**
@@ -113,7 +113,7 @@ class PlayerActivityPhaseRecord extends Model
      */
     public function player_activity_record(): belongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_activity_record_model'),
+        return $this->belongsTo(PlayerActivityRecord::class,
             'player_activity_record_id');
     }
 
@@ -123,6 +123,6 @@ class PlayerActivityPhaseRecord extends Model
      */
     public function machine(): belongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_model'), 'machine_id');
+        return $this->belongsTo(Machine::class, 'machine_id');
     }
 }

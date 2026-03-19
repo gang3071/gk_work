@@ -104,7 +104,7 @@ class PlayerLotteryRecord extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id',
+        return $this->belongsTo(Channel::class, 'department_id',
             'department_id')->withTrashed();
     }
 
@@ -114,7 +114,7 @@ class PlayerLotteryRecord extends Model
      */
     public function player(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'player_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'player_id')->withTrashed();
     }
 
     /**
@@ -123,7 +123,7 @@ class PlayerLotteryRecord extends Model
      */
     public function play_game_record(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.play_game_record_model'), 'play_game_record_id');
+        return $this->belongsTo(PlayGameRecord::class, 'play_game_record_id');
     }
 
     /**
@@ -132,7 +132,7 @@ class PlayerLotteryRecord extends Model
      */
     public function machine(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_model'), 'machine_id')->withTrashed();
+        return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
     }
 
     /**
@@ -141,7 +141,7 @@ class PlayerLotteryRecord extends Model
      */
     public function lottery(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.lottery_model'), 'lottery_id')->withTrashed();
+        return $this->belongsTo(Lottery::class, 'lottery_id')->withTrashed();
     }
 
     /**

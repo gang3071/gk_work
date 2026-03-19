@@ -41,6 +41,6 @@ class LevelList extends Model
      */
     public function national_level(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.national_level_model'), 'level_id');
+        return $this->belongsTo(NationalLevel::class, 'level_id');
     }
 }

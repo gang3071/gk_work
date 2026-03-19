@@ -29,6 +29,6 @@ class Bank extends Model
      */
     public function BankContent(): hasMany
     {
-        return $this->hasMany(plugin()->webman->config('database.bank_content_model'), 'bank_id', 'id');
+        return $this->hasMany(BankContent::class, 'bank_id', 'id');
     }
 }

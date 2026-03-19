@@ -103,7 +103,7 @@ class Lottery extends Model
      */
     public function player(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'last_player_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'last_player_id')->withTrashed();
     }
 
     /**

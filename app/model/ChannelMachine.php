@@ -45,7 +45,7 @@ class ChannelMachine extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id',
+        return $this->belongsTo(Channel::class, 'department_id',
             'department_id')->withTrashed();
     }
 
@@ -55,6 +55,6 @@ class ChannelMachine extends Model
      */
     public function machine(): BelongsTo
     {
-        return $this->BelongsTo(plugin()->webman->config('database.machine_model'), 'machine_id')->withTrashed();
+        return $this->BelongsTo(Machine::class, 'machine_id')->withTrashed();
     }
 }

@@ -45,7 +45,7 @@ class MachineKeepingLog extends Model
      */
     public function player(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'player_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'player_id')->withTrashed();
     }
 
     /**
@@ -54,7 +54,7 @@ class MachineKeepingLog extends Model
      */
     public function machine(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_model'), 'machine_id')->withTrashed();
+        return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
     }
 
     /**
@@ -63,7 +63,7 @@ class MachineKeepingLog extends Model
      */
     public function user(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.user_model'), 'user_id')->withTrashed();
+        return $this->belongsTo(AdminUser::class, 'user_id')->withTrashed();
     }
 
 
@@ -73,6 +73,6 @@ class MachineKeepingLog extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id', 'department_id')->withTrashed();
+        return $this->belongsTo(Channel::class, 'department_id', 'department_id')->withTrashed();
     }
 }

@@ -38,7 +38,7 @@ class PlayerEditLog extends Model
      */
     public function player(): BelongsTo
     {
-        return $this->BelongsTo(plugin()->webman->config('database.player_model'), 'player_id')->withTrashed();
+        return $this->BelongsTo(Player::class, 'player_id')->withTrashed();
     }
 
     /**
@@ -47,7 +47,7 @@ class PlayerEditLog extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id', 'department_id')->withTrashed();
+        return $this->belongsTo(Channel::class, 'department_id', 'department_id')->withTrashed();
     }
 
     /**
@@ -56,6 +56,6 @@ class PlayerEditLog extends Model
      */
     public function user(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.user_model'), 'user_id')->withTrashed();
+        return $this->belongsTo(AdminUser::class, 'user_id')->withTrashed();
     }
 }

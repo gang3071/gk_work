@@ -45,11 +45,11 @@ class GameType extends Model
     protected $table = 'game_type';
 
     /**
-     * 玩家信息
+     * 彩金池信息
      * @return HasOne
      */
     public function lotteryPool(): HasOne
     {
-        return $this->HasOne(plugin()->webman->config('database.lottery_pool_model'), 'type', 'type');
+        return $this->HasOne(LotteryPool::class, 'type', 'type');
     }
 }

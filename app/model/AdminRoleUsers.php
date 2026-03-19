@@ -55,7 +55,7 @@ class AdminRoleUsers extends Model
     public function role()
     {
         return $this->belongsTo(
-            plugin()->webman->config('database.role_model'),
+            AdminRole::class,
             'role_id',
             'id'
         );
@@ -68,7 +68,7 @@ class AdminRoleUsers extends Model
     public function user()
     {
         return $this->belongsTo(
-            plugin()->webman->config('database.user_model'),
+            AdminUser::class,
             'user_id',
             'id'
         );

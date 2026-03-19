@@ -36,7 +36,7 @@ class ActivityPhase extends Model
      */
     public function activity(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.activity_model'), 'activity_id')->withTrashed();
+        return $this->belongsTo(Activity::class, 'activity_id')->withTrashed();
     }
 
     /**
@@ -45,6 +45,6 @@ class ActivityPhase extends Model
      */
     public function machineCategory(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_category_model'), 'cate_id')->withTrashed();
+        return $this->belongsTo(MachineCategory::class, 'cate_id')->withTrashed();
     }
 }

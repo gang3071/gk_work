@@ -45,7 +45,7 @@ class Announcement extends Model
      */
     public function adminUser(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.user_model'), 'admin_id');
+        return $this->belongsTo(AdminUser::class, 'admin_id');
     }
 
     /**
@@ -54,6 +54,6 @@ class Announcement extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id', 'department_id')->withTrashed();
+        return $this->belongsTo(Channel::class, 'department_id', 'department_id')->withTrashed();
     }
 }

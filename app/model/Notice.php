@@ -81,7 +81,7 @@ class Notice extends Model
      */
     public function adminUser(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.user_model'), 'admin_id');
+        return $this->belongsTo(AdminUser::class, 'admin_id');
     }
 
     /**
@@ -90,7 +90,7 @@ class Notice extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id', 'department_id')->withTrashed();
+        return $this->belongsTo(Channel::class, 'department_id', 'department_id')->withTrashed();
     }
 
     /**
@@ -99,7 +99,7 @@ class Notice extends Model
      */
     public function player(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'player_id', 'department_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'player_id', 'department_id')->withTrashed();
     }
 
     /**

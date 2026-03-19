@@ -60,7 +60,7 @@ class StoreAgentProfitRecord extends Model
      */
     public function player(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'player_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'player_id')->withTrashed();
     }
 
     /**
@@ -69,7 +69,7 @@ class StoreAgentProfitRecord extends Model
      */
     public function agent(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'agent_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'agent_id')->withTrashed();
     }
 
     /**
@@ -78,7 +78,7 @@ class StoreAgentProfitRecord extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id',
+        return $this->belongsTo(Channel::class, 'department_id',
             'department_id')->withTrashed();
     }
 
@@ -89,7 +89,7 @@ class StoreAgentProfitRecord extends Model
      */
     public function agent_promoter(): belongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_promoter_model'), 'player_id',
+        return $this->belongsTo(PlayerPromoter::class, 'player_id',
             'player_id');
     }
 

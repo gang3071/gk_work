@@ -37,7 +37,7 @@ class MachineMediaPush extends Model
      */
     public function machine(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_model'), 'machine_id')->withTrashed();
+        return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
     }
 
     /**
@@ -46,7 +46,7 @@ class MachineMediaPush extends Model
      */
     public function media(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_media_model'), 'media_id')->withTrashed();
+        return $this->belongsTo(MachineMedia::class, 'media_id')->withTrashed();
     }
 
     /**
@@ -55,7 +55,7 @@ class MachineMediaPush extends Model
      */
     public function machineTencentPlay(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_tencent_play_model'),
+        return $this->belongsTo(MachineTencentPlay::class,
             'machine_tencent_play_id');
     }
 }

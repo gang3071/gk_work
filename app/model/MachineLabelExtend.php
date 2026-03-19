@@ -40,6 +40,6 @@ class MachineLabelExtend extends Model
      */
     public function machineLabel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_label_model'), 'label_id')->withTrashed();
+        return $this->belongsTo(MachineLabel::class, 'label_id')->withTrashed();
     }
 }

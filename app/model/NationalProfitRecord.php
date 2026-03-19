@@ -30,7 +30,7 @@ class NationalProfitRecord extends Model
      */
     public function player(): hasOne
     {
-        return $this->hasOne(plugin()->webman->config('database.player_model'), 'id', 'uid')->withTrashed();
+        return $this->hasOne(Player::class, 'id', 'uid')->withTrashed();
     }
 
 }

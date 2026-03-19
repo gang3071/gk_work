@@ -39,6 +39,6 @@ class MachineLabel extends Model
      */
     public function machineLabelExtend(): hasMany
     {
-        return $this->hasMany(plugin()->webman->config('database.machine_label_extend_model'), 'label_id');
+        return $this->hasMany(MachineLabelExtend::class, 'label_id');
     }
 }

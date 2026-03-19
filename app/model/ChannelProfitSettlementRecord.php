@@ -56,7 +56,7 @@ class ChannelProfitSettlementRecord extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id',
+        return $this->belongsTo(Channel::class, 'department_id',
             'department_id')->withTrashed();
     }
 
@@ -66,6 +66,6 @@ class ChannelProfitSettlementRecord extends Model
      */
     public function user(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.user_model'), 'user_id')->withTrashed();
+        return $this->belongsTo(AdminUser::class, 'user_id')->withTrashed();
     }
 }

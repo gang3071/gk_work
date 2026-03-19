@@ -56,7 +56,7 @@ class ChannelProfitRecord extends Model
      */
     public function settlement(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.promoter_profit_settlement_record_model'),
+        return $this->belongsTo(PromoterProfitSettlementRecord::class,
             'settlement_id');
     }
 
@@ -66,7 +66,7 @@ class ChannelProfitRecord extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id',
+        return $this->belongsTo(Channel::class, 'department_id',
             'department_id')->withTrashed();
     }
 }

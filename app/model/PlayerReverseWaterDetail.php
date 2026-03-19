@@ -44,7 +44,7 @@ class PlayerReverseWaterDetail extends Model
      */
     public function player(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'player_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'player_id')->withTrashed();
     }
 
     /**
@@ -53,6 +53,6 @@ class PlayerReverseWaterDetail extends Model
      */
     public function platform(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.game_platform_model'), 'platform_id')->withTrashed();
+        return $this->belongsTo(GamePlatform::class, 'platform_id')->withTrashed();
     }
 }

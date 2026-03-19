@@ -50,6 +50,6 @@ class ChannelPlatformReverseWater extends Model
      */
     public function platform(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.game_platform_model'), 'platform_id')->withTrashed();
+        return $this->belongsTo(GamePlatform::class, 'platform_id')->withTrashed();
     }
 }

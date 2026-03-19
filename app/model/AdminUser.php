@@ -151,8 +151,8 @@ class AdminUser extends Model
     public function roles()
     {
         return $this->belongsToMany(
-            plugin()->webman->config('database.role_model'),
-            plugin()->webman->config('database.role_user_model'),
+            AdminRole::class,
+            AdminRoleUsers::class,
             'user_id',
             'role_id'
         );
@@ -166,7 +166,7 @@ class AdminUser extends Model
     public function department()
     {
         return $this->belongsTo(
-            plugin()->webman->config('database.department_model'),
+            AdminDepartment::class,
             'department_id'
         );
     }
@@ -181,8 +181,8 @@ class AdminUser extends Model
     public function permissions()
     {
         return $this->hasManyThrough(
-            plugin()->webman->config('database.role_permission_model'),
-            plugin()->webman->config('database.role_user_model'),
+            AdminRolePermission::class,
+            AdminRoleUsers::class,
             'user_id',
             'role_id',
             'id',
@@ -229,7 +229,7 @@ class AdminUser extends Model
     public function agentPlayers()
     {
         return $this->hasMany(
-            plugin()->webman->config('database.player_model'),
+            Player::class,
             'agent_admin_id'
         );
     }
@@ -242,7 +242,7 @@ class AdminUser extends Model
     public function storePlayers()
     {
         return $this->hasMany(
-            plugin()->webman->config('database.player_model'),
+            Player::class,
             'store_admin_id'
         );
     }

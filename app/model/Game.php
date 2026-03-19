@@ -46,7 +46,7 @@ class Game extends Model
      */
     public function gamePlatform(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.game_platform_model'),
+        return $this->belongsTo(GamePlatform::class,
             'platform_id')->withTrashed();
     }
 
@@ -56,7 +56,7 @@ class Game extends Model
      */
     public function gameContent(): hasMany
     {
-        return $this->hasMany(plugin()->webman->config('database.game_content_model'), 'game_id');
+        return $this->hasMany(GameContent::class, 'game_id');
     }
 
     /**
@@ -65,7 +65,7 @@ class Game extends Model
      */
     public function game_extend(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.game_extend_model'),
+        return $this->belongsTo(GameExtend::class,
             'game_extend_id');
     }
 }

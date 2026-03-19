@@ -51,7 +51,7 @@ class GameExtend extends Model
      */
     public function gamePlatform(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.game_platform_model'),
+        return $this->belongsTo(GamePlatform::class,
             'platform_id')->withTrashed();
     }
 }

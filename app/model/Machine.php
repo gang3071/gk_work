@@ -180,7 +180,7 @@ class Machine extends Model
      */
     public function machineCategory(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_category_model'), 'cate_id');
+        return $this->belongsTo(MachineCategory::class, 'cate_id');
     }
 
     /**
@@ -189,7 +189,7 @@ class Machine extends Model
      */
     public function gamingPlayer(): HasOne
     {
-        return $this->hasOne(plugin()->webman->config('database.player_model'), 'id', 'gaming_user_id')->withTrashed();
+        return $this->hasOne(Player::class, 'id', 'gaming_user_id')->withTrashed();
     }
 
     /**
@@ -198,7 +198,7 @@ class Machine extends Model
      */
     public function machineLabel(): belongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_label_model'), 'label_id');
+        return $this->belongsTo(MachineLabel::class, 'label_id');
     }
 
     /**
@@ -207,7 +207,7 @@ class Machine extends Model
      */
     public function keepingPlayer(): HasOne
     {
-        return $this->hasOne(plugin()->webman->config('database.player_model'), 'id', 'keeping_user_id')->withTrashed();
+        return $this->hasOne(Player::class, 'id', 'keeping_user_id')->withTrashed();
     }
 
     /**
@@ -243,7 +243,7 @@ class Machine extends Model
      */
     public function machine_media(): HasMany
     {
-        return $this->hasMany(plugin()->webman->config('database.machine_media_model'), 'machine_id');
+        return $this->hasMany(MachineMedia::class, 'machine_id');
     }
 
     /**
@@ -252,7 +252,7 @@ class Machine extends Model
      */
     public function machine_strategy(): hasOne
     {
-        return $this->hasOne(plugin()->webman->config('database.machine_strategy_model'), 'strategy_id');
+        return $this->hasOne(MachineStrategy::class, 'strategy_id');
     }
 
     /**
@@ -261,7 +261,7 @@ class Machine extends Model
      */
     public function producer(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_producer_model'),
+        return $this->belongsTo(MachineProducer::class,
             'producer_id')->withTrashed();
     }
 }

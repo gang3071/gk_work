@@ -33,7 +33,7 @@ class Currency extends Model
      */
     public function admin_user(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.user_model'), 'admin_id');
+        return $this->belongsTo(AdminUser::class, 'admin_id');
     }
 
     /**

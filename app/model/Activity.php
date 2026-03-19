@@ -40,7 +40,7 @@ class Activity extends Model
      */
     public function activity_content(): hasMany
     {
-        return $this->hasMany(plugin()->webman->config('database.activity_content_model'), 'activity_id');
+        return $this->hasMany(ActivityContent::class, 'activity_id');
     }
 
     /**
@@ -49,6 +49,6 @@ class Activity extends Model
      */
     public function activity_phase(): hasMany
     {
-        return $this->hasMany(plugin()->webman->config('database.activity_phase_model'), 'activity_id');
+        return $this->hasMany(ActivityPhase::class, 'activity_id');
     }
 }

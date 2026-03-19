@@ -44,7 +44,7 @@ class GameContent extends Model
      */
     public function gamePlatform(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.game_platform_model'), 'platform_id')->withTrashed();
+        return $this->belongsTo(GamePlatform::class, 'platform_id')->withTrashed();
     }
 
     /**
@@ -53,6 +53,6 @@ class GameContent extends Model
      */
     public function game(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.game_model'), 'game_id')->withTrashed();
+        return $this->belongsTo(Game::class, 'game_id')->withTrashed();
     }
 }

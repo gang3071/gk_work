@@ -192,7 +192,7 @@ class Channel extends Model
      */
     public function department(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.department_model'), 'department_id')->withTrashed();
+        return $this->belongsTo(AdminDepartment::class, 'department_id')->withTrashed();
     }
 
     /**
@@ -201,7 +201,7 @@ class Channel extends Model
      */
     public function user(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.user_model'), 'user_id')->withTrashed();
+        return $this->belongsTo(AdminUser::class, 'user_id')->withTrashed();
     }
 
     /**
@@ -210,7 +210,7 @@ class Channel extends Model
      */
     public function externalApp(): hasOne
     {
-        return $this->hasOne(plugin()->webman->config('database.external_app_model'), 'department_id', 'department_id');
+        return $this->hasOne(ExternalApp::class, 'department_id', 'department_id');
     }
 
     /**
@@ -219,7 +219,7 @@ class Channel extends Model
      */
     public function player(): hasMany
     {
-        return $this->hasMany(plugin()->webman->config('database.player_model'), 'department_id', 'department_id');
+        return $this->hasMany(Player::class, 'department_id', 'department_id');
     }
 
     /**
@@ -228,8 +228,8 @@ class Channel extends Model
      */
     public function wallet(): hasManyThrough
     {
-        return $this->hasManyThrough(plugin()->webman->config('database.player_platform_cash_model'),
-            plugin()->webman->config('database.player_model'), 'department_id', 'player_id', 'department_id', 'id');
+        return $this->hasManyThrough(PlayerPlatformCash::class,
+            Player::class, 'department_id', 'player_id', 'department_id', 'id');
     }
 
     public function getDomainExtAttribute($value)

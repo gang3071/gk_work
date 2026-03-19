@@ -69,7 +69,7 @@ class PromoterProfitRecord extends Model
      */
     public function player(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'player_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'player_id')->withTrashed();
     }
 
     /**
@@ -78,7 +78,7 @@ class PromoterProfitRecord extends Model
      */
     public function promoter(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_promoter_model'), 'promoter_player_id', 'player_id');
+        return $this->belongsTo(PlayerPromoter::class, 'promoter_player_id', 'player_id');
     }
 
     /**
@@ -87,7 +87,7 @@ class PromoterProfitRecord extends Model
      */
     public function source_promoter(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_promoter_model'), 'source_player_id', 'player_id');
+        return $this->belongsTo(PlayerPromoter::class, 'source_player_id', 'player_id');
     }
 
     /**
@@ -96,7 +96,7 @@ class PromoterProfitRecord extends Model
      */
     public function player_promoter(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'promoter_player_id');
+        return $this->belongsTo(Player::class, 'promoter_player_id');
     }
 
     /**
@@ -105,6 +105,6 @@ class PromoterProfitRecord extends Model
      */
     public function settlement(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.promoter_profit_settlement_record_model'), 'settlement_id');
+        return $this->belongsTo(PromoterProfitSettlementRecord::class, 'settlement_id');
     }
 }

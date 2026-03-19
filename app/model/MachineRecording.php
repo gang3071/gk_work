@@ -58,7 +58,7 @@ class MachineRecording extends Model
      */
     public function machine(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_model'), 'machine_id')->withTrashed();
+        return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
     }
 
     /**
@@ -67,7 +67,7 @@ class MachineRecording extends Model
      */
     public function media(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_media_model'), 'media_id')->withTrashed();
+        return $this->belongsTo(MachineMedia::class, 'media_id')->withTrashed();
     }
 
     /**
@@ -76,7 +76,7 @@ class MachineRecording extends Model
      */
     public function playerGameLog(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_game_log_model'), 'player_game_log_id');
+        return $this->belongsTo(PlayerGameLog::class, 'player_game_log_id');
     }
 
     /**
@@ -85,7 +85,7 @@ class MachineRecording extends Model
      */
     public function playerGameRecord(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_game_record_model'), 'player_game_record_id');
+        return $this->belongsTo(PlayerGameRecord::class, 'player_game_record_id');
     }
 
     /**
@@ -94,7 +94,7 @@ class MachineRecording extends Model
      */
     public function channel(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.channel_model'), 'department_id',
+        return $this->belongsTo(Channel::class, 'department_id',
             'department_id')->withTrashed();
     }
 }

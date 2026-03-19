@@ -40,6 +40,6 @@ class BankContent extends Model
      */
     public function bank(): BelongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.bank_model'), 'bank_id', 'id');
+        return $this->belongsTo(Bank::class, 'bank_id', 'id');
     }
 }

@@ -45,7 +45,7 @@ class PlayerActivityRecord extends Model
      */
     public function activity(): belongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.activity_model'), 'activity_id')->withTrashed();
+        return $this->belongsTo(Activity::class, 'activity_id')->withTrashed();
     }
 
     /**
@@ -54,7 +54,7 @@ class PlayerActivityRecord extends Model
      */
     public function machine(): belongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.machine_model'), 'machine_id')->withTrashed();
+        return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
     }
 
     /**
@@ -63,6 +63,6 @@ class PlayerActivityRecord extends Model
      */
     public function player(): belongsTo
     {
-        return $this->belongsTo(plugin()->webman->config('database.player_model'), 'player_id')->withTrashed();
+        return $this->belongsTo(Player::class, 'player_id')->withTrashed();
     }
 }

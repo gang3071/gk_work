@@ -170,8 +170,8 @@ class AdminRole extends Model
     public function departments()
     {
         return $this->belongsToMany(
-            plugin()->webman->config('database.department_model'),
-            plugin()->webman->config('database.role_department_model'),
+            AdminDepartment::class,
+            AdminRoleDepartment::class,
             'role_id',
             'department_id'
         );
@@ -196,8 +196,8 @@ class AdminRole extends Model
     public function users()
     {
         return $this->belongsToMany(
-            plugin()->webman->config('database.user_model'),
-            plugin()->webman->config('database.role_user_table'),
+            AdminUser::class,
+            'admin_role_users',
             'role_id',
             'user_id'
         );
@@ -211,8 +211,8 @@ class AdminRole extends Model
     public function menus()
     {
         return $this->belongsToMany(
-            plugin()->webman->config('database.menu_model'),
-            plugin()->webman->config('database.role_menu_table'),
+            AdminMenu::class,
+            'admin_role_menus',
             'role_id',
             'menu_id'
         );
@@ -225,9 +225,10 @@ class AdminRole extends Model
      */
     public function permissions()
     {
+        // TODO: 需要创建 AdminPermission 模型
         return $this->belongsToMany(
-            plugin()->webman->config('database.permission_model'),
-            plugin()->webman->config('database.role_permission_table'),
+            AdminRolePermission::class,
+            'admin_role_permissions',
             'role_id',
             'permission_id'
         );
