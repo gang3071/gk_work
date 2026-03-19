@@ -19,12 +19,12 @@ class GamePlatformBill
             try {
                 $WMData = GameServiceFactory::createService('WM')->handleGameHistories();
             } catch (\Exception $e) {
-                Log::error('GamePlatformBill', [$e->getMessage(), $e->getLine(), $e->getFile()]);
+                Log::error('GamePlatformBill: ' . $e->getMessage(), ['line' => $e->getLine(), 'file' => $e->getFile(), 'trace' => $e->getTraceAsString()]);
             }
             try {
                 $BTGData = GameServiceFactory::createService('BTG')->handleGameHistories();
             } catch (\Exception $e) {
-                Log::error('GamePlatformBill', [$e->getMessage(), $e->getLine(), $e->getFile()]);
+                Log::error('GamePlatformBill: ' . $e->getMessage(), ['line' => $e->getLine(), 'file' => $e->getFile(), 'trace' => $e->getTraceAsString()]);
             }
             $data = array_merge($WMData, $BTGData);
             if (!empty($data)) {

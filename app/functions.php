@@ -371,7 +371,7 @@ function sendSocketMessage($channels, $content, string $form = 'system')
             'content' => json_encode($content)
         ]);
     } catch (Exception $e) {
-        Log::error('sendSocketMessage', [$e->getMessage()]);
+        Log::error('sendSocketMessage: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
         return false;
     }
 }
@@ -1286,7 +1286,7 @@ function machineWash(
     try {
         LotteryServices::forceSyncRedisToDatabase();
     } catch (\Exception $e) {
-        Log::error('游戏结束同步彩金失败: ' . $e->getMessage());
+        Log::error('游戏结束同步彩金失败: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
     }
     queueClient::send('media-recording', [
         'machine_id' => $machine->id,

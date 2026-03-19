@@ -134,7 +134,9 @@ class ChannelSettlementServices
                 DB::commit();
             } catch (\Exception $e) {
                 DB::rollBack();
-                Log::error('渠道生成分润记录错误:' . $channel->department_id, [$e->getMessage()]);
+                Log::error('渠道生成分润记录错误:' . $channel->department_id . ' - ' . $e->getMessage(), [
+                    'trace' => $e->getTraceAsString()
+                ]);
             }
         }
 

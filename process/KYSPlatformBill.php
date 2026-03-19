@@ -20,7 +20,7 @@ class KYSPlatformBill
                     PlayGameRecord::query()->upsert($data, ['platform_id', 'order_no']);
                 }
             } catch (\Exception $e) {
-                Log::error('KYSGamePlatformBill', [$e->getMessage(), $e->getLine(), $e->getFile()]);
+                Log::error('KYSGamePlatformBill: ' . $e->getMessage(), ['line' => $e->getLine(), 'file' => $e->getFile(), 'trace' => $e->getTraceAsString()]);
             }
         });
     }

@@ -20,7 +20,7 @@ class YZGGamePlatformBill
                     PlayGameRecord::query()->upsert($data, ['platform_id', 'order_no']);
                 }
             } catch (\Exception $e) {
-                Log::error('GamePlatformBill', [$e->getMessage()]);
+                Log::error('GamePlatformBill: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
             }
         });
     }

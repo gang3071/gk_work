@@ -270,7 +270,7 @@ class OfflineProfitSettlementServices
             DB::commit();
         } catch (Exception $e) {
             DB::rollBack();
-            Log::error('生成分润记录错误', [$e->getMessage()]);
+            Log::error('生成分润记录错误: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
             sendSocketMessage('private-channel-' . $data['department_id'] . '-' . ($data['user_id'] ?? 0), [
                 'msg_type' => 'player_offline_profit_settlement_erro',
                 'title' => '线下代理结算失败',

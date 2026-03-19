@@ -15,7 +15,7 @@ class DGGamePlatformBill
         new Crontab('0 */5 * * * *', function () {
             $env = config('app.env');
             if ($env != 'pro') {
-                Log::info('DGGamePlatformBill', ['DG测试线不拉取游戏记录']);
+                Log::info('DGGamePlatformBill: DG测试线不拉取游戏记录');
                 return;
             }
             ini_set('memory_limit', '512M');
@@ -31,7 +31,7 @@ class DGGamePlatformBill
                     }
                 }
             } catch (\Exception $e) {
-                Log::error('GamePlatformBill', [$e->getMessage()]);
+                Log::error('GamePlatformBill: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
             }
         });
     }
