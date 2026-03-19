@@ -22,6 +22,7 @@ use app\model\PlayerPlatformCash;
 use app\model\PlayerPromoter;
 use app\model\PlayerRechargeRecord;
 use app\model\PlayerWithdrawRecord;
+use app\model\PlayGameRecord;
 use app\model\PromoterProfitRecord;
 use app\model\PromoterProfitSettlementRecord;
 use app\model\SystemSetting;
@@ -1674,4 +1675,96 @@ function reviewedRechargeMessage()
             ]);
         }
     }
+}
+
+/**
+ * 全民代理分润结算
+ * @return void
+ */
+function nationalPromoterRebate(): void
+{
+    $log = Log::channel('national_promoter');
+    ini_set('memory_limit', '512M');
+    $log->info('全民代理统计开始: NationalPromoterRebate' . date('Y-m-d H:i:s'));
+    $time = date('Y-m-d H:i:s');
+    $playGameRecord = PlayGameRecord::query()
+        ->where('national_promoter_action', 0)
+        ->where('created_at', '<=', $time)
+        ->where('settlement_status', PlayGameRecord::SETTLEMENT_STATUS_SETTLED)
+        ->selectRaw("player_id, sum(bet) as all_bet, sum(diff) as all_diff")
+        ->groupBy('player_id')
+        ->get();
+    if (empty($playGameRecord->toArray())) {
+        $log->info('全民代理统计结束: NationalPromoterRebate' . date('Y-m-d H:i:s') . ' 未产生数据');
+        return;
+    }
+    foreach ($playGameRecord as $item) {
+        Db::beginTransaction();
+        try {
+            $log->info('全民代理统计: NationalPromoterRebate' . date('Y-m-d H:i:s'), $item->toArray());
+            //计算所有玩家打码量
+            if ($item->all_bet > 0 && !empty($item->player->national_promoter)) {
+                //当前玩家打码量
+                $item->player->national_promoter->chip_amount = bcadd($item->player->national_promoter->chip_amount,
+                    $item->all_bet, 2);
+                //根据打码量查询玩家当前全民代理等级
+                /** @var LevelList $levelId */
+                $levelId = LevelList::query()
+                    ->where('department_id', $item->player->department_id)
+                    ->where('must_chip_amount', '<=', $item->player->national_promoter->chip_amount)
+                    ->orderBy('must_chip_amount', 'desc')
+                    ->first();
+                if (!empty($levelId) && isset($levelId->id)) {
+                    //根据打码量提升玩家全民代理等级
+                    $item->player->national_promoter->level = $levelId->id;
+                }
+                $item->player->push();
+                if (!empty($item->player->recommend_id) && $item->all_diff != 0 && $item->player->national_promoter->status == 1 && !empty($levelId)) {
+                    /** @var Player $recommendPromoter */
+                    $recommendPromoter = Player::query()->with([
+                        'national_promoter',
+                        'national_promoter.level_list'
+                    ])->find($item->player->recommend_id);
+                    if (!empty($recommendPromoter->national_promoter) && $recommendPromoter->is_promoter < 1 && $recommendPromoter->status_national == 1) {
+                        $damageRebateRatio = isset($recommendPromoter->national_promoter->level_list->damage_rebate_ratio) ? $recommendPromoter->national_promoter->level_list->damage_rebate_ratio : 0;
+                        $money = bcdiv(bcmul(-$item->all_diff, $damageRebateRatio, 2), 100, 2);
+                        $recommendPromoter->national_promoter->pending_amount = bcadd($recommendPromoter->national_promoter->pending_amount,
+                            $money, 2);
+                        $recommendPromoter->push();
+                        /** @var NationalProfitRecord $nationalProfitRecord */
+                        $nationalProfitRecord = NationalProfitRecord::query()->where('uid', $item->player->id)
+                            ->where('type', 1)
+                            ->whereDate('created_at', date('Y-m-d'))
+                            ->first();
+                        if (!empty($nationalProfitRecord)) {
+                            $nationalProfitRecord->money = bcadd($nationalProfitRecord->money, $money, 2);
+                        } else {
+                            $nationalProfitRecord = new NationalProfitRecord();
+                            $nationalProfitRecord->uid = $item->player->id;
+                            $nationalProfitRecord->recommend_id = $item->player->recommend_id;
+                            $nationalProfitRecord->money = $money;
+                            $nationalProfitRecord->type = 1;
+                        }
+                        $nationalProfitRecord->save();
+                    }
+                }
+            }
+            PlayGameRecord::query()
+                ->where('national_promoter_action', 0)
+                ->where('settlement_status', PlayGameRecord::SETTLEMENT_STATUS_SETTLED)
+                ->where('player_id', $item->player_id)
+                ->where('created_at', '<=', $time)
+                ->update([
+                    'national_promoter_action' => 1,
+                    'national_damage_ratio' => $damageRebateRatio ?? 0
+                ]);
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+            $log->error('全民代理统计错误: NationalPromoterRebate' . date('Y-m-d H:i:s') . ' - ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+        }
+    }
+    $log->info('全民代理统计结束: NationalPromoterRebate' . date('Y-m-d H:i:s'));
 }
