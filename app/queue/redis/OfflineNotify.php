@@ -21,26 +21,55 @@ class OfflineNotify implements Consumer
     public function consume($data)
     {
         $log = Log::channel('offline_notify_server');
+        $log->info('开始处理下线通知', ['data' => $data]);
+
         try {
             /** @var Player $player */
             $player = Player::query()->find($data['player_id']);
-            if (!empty($player)) {
-                /** @var ExternalApp $externalApp */
-                $externalApp = ExternalApp::query()->where('department_id', $player->channel->department_id)
-                    ->whereNull('deleted_at')
-                    ->where('status', 1)
-                    ->first();
-                if (!empty($externalApp->notify_url)) {
-                    $params = [
-                        'sign' => md5($externalApp->app_id . $externalApp->app_secret),
-                        'id' => $player->id,
-                    ];
-                    $response = Http::timeout(10)->asForm()->post($externalApp->notify_url, $params);
-                    $log->info('玩家下线回调', ['params' => $params, 'res' => $response]);
-                }
+            if (empty($player)) {
+                $log->warning('玩家不存在', ['player_id' => $data['player_id']]);
+                return;
             }
+
+            /** @var ExternalApp $externalApp */
+            $externalApp = ExternalApp::query()->where('department_id', $player->channel->department_id)
+                ->whereNull('deleted_at')
+                ->where('status', 1)
+                ->first();
+
+            if (empty($externalApp)) {
+                $log->info('外部应用未配置', [
+                    'player_id' => $data['player_id'],
+                    'department_id' => $player->channel->department_id
+                ]);
+                return;
+            }
+
+            if (empty($externalApp->notify_url)) {
+                $log->info('未配置通知URL', [
+                    'player_id' => $data['player_id'],
+                    'app_id' => $externalApp->app_id
+                ]);
+                return;
+            }
+
+            $params = [
+                'sign' => md5($externalApp->app_id . $externalApp->app_secret),
+                'id' => $player->id,
+            ];
+            $response = Http::timeout(10)->asForm()->post($externalApp->notify_url, $params);
+
+            $log->info('下线通知发送成功', [
+                'player_id' => $data['player_id'],
+                'notify_url' => $externalApp->notify_url,
+                'response' => $response
+            ]);
         } catch (Exception $e) {
-            $log->error('玩家下线回调', [$e->getMessage()]);
+            $log->error('下线通知处理失败', [
+                'data' => $data,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
         }
     }
 }

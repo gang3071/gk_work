@@ -23,31 +23,62 @@ class LotteryMachine implements Consumer
     // 消费
     public function consume($data)
     {
+        $log = Log::channel('lottery_machine');
+        $log->info('开始处理机台抽奖', ['data' => $data]);
+
         try {
             /** @var Machine $machine */
             $machine = Machine::query()->find($data['machine_id']);
             /** @var Player $player */
             $player = Player::query()->find($data['player_id']);
-            if (!empty($machine) && !empty($player)) {
-                if ($player->channel->lottery_status == 0) {
-                    return;
-                }
 
-                // 通知后台管理系统玩家正在游戏
-                $this->notifyPlayerBetting($player, $machine, $data);
-
-                $lotteryServices = new LotteryServices();
-                switch ($machine->type) {
-                    case GameType::TYPE_STEEL_BALL:
-                        $lotteryServices = $lotteryServices->setJackLotteryList();
-                        break;
-                    case GameType::TYPE_SLOT:
-                        $lotteryServices = $lotteryServices->setSlotLotteryList();
-                }
-                $lotteryServices->setMachine($machine)->setPlayer($player)->addLotteryPool($data['num'], $data['last_num'])->checkLottery();
+            if (empty($machine)) {
+                $log->warning('机台不存在', ['machine_id' => $data['machine_id']]);
+                return;
             }
+
+            if (empty($player)) {
+                $log->warning('玩家不存在', ['player_id' => $data['player_id']]);
+                return;
+            }
+
+            if ($player->channel->lottery_status == 0) {
+                $log->info('渠道抽奖功能未开启', [
+                    'player_id' => $data['player_id'],
+                    'channel_id' => $player->channel->id
+                ]);
+                return;
+            }
+
+            // 通知后台管理系统玩家正在游戏
+            $this->notifyPlayerBetting($player, $machine, $data);
+
+            $lotteryServices = new LotteryServices();
+            switch ($machine->type) {
+                case GameType::TYPE_STEEL_BALL:
+                    $lotteryServices = $lotteryServices->setJackLotteryList();
+                    $log->info('设置钢珠机抽奖列表', ['machine_id' => $data['machine_id']]);
+                    break;
+                case GameType::TYPE_SLOT:
+                    $lotteryServices = $lotteryServices->setSlotLotteryList();
+                    $log->info('设置斯洛机抽奖列表', ['machine_id' => $data['machine_id']]);
+                    break;
+            }
+
+            $lotteryServices->setMachine($machine)->setPlayer($player)->addLotteryPool($data['num'], $data['last_num'])->checkLottery();
+
+            $log->info('机台抽奖处理完成', [
+                'machine_id' => $data['machine_id'],
+                'player_id' => $data['player_id'],
+                'num' => $data['num'],
+                'last_num' => $data['last_num']
+            ]);
         } catch (Exception $e) {
-            Log::channel('lottery_machine')->error('LotteryPool:' . $e->getMessage());
+            $log->error('机台抽奖处理失败', [
+                'data' => $data,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
         }
     }
 

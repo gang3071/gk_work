@@ -24,19 +24,31 @@ class MachineMaintain implements Consumer
      */
     public function consume($data)
     {
+        $log = Log::channel('machine_maintain');
+
         /** @var SystemSetting $systemSetting */
         $systemSetting = SystemSetting::query()
             ->where('feature', 'machine_maintain')
             ->first();
         if ($systemSetting->status == 0) {
-            return $this->error('未开启机器维护');
+            $log->warning('未开启机器维护');
+            return;
         }
         if (strtotime($systemSetting->updated_at) != $data['setting_time']) {
-            return $this->error('过期任务不执行');
+            $log->warning('过期任务不执行', ['setting_time' => $data['setting_time'], 'updated_at' => $systemSetting->updated_at]);
+            return;
         }
+
         $machineList = Machine::query()
             ->whereIn('type', [GameType::TYPE_SLOT, GameType::TYPE_STEEL_BALL])
             ->get();
+
+        $total = $machineList->count();
+        $successCount = 0;
+        $failCount = 0;
+
+        $log->info('开始机器维护', ['total' => $total]);
+
         /** @var Machine $machine */
         foreach ($machineList as $machine) {
             try {
@@ -56,11 +68,22 @@ class MachineMaintain implements Consumer
                     default:
                         throw new Exception('机台类型错误');
                 }
+                $successCount++;
             } catch (\Exception $e) {
-                Log::channel('machine_maintain')->error('MachineMaintain', [$e->getMessage()]);
+                $failCount++;
+                $log->error('机器维护失败', [
+                    'machine_id' => $machine->id,
+                    'machine_code' => $machine->code,
+                    'error' => $e->getMessage()
+                ]);
                 continue;
             }
         }
-        return $this->success();
+
+        $log->info('机器维护完成', [
+            'total' => $total,
+            'success' => $successCount,
+            'fail' => $failCount
+        ]);
     }
 }

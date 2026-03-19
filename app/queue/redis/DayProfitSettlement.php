@@ -118,11 +118,14 @@ class DayProfitSettlement implements Consumer
         ];
         try {
             ProfitSettlementServices::calculation($player->recommend_id, $player->id, $player->department_id, $info);
+            Log::channel('day_profit_settlement')->info('日分润结算成功', ['player_id' => $data['player_id'], 'day' => $data['day']]);
         } catch (\Exception $e) {
-            Log::channel('day_profit_settlement')->error($e->getMessage());
-            return $this->error($e->getMessage());
+            Log::channel('day_profit_settlement')->error('日分润结算失败: ' . $e->getMessage(), [
+                'player_id' => $data['player_id'],
+                'day' => $data['day'],
+                'trace' => $e->getTraceAsString()
+            ]);
+            return;
         }
-
-        return $this->success();
     }
 }

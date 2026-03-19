@@ -20,23 +20,43 @@ class GameLottery implements Consumer
     // 消费
     public function consume($data)
     {
+        $log = Log::channel('game_lottery');
+        $log->info('开始处理游戏抽奖', ['data' => $data]);
+
         try {
             /** @var Player $player */
             $player = Player::query()->find($data['player_id']);
-            Log::channel('game_lottery')->error('LotteryPool:', [$data]);
-            if (!empty($player)) {
-                if ($player->channel->lottery_status == 0) {
-                    return;
-                }
 
-                // 通知后台管理系统玩家正在游戏
-                $this->notifyPlayerBetting($player, $data);
-
-                $gameLotteryServices = new GameLotteryServices();
-                $gameLotteryServices->setPlayer($player)->setLog()->setLotteryList()->addLotteryPool($data['bet'])->checkLottery($data['bet'], $data['play_game_record_id']);
+            if (empty($player)) {
+                $log->warning('玩家不存在', ['player_id' => $data['player_id']]);
+                return;
             }
+
+            if ($player->channel->lottery_status == 0) {
+                $log->info('渠道抽奖功能未开启', [
+                    'player_id' => $data['player_id'],
+                    'channel_id' => $player->channel->id
+                ]);
+                return;
+            }
+
+            // 通知后台管理系统玩家正在游戏
+            $this->notifyPlayerBetting($player, $data);
+
+            $gameLotteryServices = new GameLotteryServices();
+            $gameLotteryServices->setPlayer($player)->setLog()->setLotteryList()->addLotteryPool($data['bet'])->checkLottery($data['bet'], $data['play_game_record_id']);
+
+            $log->info('游戏抽奖处理完成', [
+                'player_id' => $data['player_id'],
+                'bet' => $data['bet'],
+                'play_game_record_id' => $data['play_game_record_id']
+            ]);
         } catch (Exception $e) {
-            Log::channel('game_lottery')->error('LotteryPool:' . $e->getMessage());
+            $log->error('游戏抽奖处理失败', [
+                'data' => $data,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
         }
     }
 
