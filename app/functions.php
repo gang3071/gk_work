@@ -909,10 +909,16 @@ function mediaClear(): void
                             $endpointServiceId[] = $endPoint['endpointServiceId'];
                         }
                     }
-                    $mediaServer->log->error('MediaClear',
-                        [$streamInfo, $endpointServiceId, $machineMedia->machine->code]);
+                    $mediaServer->log->error('MediaClear', [
+                        'stream_info' => $streamInfo,
+                        'endpoint_service_id' => $endpointServiceId,
+                        'machine_code' => $machineMedia->machine->code
+                    ]);
                 } catch (Exception $e) {
-                    $mediaServer->log->error('MediaClear', [$e->getMessage(), $machineMedia->machine->code]);
+                    $mediaServer->log->error('MediaClear: ' . $e->getMessage(), [
+                        'machine_code' => $machineMedia->machine->code,
+                        'trace' => $e->getTraceAsString()
+                    ]);
                 }
             }
         });
@@ -1130,7 +1136,7 @@ function machineWash(
 )
 {
     try {
-        $lang = Translation::getLocale();
+        $lang = Translation::getLocale() ?? 'zh_CN';
         $services = MachineServices::createServices($machine, $lang);
         if ($services->last_point_at + 5 >= time()) {
             throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
