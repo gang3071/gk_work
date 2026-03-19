@@ -1,7 +1,7 @@
 <?php
 
-use addons\webman\model\GameType;
-use addons\webman\model\PhoneSmsLog;
+use app\model\GameType;
+use app\model\PhoneSmsLog;
 
 return [
     'validation_error' => '字段驗證錯誤',
@@ -74,7 +74,6 @@ return [
         GameType::CATE_LIVE_VIDEO => '真實訊息',
     ],
     'phone_code_error' => '驗證碼錯誤',
-    'client_version_incorrect' => '客戶端版本不正確',
     'player_not_fount' => '使用者不存在',
     'player_stop' => '玩家帳號已停用',
     'password_change_error' => '密碼修改失敗',
@@ -354,7 +353,6 @@ return [
     'game_has_disable' => '遊戲已被禁用',
     'game_platform_has_disable' => '遊戲平臺已禁用',
     'game_platform_not_enabled' => '通路未啟用該遊戲平臺',
-    'game_not_enabled' => '您沒有權限訪問該遊戲',
     'recharge_amount_error' => '充值金額錯誤',
     'recharge_method_error' => '充值管道錯誤',
     'activity_not_found' => '活動不存在',
@@ -421,4 +419,5 @@ return [
     'machine_lock' => '{code}機台已鎖，請排障後解鎖機台',
     'point_not_enough' => '機台分數必須大於6才能開啟自動',
     'machine_point_insufficient' => '{code} 機台，分數不足100無法上轉',
+    'one_payment_recharge_close' => 'onePay充值頻道已關閉'
 ];

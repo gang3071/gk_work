@@ -6,9 +6,8 @@
  * Time: 00:44
  */
 
-use addons\webman\model\Lottery;
-use addons\webman\model\Notice;
-use addons\webman\model\PlayerLotteryRecord;
+use app\model\Lottery;
+use app\model\Notice;
 
 return [
     'title' => [
@@ -26,7 +25,6 @@ return [
     'content' => [
         Notice::TYPE_LOTTERY . '_' . Lottery::LOTTERY_TYPE_FIXED => 'Congratulations on receiving the prize money {lottery_name} and game points {amount} on the {machine_type} {machine_code} machine.',
         Notice::TYPE_LOTTERY . '_' . Lottery::LOTTERY_TYPE_RANDOM => 'Congratulations on winning the random prize {lotteryname} {amount} on the {machine_type} {machine_code} machine.',
-        Notice::TYPE_LOTTERY . '_' . Lottery::LOTTERY_TYPE_RANDOM . '_' . PlayerLotteryRecord::SOURCE_GAME => 'Congratulations! You have won a random jackpot of {amount} in the video game "{game_name}".',
         Notice::TYPE_RECHARGE_PASS => 'Congratulations, your previous order has been approved. Please check your submission for {point}.',
         Notice::TYPE_RECHARGE_REJECT => 'Sorry, your previous order review did not pass.',
         Notice::TYPE_WITHDRAW_PASS => 'Congratulations, your sub order has been approved. Sub order {point}.',

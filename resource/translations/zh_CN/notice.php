@@ -6,9 +6,8 @@
  * Time: 00:44
  */
 
-use addons\webman\model\Lottery;
-use addons\webman\model\Notice;
-use addons\webman\model\PlayerLotteryRecord;
+use app\model\Lottery;
+use app\model\Notice;
 
 return [
     'title' => [
@@ -26,7 +25,6 @@ return [
     'content' => [
         Notice::TYPE_LOTTERY . '_' . Lottery::LOTTERY_TYPE_FIXED => '恭喜您在{machine_type}{machine_code}机台，获得了彩金{lottery_name}奖励, 奖励游戏点{amount}',
         Notice::TYPE_LOTTERY . '_' . Lottery::LOTTERY_TYPE_RANDOM => '恭喜您在{machine_type}{machine_code}机台，获得了随机彩金{lottery_name}的奖励{amount}.',
-        Notice::TYPE_LOTTERY . '_' . Lottery::LOTTERY_TYPE_RANDOM . '_' . PlayerLotteryRecord::SOURCE_GAME => '恭喜您在电子游戏, "{game_name}"，获得了随机彩金{lottery_name}的奖励{amount}.',
         Notice::TYPE_RECHARGE_PASS => '恭喜您的上分订单已审核通过，上分 {point}，请查收。',
         Notice::TYPE_RECHARGE_REJECT => '抱歉您的上分订单审核不通过。',
         Notice::TYPE_WITHDRAW_PASS => '恭喜您的下分订单已审核通过，下分 {point}。',

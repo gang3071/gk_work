@@ -6,9 +6,8 @@
  * Time: 00:44
  */
 
-use addons\webman\model\Lottery;
-use addons\webman\model\Notice;
-use addons\webman\model\PlayerLotteryRecord;
+use app\model\Lottery;
+use app\model\Notice;
 
 return [
     'title' => [
@@ -26,7 +25,6 @@ return [
     'content' => [
         Notice::TYPE_LOTTERY . '_' . Lottery::LOTTERY_TYPE_FIXED => '恭喜您在{machine_type}{machine_code}機台，獲得了彩金{lottery_name}獎勵，獎勵遊戲點{amount}',
         Notice::TYPE_LOTTERY . '_' . Lottery::LOTTERY_TYPE_RANDOM => '恭喜您在{machine_type}{machine_code}機台，獲得了隨機彩金{lottery_name}的獎勵{amount}.',
-        Notice::TYPE_LOTTERY . '_' . Lottery::LOTTERY_TYPE_RANDOM . '_' . PlayerLotteryRecord::SOURCE_GAME => '恭喜您在電子遊戲, "{game_name}"，獲得了隨機彩金{lottery_name}的獎勵{amount}.',
         Notice::TYPE_RECHARGE_PASS => '恭喜您的上分訂單已稽核通過，上分 {point}，請查收。',
         Notice::TYPE_RECHARGE_REJECT => '抱歉您的上分訂單稽核不通過。',
         Notice::TYPE_WITHDRAW_PASS => '恭喜您的下分訂單已稽核通過，下分 {point}。',

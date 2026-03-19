@@ -1,7 +1,7 @@
 <?php
 
-use addons\webman\model\GameType;
-use addons\webman\model\Machine;
+use app\model\GameType;
+use app\model\Machine;
 use app\service\machine\Jackpot;
 use app\service\machine\Slot;
 use app\service\machine\SongJackpot;

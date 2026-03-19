@@ -1,7 +1,7 @@
 <?php
 
-use addons\webman\model\GameType;
-use addons\webman\model\PhoneSmsLog;
+use app\model\GameType;
+use app\model\PhoneSmsLog;
 
 return [
     'validation_error' => 'フィールド検証エラー',
@@ -74,7 +74,6 @@ return [
         GameType::CATE_LIVE_VIDEO => 'ライブビデオ',
     ],
     'phone_code_error' => '確認コードエラー',
-    'client_version_incorrect' => 'クライアントバージョンが正しくありません',
     'player_not_fount' => 'ユーザーが存在しません',
     'player_stop' => 'プレイヤーアカウントは無効化されました',
     'password_change_error' => 'パスワードの変更に失敗しました',
@@ -353,7 +352,6 @@ return [
     'game_has_disable' => 'ゲームが無効になっている',
     'game_platform_has_disable' => 'ゲームプラットフォームが無効になっている',
     'game_platform_not_enabled' => 'チャネルはゲームプラットフォームを有効にしていません',
-    'game_not_enabled' => 'このゲームにアクセスする権限がありません',
     'recharge_amount_error' => 'チャージ金額エラー',
     'recharge_method_error' => 'チャージ方式エラー',
     'activity_not_found' => 'アクティビティは存在しません',
@@ -417,4 +415,5 @@ return [
     'machine_lock' => '{code}テーブルはロックされているので、障害物を取り除いてからテーブルをロック解除してください',
     'point_not_enough' => 'テーブルスコアは6より大きくなければ自動を開始できません',
     'machine_point_insufficient' => '{code} 机台、点数が100未満では回転できません',
+    'one_payment_recharge_close' => 'onePay リチャージ パス ロード 已关闭'
 ];

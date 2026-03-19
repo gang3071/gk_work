@@ -1,7 +1,7 @@
 <?php
 
-use addons\webman\model\GameType;
-use addons\webman\model\PhoneSmsLog;
+use app\model\GameType;
+use app\model\PhoneSmsLog;
 
 return [
     'validation_error' => 'Field validation error',
@@ -74,7 +74,6 @@ return [
         GameType::CATE_LIVE_VIDEO => 'Live video',
     ],
     'phone_code_error' => 'Verification code error',
-    'client_version_incorrect' => 'Client version is incorrect',
     'player_not_fount' => 'User does not exist',
     'player_stop' => 'Player account has been deactivated',
     'password_change_error' => 'Password change failed',
@@ -353,7 +352,6 @@ return [
     'game_has_disable' => 'The game has been disabled',
     'game_platform_has_disable' => 'The game platform has been disabled',
     'game_platform_not_enabled' => 'The channel is not enabled for this game platform',
-    'game_not_enabled' => 'You do not have permission to access this game',
     'recharge_amount_error' => 'Recharge amount incorrect',
     'recharge_method_error' => 'Recharge method incorrect',
     'activity_not_found' => 'The activity does not exist',
@@ -420,4 +418,5 @@ return [
     'machine_lock' => '{code}The machine is locked. Please unlock the machine after troubleshooting',
     'point_not_enough' => 'The machine score must be greater than 6 to enable automatic operation',
     'machine_point_insufficient' => '{code} Machine, score less than 100, unable to move up',
+    'one_payment_recharge_close' => 'onePay Recharge Pass Load has been closed'
 ];

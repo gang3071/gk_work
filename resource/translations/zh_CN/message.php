@@ -1,7 +1,7 @@
 <?php
 
-use addons\webman\model\GameType;
-use addons\webman\model\PhoneSmsLog;
+use app\model\GameType;
+use app\model\PhoneSmsLog;
 
 return [
     'validation_error' => '字段验证错误',
@@ -74,7 +74,6 @@ return [
         GameType::CATE_LIVE_VIDEO => '真人视讯',
     ],
     'phone_code_error' => '验证码错误',
-    'client_version_incorrect' => '客户端版本不正确',
     'player_not_fount' => '用户不存在',
     'player_stop' => '玩家账户已停用',
     'password_change_error' => '密码修改失败',
@@ -320,9 +319,6 @@ return [
         'player_gift' => '用户打赏',
         'player_bet_settlement' => '用户下注结算',
         'player_re_bet_settlement' => '注单重新结算',
-        'jackpot_result' => 'Jackpot中獎',
-        'player_prepay' => '打鱼机预扣金额',
-        'player_refund' => '退款',
     ],
     'source' => [
         'system' => '系统',
@@ -363,7 +359,6 @@ return [
     'game_has_disable' => '游戏已被禁用',
     'game_platform_has_disable' => '游戏平台已禁用',
     'game_platform_not_enabled' => '渠道未启用该游戏平台',
-    'game_not_enabled' => '您没有权限访问该游戏',
     'odds_x' => '欠落比X',
     'odds_y' => '欠落比Y',
     'label_id' => '缺少标签ID',
@@ -434,4 +429,5 @@ return [
     'machine_lock' => '{code}机台已锁,请排障后解锁机台',
     'point_not_enough' => '机台分数必须大于6才能开启自动',
     'machine_point_insufficient' => '{code} 机台, 分数不足100无法上转',
+    'one_payment_recharge_close' => 'onePay充值通道已关闭'
 ];
