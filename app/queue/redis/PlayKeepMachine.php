@@ -2,8 +2,8 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\Machine;
-use addons\webman\model\SystemSetting;
+use app\model\Machine;
+use app\model\SystemSetting;
 use app\service\machine\MachineServices;
 use Exception;
 use support\Cache;
@@ -60,7 +60,7 @@ class PlayKeepMachine implements Consumer
                 'keeping' => $services->keeping
             ]);
         } catch (Exception $e) {
-            Log::error('PlayKeepMachine', ['message' => $e->getMessage()]);
+            Log::channel('play_keep_machine')->error('PlayKeepMachine', ['message' => $e->getMessage()]);
         }
     }
 }

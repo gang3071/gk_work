@@ -2,7 +2,8 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\Player;
+use app\model\Player;
+use app\model\PlayGameRecord;
 use app\service\GameLotteryServices;
 use Exception;
 use support\Log;
@@ -22,7 +23,7 @@ class GameLottery implements Consumer
         try {
             /** @var Player $player */
             $player = Player::query()->find($data['player_id']);
-            Log::error('LotteryPool:', [$data]);
+            Log::channel('game_lottery')->error('LotteryPool:', [$data]);
             if (!empty($player)) {
                 if ($player->channel->lottery_status == 0) {
                     return;
@@ -35,7 +36,7 @@ class GameLottery implements Consumer
                 $gameLotteryServices->setPlayer($player)->setLog()->setLotteryList()->addLotteryPool($data['bet'])->checkLottery($data['bet'], $data['play_game_record_id']);
             }
         } catch (Exception $e) {
-            Log::error('LotteryPool:' . $e->getMessage());
+            Log::channel('game_lottery')->error('LotteryPool:' . $e->getMessage());
         }
     }
 
@@ -49,7 +50,7 @@ class GameLottery implements Consumer
     {
         try {
             // 获取当前平台信息
-            $record = \addons\webman\model\PlayGameRecord::query()
+            $record = PlayGameRecord::query()
                 ->with('gamePlatform')
                 ->where('player_id', $player->id)
                 ->orderBy('id', 'desc')
@@ -57,7 +58,7 @@ class GameLottery implements Consumer
 
             // 获取累计押注（最近5分钟）
             $fiveMinutesAgo = date('Y-m-d H:i:s', time() - 300);
-            $totalBet = \addons\webman\model\PlayGameRecord::query()
+            $totalBet = PlayGameRecord::query()
                 ->where('player_id', $player->id)
                 ->where('created_at', '>=', $fiveMinutesAgo)
                 ->sum('bet');
@@ -85,7 +86,7 @@ class GameLottery implements Consumer
                 'timestamp' => time(),
             ]);
         } catch (Exception $e) {
-            Log::error('通知后台玩家押注失败: ' . $e->getMessage());
+            Log::channel('game_lottery')->error('通知后台玩家押注失败: ' . $e->getMessage());
         }
     }
 

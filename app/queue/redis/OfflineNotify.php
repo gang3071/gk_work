@@ -2,8 +2,8 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\ExternalApp;
-use addons\webman\model\Player;
+use app\model\ExternalApp;
+use app\model\Player;
 use Exception;
 use support\Log;
 use Webman\RedisQueue\Consumer;

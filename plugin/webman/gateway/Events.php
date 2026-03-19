@@ -2,8 +2,8 @@
 
 namespace plugin\webman\gateway;
 
-use addons\webman\model\GameType;
-use addons\webman\model\Machine;
+use app\model\GameType;
+use app\model\Machine;
 use app\service\machine\MachineServices;
 use GatewayWorker\Lib\Gateway;
 use support\Cache;

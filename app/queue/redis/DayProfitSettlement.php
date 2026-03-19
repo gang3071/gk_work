@@ -2,19 +2,17 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\Player;
-use addons\webman\model\PlayerDeliveryRecord;
-use addons\webman\model\PlayerWithdrawRecord;
-use addons\webman\model\PlayGameRecord;
-use addons\webman\model\PromoterProfitGameRecord;
+use app\model\Player;
+use app\model\PlayerDeliveryRecord;
+use app\model\PlayerWithdrawRecord;
+use app\model\PlayGameRecord;
+use app\model\PromoterProfitGameRecord;
 use app\service\ProfitSettlementServices;
-use ExAdmin\ui\traits\queueProgress;
 use support\Log;
 use Webman\RedisQueue\Consumer;
 
 class DayProfitSettlement implements Consumer
 {
-    use queueProgress;
 
     public $queue = 'day_profit_settlement';
 
@@ -121,7 +119,7 @@ class DayProfitSettlement implements Consumer
         try {
             ProfitSettlementServices::calculation($player->recommend_id, $player->id, $player->department_id, $info);
         } catch (\Exception $e) {
-            Log::info($e->getMessage());
+            Log::channel('day_profit_settlement')->error($e->getMessage());
             return $this->error($e->getMessage());
         }
 

@@ -2,11 +2,11 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\Player;
-use addons\webman\model\PlayerDeliveryRecord;
-use addons\webman\model\PlayerGamePlatform;
-use addons\webman\model\PlayerPlatformCash;
-use addons\webman\model\PlayerWalletTransfer;
+use app\model\Player;
+use app\model\PlayerDeliveryRecord;
+use app\model\PlayerGamePlatform;
+use app\model\PlayerPlatformCash;
+use app\model\PlayerWalletTransfer;
 use app\service\game\GameServiceFactory;
 use Exception;
 use support\Cache;
@@ -37,7 +37,7 @@ class GameDepositAmount implements Consumer
                 $gameService = GameServiceFactory::createService(strtoupper($gamePlatform->gamePlatform->code),
                     $player);
             } catch (Exception $e) {
-                Log::error('game-depositAmount : ' . $e->getMessage());
+                Log::channel('game_deposit_amount')->error('game-depositAmount : ' . $e->getMessage());
                 return;
             }
             $amount = $data['amount'];
@@ -84,8 +84,8 @@ class GameDepositAmount implements Consumer
                     $playerDeliveryRecord->amount = $playerWalletTransfer->amount;
                     $playerDeliveryRecord->amount_before = $beforeGameAmount;
                     $playerDeliveryRecord->amount_after = $machineWallet->money;
-                    $playerDeliveryRecord->tradeno = $target->tradeno ?? '';
-                    $playerDeliveryRecord->remark = $target->remark ?? '';
+                    $playerDeliveryRecord->tradeno = $playerWalletTransfer->tradeno ?? '';
+                    $playerDeliveryRecord->remark = $playerWalletTransfer->remark ?? '';
                     $playerDeliveryRecord->user_id = 0;
                     $playerDeliveryRecord->user_name = '';
                     $playerDeliveryRecord->save();
@@ -93,7 +93,7 @@ class GameDepositAmount implements Consumer
                     DB::commit();
                 } catch (Exception $e) {
                     DB::rollBack();
-                    Log::error('game-depositAmount : ' . $e->getMessage());
+                    Log::channel('game_deposit_amount')->error('game-depositAmount : ' . $e->getMessage());
                 }
             }
         }

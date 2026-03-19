@@ -2,17 +2,14 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\Channel;
-use addons\webman\model\PlayerPromoter;
-use ExAdmin\ui\traits\queueProgress;
+use app\model\Channel;
+use app\model\PlayerPromoter;
+use Exception;
 use support\Log;
-use think\Exception;
 use Webman\RedisQueue\Consumer;
 
 class ProfitSettlement implements Consumer
 {
-    use queueProgress;
-
     public $queue = 'profit_settlement';
 
     public $connection = 'default';
@@ -56,7 +53,7 @@ class ProfitSettlement implements Consumer
             try {
                 doSettlement($value['player_id'], $data['user_id'], $data['user_name']);
             } catch (Exception $e) {
-                Log::error('推广员分润结算错误: ' . $e->getMessage());
+                Log::channel('profit_settlement')->error('推广员分润结算错误: ' . $e->getMessage());
                 return $this->error($e->getMessage());
             }
             $this->percentage($total, $key + 1);

@@ -3,15 +3,12 @@
 namespace app\queue\redis;
 
 use app\service\OfflineProfitSettlementServices;
-use ExAdmin\ui\traits\queueProgress;
+use Exception;
 use support\Log;
-use think\Exception;
 use Webman\RedisQueue\Consumer;
 
 class OfflineProfitSettlement implements Consumer
 {
-    use queueProgress;
-
     public $queue = 'offline_profit_settlement';
 
     public $connection = 'default';
@@ -26,7 +23,7 @@ class OfflineProfitSettlement implements Consumer
         try {
             OfflineProfitSettlementServices::doProfitSettlement($data);
         } catch (Exception $e) {
-            Log::error('offline_profit_settlement : ' . $e->getMessage());
+            Log::channel('offline_profit_settlement')->error('offline_profit_settlement : ' . $e->getMessage());
         }
     }
 }

@@ -2,9 +2,9 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\Machine;
-use addons\webman\model\MachineMedia;
-use addons\webman\service\MediaServer;
+use app\model\Machine;
+use app\model\MachineMedia;
+use app\service\MediaServer;
 use Exception;
 use support\Log;
 use Webman\RedisQueue\Consumer;

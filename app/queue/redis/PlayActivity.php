@@ -2,9 +2,9 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\GameType;
-use addons\webman\model\Machine;
-use addons\webman\model\Player;
+use app\model\GameType;
+use app\model\Machine;
+use app\model\Player;
 use app\service\ActivityServices;
 use Exception;
 use support\Log;
@@ -41,7 +41,7 @@ class PlayActivity implements Consumer
                 }
             }
         } catch (Exception $e) {
-            Log::error('PlayActivity', [$e->getMessage()]);
+            Log::channel('play_activity')->error('PlayActivity', [$e->getMessage()]);
         }
     }
 }

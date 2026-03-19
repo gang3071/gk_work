@@ -2,9 +2,11 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\GameType;
-use addons\webman\model\Machine;
-use addons\webman\model\Player;
+use app\model\GameType;
+use app\model\Machine;
+use app\model\Player;
+use app\model\PlayerGameLog;
+use app\model\PlayerGameRecord;
 use app\service\LotteryServices;
 use Exception;
 use support\Log;
@@ -45,7 +47,7 @@ class LotteryMachine implements Consumer
                 $lotteryServices->setMachine($machine)->setPlayer($player)->addLotteryPool($data['num'], $data['last_num'])->checkLottery();
             }
         } catch (Exception $e) {
-            Log::error('LotteryPool:' . $e->getMessage());
+            Log::channel('lottery_machine')->error('LotteryPool:' . $e->getMessage());
         }
     }
 
@@ -60,15 +62,15 @@ class LotteryMachine implements Consumer
     {
         try {
             // 获取当前游戏记录
-            $record = \addons\webman\model\PlayerGameRecord::query()
+            $record = PlayerGameRecord::query()
                 ->where('player_id', $player->id)
-                ->where('status', \addons\webman\model\PlayerGameRecord::STATUS_START)
+                ->where('status', PlayerGameRecord::STATUS_START)
                 ->orderBy('id', 'desc')
                 ->first();
 
             // 获取累计押注（最近5分钟）
             $fiveMinutesAgo = date('Y-m-d H:i:s', time() - 300);
-            $totalPressure = \addons\webman\model\PlayerGameLog::query()
+            $totalPressure = PlayerGameLog::query()
                 ->where('player_id', $player->id)
                 ->where('created_at', '>=', $fiveMinutesAgo)
                 ->sum('pressure');
@@ -96,7 +98,7 @@ class LotteryMachine implements Consumer
                 'timestamp' => time(),
             ]);
         } catch (Exception $e) {
-            Log::error('通知后台玩家押注失败: ' . $e->getMessage());
+            Log::channel('lottery_machine')->error('通知后台玩家押注失败: ' . $e->getMessage());
         }
     }
 

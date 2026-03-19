@@ -2,14 +2,12 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\PlayerRechargeRecord;
-use ExAdmin\ui\traits\queueProgress;
-use think\Exception;
+use app\model\PlayerRechargeRecord;
+use Exception;
 use Webman\RedisQueue\Consumer;
 
 class CancelRecharge implements Consumer
 {
-    use queueProgress;
 
     public $queue = 'cancel_recharge';
 

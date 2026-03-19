@@ -2,20 +2,17 @@
 
 namespace app\queue\redis;
 
-use addons\webman\model\GameType;
-use addons\webman\model\Machine;
-use addons\webman\model\SystemSetting;
+use app\model\GameType;
+use app\model\Machine;
+use app\model\SystemSetting;
 use app\service\machine\MachineServices;
-use ExAdmin\ui\traits\queueProgress;
+use Exception;
 use support\Log;
-use think\Exception;
 use Webman\Push\PushException;
 use Webman\RedisQueue\Consumer;
 
 class MachineMaintain implements Consumer
 {
-    use queueProgress;
-
     public $queue = 'machine-maintain';
 
     public $connection = 'default';
@@ -60,7 +57,7 @@ class MachineMaintain implements Consumer
                         throw new Exception('机台类型错误');
                 }
             } catch (\Exception $e) {
-                Log::error('MachineMaintain', [$e->getMessage()]);
+                Log::channel('machine_maintain')->error('MachineMaintain', [$e->getMessage()]);
                 continue;
             }
         }
