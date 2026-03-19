@@ -20,6 +20,8 @@ use app\model\PlayerGameLog;
 use app\model\PlayerGameRecord;
 use app\model\PlayerPlatformCash;
 use app\model\PlayerPromoter;
+use app\model\PlayerRechargeRecord;
+use app\model\PlayerWithdrawRecord;
 use app\model\PromoterProfitRecord;
 use app\model\PromoterProfitSettlementRecord;
 use app\model\SystemSetting;
@@ -28,7 +30,6 @@ use app\service\LotteryServices;
 use app\service\machine\MachineServices;
 use app\service\machine\Slot;
 use app\service\MediaServer;
-use ExAdmin\ui\components\attrs\Sortable;
 use support\Cache;
 use support\Db;
 use support\Log;
@@ -410,6 +411,25 @@ function doCurl(string $url, int $gaming_user_id, int $machine_id, array $params
 function getGivePoints($playerId, $machineId)
 {
     return Cache::get('gift_cache_' . $machineId . '_' . $playerId);
+}
+
+/**
+ * 反转位（用于 CRC8 计算）
+ * @param $num
+ * @param $width
+ * @return void
+ */
+function reflect_bits(&$num, $width): void
+{
+    $ref = 0;
+
+    for ($i = 0; $i < $width; $i++) {
+        $bit = ($num >> $i) & 0b1;
+        $bit = ($bit << (($width - 1) - $i));
+        $ref = $ref | $bit;
+    }
+
+    $num = $ref;
 }
 
 /**
@@ -1584,3 +1604,68 @@ function floorToPointSecond($number)
     return number_format(($number * 100) / 100, 2);
 }
 
+/**
+ * 发送提现待审核消息
+ * @return void
+ * @throws Exception
+ */
+function reviewedWithdrawMessage()
+{
+    $subQuery = PlayerWithdrawRecord::query()
+        ->select(DB::raw('MAX(id) as id'))
+        ->where('status', PlayerWithdrawRecord::STATUS_WAIT)
+        ->groupBy('department_id');
+    /** @var PlayerWithdrawRecord $playerWithdrawRecord */
+    $playerWithdrawRecordList = PlayerWithdrawRecord::query()
+        ->whereIn('id', $subQuery)
+        ->get();
+    if (!empty($playerWithdrawRecordList)) {
+        /** @var PlayerWithdrawRecord $item */
+        foreach ($playerWithdrawRecordList as $item) {
+            sendSocketMessage('private-admin_group-channel-' . $item->department_id, [
+                'msg_type' => 'player_create_withdraw_order',
+                'id' => $item->id,
+                'player_id' => $item->player_id,
+                'player_name' => $item->player_name,
+                'player_phone' => $item->player_phone,
+                'money' => $item->money,
+                'point' => $item->point,
+                'status' => $item->status,
+                'tradeno' => $item->tradeno,
+            ]);
+        }
+    }
+}
+
+/**
+ * 发送充值待审核消息
+ * @return void
+ * @throws Exception
+ */
+function reviewedRechargeMessage()
+{
+    $subQuery = PlayerRechargeRecord::query()
+        ->select(DB::raw('MAX(id) as id'))
+        ->where('status', PlayerRechargeRecord::STATUS_RECHARGING)
+        ->whereIn('type', [PlayerRechargeRecord::TYPE_SELF, PlayerRechargeRecord::TYPE_BUSINESS])
+        ->groupBy('department_id');
+    /** @var PlayerRechargeRecord $playerRechargeRecord */
+    $playerRechargeRecordList = PlayerRechargeRecord::query()
+        ->whereIn('id', $subQuery)
+        ->get();
+    if (!empty($playerRechargeRecordList)) {
+        /** @var PlayerRechargeRecord $item */
+        foreach ($playerRechargeRecordList as $item) {
+            sendSocketMessage('private-admin_group-channel-' . $item->department_id, [
+                'msg_type' => 'player_examine_recharge_order',
+                'id' => $item->id,
+                'player_id' => $item->player_id,
+                'player_name' => $item->player_name,
+                'player_phone' => $item->player_phone,
+                'money' => $item->money,
+                'status' => $item->status,
+                'tradeno' => $item->tradeno,
+            ]);
+        }
+    }
+}
