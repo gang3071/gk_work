@@ -32,12 +32,7 @@ class BankContent extends Model
         'created_at',
         'updated_at',
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.bank_content_table'));
-    }
+    protected $table = 'bank_content';
 
     /**
      * 银行

@@ -29,11 +29,7 @@ class MachineMediaPush extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_media_push_table'));
-    }
+    protected $table = 'machine_media_push';
 
     /**
      * 关联机台

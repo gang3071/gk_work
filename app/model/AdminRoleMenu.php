@@ -44,10 +44,5 @@ class AdminRoleMenu extends Model
         'role_id' => 'integer',
         'menu_id' => 'integer',
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.role_menu_table'));
-    }
+    protected $table = 'admin_role_menus';
 }

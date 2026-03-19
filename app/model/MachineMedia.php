@@ -34,11 +34,7 @@ class MachineMedia extends Model
 {
     use SoftDeletes, HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_media_table'));
-    }
+    protected $table = 'machine_media';
 
     /**
      * 游戏类别

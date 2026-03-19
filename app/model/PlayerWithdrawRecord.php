@@ -67,12 +67,7 @@ class PlayerWithdrawRecord extends Model
     const TYPE_GB = 4; // 购宝提现
     const TYPE_COIN = 5; // 币商提现
     protected $dataAuth = ['department_id' => 'department_id'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_withdraw_record_table'));
-    }
+    protected $table = 'player_withdraw_record';
 
     /**
      * 模型的 "booted" 方法

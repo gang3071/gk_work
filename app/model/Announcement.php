@@ -37,12 +37,7 @@ class Announcement extends Model
     const PRIORITY_ORDINARY = 1; // 普通
     const PRIORITY_SENIOR = 2; // 高级
     const PRIORITY_EMERGENT = 3; // 紧急
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.announcement_table'));
-    }
+    protected $table = 'announcement';
 
     /**
      * 游戏类别

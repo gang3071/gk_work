@@ -29,12 +29,7 @@ class NationalLevel extends Model
         'sort',
         'name',
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.national_level_table'));
-    }
+    protected $table = 'national_level';
 
     /**
      * 等级信息

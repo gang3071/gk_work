@@ -37,12 +37,7 @@ class PlayerActivityRecord extends Model
 
     const STATUS_BEGIN = 1; // 进行中
     const STATUS_FINISH = 2; // 已结束
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_activity_record_table'));
-    }
+    protected $table = 'player_activity_record';
 
     /**
      * 活动内容

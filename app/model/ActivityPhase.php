@@ -28,11 +28,7 @@ class ActivityPhase extends Model
     use HasDateTimeFormatter;
 
     //数据权限字段
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.activity_phase_table'));
-    }
+    protected $table = 'activity_phase';
 
     /**
      * 活动

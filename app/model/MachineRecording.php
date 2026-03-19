@@ -50,12 +50,7 @@ class MachineRecording extends Model
 
     //数据权限字段
     protected $dataAuth = ['department_id' => 'department_id'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_recording_table'));
-    }
+    protected $table = 'machine_recording';
 
     /**
      * 机台

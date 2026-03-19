@@ -37,11 +37,7 @@ class PlayerWalletTransfer extends Model
     const TYPE_IN = 2; // 转入
 
     //数据权限字段
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_wallet_transfer_table'));
-    }
+    protected $table = 'player_wallet_transfer';
 
     /**
      * 渠道信息

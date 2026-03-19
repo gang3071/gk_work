@@ -61,13 +61,7 @@ class PromoterProfitRecord extends Model
 
     const MODEL_TASK = 1; // 任务模式
     const MODEL_EVENT = 2; // 事件模式
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.promoter_profit_record_table'));
-    }
+    protected $table = 'promoter_profit_record';
 
     /**
      * 玩家信息

@@ -40,12 +40,7 @@ class PhoneSmsLog extends Model
     const COUNTRY_CODE_JP = 81; // 日本
     const COUNTRY_CODE_TW = 886; // 中国台湾
     const COUNTRY_CODE_CH = 86; // 中国大陆
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.phone_sms_log_table'));
-    }
+    protected $table = 'phone_sms_log';
 
     /**
      * 玩家信息

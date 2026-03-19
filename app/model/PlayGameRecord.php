@@ -80,12 +80,7 @@ class PlayGameRecord extends Model
         'action_data',
         'type'
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.play_game_record_table'));
-    }
+    protected $table = 'play_game_record';
 
     /**
      * 渠道信息

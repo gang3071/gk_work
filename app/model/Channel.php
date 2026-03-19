@@ -93,13 +93,7 @@ class Channel extends Model
     const TYPE_STORE = 1; // 直营
     const TYPE_API = 2; // api
     const TYPE_AGENT = 3; // 代理
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.channel_table'));
-    }
+    protected $table = 'channel';
 
     /**
      * 模型的 "booted" 方法

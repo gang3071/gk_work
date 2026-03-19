@@ -52,13 +52,7 @@ class StoreAgentProfitRecord extends Model
 
     const TYPE_AGENT = 1; // 代理
     const TYPE_STORE = 2; // 店家
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.store_agent_profit_record_table'));
-    }
+    protected $table = 'store_agent_profit_record';
 
     /**
      * 玩家信息

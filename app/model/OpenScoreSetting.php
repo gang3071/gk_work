@@ -51,13 +51,7 @@ class OpenScoreSetting extends Model
         'score_6' => 'integer',
         'default_scores' => 'integer',
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.open_score_setting_table'));
-    }
+    protected $table = 'open_score_setting';
 
     /**
      * 店家玩家（旧方法，已废弃）

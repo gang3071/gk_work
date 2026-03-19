@@ -26,11 +26,7 @@ class MachineKickLog extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_kick_log_table'));
-    }
+    protected $table = 'machine_kick_log';
 
     /**
      * 玩家信息

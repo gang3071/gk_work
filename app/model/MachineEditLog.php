@@ -31,12 +31,7 @@ class MachineEditLog extends Model
 
     const SOURCE_MACHINE = 1; // 来源机台表
     const SOURCE_MEDIA = 2; // 来源媒体表
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_edit_log_table'));
-    }
+    protected $table = 'machine_edit_log';
 
     /**
      * 机台信息

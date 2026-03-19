@@ -20,11 +20,7 @@ class PlayerTag extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_tag_table'));
-    }
+    protected $table = 'player_tag';
 
     /**
      * 时间转换

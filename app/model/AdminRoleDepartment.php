@@ -44,10 +44,5 @@ class AdminRoleDepartment extends Model
         'role_id' => 'integer',
         'department_id' => 'integer',
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.role_department_table'));
-    }
+    protected $table = 'admin_role_department';
 }

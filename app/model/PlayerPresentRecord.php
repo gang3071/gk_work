@@ -37,12 +37,7 @@ class PlayerPresentRecord extends Model
 
     const TYPE_IN = 1; // 转入
     const TYPE_OUT = 2; // 转出
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_present_record_table'));
-    }
+    protected $table = 'player_present_record';
 
 
     public function user(): BelongsTo

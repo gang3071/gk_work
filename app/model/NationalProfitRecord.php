@@ -22,11 +22,7 @@ class NationalProfitRecord extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.national_profit_record_table'));
-    }
+    protected $table = 'national_profit_record';
 
     /**
      * 玩家信息

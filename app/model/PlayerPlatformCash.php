@@ -28,12 +28,7 @@ class PlayerPlatformCash extends Model
     const PLATFORM_SELF = 1; // 实体机平台
 
     protected $fillable = ['player_id', 'platform_id', 'platform_name', 'money'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_platform_cash_table'));
-    }
+    protected $table = 'player_platform_cash';
 
     /**
      * 点数

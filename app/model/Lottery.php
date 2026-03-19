@@ -95,11 +95,7 @@ class Lottery extends Model
         }
     }
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.lottery_table'));
-    }
+    protected $table = 'lottery';
 
     /**
      * 玩家信息

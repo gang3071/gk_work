@@ -28,12 +28,7 @@ class Slider extends Model
 
     //数据权限字段
     protected $dataAuth = ['department_id' => 'department_id'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.slider_table'));
-    }
+    protected $table = 'slider';
 
     /**
      * 渠道信息

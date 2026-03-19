@@ -21,11 +21,7 @@ class Bank extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.bank_table'));
-    }
+    protected $table = 'bank_list';
 
     /**
      * 银行内容

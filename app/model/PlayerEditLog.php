@@ -30,12 +30,7 @@ class PlayerEditLog extends Model
 
     //数据权限字段
     protected $dataAuth = ['department_id' => 'department_id'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_edit_log_table'));
-    }
+    protected $table = 'player_edit_log';
 
     /**
      * 玩家信息

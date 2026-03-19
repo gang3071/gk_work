@@ -103,11 +103,7 @@ class Player extends Model
         return $date->format('Y-m-d H:i:s');
     }
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_table'));
-    }
+    protected $table = 'player';
 
     public function machine_wallet(): HasOne
     {

@@ -34,13 +34,7 @@ class AdminDepartment extends Model
     const TYPE_CHANNEL = 2; // 渠道
     const TYPE_AGENT = 3; // 代理
     const TYPE_STORE = 4; // 店家
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.department_table'));
-    }
+    protected $table = 'admin_department';
 
     protected static function booted()
     {

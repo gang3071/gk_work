@@ -25,11 +25,7 @@ class Currency extends Model
 {
     use SoftDeletes, HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.currency_table'));
-    }
+    protected $table = 'currency';
 
     /**
      * 游戏类别

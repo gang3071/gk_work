@@ -41,12 +41,7 @@ class PlayerGameRecord extends Model
 
     const STATUS_START = 1; // 进行中
     const STATUS_END = 2; // 结束
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_game_record_table'));
-    }
+    protected $table = 'player_game_record';
 
     /**
      * 上分

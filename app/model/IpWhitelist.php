@@ -18,9 +18,5 @@ class IpWhitelist extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.ip_white_list_table'));
-    }
+    protected $table = 'ip_white_list';
 }

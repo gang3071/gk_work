@@ -36,12 +36,7 @@ class GameContent extends Model
         'created_at',
         'updated_at',
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.game_content_table'));
-    }
+    protected $table = 'game_content';
 
     /**
      * 游戏平台

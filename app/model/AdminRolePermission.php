@@ -44,10 +44,5 @@ class AdminRolePermission extends Model
         'role_id' => 'integer',
         'permission_id' => 'integer',
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.role_permission_table'));
-    }
+    protected $table = 'admin_role_permissions';
 }

@@ -37,11 +37,7 @@ class ChannelMachine extends Model
         return $date->format('Y-m-d H:i:s');
     }
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.channel_machine_table'));
-    }
+    protected $table = 'channel_machine';
 
     /**
      * 渠道信息

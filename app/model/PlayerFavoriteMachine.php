@@ -22,11 +22,7 @@ class PlayerFavoriteMachine extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_favorite_machine_table'));
-    }
+    protected $table = 'player_favorite_machine';
 
     /**
      * 玩家信息

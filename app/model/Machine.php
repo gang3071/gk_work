@@ -95,12 +95,7 @@ class Machine extends Model
     protected $name;
     protected $correct_rate;
     protected $picture_url;
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_table'));
-    }
+    protected $table = 'machine';
 
     /**
      * 模型的 "booted" 方法

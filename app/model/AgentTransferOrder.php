@@ -43,12 +43,7 @@ class AgentTransferOrder extends Model
 
     const TYPE_IN = 1; // 转入
     const TYPE_OUT = 2; // 转出
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.agent_transfer_order_table'));
-    }
+    protected $table = 'agent_transfer_order';
 
     /**
      * 渠道信息

@@ -18,10 +18,5 @@ use Illuminate\Database\Eloquent\Model;
  */
 class AdminFileAttachmentCate extends Model
 {
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.attachment_cate_table'));
-    }
+    protected $table = 'admin_file_attachment_cates';
 }

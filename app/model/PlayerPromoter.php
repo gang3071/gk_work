@@ -66,11 +66,7 @@ class PlayerPromoter extends Model
         return $date->format('Y-m-d H:i:s');
     }
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_promoter_table'));
-    }
+    protected $table = 'player_promoter';
 
     /**
      * 渠道信息

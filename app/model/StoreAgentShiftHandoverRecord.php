@@ -36,13 +36,7 @@ class StoreAgentShiftHandoverRecord extends Model
 
     //数据权限字段
     protected $dataAuth = ['department_id' => 'department_id'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.store_agent_shift_handover_record_table'));
-    }
+    protected $table = 'store_agent_shift_handover_record';
 
     /**
      * 管理员用户

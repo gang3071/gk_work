@@ -22,11 +22,5 @@ class AdminConfig extends Model
     use HasDateTimeFormatter;
 
     protected $fillable = ['name', 'value'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.config_table'));
-    }
+    protected $table = 'admin_configs';
 }

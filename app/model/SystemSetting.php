@@ -29,12 +29,7 @@ class SystemSetting extends Model
 
     //数据权限字段
     protected $dataAuth = ['department_id' => 'department_id'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.system_setting_table'));
-    }
+    protected $table = 'system_setting';
 
     /**
      * 模型的 "booted" 方法

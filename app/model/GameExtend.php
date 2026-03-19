@@ -43,11 +43,7 @@ class GameExtend extends Model
         return $date->format('Y-m-d H:i:s');
     }
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.game_extend_table'));
-    }
+    protected $table = 'game_extend';
 
     /**
      * 游戏平台

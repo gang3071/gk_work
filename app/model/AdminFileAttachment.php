@@ -33,11 +33,5 @@ class AdminFileAttachment extends Model
     use SoftDeletes, HasDateTimeFormatter;
 
     protected $fillable = ['cate_id', 'uploader_id', 'type', 'file_type', 'name', 'real_name', 'path', 'url', 'ext', 'disk', 'size'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.attachment_table'));
-    }
+    protected $table = 'admin_file_attachments';
 }

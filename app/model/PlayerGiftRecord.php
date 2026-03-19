@@ -36,9 +36,5 @@ class PlayerGiftRecord extends Model
         return $date->format('Y-m-d H:i:s');
     }
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_gift_record_table'));
-    }
+    protected $table = 'player_gift_record';
 }

@@ -62,11 +62,7 @@ class MachineReport extends Model
         return $date->format('Y-m-d H:i:s');
     }
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_report_table'));
-    }
+    protected $table = 'machine_report';
 
     /**
      * 机台信息

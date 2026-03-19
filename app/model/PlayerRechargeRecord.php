@@ -66,12 +66,7 @@ class PlayerRechargeRecord extends Model
     const TYPE_GB = 5; // 购宝充值
     const TYPE_MACHINE = 6; // 机器投钞
     const TYPE_EH = 7; // Eh-Pay
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_recharge_record_table'));
-    }
+    protected $table = 'player_recharge_record';
 
     /**
      * 玩家信息

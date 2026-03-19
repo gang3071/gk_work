@@ -22,11 +22,7 @@ class MachineOpenCard extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_open_card_table'));
-    }
+    protected $table = 'machine_open_card';
 
     /**
      * 机台信息

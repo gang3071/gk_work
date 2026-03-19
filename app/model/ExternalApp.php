@@ -37,11 +37,7 @@ class ExternalApp extends Model
 {
     use SoftDeletes, HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.external_app_table'));
-    }
+    protected $table = 'external_app';
 
     /**
      * 模型的 "booted" 方法

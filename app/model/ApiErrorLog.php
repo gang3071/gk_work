@@ -20,9 +20,5 @@ use Illuminate\Database\Eloquent\Model;
  */
 class ApiErrorLog extends Model
 {
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.api_error_log_table'));
-    }
+    protected $table = 'api_error_log';
 }

@@ -35,12 +35,7 @@ class NationalPromoter extends Model
     use HasDateTimeFormatter;
 
     protected $fillable = ['uid', 'level'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.national_promoter_table'));
-    }
+    protected $table = 'national_promoter';
 
     /**
      * 玩家信息

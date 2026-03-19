@@ -73,11 +73,7 @@ class Notice extends Model
         return $date->format('Y-m-d H:i:s');
     }
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.notice_table'));
-    }
+    protected $table = 'notice';
 
     /**
      * 游戏类别

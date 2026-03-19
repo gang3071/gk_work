@@ -36,13 +36,7 @@ class PlayerReverseWaterDetail extends Model
 
     const STATUS_UNRECEIVED = 0; // 未领取
     const STATUS_RECEIVED = 1; // 已领取
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.player_reverse_water_detail_table'));
-    }
+    protected $table = 'player_reverse_water_detail';
 
     /**
      * 玩家信息

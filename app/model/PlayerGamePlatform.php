@@ -30,11 +30,7 @@ class PlayerGamePlatform extends Model
 {
     use SoftDeletes, HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_game_platform_table'));
-    }
+    protected $table = 'player_game_platform';
 
     /**
      * 游戏平台

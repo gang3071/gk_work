@@ -21,12 +21,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class ChannelPlatformReverseWaterSetting extends Model
 {
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.channel_platform_reverse_water_setting_table'));
-    }
+    protected $table = 'channel_platform_reverse_water_setting';
 
     /**
      * 反水活动

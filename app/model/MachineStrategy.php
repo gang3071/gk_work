@@ -22,11 +22,7 @@ class MachineStrategy extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_strategy_table'));
-    }
+    protected $table = 'machine_strategy';
 
     /**
      * 获取器 - 内容图片

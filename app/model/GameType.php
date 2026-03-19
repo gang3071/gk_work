@@ -42,12 +42,7 @@ class GameType extends Model
     const CATE_ARCADE = 8; // 街機
     const CATE_SPORT = 9; // 体育
     const CATE_LOTTERY = 10; // 彩票
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.game_type_table'));
-    }
+    protected $table = 'game_type';
 
     /**
      * 玩家信息

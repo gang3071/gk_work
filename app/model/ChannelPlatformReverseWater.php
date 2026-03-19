@@ -33,13 +33,7 @@ class ChannelPlatformReverseWater extends Model
         'checkout_time',
         'status'
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.channel_platform_reverse_water_table'));
-    }
+    protected $table = 'channel_platform_reverse_water';
 
     /**
      * 反水活动配置

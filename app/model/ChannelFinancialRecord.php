@@ -40,12 +40,7 @@ class ChannelFinancialRecord extends Model
     const ACTION_RECHARGE_SETTING_EDIT = 9; // 修改充值配置
     const ACTION_WITHDRAW_GB_ERROR = 10; // 购宝处理失败
     const ACTION_WITHDRAW_EH_ERROR = 11; // EH支付处理失败
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.channel_financial_record_table'));
-    }
+    protected $table = 'channel_financial_record';
 
     /**
      * 玩家信息

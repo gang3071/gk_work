@@ -38,12 +38,7 @@ class Game extends Model
     const DISPLAY_MODE_LANDSCAPE = 1; // 横版
     const DISPLAY_MODE_PORTRAIT = 2;  // 竖版
     const DISPLAY_MODE_ALL = 3;       // 全部支持
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.game_table'));
-    }
+    protected $table = 'game';
 
     /**
      * 游戏平台

@@ -23,11 +23,7 @@ class PlayHistory extends Model
 {
     use SoftDeletes, HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.play_history_table'));
-    }
+    protected $table = 'play_history';
 
     /**
      * 玩家信息

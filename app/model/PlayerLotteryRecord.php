@@ -66,12 +66,7 @@ class PlayerLotteryRecord extends Model
     const SOURCE_GAME = 2;// 电子游戏
     const SOURCE_MANUAL = 3;// 手动发放
     protected $dataAuth = ['department_id' => 'department_id']; // 已完成
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_lottery_record_table'));
-    }
+    protected $table = 'player_lottery_record';
 
     /**
      * @return void

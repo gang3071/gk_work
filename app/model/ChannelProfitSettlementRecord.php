@@ -48,13 +48,7 @@ class ChannelProfitSettlementRecord extends Model
 
     const TYPE_SETTLEMENT = 1; // 结算
     const TYPE_CLEAR = 2; // 清算
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.channel_profit_settlement_record_table'));
-    }
+    protected $table = 'channel_profit_settlement_record';
 
     /**
      * 渠道信息

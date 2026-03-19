@@ -37,12 +37,7 @@ class MachineKeepingLog extends Model
 
     const STATUS_STAR = 1; // 进行中
     const STATUS_END = 2; // 已结束
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_keeping_log_table'));
-    }
+    protected $table = 'machine_keeping_log';
 
     /**
      * 玩家信息

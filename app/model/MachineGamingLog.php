@@ -30,10 +30,5 @@ class MachineGamingLog extends Model
     use HasDateTimeFormatter;
 
     protected $fillable = ['machine_id', 'type', 'date', 'turn_point', 'pressure', 'score', 'seventh_turn_point', 'seventh_pressure', 'seventh_score', 'thirty_turn_point', 'thirty_pressure', 'thirty_score'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_gaming_log_table'));
-    }
+    protected $table = 'machine_gaming_log';
 }

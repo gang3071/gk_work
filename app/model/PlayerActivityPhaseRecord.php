@@ -44,12 +44,7 @@ class PlayerActivityPhaseRecord extends Model
     const STATUS_COMPLETE = 3; // 已发放(审核通过)
     const STATUS_REJECT = 4; // 已拒绝
     protected $dataAuth = ['department_id' => 'department_id'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_activity_phase_record_table'));
-    }
+    protected $table = 'player_activity_phase_record';
 
     /**
      * @return void

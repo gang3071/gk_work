@@ -21,9 +21,5 @@ class NationalInvite extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.national_invite_table'));
-    }
+    protected $table = 'national_invite';
 }

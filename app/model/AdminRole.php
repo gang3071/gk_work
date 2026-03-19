@@ -94,12 +94,7 @@ class AdminRole extends Model
         'type' => self::TYPE_ADMIN,
         'check_strictly' => false,
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.role_table'));
-    }
+    protected $table = 'admin_roles';
 
     /**
      * 模型的 "booted" 方法

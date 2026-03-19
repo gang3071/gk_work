@@ -42,13 +42,7 @@ class ChannelRechargeSetting extends Model
 
     //数据权限字段
     protected $dataAuth = ['department_id' => 'department_id'];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.channel_recharge_setting_table'));
-    }
+    protected $table = 'channel_recharge_setting';
 
     /**
      * 部门

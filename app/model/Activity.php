@@ -32,11 +32,7 @@ class Activity extends Model
     use SoftDeletes, HasDateTimeFormatter;
 
     //数据权限字段
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.activity_table'));
-    }
+    protected $table = 'activity';
 
     /**
      * 活动内容

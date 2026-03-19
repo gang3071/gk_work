@@ -42,13 +42,7 @@ class PromoterProfitGameRecord extends Model
 
     const STATUS_UNCOMPLETED = 0; // 未结算
     const STATUS_COMPLETED = 1; // 已结算
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.promoter_profit_game_record_table'));
-    }
+    protected $table = 'promoter_profit_game_record';
 
     /**
      * 玩家信息

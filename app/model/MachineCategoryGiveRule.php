@@ -19,10 +19,5 @@ use Illuminate\Database\Eloquent\Model;
  */
 class MachineCategoryGiveRule extends Model
 {
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_category_give_rule_table'));
-    }
+    protected $table = 'machine_category_give_rule';
 }

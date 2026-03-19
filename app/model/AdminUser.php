@@ -137,12 +137,7 @@ class AdminUser extends Model
         'type' => self::TYPE_ADMIN,
         'is_super' => false,
     ];
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.user_table'));
-    }
+    protected $table = 'admin_users';
 
     // ==================== 关联关系 ====================
 

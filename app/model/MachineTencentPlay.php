@@ -30,9 +30,5 @@ class MachineTencentPlay extends Model
 {
     use HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.machine_tencent_play_table'));
-    }
+    protected $table = 'machine_tencent_play';
 }

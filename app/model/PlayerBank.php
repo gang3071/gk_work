@@ -29,11 +29,7 @@ class PlayerBank extends Model
 {
     use SoftDeletes, HasDateTimeFormatter;
 
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-        $this->setTable(plugin()->webman->config('database.player_bank_table'));
-    }
+    protected $table = 'player_bank';
 
     /**
      * 玩家信息

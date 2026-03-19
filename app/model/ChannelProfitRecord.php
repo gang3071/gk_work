@@ -48,13 +48,7 @@ class ChannelProfitRecord extends Model
 
     const STATUS_UNCOMPLETED = 0; // 未结算
     const STATUS_COMPLETED = 1; // 已结算
-
-    public function __construct(array $attributes = [])
-    {
-        parent::__construct($attributes);
-
-        $this->setTable(plugin()->webman->config('database.channel_profit_record_table'));
-    }
+    protected $table = 'channel_profit_record';
 
     /**
      * 结算信息
