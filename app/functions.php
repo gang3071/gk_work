@@ -81,7 +81,7 @@ function machineKeepOutPlayer(): void
     $log = Log::channel('machine_keeping');
     //機台例行維護中
     if (machineMaintaining()) {
-        $log->info('PlayOutMachine', ['全站维护中']);
+        $log->info('PlayOutMachine: 全站维护中');
         return;
     }
     /** @var SystemSetting $setting */
@@ -182,11 +182,11 @@ function machineKeepOutPlayer(): void
             if ($keepSeconds > 0) {
                 if ($services->reward_status == 1) {
                     if ($machine->type == GameType::TYPE_STEEL_BALL) {
-                        $log->info('PlayOutMachine', [$machine->code . '开奖中15分钟内不扣除保留时间']);
+                        $log->info('PlayOutMachine: ' . $machine->code . '开奖中15分钟内不扣除保留时间');
                         continue;
                     }
                 }
-                $log->info('PlayOutMachine: 扣除保留时间', [$keepingSetting, $keepSeconds]);
+                $log->info('PlayOutMachine: 扣除保留时间', ['keeping_setting' => $keepingSetting, 'keep_seconds' => $keepSeconds]);
                 $services->keep_seconds = max(bcsub($keepSeconds, 10), 0);
                 sendSocketMessage('player-' . $machine->gaming_user_id . '-' . $machine->id, [
                     'msg_type' => 'player_machine_keeping',
@@ -247,7 +247,7 @@ function machineKeepOutPlayer(): void
                 }
             }
         } catch (\Exception $e) {
-            $log->error('PlayOutMachine', [$e->getMessage()]);
+            $log->error('PlayOutMachine: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
         }
     }
 }
