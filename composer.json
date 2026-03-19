@@ -34,6 +34,7 @@
     "doctrine/annotations": "1.14",
     "illuminate/database": "^8.83",
     "illuminate/redis": "^8.83",
+    "symfony/cache": "^5.4",
     "ext-openssl": "*",
     "webman/log": "^1.1",
     "yzh52521/webman-lock": "^1.0",
