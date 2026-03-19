@@ -359,9 +359,9 @@ function getContent(int $type, string $source): string
 function sendSocketMessage($channels, $content, string $form = 'system')
 {
     try {
-        // 发送进入保留状态消息
+        // 从配置文件读取 API 地址（支持跨服务器推送）
         $api = new Api(
-            'http://127.0.0.1:3232',
+            config('plugin.webman.push.app.api'),
             config('plugin.webman.push.app.app_key'),
             config('plugin.webman.push.app.app_secret')
         );
