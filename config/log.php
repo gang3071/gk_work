@@ -662,7 +662,7 @@ if (env('TELEGRAM_ENABLED', false)) {
 
     if ($botToken && $chatId) {
         $handlers['default']['handlers'][] = [
-            'class' => app\service\TelegramHandler::class,
+            'class' => app\service\TelegramService::class,
             'constructor' => [
                 $botToken,                  // Telegram Bot Token
                 $chatId,                    // Chat ID
