@@ -12,7 +12,7 @@
  * @license   http://www.opensource.org/licenses/mit-license.php MIT License
  */
 
-return [
+$handlers = [
     'default' => [
         'handlers' => [
             [
@@ -654,3 +654,23 @@ return [
         ],
     ],
 ];
+
+// 如果启用 Telegram 通知，添加到 default 通道
+if (env('TELEGRAM_ENABLED', false)) {
+    $botToken = env('TELEGRAM_BOT_TOKEN', '');
+    $chatId = env('TELEGRAM_CHAT_ID', '');
+
+    if ($botToken && $chatId) {
+        $handlers['default']['handlers'][] = [
+            'class' => app\service\TelegramHandler::class,
+            'constructor' => [
+                $botToken,                  // Telegram Bot Token
+                $chatId,                    // Chat ID
+                Monolog\Logger::ERROR,      // 只发送 ERROR 及以上级别
+                true,                       // bubble
+            ],
+        ];
+    }
+}
+
+return $handlers;
