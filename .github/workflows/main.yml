@@ -1,4 +1,4 @@
-name: Auto Deploy on WORK Main Branch
+name: Work
 
 # 1. 触发条件：只有当 push 到 main 分支时才触发work
 on:
