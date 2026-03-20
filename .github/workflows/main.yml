@@ -14,4 +14,4 @@ jobs:
       - name: Trigger Baota WebHook
         # 2. 这里的 URL 替换成你从宝塔 WebHook 插件里复制出来的那个完整链接
         run: |
-          curl -k -X GET "http://34.80.234.173:35812/738e87c1/hook?access_key=123&param=aaa"
+          curl -k -X GET "http://34.80.234.173:35812/738e87c1/hook?access_key=ZbVfTXP8aMvRvlGW08F58fyxDpjQwCik2V2tMRhJSPAgNkkt&param=aaa"
