@@ -1,0 +1,17 @@
+name: Auto Deploy on Main Branch
+
+# 1. 触发条件：只有当 push 到 main 分支时才触发
+on:
+  push:
+    branches:
+      - main
+      # 如果你的后台项目是 master，就把上面那行改成 - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Baota WebHook
+        # 2. 这里的 URL 替换成你从宝塔 WebHook 插件里复制出来的那个完整链接
+        run: |
+          curl -k -X GET "http://你的面板IP:端口/hook?access_key=xxxxxxxxx&param=xxx"
