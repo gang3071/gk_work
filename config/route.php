@@ -6,6 +6,26 @@ Route::options('[{path:.+}]', function () {
     return response('');
 });
 
+// API v1 路由（接收来自 gk_api 的代理请求）
+Route::group('/api/v1', function () {
+    // 进入游戏
+    Route::post('/enter-game', [\app\wallet\controller\GamePlatformProxyController::class, 'enterGame']);
+    // 进入游戏大厅
+    Route::post('/lobby-login', [\app\wallet\controller\GamePlatformProxyController::class, 'lobbyLogin']);
+    // 平台转出到电子游戏
+    Route::post('/wallet-transfer-out', [\app\wallet\controller\GamePlatformProxyController::class, 'walletTransferOut']);
+    // 电子游戏转入到平台
+    Route::post('/wallet-transfer-in', [\app\wallet\controller\GamePlatformProxyController::class, 'walletTransferIn']);
+    // 查询电子游戏平台余额
+    Route::post('/get-balance', [\app\wallet\controller\GamePlatformProxyController::class, 'getBalance']);
+    // 查询所有电子游戏平台余额
+    Route::post('/get-wallet', [\app\wallet\controller\GamePlatformProxyController::class, 'getWallet']);
+    // 全部转出
+    Route::post('/withdrawAmountAll', [\app\wallet\controller\GamePlatformProxyController::class, 'withdrawAmountAll']);
+    // 快速转出电子游戏钱包余额
+    Route::post('/fast-transfer', [\app\wallet\controller\GamePlatformProxyController::class, 'fastTransfer']);
+});
+
 // 单一钱包api
 Route::group('/single-wallet', function () {
     Route::group('/mt-channel', function () {
