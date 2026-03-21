@@ -169,6 +169,7 @@ class GamePlatformProxyController
                 ]);
             }
 
+
             // 调用游戏服务获取游戏URL
             $gameService = GameServiceFactory::createService(strtoupper($game->gamePlatform->code), $player);
             $gameUrl = $gameService->gameLogin($game, $lang);
