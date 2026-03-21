@@ -361,11 +361,11 @@ function getContent(int $type, string $source): string
 function sendSocketMessage($channels, $content, string $form = 'system')
 {
     try {
-        // 从配置文件读取 API 地址（支持跨服务器推送）
+        // 直接读取 .env 配置，连接到 gk_api 的推送服务
         $api = new Api(
-            config('plugin.webman.push.app.api'),
-            config('plugin.webman.push.app.app_key'),
-            config('plugin.webman.push.app.app_secret')
+            env('PUSH_API_URL', 'http://10.140.0.6:3232'),
+            env('PUSH_APP_KEY', '20f94408fc4c52845f162e92a253c7a3'),
+            env('PUSH_APP_SECRET', '3151f8648a6ccd9d4515386f34127e28')
         );
         return $api->trigger($channels, 'message', [
             'from_uid' => $form,
