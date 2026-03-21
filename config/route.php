@@ -12,27 +12,29 @@ Route::post('/test', function () {
 });
 
 // API v1 路由（接收来自 gk_api 的代理请求）
-Route::group('/api/v1', function () {
-    // 测试路由
-    Route::post('/test', function () {
-        return json(['status' => 'ok', 'message' => 'API v1 test works']);
+Route::group('/api', function () {
+    Route::group('/v1', function () {
+// 测试路由
+        Route::post('/test', function () {
+            return json(['status' => 'ok', 'message' => 'API v1 test works']);
+        });
+// 进入游戏
+        Route::post('/enter-game', [\app\api\v1\GamePlatformProxyController::class, 'enterGame']);
+// 进入游戏大厅
+        Route::post('/lobby-login', [\app\api\v1\GamePlatformProxyController::class, 'lobbyLogin']);
+// 平台转出到电子游戏
+        Route::post('/wallet-transfer-out', [\app\api\v1\GamePlatformProxyController::class, 'walletTransferOut']);
+// 电子游戏转入到平台
+        Route::post('/wallet-transfer-in', [\app\api\v1\GamePlatformProxyController::class, 'walletTransferIn']);
+// 查询电子游戏平台余额
+        Route::post('/get-balance', [\app\api\v1\GamePlatformProxyController::class, 'getBalance']);
+// 查询所有电子游戏平台余额
+        Route::post('/get-wallet', [\app\api\v1\GamePlatformProxyController::class, 'getWallet']);
+// 全部转出
+        Route::post('/withdrawAmountAll', [\app\api\v1\GamePlatformProxyController::class, 'withdrawAmountAll']);
+// 快速转出电子游戏钱包余额
+        Route::post('/fast-transfer', [\app\api\v1\GamePlatformProxyController::class, 'fastTransfer']);
     });
-    // 进入游戏
-    Route::post('/enter-game', [\app\api\v1\GamePlatformProxyController::class, 'enterGame']);
-    // 进入游戏大厅
-    Route::post('/lobby-login', [\app\api\v1\GamePlatformProxyController::class, 'lobbyLogin']);
-    // 平台转出到电子游戏
-    Route::post('/wallet-transfer-out', [\app\api\v1\GamePlatformProxyController::class, 'walletTransferOut']);
-    // 电子游戏转入到平台
-    Route::post('/wallet-transfer-in', [\app\api\v1\GamePlatformProxyController::class, 'walletTransferIn']);
-    // 查询电子游戏平台余额
-    Route::post('/get-balance', [\app\api\v1\GamePlatformProxyController::class, 'getBalance']);
-    // 查询所有电子游戏平台余额
-    Route::post('/get-wallet', [\app\api\v1\GamePlatformProxyController::class, 'getWallet']);
-    // 全部转出
-    Route::post('/withdrawAmountAll', [\app\api\v1\GamePlatformProxyController::class, 'withdrawAmountAll']);
-    // 快速转出电子游戏钱包余额
-    Route::post('/fast-transfer', [\app\api\v1\GamePlatformProxyController::class, 'fastTransfer']);
 });
 
 // 单一钱包api
