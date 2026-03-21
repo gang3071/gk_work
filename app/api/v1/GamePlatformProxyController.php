@@ -663,4 +663,69 @@ class GamePlatformProxyController
             return $this->fail($e->getMessage() ?? '系统错误');
         }
     }
+
+    /**
+     * 获取游戏列表
+     * @param Request $request
+     * @return Response
+     */
+    public function getGameList(Request $request): Response
+    {
+        try {
+            $player = $this->getPlayer($request);
+            if (empty($player)) {
+                return $this->fail('玩家未登录或登录已过期');
+            }
+
+            $data = $request->all();
+
+            $validator = v::key('game_platform_id',
+                v::stringType()->notEmpty()->setName('游戏平台ID'));
+
+            try {
+                $validator->assert($data);
+            } catch (AllOfException $e) {
+                return $this->fail($e->getMessage());
+            }
+
+            /** @var GamePlatform $gamePlatform */
+            $gamePlatform = GamePlatform::query()->find($data['game_platform_id']);
+
+            if (empty($gamePlatform)) {
+                return $this->fail('游戏平台不存在');
+            }
+
+            if ($gamePlatform->status == 0) {
+                return $this->fail('游戏平台已禁用');
+            }
+
+            $lang = $request->header('Accept-Language', 'zh-CN');
+            $lang = Str::replace('_', '-', $lang);
+
+            // 调用游戏服务获取游戏列表并保存到数据库
+            $gameService = GameServiceFactory::createService(strtoupper($gamePlatform->code), $player);
+            $gameService->getGameList($lang);
+
+            Log::info('Get game list', [
+                'player_id' => $player->id,
+                'platform_id' => $gamePlatform->id,
+                'platform' => $gamePlatform->code,
+            ]);
+
+            return $this->success([
+                'message' => '游戏列表已更新'
+            ]);
+
+        } catch (Exception $e) {
+            Log::error('Get game list failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('获取游戏列表', $e, [
+                'game_platform_id' => $data['game_platform_id'] ?? null,
+                'player_id' => $player->id ?? null,
+            ]);
+            return $this->fail($e->getMessage() ?? '系统错误');
+        }
+    }
 }

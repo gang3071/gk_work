@@ -6,7 +6,7 @@ Route::options('[{path:.+}]', function () {
     return response('');
 });
 
-// API v1 路由（接收来自 gk_api 的代理请求）
+// API v1 路由（接收来自 gk_api 的代理请求 - 玩家端，需要 JWT Token）
 Route::group('/api', function () {
     Route::group('/v1', function () {
 // 进入游戏
@@ -25,6 +25,18 @@ Route::group('/api', function () {
         Route::post('/withdrawAmountAll', [\app\api\v1\GamePlatformProxyController::class, 'withdrawAmountAll']);
 // 快速转出电子游戏钱包余额
         Route::post('/fast-transfer', [\app\api\v1\GamePlatformProxyController::class, 'fastTransfer']);
+// 获取游戏列表（保留兼容性，建议使用 admin 接口）
+        Route::post('/get-game-list', [\app\api\v1\GamePlatformProxyController::class, 'getGameList']);
+    });
+});
+
+// Admin API 路由（接收来自 gk_admin 的请求 - 管理后台，使用 X-Player-Id）
+Route::group('/api', function () {
+    Route::group('/admin', function () {
+// 管理后台 - 进入游戏大厅
+        Route::post('/lobby-login', [\app\api\v1\AdminGamePlatformController::class, 'lobbyLogin']);
+// 管理后台 - 获取游戏列表
+        Route::post('/get-game-list', [\app\api\v1\AdminGamePlatformController::class, 'getGameList']);
     });
 });
 
