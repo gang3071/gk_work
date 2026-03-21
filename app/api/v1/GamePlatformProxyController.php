@@ -1,6 +1,6 @@
 <?php
 
-namespace app\wallet\controller;
+namespace app\api\v1;
 
 use app\exception\GameException;
 use app\model\Game;
