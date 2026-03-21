@@ -13,16 +13,15 @@ use Webman\Push\Api;
 class PushTestController
 {
     /**
-     * 创建 Push API 实例
+     * 创建 Push API 实例（连接到 gk_api 的推送服务）
      * @return Api
      */
     private function createPushApi(): Api
     {
-        $config = config('plugin.webman.push.app');
         return new Api(
-            $config['api'],
-            $config['app_key'],
-            $config['app_secret']
+            env('PUSH_API_URL', 'http://10.140.0.6:3232'),
+            env('PUSH_APP_KEY', '20f94408fc4c52845f162e92a253c7a3'),
+            env('PUSH_APP_SECRET', '3151f8648a6ccd9d4515386f34127e28')
         );
     }
 
@@ -150,48 +149,45 @@ class PushTestController
     }
 
     /**
-     * 检查推送配置
+     * 检查推送配置（gk_api 推送服务）
      * @param Request $request
      * @return Response
      */
     public function checkConfig(Request $request): Response
     {
         try {
-            $config = config('plugin.webman.push.app');
+            $websocket = env('PUSH_WEBSOCKET', '未配置');
+            $apiUrl = env('PUSH_API_URL', '未配置');
+            $appKey = env('PUSH_APP_KEY', '未配置');
+            $appSecret = env('PUSH_APP_SECRET', '');
 
-            // 隐藏敏感信息
-            $safeConfig = [
-                'enable' => $config['enable'] ?? false,
-                'websocket' => $config['websocket'] ?? 'Not configured',
-                'api' => $config['api'] ?? 'Not configured',
-                'app_key' => $config['app_key'] ?? 'Not configured',
-                'app_secret' => substr($config['app_secret'] ?? '', 0, 8) . '...(已隐藏)',
-            ];
-
-            // 检测是否使用占位符
+            // 检测配置问题
             $warnings = [];
-            if (strpos($safeConfig['websocket'], 'gk_api') !== false) {
-                $warnings[] = 'WebSocket 地址包含占位符，需要替换为实际地址';
+            if ($websocket === '未配置' || strpos($websocket, 'gk_api') !== false) {
+                $warnings[] = 'PUSH_WEBSOCKET 未配置或包含占位符';
             }
-            if (strpos($safeConfig['api'], 'gk_api') !== false) {
-                $warnings[] = 'API 地址包含占位符，需要替换为实际地址';
+            if ($apiUrl === '未配置' || strpos($apiUrl, 'gk_api') !== false) {
+                $warnings[] = 'PUSH_API_URL 未配置或包含占位符';
             }
-            if ($safeConfig['app_secret'] === 'e8c7f4a1...(已隐藏)') {
-                $warnings[] = 'app_secret 可能未更新，请确认与 gk_api 配置一致';
+            if ($appKey === '未配置') {
+                $warnings[] = 'PUSH_APP_KEY 未配置';
+            }
+            if (empty($appSecret) || $appSecret === 'e8c7f4a1d3b6259f8e0c2a5b7d1f4e9a') {
+                $warnings[] = 'PUSH_APP_SECRET 可能未更新（应该是: 3151f8648a6ccd9d4515386f34127e28）';
             }
 
             return json([
                 'code' => 200,
-                'msg' => '配置信息',
+                'msg' => 'gk_api 推送服务配置信息',
                 'data' => [
-                    'config' => $safeConfig,
-                    'warnings' => $warnings,
-                    'env' => [
-                        'PUSH_WEBSOCKET' => env('PUSH_WEBSOCKET', '未配置'),
-                        'PUSH_API' => env('PUSH_API', '未配置'),
-                        'PUSH_APP_KEY' => env('PUSH_APP_KEY', '未配置'),
-                        'PUSH_APP_SECRET' => substr(env('PUSH_APP_SECRET', ''), 0, 8) . '...',
+                    'config' => [
+                        'websocket' => $websocket,
+                        'api_url' => $apiUrl,
+                        'app_key' => $appKey,
+                        'app_secret' => substr($appSecret, 0, 8) . '...(已隐藏)',
                     ],
+                    'warnings' => $warnings,
+                    'status' => empty($warnings) ? '✅ 配置正常' : '⚠️ 配置有问题',
                 ],
             ]);
 
