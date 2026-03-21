@@ -13,6 +13,20 @@ use Webman\Push\Api;
 class PushTestController
 {
     /**
+     * 创建 Push API 实例
+     * @return Api
+     */
+    private function createPushApi(): Api
+    {
+        $config = config('plugin.webman.push.app');
+        return new Api(
+            $config['api'],
+            $config['app_key'],
+            $config['app_secret']
+        );
+    }
+
+    /**
      * 测试推送消息
      * @param Request $request
      * @return Response
@@ -49,7 +63,8 @@ class PushTestController
             ]);
 
             // 发送推送
-            $result = Api::trigger($channel, $event, $pushData);
+            $api = $this->createPushApi();
+            $result = $api->trigger($channel, $event, $pushData);
 
             if ($result) {
                 return json([
@@ -107,7 +122,8 @@ class PushTestController
             ];
 
             // 发送到广播频道
-            $result = Api::trigger('public-channel', 'broadcast', $pushData);
+            $api = $this->createPushApi();
+            $result = $api->trigger('public-channel', 'broadcast', $pushData);
 
             return json([
                 'code' => 200,
@@ -218,7 +234,8 @@ class PushTestController
                 'timestamp' => time(),
             ];
 
-            $result = Api::trigger($channel, 'notification', $pushData);
+            $api = $this->createPushApi();
+            $result = $api->trigger($channel, 'notification', $pushData);
 
             Log::info('Push to player', [
                 'player_id' => $playerId,
