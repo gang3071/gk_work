@@ -99,20 +99,25 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
         }
 
         if (!$response->ok()) {
-            $this->log->error($url, ['params' => $params, 'response' => $response->body()]);
-            throw new GameException(trans('system_busy', [], 'message'));
+            $errorMsg = 'T9 API请求失败 HTTP ' . $response->status() . ': ' . $response->body();
+            $this->log->error($url, ['params' => $params, 'response' => $response->body(), 'status' => $response->status()]);
+            throw new GameException($errorMsg);
         }
 
         $res = json_decode($response->body(), true);
 
-
         if (empty($res)) {
-            throw new Exception(trans('system_busy', [], 'message'));
+            $errorMsg = 'T9 API响应为空: ' . $response->body();
+            $this->log->error($url, ['params' => $params, 'response' => $response->body()]);
+            throw new Exception($errorMsg);
         }
 
         if ($res['Error']['Code'] != 0) {
-            $this->log->error($url, ['params' => $params, 'response' => $response->body()]);
-            throw new Exception(trans('system_busy', [], 'message'));
+            $errorCode = $res['Error']['Code'] ?? '未知错误码';
+            $errorMessage = $res['Error']['Message'] ?? $response->body();
+            $errorMsg = "T9 API错误 Code:{$errorCode} - {$errorMessage}";
+            $this->log->error($url, ['params' => $params, 'response' => $response->body(), 'error_code' => $errorCode]);
+            throw new Exception($errorMsg);
         }
 
         return $res;

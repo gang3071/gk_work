@@ -99,20 +99,23 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
 
 
         if (!$response->ok()) {
-            $this->log->error($url, ['params' => $params, 'response' => $response->body()]);
-            throw new GameException(trans('system_busy', [], 'message'));
+            $errorMsg = 'T9 API请求失败 HTTP ' . $response->status() . ': ' . $response->body();
+            $this->log->error($url, ['params' => $params, 'response' => $response->body(), 'status' => $response->status()]);
+            throw new GameException($errorMsg);
         }
 
         $res = json_decode($response->body(), true);
 
-
         if (empty($res)) {
-            throw new Exception(trans('system_busy', [], 'message'));
+            $errorMsg = 'T9 API响应为空: ' . $response->body();
+            $this->log->error($url, ['params' => $params, 'response' => $response->body()]);
+            throw new Exception($errorMsg);
         }
 
         if ($res['resultCode'] != 'OK') {
-            $this->log->error($url, ['params' => $params, 'response' => $response->body()]);
-            throw new Exception(trans('system_busy', [], 'message'));
+            $errorMsg = 'T9 API错误: ' . ($res['resultCode'] ?? '未知错误') . ' - ' . ($res['message'] ?? $response->body());
+            $this->log->error($url, ['params' => $params, 'response' => $response->body(), 'result_code' => $res['resultCode'] ?? 'null']);
+            throw new Exception($errorMsg);
         }
 
         return $res;
