@@ -33,7 +33,16 @@ class GamePlatformProxyController
     private function getPlayer(Request $request): ?Player
     {
         try {
-            // 从 Authorization header 获取 token
+            // 优先从 X-Player-Id header 获取（来自 gk_api 代理）
+            $playerId = $request->header('X-Player-Id', '');
+            if (!empty($playerId)) {
+                $player = Player::query()->where('id', $playerId)->first();
+                if ($player) {
+                    return $player;
+                }
+            }
+
+            // 降级方案：尝试解析 JWT token（直接访问时）
             $authorization = $request->header('Authorization', '');
             if (empty($authorization)) {
                 return null;
