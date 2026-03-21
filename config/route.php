@@ -6,8 +6,17 @@ Route::options('[{path:.+}]', function () {
     return response('');
 });
 
+// 测试路由
+Route::post('/test', function () {
+    return json(['status' => 'ok', 'message' => 'Test route works']);
+});
+
 // API v1 路由（接收来自 gk_api 的代理请求）
 Route::group('/api/v1', function () {
+    // 测试路由
+    Route::post('/test', function () {
+        return json(['status' => 'ok', 'message' => 'API v1 test works']);
+    });
     // 进入游戏
     Route::post('/enter-game', [\app\wallet\controller\GamePlatformProxyController::class, 'enterGame']);
     // 进入游戏大厅
