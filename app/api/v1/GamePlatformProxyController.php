@@ -98,6 +98,107 @@ class GamePlatformProxyController
     }
 
     /**
+     * 将技术性错误转换为用户友好的提示
+     */
+    private function convertErrorMessage(string $errorMsg): string
+    {
+        // 连接/网络错误
+        if (stripos($errorMsg, 'connection') !== false ||
+            stripos($errorMsg, 'timeout') !== false ||
+            stripos($errorMsg, 'timed out') !== false ||
+            stripos($errorMsg, 'could not resolve') !== false ||
+            stripos($errorMsg, 'unreachable') !== false) {
+            return '游戏服务器连接超时，请检查网络后重试';
+        }
+
+        // 余额相关
+        if (stripos($errorMsg, 'balance') !== false ||
+            stripos($errorMsg, '余额') !== false ||
+            stripos($errorMsg, 'insufficient') !== false) {
+            return '余额不足，请先充值后再试';
+        }
+
+        // 限制相关
+        if (stripos($errorMsg, 'limit') !== false ||
+            stripos($errorMsg, '限制') !== false ||
+            stripos($errorMsg, 'exceeded') !== false) {
+            return '操作受限，请稍后再试';
+        }
+
+        // 维护相关
+        if (stripos($errorMsg, 'maintain') !== false ||
+            stripos($errorMsg, '维护') !== false ||
+            stripos($errorMsg, 'maintenance') !== false) {
+            return '游戏正在维护中，请稍后再试';
+        }
+
+        // API/接口错误
+        if (stripos($errorMsg, 'api') !== false ||
+            stripos($errorMsg, 'curl') !== false ||
+            stripos($errorMsg, 'http') !== false) {
+            return '游戏服务暂时不可用，请稍后重试';
+        }
+
+        // 认证相关
+        if (stripos($errorMsg, 'auth') !== false ||
+            stripos($errorMsg, 'token') !== false ||
+            stripos($errorMsg, 'login') !== false) {
+            return '登录已过期，请重新登录';
+        }
+
+        // 数据库错误
+        if (stripos($errorMsg, 'database') !== false ||
+            stripos($errorMsg, 'query') !== false ||
+            stripos($errorMsg, 'sql') !== false) {
+            return '系统繁忙，请稍后重试';
+        }
+
+        // 默认友好提示
+        return '操作失败，请稍后重试';
+    }
+
+    /**
+     * 统一的异常处理
+     * @param string $action 操作名称（用于日志和告警）
+     * @param Exception $e 异常对象
+     * @param Player|null $player 玩家对象
+     * @param array $context 额外上下文信息
+     * @return Response
+     */
+    private function handleException(string $action, Exception $e, ?Player $player = null, array $context = []): Response
+    {
+        // 游戏业务异常直接返回原始消息
+        if ($e instanceof GameException) {
+            Log::warning("{$action} failed - Game exception", array_merge([
+                'player_id' => $player->id ?? null,
+                'error' => $e->getMessage(),
+            ], $context));
+            return $this->fail($e->getMessage());
+        }
+
+        // 系统异常需要转换提示
+        $errorMsg = $e->getMessage();
+
+        // 记录详细日志
+        Log::error("{$action} failed - System exception", array_merge([
+            'player_id' => $player->id ?? null,
+            'error' => $errorMsg,
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+        ], $context));
+
+        // 发送告警
+        $this->sendTelegramAlert($action, $e, array_merge([
+            'player_id' => $player->id ?? null,
+        ], $context));
+
+        // 转换为用户友好提示
+        $userMessage = $this->convertErrorMessage($errorMsg);
+
+        return $this->fail($userMessage);
+    }
+
+    /**
      * 发送 Telegram 告警通知
      */
     private function sendTelegramAlert(string $action, Exception $e, array $context = []): void
@@ -195,15 +296,11 @@ class GamePlatformProxyController
             ]);
 
         } catch (Exception $e) {
-            Log::error('Enter game failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-            $this->sendTelegramAlert('进入游戏', $e, [
+            return $this->handleException('进入游戏', $e, $player ?? null, [
                 'game_id' => $data['game_id'] ?? null,
-                'player_id' => $player->id ?? null,
+                'game_name' => $game->gameContent->first()->name ?? null,
+                'platform' => $game->gamePlatform->code ?? null,
             ]);
-            return $this->fail($e->getMessage() ?? '系统错误');
         }
     }
 
