@@ -36,7 +36,7 @@ class PushTestController
             $data = $request->all();
 
             // 默认参数
-            $channel = $data['channel'] ?? 'test-channel';
+            $channel = $data['channel'] ?? 'private-admin_group-admin-1';
             $event = $data['event'] ?? 'test-event';
             $message = $data['message'] ?? '这是一条测试推送消息';
             $playerId = $data['player_id'] ?? null;
