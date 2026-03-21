@@ -14,6 +14,8 @@ use Webman\RateLimiter\Annotation\RateLimiter;
 
 class MtGameController
 {
+    use TelegramAlertTrait;
+
     // 1. 使用常量定义状态码，更符合常量的语义
     public const API_CODE_SUCCESS = '00000';
     public const API_CODE_INVALID_PARAM = '20001';
@@ -70,27 +72,26 @@ class MtGameController
      */
     public function balance(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-//        $test = '{"user_id":632,"web_id":"5286437a3e","system_code":"yjbtest"}';
-//        $test = '{"system_code":"yjbtest","web_id":"5286437a3e","user_id":"632","bet_sn":"BETSN000000001","game_code":"BJ001","game_name":"Blackjack","table_code":"TBL001","play_code":"PLC001","play_name":"Dealer Stand","odds":"1.95","order_money":50.0,"order_time":"2023-10-01 14:30:00","settle_date":"2023-10-01","currency":"USD","Ip":"123.45.67.89"}';
-//
-//        echo $this->service->encrypt($test);exit;
-
-        //todo三方请求是否需要验签待验证
-//        if($this->service->signatureData($data['msg'],$request->header('apits')) !== $request->header('apisi')){
-//            return $this->error(self::API_CODE_DECRYPT_ERROR);
-//        }
-
-
-        $data = $this->service->decrypt($params['msg']);
-        Log::channel('mt_server')->info('MT余额查询记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $data = $this->service->decrypt($params['msg']);
+            Log::channel('mt_server')->info('MT余额查询记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->balance();
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
+        } catch (Exception $e) {
+            Log::error('MT balance failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('MT', '余额查询异常', $e, [
+                'params' => $request->post(),
+            ]);
+            return $this->error(self::API_CODE_FAILURE, $e->getMessage());
         }
-        $balance = $this->service->balance();
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
     }
 
     #[RateLimiter(limit: 5)]
@@ -102,20 +103,30 @@ class MtGameController
      */
     public function bet(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $data = $this->service->decrypt($params['msg']);
+            $data = $this->service->decrypt($params['msg']);
 
-        Log::channel('mt_server')->info('MT下注记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            Log::channel('mt_server')->info('MT下注记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->bet($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
+        } catch (Exception $e) {
+            Log::error('MT bet failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('MT', '下注异常', $e, [
+                'params' => $request->post(),
+            ]);
+            return $this->error(self::API_CODE_FAILURE, $e->getMessage());
         }
-        $balance = $this->service->bet($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
     }
 
     /**
@@ -126,19 +137,29 @@ class MtGameController
     #[RateLimiter(limit: 5)]
     public function cancelBet(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $data = $this->service->decrypt($params['msg']);
-        Log::channel('mt_server')->info('MT取消下注', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $data = $this->service->decrypt($params['msg']);
+            Log::channel('mt_server')->info('MT取消下注', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->cancelBet($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
+        } catch (Exception $e) {
+            Log::error('MT cancelBet failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('MT', '取消下注异常', $e, [
+                'params' => $request->post(),
+            ]);
+            return $this->error(self::API_CODE_FAILURE, $e->getMessage());
         }
-        $balance = $this->service->cancelBet($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
     }
 
     /**
@@ -149,19 +170,29 @@ class MtGameController
     #[RateLimiter(limit: 5)]
     public function betResult(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $data = $this->service->decrypt($params['msg']);
-        Log::channel('mt_server')->info('MT结算记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $data = $this->service->decrypt($params['msg']);
+            Log::channel('mt_server')->info('MT结算记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->betResulet($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
+        } catch (Exception $e) {
+            Log::error('MT betResult failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('MT', '结算异常', $e, [
+                'params' => $request->post(),
+            ]);
+            return $this->error(self::API_CODE_FAILURE, $e->getMessage());
         }
-        $balance = $this->service->betResulet($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
     }
 
     /**
@@ -172,19 +203,29 @@ class MtGameController
     #[RateLimiter(limit: 5)]
     public function reBetResult(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $data = $this->service->decrypt($params['msg']);
-        Log::channel('mt_server')->info('MT重新结算结算记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $data = $this->service->decrypt($params['msg']);
+            Log::channel('mt_server')->info('MT重新结算结算记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->reBetResulet($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
+        } catch (Exception $e) {
+            Log::error('MT reBetResult failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('MT', '重新结算异常', $e, [
+                'params' => $request->post(),
+            ]);
+            return $this->error(self::API_CODE_FAILURE, $e->getMessage());
         }
-        $balance = $this->service->reBetResulet($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
     }
 
     /**
@@ -195,19 +236,29 @@ class MtGameController
     #[RateLimiter(limit: 5)]
     public function gift(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $data = $this->service->decrypt($params['msg']);
-        Log::channel('mt_server')->info('MT打赏记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $data = $this->service->decrypt($params['msg']);
+            Log::channel('mt_server')->info('MT打赏记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->gift($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
+        } catch (Exception $e) {
+            Log::error('MT gift failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('MT', '打赏异常', $e, [
+                'params' => $request->post(),
+            ]);
+            return $this->error(self::API_CODE_FAILURE, $e->getMessage());
         }
-        $balance = $this->service->gift($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
     }
 
     /**

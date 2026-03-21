@@ -9,8 +9,10 @@ use app\model\Player;
 use app\model\PlayerEnterGameRecord;
 use app\model\PlayerGamePlatform;
 use app\service\game\GameServiceFactory;
+use app\service\TelegramService;
 use Exception;
 use Illuminate\Support\Str;
+use Monolog\Logger;
 use Respect\Validation\Exceptions\AllOfException;
 use Respect\Validation\Validator as v;
 use support\Db;
@@ -86,6 +88,54 @@ class GamePlatformProxyController
             'msg' => $message,
             'data' => [],
         ]);
+    }
+
+    /**
+     * 发送 Telegram 告警通知
+     */
+    private function sendTelegramAlert(string $action, Exception $e, array $context = []): void
+    {
+        try {
+            $token = env('TELEGRAM_BOT_TOKEN');
+            $chatId = env('TELEGRAM_CHAT_ID');
+
+            if (empty($token) || empty($chatId)) {
+                return;
+            }
+
+            $telegram = new TelegramService($token, $chatId, Logger::ERROR);
+
+            $date = date('Y-m-d H:i:s');
+            $hostname = gethostname();
+
+            $text = "🚨 *游戏平台代理异常*\n";
+            $text .= "📅 时间: `{$date}`\n";
+            $text .= "🖥️ 节点: `{$hostname}`\n";
+            $text .= "⚙️ 操作: `{$action}`\n";
+            $text .= "❌ 错误: {$e->getMessage()}\n";
+            $text .= "📂 文件: `{$e->getFile()}:{$e->getLine()}`\n";
+
+            if (!empty($context)) {
+                $contextStr = json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+                $text .= "🔗 上下文: \n```\n{$contextStr}\n```";
+            }
+
+            $telegram->write([
+                'datetime' => new \DateTime(),
+                'level_name' => 'ERROR',
+                'message' => $action,
+                'context' => array_merge($context, [
+                    'error' => $e->getMessage(),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                ]),
+            ]);
+        } catch (\Throwable $te) {
+            // 发送 Telegram 失败不影响主流程
+            Log::warning('Send telegram alert failed', [
+                'error' => $te->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -169,6 +219,10 @@ class GamePlatformProxyController
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
+            $this->sendTelegramAlert('进入游戏', $e, [
+                'game_id' => $data['game_id'] ?? null,
+                'player_id' => $player->id ?? null,
+            ]);
             return $this->fail($e->getMessage() ?? '系统错误');
         }
     }
@@ -227,6 +281,10 @@ class GamePlatformProxyController
             Log::error('Lobby login failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('进入游戏大厅', $e, [
+                'game_platform_id' => $data['game_platform_id'] ?? null,
+                'player_id' => $player->id ?? null,
             ]);
             return $this->fail($e->getMessage() ?? '系统错误');
         }
@@ -298,6 +356,11 @@ class GamePlatformProxyController
             Log::error('Wallet transfer out failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('钱包转出', $e, [
+                'game_platform_id' => $data['game_platform_id'] ?? null,
+                'amount' => $data['amount'] ?? null,
+                'player_id' => $player->id ?? null,
             ]);
             return $this->fail($e->getMessage() ?? '系统错误');
         }
@@ -374,6 +437,12 @@ class GamePlatformProxyController
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
+            $this->sendTelegramAlert('钱包转入', $e, [
+                'game_platform_id' => $data['game_platform_id'] ?? null,
+                'amount' => $data['amount'] ?? null,
+                'take_all' => $data['take_all'] ?? null,
+                'player_id' => $player->id ?? null,
+            ]);
             return $this->fail($e->getMessage() ?? '系统错误');
         }
     }
@@ -426,6 +495,10 @@ class GamePlatformProxyController
             Log::error('Get balance failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('查询余额', $e, [
+                'game_platform_id' => $data['game_platform_id'] ?? null,
+                'player_id' => $player->id ?? null,
             ]);
             return $this->fail($e->getMessage() ?? '系统错误');
         }
@@ -490,6 +563,9 @@ class GamePlatformProxyController
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
+            $this->sendTelegramAlert('查询所有钱包', $e, [
+                'player_id' => $player->id ?? null,
+            ]);
             return $this->fail($e->getMessage() ?? '系统错误');
         }
     }
@@ -548,6 +624,9 @@ class GamePlatformProxyController
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
+            $this->sendTelegramAlert('全部转出', $e, [
+                'player_id' => $player->id ?? null,
+            ]);
             return $this->fail($e->getMessage() ?? '系统错误');
         }
     }
@@ -597,6 +676,9 @@ class GamePlatformProxyController
             Log::error('Fast transfer failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('快速转出', $e, [
+                'player_id' => $player->id ?? null,
             ]);
             return $this->fail($e->getMessage() ?? '系统错误');
         }

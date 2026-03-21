@@ -16,6 +16,8 @@ use Webman\RateLimiter\Annotation\RateLimiter;
  */
 class ATGGameController
 {
+    use TelegramAlertTrait;
+
     // 1. 使用常量定义状态码，更符合常量的语义
     public const API_CODE_SUCCESS = 0;
     public const API_CODE_FAIL = 1;
@@ -71,19 +73,20 @@ class ATGGameController
      */
     public function balance(Request $request): Response
     {
-        $params = $request->post();
-
-        $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-
-        $this->log->info('atg余额查询记录', ['params' => $data]);
-
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+        try {
+            $params = $request->post();
+            $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
+            $this->log->info('atg余额查询记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->balance();
+            return $this->success(['balance' => $balance]);
+        } catch (Exception $e) {
+            Log::error('ATG balance failed', ['error' => $e->getMessage()]);
+            $this->sendTelegramAlert('ATG', '余额查询异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_FAIL);
         }
-
-        $balance = $this->service->balance();
-        // 3. 使用常量获取状态码描述
-        return $this->success(['balance' => $balance]);
     }
 
     #[RateLimiter(limit: 5)]
@@ -95,18 +98,23 @@ class ATGGameController
      */
     public function bet(Request $request): Response
     {
-        $params = $request->post();
-        $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-        $this->log->info('atg下注记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+        try {
+            $params = $request->post();
+            $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
+            $this->log->info('atg下注记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->bet($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            return $this->success($balance);
+        } catch (Exception $e) {
+            Log::error('ATG bet failed', ['error' => $e->getMessage()]);
+            $this->sendTelegramAlert('ATG', '下注异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_FAIL);
         }
-        $balance = $this->service->bet($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success($balance);
     }
 
     /**
@@ -117,20 +125,24 @@ class ATGGameController
     #[RateLimiter(limit: 5)]
     public function betResult(Request $request): Response
     {
-        $params = $request->post();
-        $this->log->info('atg余额查询记录', array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-
-        $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-        $this->log->info('atg结算记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+        try {
+            $params = $request->post();
+            $this->log->info('atg余额查询记录', array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
+            $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
+            $this->log->info('atg结算记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->betResulet($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            return $this->success($balance);
+        } catch (Exception $e) {
+            Log::error('ATG betResult failed', ['error' => $e->getMessage()]);
+            $this->sendTelegramAlert('ATG', '结算异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_FAIL);
         }
-        $balance = $this->service->betResulet($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success($balance);
     }
 
 
@@ -141,18 +153,23 @@ class ATGGameController
      */
     public function refund(Request $request): Response
     {
-        $params = $request->post();
-        $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-        $this->log->info('atg退款记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+        try {
+            $params = $request->post();
+            $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
+            $this->log->info('atg退款记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->refund($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            return $this->success($balance);
+        } catch (Exception $e) {
+            Log::error('ATG refund failed', ['error' => $e->getMessage()]);
+            $this->sendTelegramAlert('ATG', '退款异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_FAIL);
         }
-        $balance = $this->service->refund($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success($balance);
     }
 
     /**

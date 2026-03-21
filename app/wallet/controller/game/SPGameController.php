@@ -15,6 +15,7 @@ use Webman\RateLimiter\Annotation\RateLimiter;
 
 class SPGameController
 {
+    use TelegramAlertTrait;
     // 1. 使用常量定义状态码，更符合常量的语义
     public const API_CODE_SUCCESS = 0;
     public const API_CODE_DECRYPT_ERROR = 1006;
@@ -52,15 +53,20 @@ class SPGameController
      */
     public function balance(Request $request)
     {
-        $params = $request->rawBody();
-        $data = $this->service->decrypt($params);
-        Log::channel('sp_server')->info('sp余额查询记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+        try {
+            $params = $request->rawBody();
+            $data = $this->service->decrypt($params);
+            Log::channel('sp_server')->info('sp余额查询记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->balance();
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], array_merge($data, ['amount' => $balance]));
+        } catch (Exception $e) {
+            Log::error('SP balance failed', ['error' => $e->getMessage()]);
+            $this->sendTelegramAlert('SP', '余额查询异常', $e, ['params' => $request->rawBody()]);
+            return $this->error(self::API_CODE_GENERAL_ERROR);
         }
-        $balance = $this->service->balance();
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], array_merge($data, ['amount' => $balance]));
     }
 
     #[RateLimiter(limit: 5)]
@@ -72,23 +78,28 @@ class SPGameController
      */
     public function bet(Request $request): Response
     {
-        $params = $request->rawBody();
-        $data = $this->service->decrypt($params);
-        Log::channel('sp_server')->info('sp下注记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+        try {
+            $params = $request->rawBody();
+            $data = $this->service->decrypt($params);
+            Log::channel('sp_server')->info('sp下注记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->bet($data);
+            $return = [
+                'username' => $data['username'],
+                'currency' => $data['currency'],
+                'amount' => $balance,
+            ];
+            if ($this->service->error) {
+                return $this->error($this->service->error, $return);
+            }
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('SP bet failed', ['error' => $e->getMessage()]);
+            $this->sendTelegramAlert('SP', '下注异常', $e, ['params' => $request->rawBody()]);
+            return $this->error(self::API_CODE_GENERAL_ERROR);
         }
-        $balance = $this->service->bet($data);
-        $return = [
-            'username' => $data['username'],
-            'currency' => $data['currency'],
-            'amount' => $balance,
-        ];
-        if ($this->service->error) {
-            return $this->error($this->service->error, $return);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**
@@ -99,23 +110,28 @@ class SPGameController
     #[RateLimiter(limit: 5)]
     public function cancelBet(Request $request): Response
     {
-        $params = $request->rawBody();
-        $data = $this->service->decrypt($params);
-        Log::channel('sp_server')->info('sp取消下注', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+        try {
+            $params = $request->rawBody();
+            $data = $this->service->decrypt($params);
+            Log::channel('sp_server')->info('sp取消下注', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->cancelBet($data);
+            $return = [
+                'username' => $data['username'],
+                'currency' => $data['currency'],
+                'amount' => $balance,
+            ];
+            if ($this->service->error) {
+                return $this->error($this->service->error, $return);
+            }
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('SP cancelBet failed', ['error' => $e->getMessage()]);
+            $this->sendTelegramAlert('SP', '取消下注异常', $e, ['params' => $request->rawBody()]);
+            return $this->error(self::API_CODE_GENERAL_ERROR);
         }
-        $balance = $this->service->cancelBet($data);
-        $return = [
-            'username' => $data['username'],
-            'currency' => $data['currency'],
-            'amount' => $balance,
-        ];
-        if ($this->service->error) {
-            return $this->error($this->service->error, $return);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**
@@ -126,23 +142,28 @@ class SPGameController
     #[RateLimiter(limit: 5)]
     public function betResult(Request $request): Response
     {
-        $params = $request->rawBody();
-        $data = $this->service->decrypt($params);
-        Log::channel('sp_server')->info('sp结算下注', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+        try {
+            $params = $request->rawBody();
+            $data = $this->service->decrypt($params);
+            Log::channel('sp_server')->info('sp结算下注', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->betResulet($data);
+            $return = [
+                'username' => $data['username'],
+                'currency' => $data['currency'],
+                'amount' => $balance,
+            ];
+            if ($this->service->error) {
+                return $this->error($this->service->error, $return);
+            }
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('SP betResult failed', ['error' => $e->getMessage()]);
+            $this->sendTelegramAlert('SP', '结算异常', $e, ['params' => $request->rawBody()]);
+            return $this->error(self::API_CODE_GENERAL_ERROR);
         }
-        $balance = $this->service->betResulet($data);
-        $return = [
-            'username' => $data['username'],
-            'currency' => $data['currency'],
-            'amount' => $balance,
-        ];
-        if ($this->service->error) {
-            return $this->error($this->service->error, $return);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**

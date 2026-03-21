@@ -19,6 +19,8 @@ use Webman\RateLimiter\Annotation\RateLimiter;
  */
 class TNineGameController
 {
+    use TelegramAlertTrait;
+
     // 1. 使用常量定义状态码，更符合常量的语义
     public const API_CODE_SUCCESS = 0;
     public const API_CODE_ERROR = 1;
