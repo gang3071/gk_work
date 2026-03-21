@@ -29,10 +29,10 @@ Route::group('/api', function () {
         Route::post('/get-game-list', [\app\api\v1\GamePlatformProxyController::class, 'getGameList']);
 
         // 推送测试接口
-        Route::post('/push/test', [\app\api\v1\PushTestController::class, 'test']);
-        Route::post('/push/broadcast', [\app\api\v1\PushTestController::class, 'broadcast']);
-        Route::get('/push/config', [\app\api\v1\PushTestController::class, 'checkConfig']);
-        Route::post('/push/test-player', [\app\api\v1\PushTestController::class, 'testPlayerPush']);
+        Route::post('/push-test', [\app\api\v1\PushTestController::class, 'test']);
+        Route::post('/push-broadcast', [\app\api\v1\PushTestController::class, 'broadcast']);
+        Route::get('/push-config', [\app\api\v1\PushTestController::class, 'checkConfig']);
+        Route::post('/push-test-player', [\app\api\v1\PushTestController::class, 'testPlayerPush']);
     });
 });
 
