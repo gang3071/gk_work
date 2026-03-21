@@ -9,10 +9,8 @@ use app\model\Player;
 use app\model\PlayerEnterGameRecord;
 use app\model\PlayerGamePlatform;
 use app\service\game\GameServiceFactory;
-use app\service\TelegramService;
 use Exception;
 use Illuminate\Support\Str;
-use Monolog\Logger;
 use Respect\Validation\Exceptions\AllOfException;
 use Respect\Validation\Validator as v;
 use support\Db;
@@ -96,45 +94,17 @@ class GamePlatformProxyController
     private function sendTelegramAlert(string $action, Exception $e, array $context = []): void
     {
         try {
-            $token = env('TELEGRAM_BOT_TOKEN');
-            $chatId = env('TELEGRAM_CHAT_ID');
-
-            if (empty($token) || empty($chatId)) {
-                return;
-            }
-
-            $telegram = new TelegramService($token, $chatId, Logger::ERROR);
-
-            $date = date('Y-m-d H:i:s');
-            $hostname = gethostname();
-
-            $text = "🚨 *游戏平台代理异常*\n";
-            $text .= "📅 时间: `{$date}`\n";
-            $text .= "🖥️ 节点: `{$hostname}`\n";
-            $text .= "⚙️ 操作: `{$action}`\n";
-            $text .= "❌ 错误: {$e->getMessage()}\n";
-            $text .= "📂 文件: `{$e->getFile()}:{$e->getLine()}`\n";
-
-            if (!empty($context)) {
-                $contextStr = json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-                $text .= "🔗 上下文: \n```\n{$contextStr}\n```";
-            }
-
-            $telegram->write([
-                'datetime' => new \DateTime(),
-                'level_name' => 'ERROR',
-                'message' => $action,
-                'context' => array_merge($context, [
-                    'error' => $e->getMessage(),
-                    'file' => $e->getFile(),
-                    'line' => $e->getLine(),
-                ]),
-            ]);
+            // 直接使用 Log::error() 会自动触发 TelegramService（已在 config/log.php 配置）
+            Log::error('游戏平台代理异常: ' . $action . ' - ' . $e->getMessage(), array_merge($context, [
+                'action' => $action,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]));
         } catch (\Throwable $te) {
             // 发送 Telegram 失败不影响主流程
-            Log::warning('Send telegram alert failed', [
-                'error' => $te->getMessage(),
-            ]);
+            Log::warning('Send telegram alert failed: ' . $te->getMessage());
         }
     }
 
