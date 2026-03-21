@@ -37,6 +37,8 @@ Route::group('/api', function () {
         Route::post('/lobby-login', [\app\api\v1\AdminGamePlatformController::class, 'lobbyLogin']);
 // 管理后台 - 获取游戏列表
         Route::post('/get-game-list', [\app\api\v1\AdminGamePlatformController::class, 'getGameList']);
+// 管理后台 - 进入游戏
+        Route::post('/enter-game', [\app\api\v1\AdminGamePlatformController::class, 'enterGame']);
     });
 });
 

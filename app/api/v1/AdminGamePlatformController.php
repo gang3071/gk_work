@@ -2,6 +2,7 @@
 
 namespace app\api\v1;
 
+use app\model\Game;
 use app\model\GamePlatform;
 use app\model\Player;
 use app\service\game\GameServiceFactory;
@@ -204,6 +205,75 @@ class AdminGamePlatformController
             ]);
             $this->sendTelegramAlert('管理后台获取游戏列表', $e, [
                 'game_platform_id' => $data['game_platform_id'] ?? null,
+                'player_id' => $player->id ?? null,
+            ]);
+            return $this->fail($e->getMessage() ?? '系统错误');
+        }
+    }
+
+    /**
+     * 进入游戏
+     * @param Request $request
+     * @return Response
+     */
+    public function enterGame(Request $request): Response
+    {
+        try {
+            $player = $this->getPlayer($request);
+            if (empty($player)) {
+                return $this->fail('玩家信息获取失败，请检查 X-Player-Id header');
+            }
+
+            $data = $request->all();
+
+            if (empty($data['game_id'])) {
+                return $this->fail('游戏ID不能为空');
+            }
+
+            /** @var Game $game */
+            $game = Game::query()->where('id', $data['game_id'])->first();
+
+            if (empty($game)) {
+                return $this->fail('游戏不存在');
+            }
+
+            if ($game->status == 0) {
+                return $this->fail('游戏已禁用');
+            }
+
+            if (empty($game->gamePlatform)) {
+                return $this->fail('游戏平台不存在');
+            }
+
+            if ($game->gamePlatform->status == 0) {
+                return $this->fail('游戏平台已禁用');
+            }
+
+            $lang = $request->header('Accept-Language', 'zh-CN');
+            $lang = Str::replace('_', '-', $lang);
+
+            // 调用游戏服务获取游戏URL
+            $gameService = GameServiceFactory::createService(strtoupper($game->gamePlatform->code), $player);
+            $gameUrl = $gameService->gameLogin($game, $lang);
+
+            Log::info('Admin enter game', [
+                'player_id' => $player->id,
+                'game_id' => $game->id,
+                'platform' => $game->gamePlatform->code,
+            ]);
+
+            return $this->success([
+                'url' => $gameUrl,
+                'display_mode' => $game->display_mode,
+            ]);
+
+        } catch (Exception $e) {
+            Log::error('Admin enter game failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('管理后台进入游戏', $e, [
+                'game_id' => $data['game_id'] ?? null,
                 'player_id' => $player->id ?? null,
             ]);
             return $this->fail($e->getMessage() ?? '系统错误');
