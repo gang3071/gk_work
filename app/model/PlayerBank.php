@@ -39,47 +39,4 @@ class PlayerBank extends Model
     {
         return $this->belongsTo(Player::class, 'player_id')->withTrashed();
     }
-
-    /**
-     * 模型事件 - 删除前
-     */
-    protected static function boot()
-    {
-        parent::boot();
-
-        static::deleting(function (PlayerBank $playerBank) {
-            if (!empty($playerBank->qr_code)) {
-                $imagePath = self::extractImagePathFromUrl($playerBank->qr_code);
-
-                if ($imagePath) {
-                    deleteToGCS($imagePath);
-                }
-            }
-        });
-    }
-
-    /**
-     * 从 URL 中提取图片路径
-     */
-    private static function extractImagePathFromUrl($url): string
-    {
-        if (filter_var($url, FILTER_VALIDATE_URL)) {
-            $parsedUrl = parse_url($url);
-            if (isset($parsedUrl['path'])) {
-                $path = $parsedUrl['path'];
-
-                // 移除可能的存储桶名称
-                $bucketName = env('GOOGLE_CLOUD_STORAGE_BUCKET', 'yjbfile');
-                $bucketPrefix = '/' . $bucketName . '/';
-
-                if (str_starts_with($path, $bucketPrefix)) {
-                    return substr($path, strlen($bucketPrefix));
-                }
-
-                return ltrim($path, '/');
-            }
-        }
-
-        return $url;
-    }
 }

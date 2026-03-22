@@ -3,7 +3,6 @@
  * Here is your custom functions.
  */
 
-use app\model\ApiErrorLog;
 use app\model\GameType;
 use app\model\LevelList;
 use app\model\Machine;
@@ -13,11 +12,11 @@ use app\model\MachineMedia;
 use app\model\MachineMediaPush;
 use app\model\NationalProfitRecord;
 use app\model\Notice;
-use app\model\PhoneSmsLog;
 use app\model\Player;
 use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGameLog;
 use app\model\PlayerGameRecord;
+use app\model\PlayerLotteryRecord;
 use app\model\PlayerPlatformCash;
 use app\model\PlayerPromoter;
 use app\model\PlayerRechargeRecord;
@@ -38,44 +37,11 @@ use support\Translation;
 use Webman\Push\Api;
 use Webman\Push\PushException;
 use Webman\RedisQueue\Client as queueClient;
-use WebmanTech\LaravelHttpClient\Facades\Http;
-
-/**
- * 生成uuid
- * @return string
- */
-function gen_uuid(): string
-{
-    $uuid['time_low'] = mt_rand(0, 0xffff) + (mt_rand(0, 0xffff) << 16);
-    $uuid['time_mid'] = mt_rand(0, 0xffff);
-    $uuid['time_hi'] = (4 << 12) | (mt_rand(0, 0x1000));
-    $uuid['clock_seq_hi'] = (1 << 7) | (mt_rand(0, 128));
-    $uuid['clock_seq_low'] = mt_rand(0, 255);
-
-    for ($i = 0; $i < 6; $i++) {
-        $uuid['node'][$i] = mt_rand(0, 255);
-    }
-
-    return sprintf('%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x',
-        $uuid['time_low'],
-        $uuid['time_mid'],
-        $uuid['time_hi'],
-        $uuid['clock_seq_hi'],
-        $uuid['clock_seq_low'],
-        $uuid['node'][0],
-        $uuid['node'][1],
-        $uuid['node'][2],
-        $uuid['node'][3],
-        $uuid['node'][4],
-        $uuid['node'][5]
-    );
-}
 
 /**
  * 检查玩家游戏状态 5分钟没有使用机台玩家将被踢出(分数返还)
  * @return void
  * @throws Exception
- * @throws PushException
  */
 function machineKeepOutPlayer(): void
 {
@@ -86,7 +52,7 @@ function machineKeepOutPlayer(): void
         return;
     }
     /** @var SystemSetting $setting */
-    $setting = SystemSetting::where('feature', 'pending_minutes')->where('status', 1)->first();
+    $setting = SystemSetting::query()->where('feature', 'pending_minutes')->where('status', 1)->first();
     if (!$setting || $setting->num <= 0) {
         $settingMinutes = 2; // 默认2分钟进入保留状态
     } else {
@@ -96,7 +62,7 @@ function machineKeepOutPlayer(): void
     // 不扣保留时间设置
     $isFreeTime = false;
     /** @var SystemSetting $keepingSetting */
-    $keepingSetting = SystemSetting::where('feature', 'keeping_off')->where('status', 1)->first();
+    $keepingSetting = SystemSetting::query()->where('feature', 'keeping_off')->where('status', 1)->first();
     if (!empty($keepingSetting)) {
         $offStart = $keepingSetting['date_start'] ?? '';
         $offEnd = $keepingSetting['date_end'] ?? '';
@@ -208,7 +174,7 @@ function machineKeepOutPlayer(): void
                 $beforeGameAmount = $player->machine_wallet->money;
                 if (machineWash($player, $machine, 'leave', 1)) {
                     /** @var PlayerPlatformCash $playerPlatformWallet */
-                    $playerPlatformWallet = PlayerPlatformCash::where([
+                    $playerPlatformWallet = PlayerPlatformCash::query()->where([
                         'player_id' => $player->id,
                         'platform_id' => PlayerPlatformCash::PLATFORM_SELF,
                     ])->first();
@@ -247,7 +213,7 @@ function machineKeepOutPlayer(): void
                     Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
                 }
             }
-        } catch (\Exception $e) {
+        } catch (Exception $e) {
             $log->error('PlayOutMachine: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
         }
     }
@@ -293,72 +259,13 @@ function createOrderNo(): string
 }
 
 /**
- * 设置短信key
- * @param string $phone 手机号
- * @param int $type 模式 1 为修改密码短信
- * @return string
- */
-function setSmsKey(string $phone, int $type): string
-{
-    switch ($type) {
-        case PhoneSmsLog::TYPE_LOGIN:
-            return 'sms-login' . $phone;
-        case PhoneSmsLog::TYPE_REGISTER:
-            return 'sms-register' . $phone;
-        case PhoneSmsLog::TYPE_CHANGE_PASSWORD:
-            return 'sms-change-password' . $phone;
-        case PhoneSmsLog::TYPE_CHANGE_PAY_PASSWORD:
-            return 'sms-change-pay-password' . $phone;
-        case PhoneSmsLog::TYPE_CHANGE_PHONE:
-            return 'sms-change-phone' . $phone;
-        case PhoneSmsLog::TYPE_BIND_NEW_PHONE:
-            return 'sms-type-bind-new-phone' . $phone;
-        case PhoneSmsLog::TYPE_TALK_BIND:
-            return 'sms-type-talk-bind' . $phone;
-        default:
-            return 'sms-' . $phone;
-    }
-}
-
-/**
- * 获取短信消息
- * @param int $type 模式 1 为修改密码短信
- * @param string $source 来源
- * @return string
- */
-function getContent(int $type, string $source): string
-{
-    switch ($type) {
-        case PhoneSmsLog::TYPE_LOGIN:
-            return config($source . '-sms.login_content');
-        case PhoneSmsLog::TYPE_REGISTER:
-            return config($source . '-sms.register_content');
-        case PhoneSmsLog::TYPE_CHANGE_PASSWORD:
-            return config($source . '-sms.change_password_content');
-        case PhoneSmsLog::TYPE_CHANGE_PAY_PASSWORD:
-            return config($source . '-sms.change_pay_password');
-        case PhoneSmsLog::TYPE_CHANGE_PHONE:
-            return config($source . '-sms.change_phone');
-        case PhoneSmsLog::TYPE_BIND_NEW_PHONE:
-            return config($source . '-sms.bind_new_phone');
-        case PhoneSmsLog::TYPE_TALK_BIND:
-            return config($source . '-sms.talk_bind');
-        case PhoneSmsLog::TYPE_LINE_BIND:
-            return config($source . '-sms.line_bind');
-        default:
-            return config($source . '-sms.sm_content');
-    }
-}
-
-/**
  * 发送socket消息
  * @param $channels
  * @param $content
  * @param string $form
  * @return bool|string
- * @throws PushException
  */
-function sendSocketMessage($channels, $content, string $form = 'system')
+function sendSocketMessage($channels, $content, string $form = 'system'): bool|string
 {
     try {
         // 直接读取 .env 配置，连接到 gk_api 的推送服务
@@ -378,38 +285,12 @@ function sendSocketMessage($channels, $content, string $form = 'system')
 }
 
 /**
- * 组装请求
- * @param string $url
- * @param array $params
- * @param int $gaming_user_id
- * @param int $machine_id
- * @return array|mixed|null
- * @throws \Exception
- */
-function doCurl(string $url, int $gaming_user_id, int $machine_id, array $params = [])
-{
-    $result = Http::timeout(7)->contentType('application/json')->accept('application/json')->asJson()->post($url,
-        $params);
-    if (!isset($result['result'])) {
-        $apiErrorLog = new ApiErrorLog;
-        $apiErrorLog->player_id = $gaming_user_id;
-        $apiErrorLog->target = 'machine';
-        $apiErrorLog->target_id = $machine_id;
-        $apiErrorLog->url = $url;
-        $apiErrorLog->params = json_encode($params);
-        $apiErrorLog->content = '後台 api timeout';
-        $apiErrorLog->save();
-    }
-    return $result->json();
-}
-
-/**
  * 获取增点缓存
  * @param $playerId
  * @param $machineId
  * @return mixed
  */
-function getGivePoints($playerId, $machineId)
+function getGivePoints($playerId, $machineId): mixed
 {
     return Cache::get('gift_cache_' . $machineId . '_' . $playerId);
 }
@@ -717,9 +598,8 @@ function decodeStatus($data): string
  * @param Machine $machine
  * @param $type
  * @param int $playerId
- * @throws PushException
  */
-function sendMachineException(Machine $machine, $type, int $playerId = 0)
+function sendMachineException(Machine $machine, $type, int $playerId = 0): void
 {
     $notice = new Notice();
     $notice->department_id = 1;
@@ -933,10 +813,8 @@ function machineMaintaining(): bool
 {
     //每周機台維護時段
     /** @var SystemSetting $setting */
-    $setting = SystemSetting::where('feature', 'machine_maintain')->first();
-    if (!$setting || $setting->status == 0) {
-        return false;
-    } else {
+    $setting = SystemSetting::query()->where('feature', 'machine_maintain')->first();
+    if ($setting && $setting->status != 0) {
         $week = $setting->num;
         $time_start = $setting->date_start;
         $time_end = $setting->date_end;
@@ -956,8 +834,8 @@ function machineMaintaining(): bool
                 return true;
             }
         }
-        return false;
     }
+    return false;
 }
 
 /**
@@ -966,10 +844,10 @@ function machineMaintaining(): bool
  * @param $playerId
  * @return void
  */
-function updateKeepingLog($machineId, $playerId)
+function updateKeepingLog($machineId, $playerId): void
 {
     /** @var MachineKeepingLog $machineKeepingLog */
-    $machineKeepingLog = MachineKeepingLog::where([
+    $machineKeepingLog = MachineKeepingLog::query()->where([
         'machine_id' => $machineId,
         'player_id' => $playerId
     ])->where('status', MachineKeepingLog::STATUS_STAR)->first();
@@ -989,10 +867,10 @@ function updateKeepingLog($machineId, $playerId)
  * @return void
  * @throws Exception
  */
-function doSettlement($id, int $userId = 0, string $userName = '')
+function doSettlement($id, int $userId = 0, string $userName = ''): void
 {
     /** @var PlayerPromoter $playerPromoter */
-    $playerPromoter = PlayerPromoter::where('player_id', $id)->first();
+    $playerPromoter = PlayerPromoter::query()->where('player_id', $id)->first();
     if (empty($playerPromoter)) {
         throw new Exception(trans('profit_amount_not_found', [], 'message'));
     }
@@ -1002,7 +880,7 @@ function doSettlement($id, int $userId = 0, string $userName = '')
     if (!isset($playerPromoter->profit_amount)) {
         throw new Exception(trans('profit_amount_not_found', [], 'message'));
     }
-    $profitAmount = PromoterProfitRecord::where('status', PromoterProfitRecord::STATUS_UNCOMPLETED)
+    $profitAmount = PromoterProfitRecord::query()->where('status', PromoterProfitRecord::STATUS_UNCOMPLETED)
         ->where('promoter_player_id', $id)
         ->first([
             DB::raw('SUM(`withdraw_amount`) as total_withdraw_amount'),
@@ -1057,7 +935,7 @@ function doSettlement($id, int $userId = 0, string $userName = '')
         $promoterProfitSettlementRecord->actual_amount = $settlement;
         $promoterProfitSettlementRecord->save();
         // 更新结算报表
-        PromoterProfitRecord::where('status', PromoterProfitRecord::STATUS_UNCOMPLETED)
+        PromoterProfitRecord::query()->where('status', PromoterProfitRecord::STATUS_UNCOMPLETED)
             ->where('promoter_player_id', $id)
             ->update([
                 'status' => PromoterProfitRecord::STATUS_COMPLETED,
@@ -1082,7 +960,7 @@ function doSettlement($id, int $userId = 0, string $userName = '')
         $playerPromoter->last_settlement_time = date('Y-m-d', strtotime('-1 day'));
 
         if (!empty($playerPromoter->path)) {
-            PlayerPromoter::where('player_id', '!=', $playerPromoter->player_id)
+            PlayerPromoter::query()->where('player_id', '!=', $playerPromoter->player_id)
                 ->whereIn('player_id', explode(',', $playerPromoter->path))
                 ->update([
                     'team_profit_amount' => DB::raw("team_profit_amount - {$promoterProfitSettlementRecord->total_profit_amount}"),
@@ -1111,7 +989,7 @@ function doSettlement($id, int $userId = 0, string $userName = '')
         }
         $playerPromoter->push();
         DB::commit();
-    } catch (\Exception $e) {
+    } catch (Exception $e) {
         DB::rollback();
         throw new Exception($e->getMessage());
     }
@@ -1124,7 +1002,7 @@ function doSettlement($id, int $userId = 0, string $userName = '')
  * @param string $path
  * @param int $is_system
  * @param bool $hasLottery
- * @return true
+ * @return PlayerLotteryRecord|array|bool
  * @throws Exception
  * @throws PushException
  */
@@ -1134,7 +1012,7 @@ function machineWash(
     string  $path = 'leave',
     int     $is_system = 0,
     bool    $hasLottery = false
-)
+): PlayerLotteryRecord|bool|array
 {
     try {
         $lang = Translation::getLocale() ?? 'zh_CN';
@@ -1220,7 +1098,7 @@ function machineWash(
                 }
                 break;
         }
-    } catch (\Exception $e) {
+    } catch (Exception $e) {
         throw new Exception($e->getMessage());
     }
 
@@ -1232,7 +1110,7 @@ function machineWash(
             if ($playerLotteryRecord) {
                 return $playerLotteryRecord;
             }
-        } catch (\Exception $e) {
+        } catch (Exception $e) {
             throw new Exception($e->getMessage());
         }
     }
@@ -1284,7 +1162,7 @@ function machineWash(
                 $services->bet = 0;
                 break;
         }
-    } catch (\Exception $e) {
+    } catch (Exception $e) {
         DB::rollback();
         throw new Exception($e->getMessage());
     }
@@ -1292,7 +1170,7 @@ function machineWash(
     // 强制同步所有彩金的Redis数据到数据库
     try {
         LotteryServices::forceSyncRedisToDatabase();
-    } catch (\Exception $e) {
+    } catch (Exception $e) {
         Log::error('游戏结束同步彩金失败: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
     }
     queueClient::send('media-recording', [
@@ -1365,7 +1243,7 @@ function machineWashZero(
         $control_open_point = !empty($machine->control_open_point) ? $machine->control_open_point : 100;
         //记录游戏局记录
         /** @var PlayerGameRecord $gameRecord */
-        $gameRecord = PlayerGameRecord::where('machine_id', $machine->id)
+        $gameRecord = PlayerGameRecord::query()->where('machine_id', $machine->id)
             ->where('player_id', $player->id)
             ->where('status', PlayerGameRecord::STATUS_START)
             ->orderBy('created_at', 'desc')
@@ -1598,25 +1476,11 @@ function nationalPromoterSettlement($data): bool
 }
 
 /**
- * 格式化数字到两位小数
- * @param $number
- * @return string
- */
-function floorToPointSecond($number)
-{
-    if (!is_numeric($number)) {
-        return $number;
-    }
-
-    return number_format(($number * 100) / 100, 2);
-}
-
-/**
  * 发送提现待审核消息
  * @return void
  * @throws Exception
  */
-function reviewedWithdrawMessage()
+function reviewedWithdrawMessage(): void
 {
     $subQuery = PlayerWithdrawRecord::query()
         ->select(DB::raw('MAX(id) as id'))
@@ -1649,7 +1513,7 @@ function reviewedWithdrawMessage()
  * @return void
  * @throws Exception
  */
-function reviewedRechargeMessage()
+function reviewedRechargeMessage(): void
 {
     $subQuery = PlayerRechargeRecord::query()
         ->select(DB::raw('MAX(id) as id'))
@@ -1759,7 +1623,7 @@ function nationalPromoterRebate(): void
                     'national_damage_ratio' => $damageRebateRatio ?? 0
                 ]);
             DB::commit();
-        } catch (\Exception $e) {
+        } catch (Exception $e) {
             DB::rollBack();
             $log->error('全民代理统计错误: NationalPromoterRebate' . date('Y-m-d H:i:s') . ' - ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString()

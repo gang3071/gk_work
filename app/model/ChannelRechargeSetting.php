@@ -61,46 +61,4 @@ class ChannelRechargeSetting extends Model
     {
         return $this->belongsTo(AdminUser::class, 'user_id')->withTrashed();
     }
-
-    /**
-     * 充值方式
-     * @return BelongsTo
-     */
-    public function channel_recharge_method(): BelongsTo
-    {
-        return $this->belongsTo(ChannelRechargeMethod::class, 'method_id')->withTrashed();
-    }
-
-    /**
-     * 模型的 "booted" 方法
-     *
-     * @return void
-     */
-    protected static function booted()
-    {
-        static::created(function (ChannelRechargeSetting $channelRechargeSetting) {
-            saveChannelFinancialRecord($channelRechargeSetting, ChannelFinancialRecord::ACTION_RECHARGE_SETTING_ADD);
-        });
-        static::saved(function (ChannelRechargeSetting $channelRechargeSetting) {
-            $changeData = $channelRechargeSetting->getChanges();
-            $originalData = $channelRechargeSetting->getOriginal();
-            $hasChange = false;
-            foreach ($changeData as $k => $v) {
-                if (!in_array($k, ['status', 'updated_at']) && $v != $originalData[$k]) {
-                    $hasChange = true;
-                }
-            }
-            if ($hasChange) {
-                saveChannelFinancialRecord($channelRechargeSetting, ChannelFinancialRecord::ACTION_RECHARGE_SETTING_EDIT);
-            }
-            if (array_key_exists('status', $changeData) && $changeData['status'] != $originalData['status']) {
-                if ($channelRechargeSetting->status == 1) {
-                    saveChannelFinancialRecord($channelRechargeSetting, ChannelFinancialRecord::ACTION_RECHARGE_SETTING_ENABLE);
-                }
-                if ($channelRechargeSetting->status == 0) {
-                    saveChannelFinancialRecord($channelRechargeSetting, ChannelFinancialRecord::ACTION_RECHARGE_SETTING_STOP);
-                }
-            }
-        });
-    }
 }
