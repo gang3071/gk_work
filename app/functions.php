@@ -33,7 +33,6 @@ use app\service\MediaServer;
 use support\Cache;
 use support\Db;
 use support\Log;
-use support\Translation;
 use Webman\Push\Api;
 use Webman\Push\PushException;
 use Webman\RedisQueue\Client as queueClient;
@@ -1015,7 +1014,7 @@ function machineWash(
 ): PlayerLotteryRecord|bool|array
 {
     try {
-        $lang = Translation::getLocale() ?? 'zh_CN';
+        $lang = locale() ?? 'zh_CN';
         $services = MachineServices::createServices($machine, $lang);
         if ($services->last_point_at + 5 >= time()) {
             throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
