@@ -346,7 +346,6 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
             return $player->machine_wallet->money;
         }
 
-
         $money = $data['winlose'];
         $beforeGameAmount = $machineWallet->money;
         //有金额则为赢
