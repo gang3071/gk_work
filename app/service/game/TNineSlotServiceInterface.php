@@ -153,6 +153,8 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
             'MemberPassword' => $this->player->uuid,
         ];
         $res = $this->doCurl('/api/launch_game', $params);
+
+        throw new Exception(json_encode($res));
         $this->log->info('lobbyLogin', [$res]);
 
         return $res['Data']['GameUrl'];
@@ -209,6 +211,9 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
             'isMobileLogin' => true,
         ];
         $res = $this->doCurl('/Login', $params);
+
+        throw new Exception(json_encode($res));
+
         $this->log->info('lobbyLogin', [$res]);
 
         return $res['data']['gameUrl'];
