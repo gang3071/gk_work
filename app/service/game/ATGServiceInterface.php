@@ -48,6 +48,8 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     private array $config = [];
 
+
+    public ?\Monolog\Logger $log = null;
     /**
      * @param Player|null $player
      * @throws Exception
@@ -60,6 +62,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $this->providerId = $config['providerId'];
         $this->platform = GamePlatform::query()->where('code', 'ATG')->first();
         $this->player = $player;
+        $this->log = Log::channel('rsg_server');
     }
 
     /**
@@ -164,10 +167,12 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                 ])
                 ->get($config['api_domain'] . '/token');
             if (!$tokenResponse->ok()) {
+                $this->log->info('doCurl', ['params' => $params, 'response' => $tokenResponse]);
                 throw new GameException(trans('system_busy', [], 'message'));
             }
             $data = $tokenResponse->json();
             if (empty($data['data']['token'])) {
+                $this->log->info('doCurl', ['params' => $params, 'response' => $data]);
                 throw new GameException(trans('system_busy', [], 'message'));
             }
             $token = $data['data']['token'];
@@ -187,6 +192,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             if ($res['status'] == '400' && $res['message'] == 'user exists') {
                 return [];
             }
+            $this->log->info('doCurl', ['params' => $params, 'response' => $response->json()]);
             throw new GameException(empty($res['message']) ? trans('system_busy', [], 'message') : $res['message']);
         }
 
