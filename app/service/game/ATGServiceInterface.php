@@ -16,6 +16,7 @@ use app\wallet\controller\game\RsgGameController;
 use Carbon\Carbon;
 use Exception;
 use support\Cache;
+use support\Log;
 use Webman\RedisQueue\Client;
 use WebmanTech\LaravelHttpClient\Facades\Http;
 
