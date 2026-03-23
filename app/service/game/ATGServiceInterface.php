@@ -171,12 +171,18 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                 ])
                 ->get($config['api_domain'] . '/token');
             if (!$tokenResponse->ok()) {
-                $this->log->info($test, ['params' => $params, 'response' => $tokenResponse,'url'=>$url]);
+                $this->log->info($test, ['params' => $params, 'response' => $tokenResponse,'url'=>$url,'header'=>[
+                    'X-Operator' => $config['operator'],
+                    'X-key' => $config['key'],
+                ]]);
                 throw new GameException(trans('system_busy', [], 'message'));
             }
             $data = $tokenResponse->json();
             if (empty($data['data']['token'])) {
-                $this->log->info($test, ['params' => $params, 'response' => $tokenResponse,'url'=>$url]);
+                $this->log->info($test, ['params' => $params, 'response' => $tokenResponse,'url'=>$url,'header'=>[
+                    'X-Operator' => $config['operator'],
+                    'X-key' => $config['key'],
+                ]]);
                 throw new GameException(trans('system_busy', [], 'message'));
             }
             $token = $data['data']['token'];
@@ -196,7 +202,9 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             if ($res['status'] == '400' && $res['message'] == 'user exists') {
                 return [];
             }
-            $this->log->info($test, ['params' => $params, 'response' => $tokenResponse,'url'=>$url]);
+            $this->log->info($test, ['params' => $params, 'response' => $response,'url'=>$url,'header'=>[
+                'X-Token' => $token,
+            ]]);
             throw new GameException(empty($res['message']) ? trans('system_busy', [], 'message') : $res['message']);
         }
 
