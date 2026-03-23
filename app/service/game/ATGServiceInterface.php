@@ -92,7 +92,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             ->where('player_id', $this->player->id)
             ->first();
         if (!empty($playerGamePlatform)) {
-            return $this->lobbyLogin();
+            return true;
         }
         $this->createPlayer();
         $playerGamePlatform = new PlayerGamePlatform();
