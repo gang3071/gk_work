@@ -107,6 +107,12 @@ Route::group('/single-wallet', function () {
         Route::post('/bet', [\app\wallet\controller\game\TNineGameController::class, 'bet']);
         Route::post('/notice', [\app\wallet\controller\game\TNineGameController::class, 'betResult']);
     });
+    Route::group('/tnine-solt-channel',function(){
+        // 获取玩家钱包
+        Route::post('/SeamlessGameHub/GetBalance', [\app\wallet\controller\game\TNineSlotGameController::class, 'balance']); //商戶會員餘額查詢
+        Route::post('/SeamlessGameHub/BetAndSettle', [\app\wallet\controller\game\TNineSlotGameController::class, 'bet']); //商戶會員餘額查詢
+        Route::post('SeamlessGameHub/CancelBet', [\app\wallet\controller\game\TNineSlotGameController::class, 'cancelBet']); //商戶會員餘額查詢
+    });
     Route::group('/kt-channel', function () {
         Route::post('/auth', [\app\wallet\controller\game\KTGameController::class, 'auth']);
         Route::post('/balance', [\app\wallet\controller\game\KTGameController::class, 'balance']);
