@@ -63,7 +63,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $this->providerId = $config['providerId'];
         $this->platform = GamePlatform::query()->where('code', 'ATG')->first();
         $this->player = $player;
-        $this->log = Log::channel('rsg_server');
+        $this->log = Log::channel('atg_server');
     }
 
     /**
