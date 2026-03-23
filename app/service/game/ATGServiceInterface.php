@@ -160,6 +160,9 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $config = config('game_platform.ATG');
         $cacheKey = 'game_platform_token_atg';
         $token = Cache::get($cacheKey);
+
+        $trace = debug_backtrace();
+        $test = $trace[1]['function'];
         if (empty($token)) {
             $tokenResponse = Http::timeout(7)
                 ->withHeaders([
@@ -168,12 +171,12 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                 ])
                 ->get($config['api_domain'] . '/token');
             if (!$tokenResponse->ok()) {
-                $this->log->info('doCurl', ['params' => $params, 'response' => $tokenResponse]);
+                $this->log->info($test, ['params' => $params, 'response' => $tokenResponse]);
                 throw new GameException(trans('system_busy', [], 'message'));
             }
             $data = $tokenResponse->json();
             if (empty($data['data']['token'])) {
-                $this->log->info('doCurl', ['params' => $params, 'response' => $data]);
+                $this->log->info($test, ['params' => $params, 'response' => $data]);
                 throw new GameException(trans('system_busy', [], 'message'));
             }
             $token = $data['data']['token'];
@@ -193,7 +196,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             if ($res['status'] == '400' && $res['message'] == 'user exists') {
                 return [];
             }
-            $this->log->info('doCurl', ['params' => $params, 'response' => $response->json()]);
+            $this->log->info($test, ['params' => $params, 'response' => $response->json()]);
             throw new GameException(empty($res['message']) ? trans('system_busy', [], 'message') : $res['message']);
         }
 
