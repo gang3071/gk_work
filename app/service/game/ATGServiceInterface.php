@@ -16,6 +16,7 @@ use app\wallet\controller\game\RsgGameController;
 use Carbon\Carbon;
 use Exception;
 use support\Cache;
+use support\Log;
 use Webman\RedisQueue\Client;
 use WebmanTech\LaravelHttpClient\Facades\Http;
 
@@ -48,6 +49,8 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     private array $config = [];
 
+
+    public ?\Monolog\Logger $log = null;
     /**
      * @param Player|null $player
      * @throws Exception
@@ -60,6 +63,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $this->providerId = $config['providerId'];
         $this->platform = GamePlatform::query()->where('code', 'ATG')->first();
         $this->player = $player;
+        $this->log = Log::channel('atg_server');
     }
 
     /**
@@ -88,7 +92,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             ->where('player_id', $this->player->id)
             ->first();
         if (!empty($playerGamePlatform)) {
-            return $this->lobbyLogin();
+            return true;
         }
         $this->createPlayer();
         $playerGamePlatform = new PlayerGamePlatform();
@@ -156,6 +160,9 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $config = config('game_platform.ATG');
         $cacheKey = 'game_platform_token_atg';
         $token = Cache::get($cacheKey);
+
+        $trace = debug_backtrace();
+        $test = $trace[1]['function'];
         if (empty($token)) {
             $tokenResponse = Http::timeout(7)
                 ->withHeaders([
@@ -164,10 +171,18 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                 ])
                 ->get($config['api_domain'] . '/token');
             if (!$tokenResponse->ok()) {
+                $this->log->info($test, ['params' => $params, 'response' => $tokenResponse,'url'=>$url,'header'=>[
+                    'X-Operator' => $config['operator'],
+                    'X-key' => $config['key'],
+                ]]);
                 throw new GameException(trans('system_busy', [], 'message'));
             }
             $data = $tokenResponse->json();
             if (empty($data['data']['token'])) {
+                $this->log->info($test, ['params' => $params, 'response' => $tokenResponse,'url'=>$url,'header'=>[
+                    'X-Operator' => $config['operator'],
+                    'X-key' => $config['key'],
+                ]]);
                 throw new GameException(trans('system_busy', [], 'message'));
             }
             $token = $data['data']['token'];
@@ -187,6 +202,9 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             if ($res['status'] == '400' && $res['message'] == 'user exists') {
                 return [];
             }
+            $this->log->info($test, ['params' => $params, 'response' => $response,'url'=>$url,'header'=>[
+                'X-Token' => $token,
+            ]]);
             throw new GameException(empty($res['message']) ? trans('system_busy', [], 'message') : $res['message']);
         }
 
