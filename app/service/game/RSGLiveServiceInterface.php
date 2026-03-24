@@ -518,7 +518,7 @@ class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceI
             $playerDeliveryRecord->amount_before = $beforeGameAmount;
             $playerDeliveryRecord->amount_after = $machineWallet->money;
             $playerDeliveryRecord->tradeno = $record->order_no ?? '';
-            $playerDeliveryRecord->remark = $target->remark ?? '';
+            $playerDeliveryRecord->remark = '遊戲結算';
             $playerDeliveryRecord->user_id = 0;
             $playerDeliveryRecord->user_name = '';
             $playerDeliveryRecord->save();
