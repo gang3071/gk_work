@@ -2,10 +2,12 @@
 
 namespace app\service;
 
+use app\model\GameExtend;
 use app\model\GameLottery;
 use app\model\Notice;
 use app\model\Player;
 use app\model\PlayerLotteryRecord;
+use app\model\PlayGameRecord;
 use Exception;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
@@ -607,6 +609,24 @@ class GameLotteryServices
 
         DB::beginTransaction();
         try {
+            // 先同步 Redis 累积金额到数据库（避免数据不一致）
+            $redis = \support\Redis::connection()->client();
+            $redisKey = self::REDIS_KEY_LOTTERY_AMOUNT . $lottery->id;
+            $accumulatedAmount = $redis->get($redisKey);
+
+            if ($accumulatedAmount && $accumulatedAmount > 0) {
+                // 有未同步的累积金额，先同步到数据库
+                $lottery->amount = bcadd($lottery->amount, $accumulatedAmount, 4);
+                $lottery->save();
+                $redis->del($redisKey);  // 清除已同步的累积
+
+                $this->log->info('派发前同步Redis累积金额到数据库', [
+                    'lottery_id' => $lottery->id,
+                    'accumulated' => $accumulatedAmount,
+                    'new_amount' => $lottery->amount,
+                ]);
+            }
+
             // 重新加载彩金数据，检查余额
             $lottery->refresh();
             if ($lottery->amount < $amount) {
@@ -811,6 +831,31 @@ class GameLotteryServices
         bool                $isDoubled = false
     ): void
     {
+        // 获取游戏名称或机台信息
+        $gameName = '';
+        $machineInfo = '';
+
+        if ($record->source == PlayerLotteryRecord::SOURCE_GAME) {
+            // 电子游戏：获取游戏名称
+            if ($record->play_game_record_id) {
+                $playGameRecord = PlayGameRecord::query()
+                    ->where('id', $record->play_game_record_id)
+                    ->first();
+
+                if ($playGameRecord) {
+                    $gameExtend = GameExtend::query()
+                        ->where('platform_id', $playGameRecord->platform_id)
+                        ->where('code', $playGameRecord->game_code)
+                        ->first();
+
+                    $gameName = $gameExtend->name ?? '';
+                }
+            }
+        } elseif ($record->source == PlayerLotteryRecord::SOURCE_MACHINE) {
+            // 实体机台：获取机台名称和编号
+            $machineInfo = $record->machine_name . '(' . $record->machine_code . ')';
+        }
+
         // 发送派彩消息（给中奖玩家）
         sendSocketMessage('player-' . $this->player->id, [
             'msg_type' => 'game_player_lottery_allow',
@@ -828,6 +873,9 @@ class GameLotteryServices
             'lottery_multiple' => $record->lottery_multiple,
             'is_burst' => $burstInfo['is_bursting'] ? 1 : 0,
             'burst_multiplier' => $burstInfo['multiplier'],
+            'game_name' => $gameName,
+            'machine_info' => $machineInfo,
+            'source' => $record->source,
             'next_lottery' => []
         ]);
 
@@ -844,10 +892,35 @@ class GameLotteryServices
             'game_type' => $record->game_type,
             'lottery_multiple' => $record->lottery_multiple,
             'is_burst' => $burstInfo['is_bursting'] ? 1 : 0,
+            'game_name' => $gameName,
+            'machine_info' => $machineInfo,
+            'source' => $record->source,
             'notice_num' => Notice::query()->where('player_id', $this->player->id)->where('status', 0)->count('*')
         ]);
 
-        // 发送全频道广播（新增）
+        // 构建广播内容
+        $doubleText = $isDoubled ? '【雙倍】' : '';
+        if ($record->source == PlayerLotteryRecord::SOURCE_GAME) {
+            // 电子游戏
+            $contentText = sprintf(
+                '恭喜玩家在電子遊戲%s %s 中贏得 %s%d 彩金！',
+                $gameName ? '【' . $gameName . '】' : '',
+                $lottery->name,
+                $doubleText,
+                $record->amount
+            );
+        } else {
+            // 实体机台
+            $contentText = sprintf(
+                '恭喜玩家在機台 %s %s 中贏得 %s%d 彩金！',
+                $machineInfo,
+                $lottery->name,
+                $doubleText,
+                $record->amount
+            );
+        }
+
+        // 发送全频道广播
         $broadcastMessage = [
             'msg_type' => 'game_lottery_win_broadcast',
             'lottery_id' => $lottery->id,
@@ -862,13 +935,11 @@ class GameLotteryServices
             'burst_multiplier' => $burstInfo['multiplier'],
             'is_doubled' => $isDoubled ? 1 : 0,
             'lottery_rate' => $record->lottery_rate,
-            'title' => '🎊 恭喜玩家中奖！',
-            'content' => sprintf(
-                '恭喜玩家在电子游戏 %s 中赢得 %s%d 彩金！',
-                $lottery->name,
-                $isDoubled ? '【双倍】' : '',
-                $record->amount
-            ),
+            'source' => $record->source,
+            'game_name' => $gameName,
+            'machine_info' => $machineInfo,
+            'title' => '🎊 恭喜玩家中獎！',
+            'content' => $contentText,
         ];
 
         // 发送到广播频道

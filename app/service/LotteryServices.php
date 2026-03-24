@@ -7,8 +7,10 @@ use app\model\Lottery;
 use app\model\Machine;
 use app\model\Notice;
 use app\model\Player;
+use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGameRecord;
 use app\model\PlayerLotteryRecord;
+use app\model\PlayerPlatformCash;
 use Exception;
 use support\Cache;
 use support\Db;
@@ -792,6 +794,39 @@ class LotteryServices
             // 发送站内信
             $notice = $this->sendNotice($playerLotteryRecord->id, $playerLotteryRecord->lottery_name);
 
+            // 更新玩家钱包（加彩金金额）
+            /** @var PlayerPlatformCash $machineWallet */
+            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+            if (!$machineWallet) {
+                \support\Log::error('随机彩金派发失败：玩家钱包不存在', [
+                    'player_id' => $this->player->id,
+                ]);
+                DB::rollback();
+                return false;
+            }
+
+            $beforeAmount = $machineWallet->money;
+            $machineWallet->money = bcadd($machineWallet->money, $amount, 2);
+            $machineWallet->save();
+
+            // 创建交易记录
+            $playerDeliveryRecord = new PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = $this->player->id;
+            $playerDeliveryRecord->department_id = $this->player->department_id;
+            $playerDeliveryRecord->target = $playerLotteryRecord->getTable();
+            $playerDeliveryRecord->target_id = $playerLotteryRecord->id;
+            $playerDeliveryRecord->platform_id = PlayerPlatformCash::PLATFORM_SELF;
+            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_LOTTERY;
+            $playerDeliveryRecord->source = 'lottery_random';
+            $playerDeliveryRecord->amount = $amount;
+            $playerDeliveryRecord->amount_before = $beforeAmount;
+            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->tradeno = '';
+            $playerDeliveryRecord->remark = '随机彩金派彩';
+            $playerDeliveryRecord->user_id = 0;
+            $playerDeliveryRecord->user_name = '';
+            $playerDeliveryRecord->save();
+
             // 扣减彩金池（从lottery.amount扣减）
             // 根据rate和是否双倍计算实际扣减金额
             $rate = $lottery->rate > 0 ? $lottery->rate : 100;
@@ -1253,8 +1288,48 @@ class LotteryServices
                 ];
             }
             if (isset($fixedAllowLottery['amount']) && $fixedAllowLottery['amount'] > 0) {
+                // 增加业务锁（参考随机彩金逻辑）
+                $actionLockerKey = 'machine_lottery_pool_fixed_locker_' . $fixedAllowLottery['lottery_id'];
+                $lock = Locker::lock($actionLockerKey, 2, true);
+                if (!$lock->acquire()) {
+                    \support\Log::warning('固定彩金派发锁定失败', [
+                        'lottery_id' => $fixedAllowLottery['lottery_id'],
+                        'player_id' => $this->player->id,
+                    ]);
+                    return null;
+                }
+
                 DB::beginTransaction();
                 try {
+                    // 重新加载彩金数据，检查余额（参考随机彩金逻辑）
+                    /** @var Lottery $lotteryModel */
+                    $lotteryModel = Lottery::query()->where('id', $fixedAllowLottery['lottery_id'])->lockForUpdate()->first();
+                    if (!$lotteryModel) {
+                        \support\Log::error('固定彩金不存在', [
+                            'lottery_id' => $fixedAllowLottery['lottery_id'],
+                        ]);
+                        DB::rollback();
+                        return null;
+                    }
+
+                    if ($lotteryModel->amount < $fixedAllowLottery['amount']) {
+                        \support\Log::error('固定彩金池余额不足', [
+                            'lottery_id' => $lotteryModel->id,
+                            'required' => $fixedAllowLottery['amount'],
+                            'available' => $lotteryModel->amount,
+                        ]);
+                        DB::rollback();
+                        return null;
+                    }
+
+                    // 查询最近的游戏记录（参考随机彩金逻辑）
+                    /** @var PlayerGameRecord $playerGameRecord */
+                    $playerGameRecord = PlayerGameRecord::query()
+                        ->where('player_id', $this->player->id)
+                        ->where('machine_id', $this->machine->id)
+                        ->orderBy('id', 'desc')
+                        ->first();
+
                     // 生成派彩记录
                     $playerLotteryRecord = new PlayerLotteryRecord();
                     $playerLotteryRecord->player_id = $this->player->id;
@@ -1274,63 +1349,168 @@ class LotteryServices
                     $playerLotteryRecord->is_max = $fixedAllowLottery['amount'] == $fixedAllowLottery['max_amount'] ? 1 : 0;
                     $playerLotteryRecord->lottery_id = $fixedAllowLottery['lottery_id'];
                     $playerLotteryRecord->lottery_name = $fixedAllowLottery['lottery_name'];
-                    $playerLotteryRecord->lottery_pool_amount = $fixedAllowLottery['lottery_pool_amount'];
+                    $playerLotteryRecord->lottery_pool_amount = $lotteryModel->amount;
                     $playerLotteryRecord->lottery_rate = $fixedAllowLottery['lottery_rate'];
                     $playerLotteryRecord->cate_rate = $this->machine->machineCategory->lottery_rate;
                     $playerLotteryRecord->lottery_type = Lottery::LOTTERY_TYPE_FIXED;
                     $playerLotteryRecord->lottery_multiple = $fixedAllowLottery['lottery_multiple'];
                     $playerLotteryRecord->lottery_sort = $fixedAllowLottery['lottery_sort'];
+                    $playerLotteryRecord->status = PlayerLotteryRecord::STATUS_PASS;
+                    $playerLotteryRecord->player_game_record_id = $playerGameRecord ? $playerGameRecord->id : 0;
                     $playerLotteryRecord->save();
 
-                    // 扣减彩金池（从 lottery.amount 扣减）
-                    /** @var Lottery $lotteryModel */
-                    $lotteryModel = Lottery::find($fixedAllowLottery['lottery_id']);
-                    if ($lotteryModel) {
-                        // 根据rate计算实际扣减金额
-                        $rate = $lotteryModel->rate > 0 ? $lotteryModel->rate : 100;
-                        $baseDeductAmount = bcmul($lotteryModel->amount, bcdiv($rate, 100, 4), 2);
-                        $lotteryModel->amount = bcsub($lotteryModel->amount, $baseDeductAmount, 2);
-                        $lotteryModel->save();
+                    // 记录中奖日志（参考随机彩金逻辑）
+                    \support\Log::info('【固定彩金中奖】玩家中奖:', [
+                        'lottery_id' => $lotteryModel->id,
+                        'lottery_name' => $lotteryModel->name,
+                        'player_id' => $this->player->id,
+                        'uuid' => $this->player->uuid,
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'amount' => $fixedAllowLottery['amount'],
+                        'lottery_rate' => $fixedAllowLottery['lottery_rate'],
+                        'is_doubled' => $fixedAllowLottery['is_doubled'],
+                        'pool_amount' => $lotteryModel->amount,
+                    ]);
 
-                        // 清除彩金缓存
-                        self::clearLotteryListCache($this->machine->type);
+                    // 发送站内信
+                    $notice = $this->sendNotice($playerLotteryRecord->id, $playerLotteryRecord->lottery_name);
 
-                        // 实时推送彩池数据变化
-                        self::pushLotteryPoolData();
+                    // 更新玩家钱包（加彩金金额）
+                    /** @var PlayerPlatformCash $machineWallet */
+                    $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+                    if (!$machineWallet) {
+                        \support\Log::error('固定彩金派发失败：玩家钱包不存在', [
+                            'player_id' => $this->player->id,
+                        ]);
+                        DB::rollback();
+                        return null;
                     }
+
+                    $beforeAmount = $machineWallet->money;
+                    $machineWallet->money = bcadd($machineWallet->money, $fixedAllowLottery['amount'], 2);
+                    $machineWallet->save();
+
+                    // 创建交易记录
+                    $playerDeliveryRecord = new PlayerDeliveryRecord();
+                    $playerDeliveryRecord->player_id = $this->player->id;
+                    $playerDeliveryRecord->department_id = $this->player->department_id;
+                    $playerDeliveryRecord->target = $playerLotteryRecord->getTable();
+                    $playerDeliveryRecord->target_id = $playerLotteryRecord->id;
+                    $playerDeliveryRecord->platform_id = PlayerPlatformCash::PLATFORM_SELF;
+                    $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_LOTTERY;
+                    $playerDeliveryRecord->source = 'lottery_fixed';
+                    $playerDeliveryRecord->amount = $fixedAllowLottery['amount'];
+                    $playerDeliveryRecord->amount_before = $beforeAmount;
+                    $playerDeliveryRecord->amount_after = $machineWallet->money;
+                    $playerDeliveryRecord->tradeno = '';
+                    $playerDeliveryRecord->remark = '固定彩金派彩';
+                    $playerDeliveryRecord->user_id = 0;
+                    $playerDeliveryRecord->user_name = '';
+                    $playerDeliveryRecord->save();
+
+                    // 扣减彩金池（从 lottery.amount 扣减）
+                    $rate = $lotteryModel->rate > 0 ? $lotteryModel->rate : 100;
+                    $baseDeductAmount = bcmul($lotteryModel->amount, bcdiv($rate, 100, 4), 2);
+                    $lotteryModel->amount = bcsub($lotteryModel->amount, $baseDeductAmount, 2);
+
+                    // 派彩成功后补充到保底金额（参考随机彩金逻辑）
+                    if ($lotteryModel->auto_refill_status == 1 && $lotteryModel->auto_refill_amount > 0) {
+                        $beforeRefillAmount = $lotteryModel->amount;
+
+                        // 只有当彩池低于保底金额时才补充
+                        if ($lotteryModel->amount < $lotteryModel->auto_refill_amount) {
+                            $refillAmount = bcsub($lotteryModel->auto_refill_amount, $lotteryModel->amount, 4);
+                            $lotteryModel->amount = $lotteryModel->auto_refill_amount;
+
+                            // 记录派彩后补充日志
+                            \support\Log::info('固定彩金池派彩后自动补充到保底金额:', [
+                                'lottery_id' => $lotteryModel->id,
+                                'lottery_name' => $lotteryModel->name,
+                                'before_refill_amount' => $beforeRefillAmount,
+                                'target_amount' => $lotteryModel->auto_refill_amount,
+                                'refill_amount' => $refillAmount,
+                                'after_refill_amount' => $lotteryModel->amount,
+                                'deduct_amount' => $baseDeductAmount,
+                                'player_id' => $this->player->id,
+                                'uuid' => $this->player->uuid,
+                                'machine_id' => $this->machine->id,
+                                'trigger_time' => date('Y-m-d H:i:s'),
+                            ]);
+                        }
+                    }
+
+                    $lotteryModel->save();
+
+                    DB::commit();
+
+                    // 清除彩金缓存（事务提交后）
+                    self::clearLotteryListCache($this->machine->type);
+
+                    // 实时推送彩池数据变化
+                    self::pushLotteryPoolData();
 
                     if ($hasSend) {
                         sendSocketMessage('player-' . $this->player->id, $fixedAllowLottery);
                     }
-                    // 发送彩金审核管理端消息
-                    sendSocketMessage('private-admin_group-admin-1', [
-                        'msg_type' => 'player_examine_lottery',
-                        'id' => $playerLotteryRecord->id,
-                        'player_id' => $playerLotteryRecord->player_id,
-                    ]);
-                    sendSocketMessage('private-admin_group-channel-' . $playerLotteryRecord->department_id, [
-                        'msg_type' => 'player_examine_lottery',
-                        'id' => $playerLotteryRecord->id,
-                        'player_id' => $playerLotteryRecord->player_id,
-                    ]);
-                    $content = '彩金獎勵待稽核，玩家' . empty($playerLotteryRecord->player_name) ? $playerLotteryRecord->player_name : (!empty($playerLotteryRecord->player_phone) ? $playerLotteryRecord->player_phone : '');
-                    $content .= ', 在機台: ' . $playerLotteryRecord->machine_code;
-                    $content .= ' 達成彩金: ' . $playerLotteryRecord->lottery_name . '的獎勵要求';
-                    $content .= ' 獎勵遊戲點: ' . $playerLotteryRecord->amount . '.';
-                    $notice = new Notice();
-                    $notice->department_id = $playerLotteryRecord->player->department_id;
-                    $notice->player_id = $playerLotteryRecord->player_id;
-                    $notice->source_id = $playerLotteryRecord->id;
-                    $notice->type = Notice::TYPE_EXAMINE_LOTTERY;
-                    $notice->receiver = Notice::RECEIVER_ADMIN;
-                    $notice->is_private = 0;
-                    $notice->title = '彩金獎勵待稽核';
-                    $notice->content = $content;
-                    $notice->save();
 
-                    DB::commit();
+                    // 发送中奖通知消息
+                    sendSocketMessage('player-' . $this->player->id, [
+                        'msg_type' => 'player_notice',
+                        'player_id' => $this->player->id,
+                        'notice_type' => Notice::TYPE_LOTTERY,
+                        'notice_title' => $notice->title,
+                        'notice_content' => $notice->content,
+                        'amount' => $playerLotteryRecord->amount,
+                        'machine_name' => $playerLotteryRecord->machine_name,
+                        'machine_code' => $playerLotteryRecord->machine_code,
+                        'lottery_name' => $playerLotteryRecord->lottery_name,
+                        'lottery_type' => $playerLotteryRecord->lottery_type,
+                        'game_type' => $playerLotteryRecord->game_type,
+                        'lottery_multiple' => $playerLotteryRecord->lottery_multiple,
+                        'lottery_rate' => $playerLotteryRecord->lottery_rate,
+                        'notice_num' => Notice::query()->where('player_id', $this->player->id)->where('status', 0)->count('*')
+                    ]);
+
+                    // 发送全频道广播
+                    $broadcastMessage = [
+                        'msg_type' => 'machine_lottery_win_broadcast',
+                        'lottery_id' => $playerLotteryRecord->lottery_id,
+                        'lottery_name' => $playerLotteryRecord->lottery_name,
+                        'lottery_type' => $playerLotteryRecord->lottery_type,
+                        'game_type' => $this->machine->type,
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'machine_name' => $this->machine->name,
+                        'player_id' => $this->player->id,
+                        'player_name' => $this->player->name ?? $this->player->uuid,
+                        'player_uuid' => $this->player->uuid,
+                        'amount' => $playerLotteryRecord->amount,
+                        'lottery_pool_amount' => $lotteryModel->amount,
+                        'lottery_rate' => $playerLotteryRecord->lottery_rate,
+                        'is_doubled' => $fixedAllowLottery['is_doubled'],
+                        'title' => '🎊 恭喜玩家中奖！',
+                        'content' => sprintf(
+                            '恭喜玩家在%s机台 %s 中赢得 %s%d 彩金！',
+                            $this->machine->code,
+                            $playerLotteryRecord->lottery_name,
+                            $fixedAllowLottery['is_doubled'] ? '【双倍】' : '',
+                            $playerLotteryRecord->amount
+                        ),
+                    ];
+
+                    // 发送到广播频道
+                    sendSocketMessage('broadcast', $broadcastMessage);
+
+                    // 发送到彩池频道
+                    sendSocketMessage('group-lottery-pool', $broadcastMessage);
                 } catch (\Exception $e) {
                     DB::rollback();
+                    \support\Log::error('固定彩金派发失败', [
+                        'error' => $e->getMessage(),
+                        'lottery_id' => $fixedAllowLottery['lottery_id'] ?? null,
+                        'player_id' => $this->player->id,
+                    ]);
                     throw new Exception($e->getMessage());
                 }
             }
