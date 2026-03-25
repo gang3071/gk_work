@@ -40,6 +40,24 @@ class GameLottery implements Consumer
                 return;
             }
 
+            // 防止重复处理：检查该下注记录是否已经参与过彩金检查
+            $playGameRecordId = $data['play_game_record_id'] ?? 0;
+            if ($playGameRecordId > 0) {
+                $cacheKey = 'game_lottery_processed_' . $playGameRecordId;
+                $redis = \support\Redis::connection()->client();
+
+                // 使用 SET NX（只在key不存在时设置）来防止重复处理
+                $lockResult = $redis->set($cacheKey, time(), ['NX', 'EX' => 3600]); // 1小时过期
+
+                if (!$lockResult) {
+                    $log->warning('该下注记录已处理过，跳过重复检查', [
+                        'play_game_record_id' => $playGameRecordId,
+                        'player_id' => $data['player_id']
+                    ]);
+                    return;
+                }
+            }
+
             // 通知后台管理系统玩家正在游戏
             $this->notifyPlayerBetting($player, $data);
 

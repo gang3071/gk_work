@@ -436,7 +436,8 @@ class GameLotteryServices
         // 应用爆彩概率倍数到中奖检查
         $adjustedWinRatio = bcmul($lottery->win_ratio, $burstInfo['multiplier'], 8);
 
-        // 记录开奖次数统计
+        // 记录理论检查次数（用于准确评估概率配置）
+        // 即使中途中奖退出，也应该记录完整的检查机会数，这样统计才能反映真实概率
         $this->incrementLotteryStats($lottery->id, 'total', $participateTimes);
 
         // 循环检查多次派彩机会
@@ -484,6 +485,7 @@ class GameLotteryServices
 
                 $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $i, $participateTimes, $isDoubled);
 
+                // 跳出当前彩金的检查循环，继续检查下一个彩金
                 break;
             }
         }
@@ -712,6 +714,12 @@ class GameLotteryServices
                     ]);
                 }
             }
+
+            // 更新彩金池的最后中奖信息和中奖次数
+            $lottery->last_player_id = $this->player->id;
+            $lottery->last_player_name = $this->player->name;
+            $lottery->last_award_amount = $amount;
+            $lottery->lottery_times = $lottery->lottery_times + 1;
 
             $lottery->save();
 

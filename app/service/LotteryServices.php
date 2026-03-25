@@ -860,6 +860,12 @@ class LotteryServices
                 }
             }
 
+            // 更新彩金池的最后中奖信息和中奖次数
+            $lottery->last_player_id = $this->player->id;
+            $lottery->last_player_name = $this->player->name;
+            $lottery->last_award_amount = $amount;
+            $lottery->lottery_times = $lottery->lottery_times + 1;
+
             $lottery->save();
 
             DB::commit();
@@ -1446,6 +1452,12 @@ class LotteryServices
                             ]);
                         }
                     }
+
+                    // 更新彩金池的最后中奖信息和中奖次数
+                    $lotteryModel->last_player_id = $this->player->id;
+                    $lotteryModel->last_player_name = $this->player->name;
+                    $lotteryModel->last_award_amount = $fixedAllowLottery['amount'];
+                    $lotteryModel->lottery_times = $lotteryModel->lottery_times + 1;
 
                     $lotteryModel->save();
 

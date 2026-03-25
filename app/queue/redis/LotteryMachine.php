@@ -50,6 +50,32 @@ class LotteryMachine implements Consumer
                 return;
             }
 
+            // 防止重复处理：使用机台ID+玩家ID+押注金额+时间戳作为唯一标识
+            $machineId = $data['machine_id'] ?? 0;
+            $playerId = $data['player_id'] ?? 0;
+            $num = $data['num'] ?? 0;
+            $lastNum = $data['last_num'] ?? 0;
+
+            if ($machineId > 0 && $playerId > 0) {
+                // 使用组合键生成唯一标识
+                $uniqueKey = md5($machineId . '_' . $playerId . '_' . $num . '_' . $lastNum);
+                $cacheKey = 'machine_lottery_processed_' . $uniqueKey;
+                $redis = \support\Redis::connection()->client();
+
+                // 使用 SET NX（只在key不存在时设置）来防止重复处理
+                $lockResult = $redis->set($cacheKey, time(), ['NX', 'EX' => 3600]); // 1小时过期
+
+                if (!$lockResult) {
+                    $log->warning('该机台押注已处理过，跳过重复检查', [
+                        'machine_id' => $machineId,
+                        'player_id' => $playerId,
+                        'num' => $num,
+                        'last_num' => $lastNum
+                    ]);
+                    return;
+                }
+            }
+
             // 通知后台管理系统玩家正在游戏
             $this->notifyPlayerBetting($player, $machine, $data);
 
