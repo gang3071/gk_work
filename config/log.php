@@ -429,6 +429,22 @@ $handlers = [
             ]
         ],
     ],
+    'btg_server' => [
+        'handlers' => [
+            [
+                'class' => Monolog\Handler\RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/btg_server.log',
+                    2, //$maxFiles
+                    Monolog\Logger::DEBUG,
+                ],
+                'formatter' => [
+                    'class' => Monolog\Formatter\LineFormatter::class,
+                    'constructor' => [null, 'Y-m-d H:i:s', true],
+                ],
+            ]
+        ],
+    ],
     'offline_notify_server' => [
         'handlers' => [
             [
