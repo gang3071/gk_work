@@ -5,6 +5,7 @@ namespace app\service;
 use app\model\GameType;
 use app\model\Lottery;
 use app\model\Machine;
+use app\model\MachineReport;
 use app\model\Notice;
 use app\model\Player;
 use app\model\PlayerDeliveryRecord;
@@ -934,7 +935,7 @@ class LotteryServices
         $playerLotteryRecord->lottery_multiple = $lotteryMultiple;
         $playerLotteryRecord->lottery_sort = $lottery->sort;
         $playerLotteryRecord->cate_rate = $this->machine->machineCategory->lottery_rate;
-        $playerLotteryRecord->status = PlayerLotteryRecord::STATUS_PASS;
+        $playerLotteryRecord->status = PlayerLotteryRecord::STATUS_COMPLETE;
         $playerLotteryRecord->player_game_record_id = $playerGameRecord->id;
 
         // 记录rate信息（如果是双倍则标记为2倍rate）
@@ -945,6 +946,9 @@ class LotteryServices
         }
 
         $playerLotteryRecord->save();
+
+        // 更新机台报表（因为是新建记录，updated事件不会触发）
+        $this->updateMachineReport($playerLotteryRecord);
 
         return $playerLotteryRecord;
     }
@@ -1355,9 +1359,12 @@ class LotteryServices
                     $playerLotteryRecord->lottery_type = Lottery::LOTTERY_TYPE_FIXED;
                     $playerLotteryRecord->lottery_multiple = $fixedAllowLottery['lottery_multiple'];
                     $playerLotteryRecord->lottery_sort = $fixedAllowLottery['lottery_sort'];
-                    $playerLotteryRecord->status = PlayerLotteryRecord::STATUS_PASS;
+                    $playerLotteryRecord->status = PlayerLotteryRecord::STATUS_COMPLETE;
                     $playerLotteryRecord->player_game_record_id = $playerGameRecord ? $playerGameRecord->id : 0;
                     $playerLotteryRecord->save();
+
+                    // 更新机台报表（因为是新建记录，updated事件不会触发）
+                    $this->updateMachineReport($playerLotteryRecord);
 
                     // 记录中奖日志（参考随机彩金逻辑）
                     \support\Log::info('【固定彩金中奖】玩家中奖:', [
@@ -1970,6 +1977,49 @@ class LotteryServices
             \support\Log::error('防抖爆彩检查失败:', [
                 'lottery_id' => $lottery->id,
                 'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * 更新机台报表（彩金统计）
+     * @param PlayerLotteryRecord $playerLotteryRecord
+     * @return void
+     */
+    private function updateMachineReport(PlayerLotteryRecord $playerLotteryRecord): void
+    {
+        try {
+            $date = date('Y-m-d');
+            /** @var MachineReport $machineReport */
+            $machineReport = MachineReport::query()
+                ->where('machine_id', $playerLotteryRecord->machine_id)
+                ->where('date', $date)
+                ->where('department_id', $playerLotteryRecord->department_id)
+                ->where('odds', $playerLotteryRecord->odds)
+                ->first();
+
+            if (!empty($machineReport)) {
+                $machineReport->lottery_amount = bcadd($machineReport->lottery_amount, $playerLotteryRecord->amount ?? 0, 2);
+            } else {
+                $machineReport = new MachineReport();
+                $machineReport->machine_id = $playerLotteryRecord->machine_id;
+                $machineReport->department_id = $playerLotteryRecord->department_id;
+                $machineReport->lottery_amount = $playerLotteryRecord->amount;
+                $machineReport->date = $date;
+                $machineReport->odds = $playerLotteryRecord->odds;
+            }
+            $machineReport->save();
+
+            \support\Log::info('更新机台报表彩金统计', [
+                'machine_id' => $playerLotteryRecord->machine_id,
+                'lottery_amount' => $playerLotteryRecord->amount,
+                'total_lottery_amount' => $machineReport->lottery_amount,
+                'date' => $date,
+            ]);
+        } catch (\Exception $e) {
+            \support\Log::error('更新机台报表失败', [
+                'error' => $e->getMessage(),
+                'player_lottery_record_id' => $playerLotteryRecord->id,
             ]);
         }
     }

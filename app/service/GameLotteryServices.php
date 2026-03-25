@@ -6,7 +6,9 @@ use app\model\GameExtend;
 use app\model\GameLottery;
 use app\model\Notice;
 use app\model\Player;
+use app\model\PlayerDeliveryRecord;
 use app\model\PlayerLotteryRecord;
+use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
 use Exception;
 use Illuminate\Database\Eloquent\Builder;
@@ -648,6 +650,39 @@ class GameLotteryServices
             // 发送站内信
             $notice = $this->sendNotice($playerLotteryRecord->id, $playerLotteryRecord->lottery_name);
 
+            // 更新玩家钱包（加彩金金额）
+            /** @var PlayerPlatformCash $machineWallet */
+            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+            if (!$machineWallet) {
+                $this->log->error('电子游戏彩金派发失败：玩家钱包不存在', [
+                    'player_id' => $this->player->id,
+                ]);
+                DB::rollback();
+                return false;
+            }
+
+            $beforeAmount = $machineWallet->money;
+            $machineWallet->money = bcadd($machineWallet->money, $amount, 2);
+            $machineWallet->save();
+
+            // 创建交易记录
+            $playerDeliveryRecord = new PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = $this->player->id;
+            $playerDeliveryRecord->department_id = $this->player->department_id;
+            $playerDeliveryRecord->target = $playerLotteryRecord->getTable();
+            $playerDeliveryRecord->target_id = $playerLotteryRecord->id;
+            $playerDeliveryRecord->platform_id = PlayerPlatformCash::PLATFORM_SELF;
+            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_LOTTERY;
+            $playerDeliveryRecord->source = 'lottery_game';
+            $playerDeliveryRecord->amount = $amount;
+            $playerDeliveryRecord->amount_before = $beforeAmount;
+            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->tradeno = '';
+            $playerDeliveryRecord->remark = '电子游戏彩金派彩';
+            $playerDeliveryRecord->user_id = 0;
+            $playerDeliveryRecord->user_name = '';
+            $playerDeliveryRecord->save();
+
             // 扣减彩金池（根据rate计算实际扣减金额）
             $rate = $lottery->rate > 0 ? $lottery->rate : 100;
             $baseDeductAmount = bcmul($lottery->amount, bcdiv($rate, 100, 4), 4);
@@ -749,7 +784,7 @@ class GameLotteryServices
         $playerLotteryRecord->lottery_multiple = $lotteryMultiple;
         $playerLotteryRecord->lottery_sort = $lottery->sort;
         $playerLotteryRecord->cate_rate = $lottery->rate;
-        $playerLotteryRecord->status = PlayerLotteryRecord::STATUS_PASS;
+        $playerLotteryRecord->status = PlayerLotteryRecord::STATUS_COMPLETE;
         $playerLotteryRecord->save();
 
         return $playerLotteryRecord;
