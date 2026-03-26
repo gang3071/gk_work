@@ -279,4 +279,70 @@ class AdminGamePlatformController
             return $this->fail($e->getMessage() ?? '系统错误');
         }
     }
+
+    /**
+     * 游戏回放
+     * @param Request $request
+     * @return Response
+     */
+    public function replay(Request $request): Response
+    {
+        try {
+            $player = $this->getPlayer($request);
+            if (empty($player)) {
+                return $this->fail('玩家信息获取失败，请检查 X-Player-Id header');
+            }
+
+            $data = $request->all();
+
+            if (empty($data['game_record_id'])) {
+                return $this->fail('游戏记录ID不能为空');
+            }
+
+            // 查询游戏记录
+            $gameRecord = \app\model\PlayGameRecord::query()
+                ->with(['gamePlatform'])
+                ->find($data['game_record_id']);
+
+            if (empty($gameRecord)) {
+                return $this->fail('游戏记录不存在');
+            }
+
+            if (empty($gameRecord->gamePlatform)) {
+                return $this->fail('游戏平台不存在');
+            }
+
+            $lang = $request->header('Accept-Language', 'zh-CN');
+            $lang = Str::replace('_', '-', $lang);
+
+            // 调用游戏服务获取回放URL
+            $gameService = GameServiceFactory::createService(strtoupper($gameRecord->gamePlatform->code), $player);
+            $replayUrl = $gameService->replay($gameRecord->toArray());
+
+            if (empty($replayUrl)) {
+                return $this->fail('该游戏平台不支持回放功能');
+            }
+
+            Log::info('Admin replay game', [
+                'player_id' => $player->id,
+                'game_record_id' => $gameRecord->id,
+                'platform' => $gameRecord->gamePlatform->code,
+            ]);
+
+            return $this->success([
+                'url' => $replayUrl,
+            ]);
+
+        } catch (Exception $e) {
+            Log::error('Admin replay game failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendTelegramAlert('管理后台游戏回放', $e, [
+                'game_record_id' => $data['game_record_id'] ?? null,
+                'player_id' => $player->id ?? null,
+            ]);
+            return $this->fail($e->getMessage() ?? '系统错误');
+        }
+    }
 }
