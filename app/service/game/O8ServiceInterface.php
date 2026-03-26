@@ -348,7 +348,7 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
             //下注记录
 
             //根据游戏code查找当前游戏所属的游戏平台
-            $platformId = GameExtend::query()->where('code',$order['gamecode'])->value('code')??'';
+            $platformId = GameExtend::query()->where('code',$order['gamecode'])->value('platform_id')??'';
             $insert = [
                 'player_id' => $player->id,
                 'parent_player_id' => $player->recommend_id ?? 0,
@@ -452,7 +452,7 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
                 $machineWallet->save();
                 //todo 语言文件后续处理
                 //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
-                $platformId = GameExtend::query()->where('code',$order['gamecode'])->value('code')??'';
+                $platformId = GameExtend::query()->where('code',$order['gamecode'])->value('platform_id')??'';
                 $playerDeliveryRecord = new PlayerDeliveryRecord;
                 $playerDeliveryRecord->player_id = $player->id;
                 $playerDeliveryRecord->department_id = $player->department_id;
