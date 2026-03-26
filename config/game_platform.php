@@ -5,6 +5,7 @@ return [
         'api_domain' => env('BTG_API_DOMAIN'),
         'domain' => '',
         'app_id' => env('BTG_APP_ID'),
+        'md5_key' => env('BTG_MD5_KEY'),
         'app_secret' => env('BTG_APP_SECRET'),
         'admin_url' => env('BTG_ADMIN_URL'),
         'admin_user' => env('BTG_ADMIN_USER'),

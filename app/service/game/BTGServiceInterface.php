@@ -66,10 +66,9 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
     public const ERROR_CODE_GET_BALANCE_FAILED = '6111';
     public const ERROR_CODE_TRANSACTION_TOO_FREQUENT = '6112';
 
-    public $method = 'POST';
-    public $successCode = self::ERROR_CODE_SUCCESS;
-    public string $error = '';
-    public $failCode = [
+    // 错误码消息映射
+    public const ERROR_CODE_MAP = [
+        self::ERROR_CODE_SUCCESS => '成功',
         self::ERROR_CODE_GENERAL_ERROR => '發生預期外錯誤',
         self::ERROR_CODE_GAME_MAINTENANCE => '該遊戲目前維護中',
         self::ERROR_CODE_GAME_NOT_EXIST => '該遊戲不存在',
@@ -112,8 +111,13 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         self::ERROR_CODE_TRANSACTION_TOO_FREQUENT => '交易過於頻繁'
     ];
 
+    public $method = 'POST';
+    public $successCode = self::ERROR_CODE_SUCCESS;
+    public string $error = '';
+
     private $apiDomain;
     private $appId;
+    private $md5Key;
     private $appSecret;
 
     private $path = [
@@ -154,6 +158,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
     {
         $config = config('game_platform.BTG');
         $this->appId = $config['app_id'];
+        $this->md5Key = $config['md5_key'];
         $this->apiDomain = $config['api_domain'];
         $this->appSecret = $config['app_secret'];
         $this->platform = GamePlatform::query()->where('code', 'BTG')->first();
@@ -180,7 +185,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 $this->lobbyLogin($data);
                 return 0;
             }
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return $res['data']['balance'] ?? 0;
@@ -230,7 +235,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('lobbyLogin'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return $res['data']['lobby_url'] ?? '';
@@ -284,8 +289,8 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('depositAmount'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            Log::error($this->failCode[$res['status']['code']], ['res' => $res]);
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            Log::error(self::ERROR_CODE_MAP[$res['status']['code']], ['res' => $res]);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
         if (empty($res['data']['order_id'])) {
             throw new GameException(trans('transfer_fail', [], 'message'), 0);
@@ -327,8 +332,8 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('withdrawAmount'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            Log::error($this->failCode[$res['status']['code']], ['res' => $res]);
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            Log::error(self::ERROR_CODE_MAP[$res['status']['code']], ['res' => $res]);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
         if (empty($res['data']['order_id'])) {
             throw new GameException(trans('transfer_fail', [], 'message'), 0);
@@ -360,7 +365,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('userLogout'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return true;
@@ -382,7 +387,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('getTransactionStatus'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return $res;
@@ -516,7 +521,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('getGameHistories'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return $res;
@@ -544,7 +549,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('gameLogin'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return $res['data']['game_url'] ?? '';
@@ -563,7 +568,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('getGameList'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
         $insertData = [];
         $langList = [
@@ -918,5 +923,55 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
     {
         // BTG不需要解密,直接返回原数据
         return $data;
+    }
+
+    /**
+     * 单一钱包 - 验证auth_code
+     * @param array $params
+     * @return bool
+     */
+    public function verifyAuthCode(array $params): bool
+    {
+        if (!isset($params['auth_code'])) {
+            $this->error = self::ERROR_CODE_AUTHORIZATION_INVALID;
+            return false;
+        }
+
+        // 移除 trans_details、betform_details 和 auth_code 参数
+        $checkParams = $params;
+        unset($checkParams['auth_code']);
+        unset($checkParams['trans_details']);
+        unset($checkParams['betform_details']);
+
+        // 按字母顺序排序
+        ksort($checkParams);
+
+        // 拼接参数字符串：key=value&key=value 格式
+        $paramsArray = [];
+        foreach ($checkParams as $key => $value) {
+            $paramsArray[] = $key . '=' . $value;
+        }
+        $paramsString = implode('&', $paramsArray);
+
+        // 生成初始字符串：params_string + "&" + md5_key
+        $signStr = $paramsString . '&' . $this->md5Key;
+
+        // MD5加密生成auth_code
+        $expectedAuthCode = md5($signStr);
+
+        // 验证签名
+        if (strtolower($params['auth_code']) !== strtolower($expectedAuthCode)) {
+            Log::error('BTG auth_code验证失败', [
+                'params' => $params,
+                'expected' => $expectedAuthCode,
+                'received' => $params['auth_code'],
+                'params_string' => $paramsString,
+                'sign_string' => $signStr
+            ]);
+            $this->error = self::ERROR_CODE_AUTHORIZATION_INVALID;
+            return false;
+        }
+
+        return true;
     }
 }

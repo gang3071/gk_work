@@ -2,6 +2,7 @@
 
 namespace app\wallet\controller\game;
 
+use app\model\Player;
 use app\service\game\BTGServiceInterface;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
@@ -19,97 +20,6 @@ class BTGGameController
 {
     use TelegramAlertTrait;
 
-    // 状态码定义 - 使用字符串类型保持与BTG平台一致
-    public const API_CODE_SUCCESS = '1000';
-    public const API_CODE_GENERAL_ERROR = '2001';
-    public const API_CODE_GAME_MAINTENANCE = '4001';
-    public const API_CODE_GAME_NOT_EXIST = '4002';
-    public const API_CODE_OPERATION_FREQUENT = '4003';
-    public const API_CODE_TIME_FORMAT_ERROR = '4004';
-    public const API_CODE_GAME_NO_DEMO = '4005';
-    public const API_CODE_ACTIVITY_TIME_OVERLAP = '4051';
-    public const API_CODE_ACTIVITY_UNSUPPORTED_GAMES = '4052';
-    public const API_CODE_ACTIVITY_NOT_EXIST = '4053';
-    public const API_CODE_IP_NOT_ALLOWED = '4102';
-    public const API_CODE_INVALID_CHECK_CODE = '4103';
-    public const API_CODE_AGENT_NOT_EXIST = '4104';
-    public const API_CODE_AGENT_LOCKED = '4105';
-    public const API_CODE_PLAYER_PASSWORD_ERROR = '4201';
-    public const API_CODE_PLAYER_NOT_EXIST = '4202';
-    public const API_CODE_PLAYER_ALREADY_EXIST = '4203';
-    public const API_CODE_GAME_RECORD_NOT_EXIST = '4204';
-    public const API_CODE_PLAYER_LOCKED = '4206';
-    public const API_CODE_PARAM_FORMAT_ERROR = '4302';
-    public const API_CODE_PARAM_VALUE_ERROR = '4303';
-    public const API_CODE_AUTHORIZATION_INVALID = '5001';
-    public const API_CODE_BAD_FORMAT_PARAMS = '5002';
-    public const API_CODE_INSUFFICIENT_BALANCE = '5101';
-    public const API_CODE_UNFINISHED_TRANSACTIONS = '5102';
-    public const API_CODE_PLAYER_SUSPENDED = '5103';
-    public const API_CODE_GAME_CLOSED = '5104';
-    public const API_CODE_TRANSACTION_NOT_EXIST = '5105';
-    public const API_CODE_TRANSACTION_SETTLED = '5106';
-    public const API_CODE_DUPLICATE_TRAN_ID = '5107';
-    public const API_CODE_SOMETHING_WRONG = '5201';
-    public const API_CODE_WITHDRAW_FAILED = '6101';
-    public const API_CODE_DEPOSIT_FAILED = '6102';
-    public const API_CODE_DUPLICATE_ORDER = '6104';
-    public const API_CODE_TRANSACTION_NOT_FOUND = '6105';
-    public const API_CODE_DEPOSIT_AMOUNT_ERROR = '6107';
-    public const API_CODE_WITHDRAW_AMOUNT_ERROR = '6108';
-    public const API_CODE_PARAM_CONFLICT = '6109';
-    public const API_CODE_PLAYER_TRANSACTION_LOCKED = '6110';
-    public const API_CODE_GET_BALANCE_FAILED = '6111';
-    public const API_CODE_TRANSACTION_TOO_FREQUENT = '6112';
-
-    // 状态码映射
-    public const API_CODE_MAP = [
-        self::API_CODE_SUCCESS => '成功',
-        self::API_CODE_GENERAL_ERROR => '發生預期外錯誤',
-        self::API_CODE_GAME_MAINTENANCE => '該遊戲目前維護中',
-        self::API_CODE_GAME_NOT_EXIST => '該遊戲不存在',
-        self::API_CODE_OPERATION_FREQUENT => '操作頻繁，請稍後再試(間隔1秒以上)',
-        self::API_CODE_TIME_FORMAT_ERROR => '請使用美東時間格式',
-        self::API_CODE_GAME_NO_DEMO => '遊戲不提供試玩網址',
-        self::API_CODE_ACTIVITY_TIME_OVERLAP => '活動時間重疊',
-        self::API_CODE_ACTIVITY_UNSUPPORTED_GAMES => '內含不支援遊戲',
-        self::API_CODE_ACTIVITY_NOT_EXIST => '活動不存在或是已結束',
-        self::API_CODE_IP_NOT_ALLOWED => '不被允許訪問的ip',
-        self::API_CODE_INVALID_CHECK_CODE => '錯誤的驗證碼',
-        self::API_CODE_AGENT_NOT_EXIST => '該代理商不存在',
-        self::API_CODE_AGENT_LOCKED => '該代理被鎖定',
-        self::API_CODE_PLAYER_PASSWORD_ERROR => '玩家帳號或密碼錯誤',
-        self::API_CODE_PLAYER_NOT_EXIST => '該玩家不存在',
-        self::API_CODE_PLAYER_ALREADY_EXIST => '該玩家已註冊',
-        self::API_CODE_GAME_RECORD_NOT_EXIST => '欲查詢之遊戲紀錄不存在',
-        self::API_CODE_PLAYER_LOCKED => '該玩家被鎖定',
-        self::API_CODE_PARAM_FORMAT_ERROR => '特定參數(arg)格式錯誤',
-        self::API_CODE_PARAM_VALUE_ERROR => '特定參數(arg)值錯誤',
-        self::API_CODE_AUTHORIZATION_INVALID => '錯誤的驗證',
-        self::API_CODE_BAD_FORMAT_PARAMS => '特定引數(arg)錯誤',
-        self::API_CODE_INSUFFICIENT_BALANCE => '該玩家餘額不足',
-        self::API_CODE_UNFINISHED_TRANSACTIONS => '尚有交易處理中',
-        self::API_CODE_PLAYER_SUSPENDED => '玩家帳號被停權',
-        self::API_CODE_GAME_CLOSED => '遊戲已被關閉',
-        self::API_CODE_TRANSACTION_NOT_EXIST => '交易不存在',
-        self::API_CODE_TRANSACTION_SETTLED => '交易已處理',
-        self::API_CODE_DUPLICATE_TRAN_ID => '重複的 tran_id',
-        self::API_CODE_SOMETHING_WRONG => '發生了以下錯誤',
-        self::API_CODE_WITHDRAW_FAILED => '提款交易執行失敗',
-        self::API_CODE_DEPOSIT_FAILED => '存款交易執行失敗',
-        self::API_CODE_DUPLICATE_ORDER => '該外部交易流水號已存在',
-        self::API_CODE_TRANSACTION_NOT_FOUND => '查無該交易紀錄',
-        self::API_CODE_DEPOSIT_AMOUNT_ERROR => '存款金額數值錯誤',
-        self::API_CODE_WITHDRAW_AMOUNT_ERROR => '提款金額數值錯誤',
-        self::API_CODE_PARAM_CONFLICT => 'take_all=true與withdraw_amount 參數衝突',
-        self::API_CODE_PLAYER_TRANSACTION_LOCKED => '玩家交易狀態被鎖定',
-        self::API_CODE_GET_BALANCE_FAILED => '取餘額失敗',
-        self::API_CODE_TRANSACTION_TOO_FREQUENT => '交易過於頻繁',
-    ];
-
-    /** 排除签名验证的接口 */
-    protected array $noNeedSign = [];
-
     /**
      * @var BTGServiceInterface
      */
@@ -125,7 +35,7 @@ class BTGGameController
 
     #[RateLimiter(limit: 5)]
     /**
-     * 查询余额
+     * 查询余额 - get_user_balance
      * @param Request $request
      * @return Response
      */
@@ -133,34 +43,55 @@ class BTGGameController
     {
         try {
             $params = $request->post();
-            $this->logger->info('BTG余额查询记录', ['params' => $params]);
+            $this->logger->info('BTG查询余额请求', ['params' => $params]);
+
+            // 验证必要参数
+            if ($error = $this->validateRequiredParams($params, [
+                'tran_id' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'username' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'currency' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'auth_code' => BTGServiceInterface::ERROR_CODE_AUTHORIZATION_INVALID,
+            ], 'BTG查询余额')) {
+                return $error;
+            }
 
             // 验证签名
-            $this->service->verifySign($params);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            if (!$this->service->verifyAuthCode($params)) {
+                $this->logger->error('BTG查询余额失败：auth_code验证失败', ['params' => $params]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_AUTHORIZATION_INVALID);
             }
 
-            // 设置玩家
-            if (isset($params['username'])) {
-                $this->service->player = \app\model\Player::query()->where('uuid', $params['username'])->first();
+            // 查询玩家
+            $player = Player::query()->where('uuid', $params['username'])->first();
+            if (!$player) {
+                $this->logger->error('BTG查询余额失败：玩家不存在', ['username' => $params['username']]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_PLAYER_NOT_EXIST);
             }
+
+            $this->service->player = $player;
 
             // 获取余额
             $balance = $this->service->balance();
             if ($this->service->error) {
+                $this->logger->error('BTG查询余额失败：获取余额错误', ['error' => $this->service->error, 'player_id' => $player->id]);
                 return $this->error($this->service->error);
             }
 
-            return $this->success([
-                'account_id' => $params['account_id'] ?? '',
-                'username' => $params['username'] ?? '',
+            $this->logger->info('BTG查询余额成功', [
+                'username' => $params['username'],
                 'balance' => $balance,
+                'tran_id' => $params['tran_id']
+            ]);
+
+            return $this->success([
+                'balance' => number_format($balance, 1, '.', ''),
+                'currency' => $params['currency'],
+                'tran_id' => $params['tran_id'],
             ]);
         } catch (Exception $e) {
-            $this->logger->error('BTG balance failed', ['error' => $e->getMessage()]);
-            $this->sendTelegramAlert('BTG', '余额查询异常', $e, ['params' => $request->post()]);
-            return $this->error(self::API_CODE_GENERAL_ERROR);
+            $this->logger->error('BTG查询余额异常', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('BTG', '查询余额异常', $e, ['params' => $request->post()]);
+            return $this->error(BTGServiceInterface::ERROR_CODE_SOMETHING_WRONG, [], 'message');
         }
     }
 
@@ -207,7 +138,7 @@ class BTGGameController
         } catch (Exception $e) {
             $this->logger->error('BTG bet failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('BTG', '下注异常', $e, ['params' => $request->post()]);
-            return $this->error(self::API_CODE_GENERAL_ERROR);
+            return $this->error(BTGServiceInterface::ERROR_CODE_GENERAL_ERROR);
         }
     }
 
@@ -254,7 +185,7 @@ class BTGGameController
         } catch (Exception $e) {
             $this->logger->error('BTG betResult failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('BTG', '结算异常', $e, ['params' => $request->post()]);
-            return $this->error(self::API_CODE_GENERAL_ERROR);
+            return $this->error(BTGServiceInterface::ERROR_CODE_GENERAL_ERROR);
         }
     }
 
@@ -301,7 +232,7 @@ class BTGGameController
         } catch (Exception $e) {
             $this->logger->error('BTG cancelBet failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('BTG', '取消下注异常', $e, ['params' => $request->post()]);
-            return $this->error(self::API_CODE_GENERAL_ERROR);
+            return $this->error(BTGServiceInterface::ERROR_CODE_GENERAL_ERROR);
         }
     }
 
@@ -316,14 +247,14 @@ class BTGGameController
     {
         $responseData = [
             'status' => [
-                'code' => self::API_CODE_SUCCESS, // 使用字符串常量 '1000'
-                'message' => self::API_CODE_MAP[self::API_CODE_SUCCESS],
+                'code' => (int)BTGServiceInterface::ERROR_CODE_SUCCESS, // 转换为整数类型
+                'message' => BTGServiceInterface::ERROR_CODE_MAP[BTGServiceInterface::ERROR_CODE_SUCCESS],
                 'datetime' => date('Y-m-d\TH:i:sP'),
             ],
             'data' => $data,
         ];
 
-        $this->logger->info('BTG返回记录', ['response' => $responseData]);
+        $this->logger->info('BTG成功返回', ['response' => $responseData]);
 
         return new Response(
             $httpCode,
@@ -333,25 +264,58 @@ class BTGGameController
     }
 
     /**
+     * 验证必要参数
+     *
+     * @param array $params 请求参数
+     * @param array $requiredParams 必要参数配置 [参数名 => 错误码]
+     * @param string $logPrefix 日志前缀
+     * @return Response|null 如果验证失败返回错误响应，成功返回null
+     */
+    private function validateRequiredParams(array $params, array $requiredParams, string $logPrefix = 'BTG'): ?Response
+    {
+        foreach ($requiredParams as $param => $errorCode) {
+            if (!isset($params[$param]) || $params[$param] === '') {
+                $this->logger->error("{$logPrefix}失败：缺少{$param}参数", ['params' => $params]);
+                return $this->error($errorCode, [], $param);
+            }
+        }
+        return null;
+    }
+
+    /**
      * 失败响应
      *
      * @param string|int $code 错误码
      * @param array $data 额外数据
+     * @param string $argName 参数名称（用于格式化错误消息）
      * @param int $httpCode HTTP状态码
      * @return Response
      */
-    public function error(string|int $code, array $data = [], int $httpCode = 200): Response
+    public function error(string|int $code, array $data = [], string $argName = '', int $httpCode = 200): Response
     {
         // BTG使用字符串类型的错误码
         $code = (string)$code;
+
+        // 获取错误消息
+        $message = BTGServiceInterface::ERROR_CODE_MAP[$code] ?? '未知错误';
+
+        // 如果提供了参数名称，格式化错误消息
+        if ($argName !== '') {
+            $message = str_replace('(arg)', '(' . $argName . ')', $message);
+        }
+
         $responseData = [
             'status' => [
-                'code' => $code,
-                'message' => self::API_CODE_MAP[$code] ?? '未知错误',
+                'code' => (int)$code,
+                'message' => $message,
                 'datetime' => date('Y-m-d\TH:i:sP'),
             ],
-            'data' => $data,
         ];
+
+        // 只有当data不为空时才添加data字段
+        if (!empty($data)) {
+            $responseData['data'] = $data;
+        }
 
         $this->logger->error('BTG错误返回', ['response' => $responseData]);
 
