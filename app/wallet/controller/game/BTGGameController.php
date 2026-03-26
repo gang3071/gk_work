@@ -97,142 +97,106 @@ class BTGGameController
 
     #[RateLimiter(limit: 5)]
     /**
-     * 下注扣款
+     * 转账 - transfer
+     * 处理所有类型的金额变动：下注、结算、退款、调整、奖励
      * @param Request $request
      * @return Response
      */
-    public function bet(Request $request): Response
+    public function transfer(Request $request): Response
     {
         try {
             $params = $request->post();
-            $this->logger->info('BTG下注记录', ['params' => $params]);
+            $this->logger->info('BTG转账请求', ['params' => $params]);
+
+            // 验证必要参数
+            if ($error = $this->validateRequiredParams($params, [
+                'tran_id' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'username' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'amount' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'currency' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'transfer_type' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'game_type' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'game_code' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'trans_details' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
+                'auth_code' => BTGServiceInterface::ERROR_CODE_AUTHORIZATION_INVALID,
+            ], 'BTG转账')) {
+                return $error;
+            }
 
             // 验证签名
-            $this->service->verifySign($params);
+            if (!$this->service->verifyAuthCode($params)) {
+                $this->logger->error('BTG转账失败：auth_code验证失败', ['params' => $params]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_AUTHORIZATION_INVALID);
+            }
+
+            // 验证 transfer_type
+            $allowedTypes = ['start', 'end', 'refund', 'adjust', 'reward'];
+            if (!in_array($params['transfer_type'], $allowedTypes)) {
+                $this->logger->error('BTG转账失败：无效的transfer_type', ['transfer_type' => $params['transfer_type']]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'transfer_type');
+            }
+
+            // 查询玩家
+            $player = Player::query()->where('uuid', $params['username'])->first();
+            if (!$player) {
+                $this->logger->error('BTG转账失败：玩家不存在', ['username' => $params['username']]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_PLAYER_NOT_EXIST);
+            }
+
+            $this->service->player = $player;
+
+            // 解析 trans_details
+            $transDetails = json_decode($params['trans_details'], true);
+            if (!$transDetails) {
+                $this->logger->error('BTG转账失败：trans_details格式错误', ['trans_details' => $params['trans_details']]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'trans_details');
+            }
+
+            // 解析 betform_details（如果存在）
+            $betformDetails = [];
+            if (isset($params['betform_details']) && $params['betform_details'] !== '{}') {
+                $betformDetails = json_decode($params['betform_details'], true);
+                if (!$betformDetails) {
+                    $this->logger->error('BTG转账失败：betform_details格式错误', ['betform_details' => $params['betform_details']]);
+                    return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'betform_details');
+                }
+            }
+
+            // 根据 transfer_type 分发处理
+            $result = match ($params['transfer_type']) {
+                'start' => $this->service->transferStart($params, $transDetails),
+                'end' => $this->service->transferEnd($params, $transDetails, $betformDetails),
+                'refund' => $this->service->transferRefund($params, $transDetails),
+                'adjust' => $this->service->transferAdjust($params, $transDetails, $betformDetails),
+                'reward' => $this->service->transferReward($params, $transDetails, $betformDetails),
+            };
+
             if ($this->service->error) {
+                $this->logger->error('BTG转账失败', [
+                    'transfer_type' => $params['transfer_type'],
+                    'error' => $this->service->error,
+                    'tran_id' => $params['tran_id']
+                ]);
                 return $this->error($this->service->error);
             }
 
-            // 下注扣款
-            $result = $this->service->bet($params);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
+            $this->logger->info('BTG转账成功', [
+                'transfer_type' => $params['transfer_type'],
+                'username' => $params['username'],
+                'amount' => $params['amount'],
+                'balance' => $result['balance'],
+                'tran_id' => $params['tran_id']
+            ]);
 
-            // 如果返回的是数组则成功，否则返回余额表示失败
-            if (is_array($result)) {
-                return $this->success([
-                    'account_id' => $params['account_id'] ?? '',
-                    'username' => $params['username'] ?? '',
-                    'external_order_id' => $params['external_order_id'] ?? '',
-                    'balance' => $result['balance'] ?? 0,
-                    'order_id' => $result['order_id'] ?? '',
-                ]);
-            } else {
-                return $this->error($this->service->error, [
-                    'account_id' => $params['account_id'] ?? '',
-                    'username' => $params['username'] ?? '',
-                    'balance' => $result,
-                ]);
-            }
+            return $this->success([
+                'balance' => number_format($result['balance'], 1, '.', ''),
+                'currency' => $params['currency'],
+                'tran_id' => $params['tran_id'],
+            ]);
         } catch (Exception $e) {
-            $this->logger->error('BTG bet failed', ['error' => $e->getMessage()]);
-            $this->sendTelegramAlert('BTG', '下注异常', $e, ['params' => $request->post()]);
-            return $this->error(BTGServiceInterface::ERROR_CODE_GENERAL_ERROR);
-        }
-    }
-
-    #[RateLimiter(limit: 5)]
-    /**
-     * 结算加款
-     * @param Request $request
-     * @return Response
-     */
-    public function betResult(Request $request): Response
-    {
-        try {
-            $params = $request->post();
-            $this->logger->info('BTG结算记录', ['params' => $params]);
-
-            // 验证签名
-            $this->service->verifySign($params);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-
-            // 结算加款
-            $result = $this->service->betResulet($params);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-
-            // 如果返回的是数组则成功，否则返回余额表示失败
-            if (is_array($result)) {
-                return $this->success([
-                    'account_id' => $params['account_id'] ?? '',
-                    'username' => $params['username'] ?? '',
-                    'external_order_id' => $params['external_order_id'] ?? '',
-                    'balance' => $result['balance'] ?? 0,
-                    'order_id' => $result['order_id'] ?? '',
-                ]);
-            } else {
-                return $this->error($this->service->error, [
-                    'account_id' => $params['account_id'] ?? '',
-                    'username' => $params['username'] ?? '',
-                    'balance' => $result,
-                ]);
-            }
-        } catch (Exception $e) {
-            $this->logger->error('BTG betResult failed', ['error' => $e->getMessage()]);
-            $this->sendTelegramAlert('BTG', '结算异常', $e, ['params' => $request->post()]);
-            return $this->error(BTGServiceInterface::ERROR_CODE_GENERAL_ERROR);
-        }
-    }
-
-    #[RateLimiter(limit: 5)]
-    /**
-     * 取消下注
-     * @param Request $request
-     * @return Response
-     */
-    public function cancelBet(Request $request): Response
-    {
-        try {
-            $params = $request->post();
-            $this->logger->info('BTG取消下注', ['params' => $params]);
-
-            // 验证签名
-            $this->service->verifySign($params);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-
-            // 取消下注
-            $result = $this->service->cancelBet($params);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-
-            // 如果返回的是数组则成功，否则返回余额表示失败
-            if (is_array($result)) {
-                return $this->success([
-                    'account_id' => $params['account_id'] ?? '',
-                    'username' => $params['username'] ?? '',
-                    'external_order_id' => $params['external_order_id'] ?? '',
-                    'balance' => $result['balance'] ?? 0,
-                    'order_id' => $result['order_id'] ?? '',
-                ]);
-            } else {
-                return $this->error($this->service->error, [
-                    'account_id' => $params['account_id'] ?? '',
-                    'username' => $params['username'] ?? '',
-                    'balance' => $result,
-                ]);
-            }
-        } catch (Exception $e) {
-            $this->logger->error('BTG cancelBet failed', ['error' => $e->getMessage()]);
-            $this->sendTelegramAlert('BTG', '取消下注异常', $e, ['params' => $request->post()]);
-            return $this->error(BTGServiceInterface::ERROR_CODE_GENERAL_ERROR);
+            $this->logger->error('BTG转账异常', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('BTG', '转账异常', $e, ['params' => $request->post()]);
+            return $this->error(BTGServiceInterface::ERROR_CODE_SOMETHING_WRONG);
         }
     }
 

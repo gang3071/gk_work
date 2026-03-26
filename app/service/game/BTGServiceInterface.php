@@ -926,6 +926,414 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
     }
 
     /**
+     * Transfer - start (下注扣款)
+     * @param array $params 请求参数
+     * @param array $transDetails 交易详情
+     * @return array
+     */
+    public function transferStart(array $params, array $transDetails): array
+    {
+        try {
+            $amount = abs((float)$params['amount']); // amount 为负数，取绝对值
+            $orderId = $transDetails['order_id'] ?? '';
+            $roundId = $transDetails['round_id'] ?? '';
+
+            if ($amount <= 0) {
+                $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
+                return ['balance' => $this->player->machine_wallet->money ?? 0];
+            }
+
+            /** @var PlayerPlatformCash $machineWallet */
+            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+
+            // 检查余额
+            if ($machineWallet->money < $amount) {
+                $this->error = self::ERROR_CODE_INSUFFICIENT_BALANCE;
+                return ['balance' => $machineWallet->money];
+            }
+
+            // 检查订单是否已存在（使用 order_id）
+            $existingRecord = PlayGameRecord::query()
+                ->where('order_no', $orderId)
+                ->where('platform_id', $this->platform->id)
+                ->first();
+
+            if ($existingRecord) {
+                // 订单已存在，返回当前余额（幂等性）
+                $this->error = self::ERROR_CODE_DUPLICATE_TRAN_ID;
+                return ['balance' => $machineWallet->money];
+            }
+
+            // 创建游戏记录
+            $insert = [
+                'player_id' => $this->player->id,
+                'parent_player_id' => $this->player->recommend_id ?? 0,
+                'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
+                'player_uuid' => $this->player->uuid,
+                'platform_id' => $this->platform->id,
+                'game_code' => $params['game_code'] ?? '',
+                'department_id' => $this->player->department_id,
+                'bet' => $amount,
+                'win' => 0,
+                'diff' => -$amount,
+                'order_no' => $orderId,
+                'round_no' => $roundId,
+                'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
+                'order_time' => Carbon::now()->toDateTimeString(),
+                'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
+            ];
+
+            /** @var PlayGameRecord $record */
+            $record = PlayGameRecord::query()->create($insert);
+
+            // 扣款并创建交易记录
+            $afterBalance = $this->createBetRecord($machineWallet, $this->player, $record, $amount);
+
+            return ['balance' => (float)$afterBalance];
+        } catch (Exception $e) {
+            Log::error('BTG transferStart error', ['error' => $e->getMessage(), 'params' => $params]);
+            $this->error = self::ERROR_CODE_SOMETHING_WRONG;
+            return ['balance' => $this->player->machine_wallet->money ?? 0];
+        }
+    }
+
+    /**
+     * Transfer - end (结算派彩)
+     * @param array $params 请求参数
+     * @param array $transDetails 交易详情
+     * @param array $betformDetails 注单详情
+     * @return array
+     */
+    public function transferEnd(array $params, array $transDetails, array $betformDetails): array
+    {
+        try {
+            $winAmount = (float)$params['amount']; // amount 为正数（派彩金额）
+            $orderId = $transDetails['order_id'] ?? '';
+            $roundId = $transDetails['round_id'] ?? '';
+
+            /** @var PlayerPlatformCash $machineWallet */
+            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+
+            // 查找对应的下注记录
+            /** @var PlayGameRecord $record */
+            $record = PlayGameRecord::query()
+                ->where('order_no', $orderId)
+                ->where('platform_id', $this->platform->id)
+                ->first();
+
+            if (!$record) {
+                $this->error = self::ERROR_CODE_TRANSACTION_NOT_EXIST;
+                return ['balance' => $machineWallet->money];
+            }
+
+            // 检查是否已结算
+            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+                // 已结算，返回当前余额（幂等性）
+                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
+                return ['balance' => $machineWallet->money];
+            }
+
+            // 派彩加款
+            if ($winAmount > 0) {
+                $beforeBalance = $machineWallet->money;
+                $machineWallet->money = bcadd($machineWallet->money, $winAmount, 2);
+                $machineWallet->save();
+
+                // 创建派彩交易记录
+                $playerDeliveryRecord = new PlayerDeliveryRecord();
+                $playerDeliveryRecord->player_id = $this->player->id;
+                $playerDeliveryRecord->department_id = $this->player->department_id;
+                $playerDeliveryRecord->target = $record->getTable();
+                $playerDeliveryRecord->target_id = $record->id;
+                $playerDeliveryRecord->platform_id = $this->platform->id;
+                $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
+                $playerDeliveryRecord->source = 'player_bet_settlement';
+                $playerDeliveryRecord->amount = $winAmount;
+                $playerDeliveryRecord->amount_before = $beforeBalance;
+                $playerDeliveryRecord->amount_after = $machineWallet->money;
+                $playerDeliveryRecord->tradeno = $orderId;
+                $playerDeliveryRecord->remark = '遊戲結算';
+                $playerDeliveryRecord->user_id = 0;
+                $playerDeliveryRecord->user_name = '';
+                $playerDeliveryRecord->save();
+            }
+
+            // 更新游戏记录
+            $record->platform_action_at = Carbon::now()->toDateTimeString();
+            $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
+            $record->action_data = json_encode($betformDetails, JSON_UNESCAPED_UNICODE);
+            $record->win = $winAmount;
+            $record->diff = $winAmount - $record->bet;
+
+            // 更新有效投注和其他字段（从betform_details获取）
+            if (!empty($betformDetails)) {
+                $record->valid_bet = (float)($betformDetails['valid_bet'] ?? $record->bet);
+            }
+
+            $record->save();
+
+            // 彩金记录
+            Client::send('game-lottery', [
+                'player_id' => $this->player->id,
+                'bet' => $record->bet,
+                'play_game_record_id' => $record->id
+            ]);
+
+            return ['balance' => (float)$machineWallet->money];
+        } catch (Exception $e) {
+            Log::error('BTG transferEnd error', ['error' => $e->getMessage(), 'params' => $params]);
+            $this->error = self::ERROR_CODE_SOMETHING_WRONG;
+            return ['balance' => $this->player->machine_wallet->money ?? 0];
+        }
+    }
+
+    /**
+     * Transfer - refund (退款)
+     * @param array $params 请求参数
+     * @param array $transDetails 交易详情
+     * @return array
+     */
+    public function transferRefund(array $params, array $transDetails): array
+    {
+        try {
+            $refundAmount = (float)$params['amount']; // amount 为正数（退款金额）
+            $orderId = $transDetails['order_id'] ?? '';
+
+            /** @var PlayerPlatformCash $machineWallet */
+            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+
+            // 查找对应的下注记录
+            /** @var PlayGameRecord $record */
+            $record = PlayGameRecord::query()
+                ->where('order_no', $orderId)
+                ->where('platform_id', $this->platform->id)
+                ->first();
+
+            if (!$record) {
+                $this->error = self::ERROR_CODE_TRANSACTION_NOT_EXIST;
+                return ['balance' => $machineWallet->money];
+            }
+
+            // 检查是否已取消
+            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
+                // 已退款，返回当前余额（幂等性）
+                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
+                return ['balance' => $machineWallet->money];
+            }
+
+            // 退款加款
+            $beforeBalance = $machineWallet->money;
+            $machineWallet->money = bcadd($machineWallet->money, $refundAmount, 2);
+            $machineWallet->save();
+
+            // 创建退款交易记录
+            $playerDeliveryRecord = new PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = $this->player->id;
+            $playerDeliveryRecord->department_id = $this->player->department_id;
+            $playerDeliveryRecord->target = $record->getTable();
+            $playerDeliveryRecord->target_id = $record->id;
+            $playerDeliveryRecord->platform_id = $this->platform->id;
+            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_CANCEL_BET;
+            $playerDeliveryRecord->source = 'player_bet_refund';
+            $playerDeliveryRecord->amount = $refundAmount;
+            $playerDeliveryRecord->amount_before = $beforeBalance;
+            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->tradeno = $orderId;
+            $playerDeliveryRecord->remark = '下注退款';
+            $playerDeliveryRecord->user_id = 0;
+            $playerDeliveryRecord->user_name = '';
+            $playerDeliveryRecord->save();
+
+            // 更新游戏记录状态
+            $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_CANCELLED;
+            $record->platform_action_at = Carbon::now()->toDateTimeString();
+            $record->action_data = json_encode($params, JSON_UNESCAPED_UNICODE);
+            $record->save();
+
+            return ['balance' => (float)$machineWallet->money];
+        } catch (Exception $e) {
+            Log::error('BTG transferRefund error', ['error' => $e->getMessage(), 'params' => $params]);
+            $this->error = self::ERROR_CODE_SOMETHING_WRONG;
+            return ['balance' => $this->player->machine_wallet->money ?? 0];
+        }
+    }
+
+    /**
+     * Transfer - adjust (调整金额)
+     * @param array $params 请求参数
+     * @param array $transDetails 交易详情
+     * @param array $betformDetails 注单详情
+     * @return array
+     */
+    public function transferAdjust(array $params, array $transDetails, array $betformDetails): array
+    {
+        try {
+            $adjustAmount = (float)$params['amount']; // amount 可正可负
+            $orderId = $transDetails['order_id'] ?? '';
+
+            /** @var PlayerPlatformCash $machineWallet */
+            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+
+            // 如果调整金额为0，直接返回
+            if ($adjustAmount == 0) {
+                return ['balance' => (float)$machineWallet->money];
+            }
+
+            // 查找对应的游戏记录
+            /** @var PlayGameRecord $record */
+            $record = PlayGameRecord::query()
+                ->where('order_no', $orderId)
+                ->where('platform_id', $this->platform->id)
+                ->first();
+
+            if (!$record) {
+                $this->error = self::ERROR_CODE_TRANSACTION_NOT_EXIST;
+                return ['balance' => $machineWallet->money];
+            }
+
+            // 调整余额
+            $beforeBalance = $machineWallet->money;
+            if ($adjustAmount > 0) {
+                // 加款
+                $machineWallet->money = bcadd($machineWallet->money, $adjustAmount, 2);
+            } else {
+                // 扣款
+                $deductAmount = abs($adjustAmount);
+                if ($machineWallet->money < $deductAmount) {
+                    $this->error = self::ERROR_CODE_INSUFFICIENT_BALANCE;
+                    return ['balance' => $machineWallet->money];
+                }
+                $machineWallet->money = bcsub($machineWallet->money, $deductAmount, 2);
+            }
+            $machineWallet->save();
+
+            // 创建调整交易记录
+            $playerDeliveryRecord = new PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = $this->player->id;
+            $playerDeliveryRecord->department_id = $this->player->department_id;
+            $playerDeliveryRecord->target = $record->getTable();
+            $playerDeliveryRecord->target_id = $record->id;
+            $playerDeliveryRecord->platform_id = $this->platform->id;
+            $playerDeliveryRecord->type = $adjustAmount > 0 ? PlayerDeliveryRecord::TYPE_SETTLEMENT : PlayerDeliveryRecord::TYPE_BET;
+            $playerDeliveryRecord->source = 'player_bet_adjust';
+            $playerDeliveryRecord->amount = abs($adjustAmount);
+            $playerDeliveryRecord->amount_before = $beforeBalance;
+            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->tradeno = $orderId;
+            $playerDeliveryRecord->remark = '金額調整';
+            $playerDeliveryRecord->user_id = 0;
+            $playerDeliveryRecord->user_name = '';
+            $playerDeliveryRecord->save();
+
+            // 更新游戏记录（使用新的betform_details）
+            if (!empty($betformDetails)) {
+                $record->valid_bet = (float)($betformDetails['valid_bet'] ?? $record->valid_bet);
+                $record->win = (float)($betformDetails['win'] ?? $record->win);
+                $record->diff = (float)($betformDetails['diff'] ?? $record->diff);
+                $record->action_data = json_encode($betformDetails, JSON_UNESCAPED_UNICODE);
+                $record->platform_action_at = Carbon::now()->toDateTimeString();
+                $record->save();
+            }
+
+            return ['balance' => (float)$machineWallet->money];
+        } catch (Exception $e) {
+            Log::error('BTG transferAdjust error', ['error' => $e->getMessage(), 'params' => $params]);
+            $this->error = self::ERROR_CODE_SOMETHING_WRONG;
+            return ['balance' => $this->player->machine_wallet->money ?? 0];
+        }
+    }
+
+    /**
+     * Transfer - reward (额外奖金)
+     * @param array $params 请求参数
+     * @param array $transDetails 交易详情
+     * @param array $betformDetails 注单详情
+     * @return array
+     */
+    public function transferReward(array $params, array $transDetails, array $betformDetails): array
+    {
+        try {
+            $rewardAmount = (float)$params['amount']; // amount 为正数（奖励金额）
+            $orderId = $transDetails['order_id'] ?? '';
+            $roundId = $transDetails['round_id'] ?? '';
+
+            if ($rewardAmount <= 0) {
+                $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
+                return ['balance' => $this->player->machine_wallet->money ?? 0];
+            }
+
+            /** @var PlayerPlatformCash $machineWallet */
+            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+
+            // 检查订单是否已存在（使用 order_id，避免重复派发）
+            $existingRecord = PlayGameRecord::query()
+                ->where('order_no', $orderId)
+                ->where('platform_id', $this->platform->id)
+                ->first();
+
+            if ($existingRecord) {
+                // 订单已存在，返回当前余额（幂等性）
+                $this->error = self::ERROR_CODE_DUPLICATE_TRAN_ID;
+                return ['balance' => $machineWallet->money];
+            }
+
+            // 奖励加款
+            $beforeBalance = $machineWallet->money;
+            $machineWallet->money = bcadd($machineWallet->money, $rewardAmount, 2);
+            $machineWallet->save();
+
+            // 创建游戏记录（奖励记录）
+            $insert = [
+                'player_id' => $this->player->id,
+                'parent_player_id' => $this->player->recommend_id ?? 0,
+                'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
+                'player_uuid' => $this->player->uuid,
+                'platform_id' => $this->platform->id,
+                'game_code' => $params['game_code'] ?? '',
+                'department_id' => $this->player->department_id,
+                'bet' => 0,
+                'win' => $rewardAmount,
+                'valid_bet' => 0,
+                'diff' => $rewardAmount,
+                'order_no' => $orderId,
+                'round_no' => $roundId,
+                'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
+                'action_data' => json_encode($betformDetails, JSON_UNESCAPED_UNICODE),
+                'order_time' => Carbon::now()->toDateTimeString(),
+                'platform_action_at' => Carbon::now()->toDateTimeString(),
+                'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_SETTLED
+            ];
+
+            /** @var PlayGameRecord $record */
+            $record = PlayGameRecord::query()->create($insert);
+
+            // 创建奖励交易记录
+            $playerDeliveryRecord = new PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = $this->player->id;
+            $playerDeliveryRecord->department_id = $this->player->department_id;
+            $playerDeliveryRecord->target = $record->getTable();
+            $playerDeliveryRecord->target_id = $record->id;
+            $playerDeliveryRecord->platform_id = $this->platform->id;
+            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
+            $playerDeliveryRecord->source = 'player_bet_reward';
+            $playerDeliveryRecord->amount = $rewardAmount;
+            $playerDeliveryRecord->amount_before = $beforeBalance;
+            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->tradeno = $orderId;
+            $playerDeliveryRecord->remark = '額外獎金';
+            $playerDeliveryRecord->user_id = 0;
+            $playerDeliveryRecord->user_name = '';
+            $playerDeliveryRecord->save();
+
+            return ['balance' => (float)$machineWallet->money];
+        } catch (Exception $e) {
+            Log::error('BTG transferReward error', ['error' => $e->getMessage(), 'params' => $params]);
+            $this->error = self::ERROR_CODE_SOMETHING_WRONG;
+            return ['balance' => $this->player->machine_wallet->money ?? 0];
+        }
+    }
+
+    /**
      * 单一钱包 - 验证auth_code
      * @param array $params
      * @return bool
