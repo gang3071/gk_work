@@ -45,6 +45,8 @@ Route::group('/api', function () {
         Route::post('/get-game-list', [\app\api\v1\AdminGamePlatformController::class, 'getGameList']);
 // 管理后台 - 进入游戏
         Route::post('/enter-game', [\app\api\v1\AdminGamePlatformController::class, 'enterGame']);
+// 管理后台 - 游戏回放
+        Route::post('/replay', [\app\api\v1\AdminGamePlatformController::class, 'replay']);
     });
 });
 
