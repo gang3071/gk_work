@@ -1171,9 +1171,12 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $record->win = $winAmount;
             $record->diff = $winAmount - $record->bet;
 
-            // 更新有效投注和其他字段（从betform_details获取）
+            // 有效投注保存在 action_data 中
             if (!empty($betformDetails)) {
-                $record->valid_bet = (float)($betformDetails['valid_bet'] ?? $record->bet);
+                Log::channel('btg_server')->info('BTG transferEnd 有效投注', [
+                    'order_id' => $record->order_no,
+                    'valid_bet' => $betformDetails['valid_bet'] ?? $record->bet
+                ]);
             }
 
             $record->save();
@@ -1339,11 +1342,19 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             // 更新游戏记录（使用新的betform_details）
             if (!empty($betformDetails)) {
-                $record->valid_bet = (float)($betformDetails['valid_bet'] ?? $record->valid_bet);
                 $record->win = (float)($betformDetails['win'] ?? $record->win);
                 $record->diff = (float)($betformDetails['diff'] ?? $record->diff);
                 $record->action_data = json_encode($betformDetails, JSON_UNESCAPED_UNICODE);
                 $record->platform_action_at = Carbon::now()->toDateTimeString();
+
+                // 有效投注保存在 action_data 中
+                Log::channel('btg_server')->info('BTG transferAdjust 更新记录', [
+                    'order_id' => $record->order_no,
+                    'valid_bet' => $betformDetails['valid_bet'] ?? null,
+                    'win' => $record->win,
+                    'diff' => $record->diff
+                ]);
+
                 $record->save();
             }
 
@@ -1405,7 +1416,6 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'department_id' => $this->player->department_id,
                 'bet' => 0,
                 'win' => $rewardAmount,
-                'valid_bet' => 0,
                 'diff' => $rewardAmount,
                 'order_no' => $orderId,
                 'round_no' => $roundId,
