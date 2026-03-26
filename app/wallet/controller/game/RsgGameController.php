@@ -336,13 +336,13 @@ class RsgGameController
     /**
      * 失败响应方法
      *
-     * @param string $code 错误码
+     * @param int $code 错误码
      * @param string|null $message 自定义错误信息
      * @param array $data 额外数据
      * @param int $httpCode HTTP状态码
      * @return Response
      */
-    public function error(string $code, ?string $message = null, array $data = [], int $httpCode = 200): Response
+    public function error(int $code, ?string $message = null, array $data = [], int $httpCode = 200): Response
     {
         $responseData = [
             'ErrorCode' => $code, // 使用业务状态码常量

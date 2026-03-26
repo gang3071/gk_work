@@ -349,6 +349,7 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             'Language' => $this->lang[$lang],
             'ExitAction' => '',
         ];
+        Log::channel('rsg_server')->error('gamelogin', ['params' => $params]);
         $res = $this->doCurl($this->createUrl('gameLogin'), $params);
         $this->log->info('gameLogin', [$res]);
         Log::error('RSG -> gameLogin', [$res]);
