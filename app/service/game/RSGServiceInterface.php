@@ -389,6 +389,7 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             'SequenNumber' => $origin['SequenNumber'],
             'Language' => 'zh-TW',
         ];
+        $this->log->info('replay',$params);
         $res = $this->doCurl($this->createUrl('replay'), $params);
         $this->log->info('replay', [$res]);
         if ($res['ErrorCode'] != $this->successCode) {
