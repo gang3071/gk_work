@@ -938,7 +938,18 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $orderId = $transDetails['order_id'] ?? '';
             $roundId = $transDetails['round_id'] ?? '';
 
+            Log::channel('btg_server')->info('BTG transferStart 开始处理', [
+                'order_id' => $orderId,
+                'round_id' => $roundId,
+                'amount' => $amount,
+                'player_id' => $this->player->id
+            ]);
+
             if ($amount <= 0) {
+                Log::channel('btg_server')->warning('BTG transferStart 金额无效', [
+                    'amount' => $amount,
+                    'original_amount' => $params['amount']
+                ]);
                 $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
                 return ['balance' => $this->player->machine_wallet->money ?? 0];
             }
@@ -991,7 +1002,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             return ['balance' => (float)$afterBalance];
         } catch (Exception $e) {
-            Log::error('BTG transferStart error', ['error' => $e->getMessage(), 'params' => $params]);
+            Log::channel('btg_server')->error('BTG transferStart error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = self::ERROR_CODE_SOMETHING_WRONG;
             return ['balance' => $this->player->machine_wallet->money ?? 0];
         }
@@ -1011,6 +1022,13 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $orderId = $transDetails['order_id'] ?? '';
             $roundId = $transDetails['round_id'] ?? '';
 
+            Log::channel('btg_server')->info('BTG transferEnd 开始处理', [
+                'order_id' => $orderId,
+                'round_id' => $roundId,
+                'win_amount' => $winAmount,
+                'player_id' => $this->player->id
+            ]);
+
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
@@ -1021,9 +1039,97 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 ->where('platform_id', $this->platform->id)
                 ->first();
 
+            // 如果找不到下注记录，根据betform_details自动创建
             if (!$record) {
-                $this->error = self::ERROR_CODE_TRANSACTION_NOT_EXIST;
-                return ['balance' => $machineWallet->money];
+                Log::channel('btg_server')->warning('BTG transferEnd 找不到下注记录，尝试自动创建', [
+                    'order_id' => $orderId,
+                    'platform_id' => $this->platform->id,
+                    'player_id' => $this->player->id,
+                    'betform_details' => $betformDetails
+                ]);
+
+                // 从 betform_details 获取下注金额
+                $betAmount = (float)($betformDetails['bet'] ?? 0);
+
+                // 如果有下注金额，需要先扣款
+                if ($betAmount > 0) {
+                    // 检查余额
+                    if ($machineWallet->money < $betAmount) {
+                        Log::channel('btg_server')->error('BTG transferEnd 自动创建下注记录失败：余额不足', [
+                            'order_id' => $orderId,
+                            'bet_amount' => $betAmount,
+                            'balance' => $machineWallet->money
+                        ]);
+                        $this->error = self::ERROR_CODE_INSUFFICIENT_BALANCE;
+                        return ['balance' => $machineWallet->money];
+                    }
+
+                    // 创建下注记录
+                    $insert = [
+                        'player_id' => $this->player->id,
+                        'parent_player_id' => $this->player->recommend_id ?? 0,
+                        'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
+                        'player_uuid' => $this->player->uuid,
+                        'platform_id' => $this->platform->id,
+                        'game_code' => $params['game_code'] ?? '',
+                        'department_id' => $this->player->department_id,
+                        'bet' => $betAmount,
+                        'win' => 0,
+                        'diff' => -$betAmount,
+                        'order_no' => $orderId,
+                        'round_no' => $roundId,
+                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end'], JSON_UNESCAPED_UNICODE),
+                        'order_time' => Carbon::now()->toDateTimeString(),
+                        'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
+                    ];
+
+                    $record = PlayGameRecord::query()->create($insert);
+
+                    // 扣款
+                    $this->createBetRecord($machineWallet, $this->player, $record, $betAmount);
+
+                    // 重新获取钱包（因为扣款后余额变了）
+                    $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+
+                    Log::channel('btg_server')->info('BTG transferEnd 自动创建下注记录成功', [
+                        'record_id' => $record->id,
+                        'bet_amount' => $betAmount,
+                        'balance_after_bet' => $machineWallet->money
+                    ]);
+                } else {
+                    // 没有下注金额（免费游戏或奖励），直接创建记录
+                    $insert = [
+                        'player_id' => $this->player->id,
+                        'parent_player_id' => $this->player->recommend_id ?? 0,
+                        'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
+                        'player_uuid' => $this->player->uuid,
+                        'platform_id' => $this->platform->id,
+                        'game_code' => $params['game_code'] ?? '',
+                        'department_id' => $this->player->department_id,
+                        'bet' => 0,
+                        'win' => 0,
+                        'diff' => 0,
+                        'order_no' => $orderId,
+                        'round_no' => $roundId,
+                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end', 'type' => 'free_game'], JSON_UNESCAPED_UNICODE),
+                        'order_time' => Carbon::now()->toDateTimeString(),
+                        'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
+                    ];
+
+                    $record = PlayGameRecord::query()->create($insert);
+
+                    Log::channel('btg_server')->info('BTG transferEnd 创建免费游戏记录', [
+                        'record_id' => $record->id,
+                        'order_id' => $orderId
+                    ]);
+                }
+            } else {
+                Log::channel('btg_server')->info('BTG transferEnd 找到下注记录', [
+                    'record_id' => $record->id,
+                    'order_no' => $record->order_no,
+                    'settlement_status' => $record->settlement_status,
+                    'bet' => $record->bet
+                ]);
             }
 
             // 检查是否已结算
@@ -1081,7 +1187,13 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             return ['balance' => (float)$machineWallet->money];
         } catch (Exception $e) {
-            Log::error('BTG transferEnd error', ['error' => $e->getMessage(), 'params' => $params]);
+            Log::channel('btg_server')->error('BTG transferEnd error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'params' => $params,
+                'order_id' => $orderId ?? null,
+                'player_id' => $this->player->id ?? null
+            ]);
             $this->error = self::ERROR_CODE_SOMETHING_WRONG;
             return ['balance' => $this->player->machine_wallet->money ?? 0];
         }
@@ -1152,7 +1264,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             return ['balance' => (float)$machineWallet->money];
         } catch (Exception $e) {
-            Log::error('BTG transferRefund error', ['error' => $e->getMessage(), 'params' => $params]);
+            Log::channel('btg_server')->error('BTG transferRefund error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = self::ERROR_CODE_SOMETHING_WRONG;
             return ['balance' => $this->player->machine_wallet->money ?? 0];
         }
@@ -1237,7 +1349,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             return ['balance' => (float)$machineWallet->money];
         } catch (Exception $e) {
-            Log::error('BTG transferAdjust error', ['error' => $e->getMessage(), 'params' => $params]);
+            Log::channel('btg_server')->error('BTG transferAdjust error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = self::ERROR_CODE_SOMETHING_WRONG;
             return ['balance' => $this->player->machine_wallet->money ?? 0];
         }
@@ -1327,7 +1439,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             return ['balance' => (float)$machineWallet->money];
         } catch (Exception $e) {
-            Log::error('BTG transferReward error', ['error' => $e->getMessage(), 'params' => $params]);
+            Log::channel('btg_server')->error('BTG transferReward error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = self::ERROR_CODE_SOMETHING_WRONG;
             return ['balance' => $this->player->machine_wallet->money ?? 0];
         }
