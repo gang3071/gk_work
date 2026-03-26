@@ -161,7 +161,11 @@ class O8GameController
 
         $this->service->verifyToken($token);
 
-        $return = $this->service->bet($params);
+        try {
+            $return = $this->service->bet($params);
+        } catch (Exception $e) {
+            $this->logger->error('bet',[$e->getMessage()]);
+        }
         if ($this->service->error) {
             return $this->error($this->service->error);
         }
