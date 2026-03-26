@@ -124,5 +124,11 @@ Route::group('/single-wallet', function () {
         Route::post('/v2/specification/user/getBalance/{agentName}', [\app\wallet\controller\game\DGGameController::class, 'balance']);
         Route::post('/v2/specification/account/transfer/{agentName}', [\app\wallet\controller\game\DGGameController::class, 'bet']);
     });
+    Route::group('/btg-channel', function () {
+        Route::post('/get_user_balance', [\app\wallet\controller\game\BTGGameController::class, 'balance']);
+        Route::post('/bet', [\app\wallet\controller\game\BTGGameController::class, 'bet']);
+        Route::post('/settle', [\app\wallet\controller\game\BTGGameController::class, 'settle']);
+        Route::post('/refund', [\app\wallet\controller\game\BTGGameController::class, 'refund']);
+    });
 });
 Route::disableDefaultRoute();

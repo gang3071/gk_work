@@ -7,49 +7,117 @@ use app\model\Game;
 use app\model\GameExtend;
 use app\model\GamePlatform;
 use app\model\Player;
+use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGamePlatform;
+use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
+use app\wallet\controller\game\BTGGameController;
+use Carbon\Carbon;
 use DateTime;
 use DateTimeInterface;
 use DateTimeZone;
 use Exception;
 use support\Cache;
 use support\Log;
+use Webman\RedisQueue\Client;
 
-class BTGServiceInterface extends GameServiceFactory implements GameServiceInterface
+class BTGServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
-    public $method = 'POST';
-    public $successCode = '1000';
-    public $failCode = [
-        '2001' => '發生預期外錯誤',
-        '4001' => '該遊戲目前維護中',
-        '4002' => '該遊戲不存在',
-        '4003' => '操作頻繁，請稍後再試(間隔1秒以上)',
-        '4004' => '請使用美東時間格式',
-        '4102' => '不被允許訪問的ip',
-        '4103' => '錯誤的驗證碼',
-        '4104' => '該代理商不存在',
-        '4201' => '玩家帳號或密碼錯誤',
-        '4202' => '該玩家不存在',
-        '4203' => '該玩家已註冊',
-        '4204' => '欲查詢之遊戲紀錄不存在',
-        '4206' => '該玩家被鎖定',
-        '4302' => '特定參數(arg)格式錯誤',
-        '4303' => '特定參數(arg)值錯誤',
-        '6101' => '提款交易執行失敗',
-        '6102' => '存款交易執行失敗',
-        '6104' => '該外部交易流水號已存在',
-        '6105' => '查無該交易紀錄',
-        '6107' => '存款金額數值錯誤',
-        '6108' => '提款金額數值錯誤',
-        '6109' => 'take_all=true與withdraw_amount 參數衝突',
-        '6110' => '玩家交易狀態被鎖定',
-        '6111' => '取餘額失敗',
-        '6112' => '交易過於頻繁'
+    // 错误码常量
+    public const ERROR_CODE_SUCCESS = '1000';
+    public const ERROR_CODE_GENERAL_ERROR = '2001';
+    public const ERROR_CODE_GAME_MAINTENANCE = '4001';
+    public const ERROR_CODE_GAME_NOT_EXIST = '4002';
+    public const ERROR_CODE_OPERATION_FREQUENT = '4003';
+    public const ERROR_CODE_TIME_FORMAT_ERROR = '4004';
+    public const ERROR_CODE_GAME_NO_DEMO = '4005';
+    public const ERROR_CODE_ACTIVITY_TIME_OVERLAP = '4051';
+    public const ERROR_CODE_ACTIVITY_UNSUPPORTED_GAMES = '4052';
+    public const ERROR_CODE_ACTIVITY_NOT_EXIST = '4053';
+    public const ERROR_CODE_IP_NOT_ALLOWED = '4102';
+    public const ERROR_CODE_INVALID_CHECK_CODE = '4103';
+    public const ERROR_CODE_AGENT_NOT_EXIST = '4104';
+    public const ERROR_CODE_AGENT_LOCKED = '4105';
+    public const ERROR_CODE_PLAYER_PASSWORD_ERROR = '4201';
+    public const ERROR_CODE_PLAYER_NOT_EXIST = '4202';
+    public const ERROR_CODE_PLAYER_ALREADY_EXIST = '4203';
+    public const ERROR_CODE_GAME_RECORD_NOT_EXIST = '4204';
+    public const ERROR_CODE_PLAYER_LOCKED = '4206';
+    public const ERROR_CODE_PARAM_FORMAT_ERROR = '4302';
+    public const ERROR_CODE_PARAM_VALUE_ERROR = '4303';
+    public const ERROR_CODE_AUTHORIZATION_INVALID = '5001';
+    public const ERROR_CODE_BAD_FORMAT_PARAMS = '5002';
+    public const ERROR_CODE_INSUFFICIENT_BALANCE = '5101';
+    public const ERROR_CODE_UNFINISHED_TRANSACTIONS = '5102';
+    public const ERROR_CODE_PLAYER_SUSPENDED = '5103';
+    public const ERROR_CODE_GAME_CLOSED = '5104';
+    public const ERROR_CODE_TRANSACTION_NOT_EXIST = '5105';
+    public const ERROR_CODE_TRANSACTION_SETTLED = '5106';
+    public const ERROR_CODE_DUPLICATE_TRAN_ID = '5107';
+    public const ERROR_CODE_SOMETHING_WRONG = '5201';
+    public const ERROR_CODE_WITHDRAW_FAILED = '6101';
+    public const ERROR_CODE_DEPOSIT_FAILED = '6102';
+    public const ERROR_CODE_DUPLICATE_ORDER = '6104';
+    public const ERROR_CODE_TRANSACTION_NOT_FOUND = '6105';
+    public const ERROR_CODE_DEPOSIT_AMOUNT_ERROR = '6107';
+    public const ERROR_CODE_WITHDRAW_AMOUNT_ERROR = '6108';
+    public const ERROR_CODE_PARAM_CONFLICT = '6109';
+    public const ERROR_CODE_PLAYER_TRANSACTION_LOCKED = '6110';
+    public const ERROR_CODE_GET_BALANCE_FAILED = '6111';
+    public const ERROR_CODE_TRANSACTION_TOO_FREQUENT = '6112';
+
+    // 错误码消息映射
+    public const ERROR_CODE_MAP = [
+        self::ERROR_CODE_SUCCESS => '成功',
+        self::ERROR_CODE_GENERAL_ERROR => '發生預期外錯誤',
+        self::ERROR_CODE_GAME_MAINTENANCE => '該遊戲目前維護中',
+        self::ERROR_CODE_GAME_NOT_EXIST => '該遊戲不存在',
+        self::ERROR_CODE_OPERATION_FREQUENT => '操作頻繁，請稍後再試(間隔1秒以上)',
+        self::ERROR_CODE_TIME_FORMAT_ERROR => '請使用美東時間格式',
+        self::ERROR_CODE_GAME_NO_DEMO => '遊戲不提供試玩網址',
+        self::ERROR_CODE_ACTIVITY_TIME_OVERLAP => '活動時間重疊',
+        self::ERROR_CODE_ACTIVITY_UNSUPPORTED_GAMES => '內含不支援遊戲',
+        self::ERROR_CODE_ACTIVITY_NOT_EXIST => '活動不存在或是已結束',
+        self::ERROR_CODE_IP_NOT_ALLOWED => '不被允許訪問的ip',
+        self::ERROR_CODE_INVALID_CHECK_CODE => '錯誤的驗證碼',
+        self::ERROR_CODE_AGENT_NOT_EXIST => '該代理商不存在',
+        self::ERROR_CODE_AGENT_LOCKED => '該代理被鎖定',
+        self::ERROR_CODE_PLAYER_PASSWORD_ERROR => '玩家帳號或密碼錯誤',
+        self::ERROR_CODE_PLAYER_NOT_EXIST => '該玩家不存在',
+        self::ERROR_CODE_PLAYER_ALREADY_EXIST => '該玩家已註冊',
+        self::ERROR_CODE_GAME_RECORD_NOT_EXIST => '欲查詢之遊戲紀錄不存在',
+        self::ERROR_CODE_PLAYER_LOCKED => '該玩家被鎖定',
+        self::ERROR_CODE_PARAM_FORMAT_ERROR => '特定參數(arg)格式錯誤',
+        self::ERROR_CODE_PARAM_VALUE_ERROR => '特定參數(arg)值錯誤',
+        self::ERROR_CODE_AUTHORIZATION_INVALID => '錯誤的驗證',
+        self::ERROR_CODE_BAD_FORMAT_PARAMS => '特定引數(arg)錯誤',
+        self::ERROR_CODE_INSUFFICIENT_BALANCE => '該玩家餘額不足',
+        self::ERROR_CODE_UNFINISHED_TRANSACTIONS => '尚有交易處理中',
+        self::ERROR_CODE_PLAYER_SUSPENDED => '玩家帳號被停權',
+        self::ERROR_CODE_GAME_CLOSED => '遊戲已被關閉',
+        self::ERROR_CODE_TRANSACTION_NOT_EXIST => '交易不存在',
+        self::ERROR_CODE_TRANSACTION_SETTLED => '交易已處理',
+        self::ERROR_CODE_DUPLICATE_TRAN_ID => '重複的 tran_id',
+        self::ERROR_CODE_SOMETHING_WRONG => '發生了以下錯誤',
+        self::ERROR_CODE_WITHDRAW_FAILED => '提款交易執行失敗',
+        self::ERROR_CODE_DEPOSIT_FAILED => '存款交易執行失敗',
+        self::ERROR_CODE_DUPLICATE_ORDER => '該外部交易流水號已存在',
+        self::ERROR_CODE_TRANSACTION_NOT_FOUND => '查無該交易紀錄',
+        self::ERROR_CODE_DEPOSIT_AMOUNT_ERROR => '存款金額數值錯誤',
+        self::ERROR_CODE_WITHDRAW_AMOUNT_ERROR => '提款金額數值錯誤',
+        self::ERROR_CODE_PARAM_CONFLICT => 'take_all=true與withdraw_amount 參數衝突',
+        self::ERROR_CODE_PLAYER_TRANSACTION_LOCKED => '玩家交易狀態被鎖定',
+        self::ERROR_CODE_GET_BALANCE_FAILED => '取餘額失敗',
+        self::ERROR_CODE_TRANSACTION_TOO_FREQUENT => '交易過於頻繁'
     ];
+
+    public $method = 'POST';
+    public $successCode = self::ERROR_CODE_SUCCESS;
+    public string $error = '';
 
     private $apiDomain;
     private $appId;
+    private $md5Key;
     private $appSecret;
 
     private $path = [
@@ -90,6 +158,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
     {
         $config = config('game_platform.BTG');
         $this->appId = $config['app_id'];
+        $this->md5Key = $config['md5_key'];
         $this->apiDomain = $config['api_domain'];
         $this->appSecret = $config['app_secret'];
         $this->platform = GamePlatform::query()->where('code', 'BTG')->first();
@@ -116,7 +185,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 $this->lobbyLogin($data);
                 return 0;
             }
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return $res['data']['balance'] ?? 0;
@@ -166,7 +235,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('lobbyLogin'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return $res['data']['lobby_url'] ?? '';
@@ -220,8 +289,8 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('depositAmount'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            Log::error($this->failCode[$res['status']['code']], ['res' => $res]);
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            Log::error(self::ERROR_CODE_MAP[$res['status']['code']], ['res' => $res]);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
         if (empty($res['data']['order_id'])) {
             throw new GameException(trans('transfer_fail', [], 'message'), 0);
@@ -263,8 +332,8 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('withdrawAmount'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            Log::error($this->failCode[$res['status']['code']], ['res' => $res]);
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            Log::error(self::ERROR_CODE_MAP[$res['status']['code']], ['res' => $res]);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
         if (empty($res['data']['order_id'])) {
             throw new GameException(trans('transfer_fail', [], 'message'), 0);
@@ -296,7 +365,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('userLogout'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return true;
@@ -318,7 +387,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('getTransactionStatus'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return $res;
@@ -452,7 +521,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('getGameHistories'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return $res;
@@ -480,7 +549,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('gameLogin'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
 
         return $res['data']['game_url'] ?? '';
@@ -499,7 +568,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         $params['check_code'] = $this->createSign($params);
         $res = $this->doCurl($this->createUrl('getGameList'), $params);
         if ($res['status']['code'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['status']['code']], 0);
+            throw new GameException(self::ERROR_CODE_MAP[$res['status']['code']], 0);
         }
         $insertData = [];
         $langList = [
@@ -536,5 +605,373 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
     public function getPlayer()
     {
         // TODO: Implement getPlayer() method.
+    }
+
+    /**
+     * 单一钱包 - 验证签名
+     * @param array $params
+     * @return bool
+     */
+    public function verifySign(array $params): bool
+    {
+        if (!isset($params['check_code'])) {
+            $this->error = self::ERROR_CODE_INVALID_CHECK_CODE;
+            return false;
+        }
+
+        $checkParams = $params;
+        unset($checkParams['check_code']);
+
+        $expectedSign = $this->createSign($checkParams);
+
+        if ($params['check_code'] !== $expectedSign) {
+            $this->error = self::ERROR_CODE_INVALID_CHECK_CODE;
+            return false;
+        }
+
+        // 验证账号ID
+        if (!isset($params['account_id']) || $params['account_id'] !== $this->appId) {
+            $this->error = self::ERROR_CODE_AGENT_NOT_EXIST;
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * 单一钱包 - 查询余额
+     * @return float
+     */
+    public function balance(): float
+    {
+        try {
+            // 返回玩家余额
+            if (!$this->player) {
+                $this->error = self::ERROR_CODE_PLAYER_NOT_EXIST;
+                return 0;
+            }
+
+            return (float)$this->player->machine_wallet->money;
+        } catch (Exception $e) {
+            Log::error('BTG balance error', ['error' => $e->getMessage()]);
+            $this->error = self::ERROR_CODE_GET_BALANCE_FAILED;
+            return 0;
+        }
+    }
+
+    /**
+     * 单一钱包 - 下注扣款
+     * @param $data
+     * @return array|float
+     */
+    public function bet($data): array|float
+    {
+        try {
+            $params = $data;
+
+            // 验证必要参数
+            if (!isset($params['username']) || !isset($params['external_order_id']) || !isset($params['deposit_amount'])) {
+                $this->error = self::ERROR_CODE_PARAM_FORMAT_ERROR;
+                return $this->player->machine_wallet->money ?? 0;
+            }
+
+            // 查询玩家
+            $player = Player::query()->where('uuid', $params['username'])->first();
+            if (!$player) {
+                $this->error = self::ERROR_CODE_PLAYER_NOT_EXIST;
+                return 0;
+            }
+            $this->player = $player;
+
+            $bet = (float)$params['deposit_amount'];
+
+            /** @var PlayerPlatformCash $machineWallet */
+            $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+
+            // 检查余额
+            if ($machineWallet->money < $bet) {
+                $this->error = self::ERROR_CODE_WITHDRAW_FAILED;
+                return $machineWallet->money;
+            }
+
+            // 检查订单是否已存在
+            if (PlayGameRecord::query()->where('order_no', $params['external_order_id'])->where('platform_id', $this->platform->id)->exists()) {
+                $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
+                return $machineWallet->money;
+            }
+
+            // 创建游戏记录
+            $insert = [
+                'player_id' => $player->id,
+                'parent_player_id' => $player->recommend_id ?? 0,
+                'agent_player_id' => $player->recommend_promoter->recommend_id ?? 0,
+                'player_uuid' => $player->uuid,
+                'platform_id' => $this->platform->id,
+                'game_code' => $params['game_code'] ?? '',
+                'department_id' => $player->department_id,
+                'bet' => $bet,
+                'win' => 0,
+                'diff' => 0,
+                'order_no' => $params['external_order_id'],
+                'original_data' => json_encode($params),
+                'order_time' => Carbon::now()->toDateTimeString(),
+                'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
+            ];
+            /** @var PlayGameRecord $record */
+            $record = PlayGameRecord::query()->create($insert);
+
+            // 使用父类方法扣款并创建交易记录
+            $afterBalance = $this->createBetRecord($machineWallet, $player, $record, $bet);
+
+            return [
+                'balance' => (float)$afterBalance,
+                'order_id' => (string)$record->id,
+            ];
+        } catch (Exception $e) {
+            Log::error('BTG bet error', ['error' => $e->getMessage()]);
+            $this->error = self::ERROR_CODE_DEPOSIT_FAILED;
+            return $this->player->machine_wallet->money ?? 0;
+        }
+    }
+
+    /**
+     * 单一钱包 - 结算加款
+     * @param $data
+     * @return array|float
+     */
+    public function betResulet($data): array|float
+    {
+        try {
+            $params = $data;
+
+            // 验证必要参数
+            if (!isset($params['username']) || !isset($params['external_order_id']) || !isset($params['withdraw_amount'])) {
+                $this->error = self::ERROR_CODE_PARAM_FORMAT_ERROR;
+                return $this->player->machine_wallet->money ?? 0;
+            }
+
+            // 查询玩家
+            $player = Player::query()->where('uuid', $params['username'])->first();
+            if (!$player) {
+                $this->error = self::ERROR_CODE_PLAYER_NOT_EXIST;
+                return 0;
+            }
+            $this->player = $player;
+
+            /** @var PlayerPlatformCash $machineWallet */
+            $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+
+            // 查找下注记录
+            /** @var PlayGameRecord $record */
+            $record = PlayGameRecord::query()
+                ->where('order_no', $params['external_order_id'])
+                ->where('platform_id', $this->platform->id)
+                ->first();
+
+            if (!$record) {
+                $this->error = self::ERROR_CODE_TRANSACTION_NOT_FOUND;
+                return $machineWallet->money;
+            }
+
+            // 检查是否已结算
+            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+                $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
+                return $machineWallet->money;
+            }
+
+            $money = (float)$params['withdraw_amount'];
+
+            // 有金额则为赢
+            if ($money > 0) {
+                $beforeGameAmount = $machineWallet->money;
+                // 更新玩家余额
+                $machineWallet->money = bcadd($machineWallet->money, $money, 2);
+                $machineWallet->save();
+
+                // 创建交易记录
+                $playerDeliveryRecord = new PlayerDeliveryRecord();
+                $playerDeliveryRecord->player_id = $player->id;
+                $playerDeliveryRecord->department_id = $player->department_id;
+                $playerDeliveryRecord->target = $record->getTable();
+                $playerDeliveryRecord->target_id = $record->id;
+                $playerDeliveryRecord->platform_id = $this->platform->id;
+                $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
+                $playerDeliveryRecord->source = 'player_bet_settlement';
+                $playerDeliveryRecord->amount = $money;
+                $playerDeliveryRecord->amount_before = $beforeGameAmount;
+                $playerDeliveryRecord->amount_after = $machineWallet->money;
+                $playerDeliveryRecord->tradeno = $record->order_no ?? '';
+                $playerDeliveryRecord->remark = '遊戲結算';
+                $playerDeliveryRecord->user_id = 0;
+                $playerDeliveryRecord->user_name = '';
+                $playerDeliveryRecord->save();
+            }
+
+            // 更新游戏记录
+            $record->platform_action_at = Carbon::now()->toDateTimeString();
+            $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
+            $record->action_data = json_encode($params, JSON_UNESCAPED_UNICODE);
+            $record->win = $money;
+            $record->diff = $money - $record->bet;
+            $record->save();
+
+            // 彩金记录
+            Client::send('game-lottery', [
+                'player_id' => $player->id,
+                'bet' => $record->bet,
+                'play_game_record_id' => $record->id
+            ]);
+
+            return [
+                'balance' => (float)$machineWallet->money,
+                'order_id' => (string)$record->id,
+            ];
+        } catch (Exception $e) {
+            Log::error('BTG betResulet error', ['error' => $e->getMessage()]);
+            $this->error = self::ERROR_CODE_WITHDRAW_FAILED;
+            return $this->player->machine_wallet->money ?? 0;
+        }
+    }
+
+    /**
+     * 单一钱包 - 取消下注
+     * @param $data
+     * @return array|float
+     */
+    public function cancelBet($data): array|float
+    {
+        try {
+            $params = $data;
+
+            // 验证必要参数
+            if (!isset($params['username']) || !isset($params['external_order_id'])) {
+                $this->error = self::ERROR_CODE_PARAM_FORMAT_ERROR;
+                return $this->player->machine_wallet->money ?? 0;
+            }
+
+            // 查询玩家
+            $player = Player::query()->where('uuid', $params['username'])->first();
+            if (!$player) {
+                $this->error = self::ERROR_CODE_PLAYER_NOT_EXIST;
+                return 0;
+            }
+            $this->player = $player;
+
+            // 查找下注记录
+            /** @var PlayGameRecord $record */
+            $record = PlayGameRecord::query()
+                ->where('order_no', $params['external_order_id'])
+                ->where('platform_id', $this->platform->id)
+                ->first();
+
+            if (!$record) {
+                $this->error = self::ERROR_CODE_TRANSACTION_NOT_FOUND;
+                return $player->machine_wallet->money;
+            }
+
+            // 检查是否已取消
+            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
+                $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
+                return $player->machine_wallet->money;
+            }
+
+            // 使用父类方法处理取消下注
+            $bet = (float)$record->bet;
+            $afterBalance = $this->createCancelBetRecord($record, $params, $bet);
+
+            return [
+                'balance' => (float)$afterBalance,
+                'order_id' => (string)$record->id,
+            ];
+        } catch (Exception $e) {
+            Log::error('BTG cancelBet error', ['error' => $e->getMessage()]);
+            $this->error = self::ERROR_CODE_GENERAL_ERROR;
+            return $this->player->machine_wallet->money ?? 0;
+        }
+    }
+
+    /**
+     * 单一钱包 - 重新结算
+     * @param $data
+     * @return array
+     */
+    public function reBetResulet($data): array
+    {
+        // BTG不需要重新结算,返回空数组
+        $this->error = self::ERROR_CODE_GAME_MAINTENANCE;
+        return [];
+    }
+
+    /**
+     * 单一钱包 - 送礼
+     * @param $data
+     * @return array
+     */
+    public function gift($data): array
+    {
+        // BTG不支持送礼功能
+        $this->error = self::ERROR_CODE_GAME_MAINTENANCE;
+        return [];
+    }
+
+    /**
+     * 单一钱包 - 解密
+     * @param $data
+     * @return array|null
+     */
+    public function decrypt($data)
+    {
+        // BTG不需要解密,直接返回原数据
+        return $data;
+    }
+
+    /**
+     * 单一钱包 - 验证auth_code
+     * @param array $params
+     * @return bool
+     */
+    public function verifyAuthCode(array $params): bool
+    {
+        if (!isset($params['auth_code'])) {
+            $this->error = self::ERROR_CODE_AUTHORIZATION_INVALID;
+            return false;
+        }
+
+        // 移除 trans_details、betform_details 和 auth_code 参数
+        $checkParams = $params;
+        unset($checkParams['auth_code']);
+        unset($checkParams['trans_details']);
+        unset($checkParams['betform_details']);
+
+        // 按字母顺序排序
+        ksort($checkParams);
+
+        // 拼接参数字符串：key=value&key=value 格式
+        $paramsArray = [];
+        foreach ($checkParams as $key => $value) {
+            $paramsArray[] = $key . '=' . $value;
+        }
+        $paramsString = implode('&', $paramsArray);
+
+        // 生成初始字符串：params_string + "&" + md5_key
+        $signStr = $paramsString . '&' . $this->md5Key;
+
+        // MD5加密生成auth_code
+        $expectedAuthCode = md5($signStr);
+
+        // 验证签名
+        if (strtolower($params['auth_code']) !== strtolower($expectedAuthCode)) {
+            Log::error('BTG auth_code验证失败', [
+                'params' => $params,
+                'expected' => $expectedAuthCode,
+                'received' => $params['auth_code'],
+                'params_string' => $paramsString,
+                'sign_string' => $signStr
+            ]);
+            $this->error = self::ERROR_CODE_AUTHORIZATION_INVALID;
+            return false;
+        }
+
+        return true;
     }
 }
