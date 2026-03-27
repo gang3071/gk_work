@@ -920,6 +920,13 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             $playerDeliveryRecord->user_name = '';
             $playerDeliveryRecord->save();
 
+            // 彩金记录
+            Client::send('game-lottery', [
+                'player_id' => $this->player->id,
+                'bet' => $record->bet,
+                'play_game_record_id' => $record->id
+            ]);
+
             return ['balance' => (float)$machineWallet->money];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferReward error', ['error' => $e->getMessage(), 'params' => $params]);
@@ -1277,6 +1284,15 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 ];
 
                 $recordForDelivery = PlayGameRecord::query()->create($insert);
+
+                // 彩金记录（免费游戏或奖金回合）
+                if ($amount > 0) {
+                    Client::send('game-lottery', [
+                        'player_id' => $this->player->id,
+                        'bet' => $recordForDelivery->bet,
+                        'play_game_record_id' => $recordForDelivery->id
+                    ]);
+                }
             }
 
             // 创建派彩交易记录
