@@ -566,7 +566,8 @@ class LotteryServices
                         }
                     }
 
-                    $lotteryMultiple = 1;
+                    // 彩金倍数标记（只由双倍派彩决定）
+                    $lotteryMultiple = $isDoubled ? 2 : 1;
 
                     if ($amount >= $fixedAllowLottery['amount']) {
                         $fixedAllowLottery['lottery_id'] = $lottery->id;
@@ -686,8 +687,8 @@ class LotteryServices
                 }
             }
 
-            // 彩金倍数标记
-            $lotteryMultiple = $burstInfo['is_bursting'] ? intval($burstInfo['multiplier']) : 1;
+            // 彩金倍数标记（只由双倍派彩决定，爆彩只影响概率不影响金额倍数）
+            $lotteryMultiple = $isDoubled ? 2 : 1;
 
             // 检查中奖条件
             if ($result && $amount > 0) {
@@ -1244,7 +1245,8 @@ class LotteryServices
                         }
                     }
 
-                    $lotteryMultiple = 1;
+                    // 彩金倍数标记（只由双倍派彩决定）
+                    $lotteryMultiple = $isDoubled ? 2 : 1;
 
                     // 只会发放最大金额的中奖
                     if ($amount >= $fixedAllowLottery['amount']) {

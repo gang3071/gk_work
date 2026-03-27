@@ -358,18 +358,8 @@ class GameLotteryServices
                 // 获取并处理爆彩状态
                 $burstInfo = $this->getBurstInfo($lottery);
 
-                $this->log->debug('准备调用 processLotteryCheck', [
-                    'lottery_id' => $lottery->id,
-                    'lottery_name' => $lottery->name,
-                ]);
-
                 // 处理派彩检查
                 $this->processLotteryCheck($lottery, $bet, $participateTimes, $burstInfo, $playGameRecordId);
-
-                $this->log->debug('processLotteryCheck 执行完成', [
-                    'lottery_id' => $lottery->id,
-                    'lottery_name' => $lottery->name,
-                ]);
             } catch (\Exception $e) {
                 // 记录异常但不中断循环，确保其他彩金仍然能被检查
                 $this->log->error('彩金检查异常，跳过该彩金继续检查下一个:', [
@@ -480,6 +470,7 @@ class GameLotteryServices
      * @param array $burstInfo
      * @param int $playGameRecordId
      * @return void
+     * @throws Exception
      */
     private function processLotteryCheck(
         GameLottery $lottery,
@@ -496,36 +487,17 @@ class GameLotteryServices
         // 即使中途中奖退出，也应该记录完整的检查机会数，这样统计才能反映真实概率
         $this->incrementLotteryStats($lottery->id, 'total', $participateTimes);
 
-        $this->log->debug('🔍 开始派彩概率检查循环', [
-            'lottery_id' => $lottery->id,
-            'lottery_name' => $lottery->name,
-            'participate_times' => $participateTimes,
-            'adjusted_win_ratio' => $adjustedWinRatio,
-        ]);
-
         // 循环检查多次派彩机会
         for ($i = 1; $i <= $participateTimes; $i++) {
-            $this->log->debug('派彩检查尝试', [
-                'lottery_id' => $lottery->id,
-                'attempt' => $i,
-                'of' => $participateTimes,
-            ]);
-
             $service = new LotteryProbabilityService();
             $result = $service->checkSmart($adjustedWinRatio);
-
-            $this->log->debug('派彩概率检查结果', [
-                'lottery_id' => $lottery->id,
-                'attempt' => $i,
-                'result' => $result ? '命中' : '未命中',
-            ]);
 
             // 计算彩金金额（包含rate、double、max逻辑）
             $isDoubled = false;
             $amount = $this->calculateBurstAmount($lottery, $isDoubled);
 
-            // 彩金倍数标记
-            $lotteryMultiple = $burstInfo['is_bursting'] ? intval($burstInfo['multiplier']) : 1;
+            // 彩金倍数标记（只由双倍派彩决定，爆彩只影响概率不影响金额倍数）
+            $lotteryMultiple = $isDoubled ? 2 : 1;
 
             // 检查中奖条件
             if ($result && $amount > 0) {
@@ -559,7 +531,18 @@ class GameLotteryServices
                     'stats_daily_win_rate' => $stats['daily_win_rate'],
                 ]);
 
-                $distributed = $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $i, $participateTimes, $isDoubled);
+                try {
+                    $distributed = $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $i, $participateTimes, $isDoubled);
+                } catch (PushException $e) {
+                    $this->log->info('💰 彩金派发tryDistributeLottery', [
+                        'play_game_record_id' => $playGameRecordId,
+                        'lottery_id' => $lottery->id,
+                        'lottery_name' => $lottery->name,
+                        'amount' => $amount,
+                        'error' => $e->getMessage(),
+                    ]);
+                    continue;
+                }
 
                 if ($distributed) {
                     $this->log->info('💰 彩金派发成功', [
@@ -581,13 +564,6 @@ class GameLotteryServices
                 break;
             }
         }
-
-        $this->log->debug('✓ 派彩检查循环结束', [
-            'lottery_id' => $lottery->id,
-            'lottery_name' => $lottery->name,
-            'total_attempts' => $participateTimes,
-            'result' => '未中奖',
-        ]);
     }
 
     /**
@@ -1403,9 +1379,9 @@ class GameLotteryServices
      * 计算派奖金额
      * @param GameLottery $lottery
      * @param bool $isDoubled 是否触发双倍（引用参数）
-     * @return int
+     * @return float
      */
-    private function calculateBurstAmount(GameLottery $lottery, &$isDoubled = false): int
+    private function calculateBurstAmount(GameLottery $lottery, bool &$isDoubled = false): float
     {
         // 1. 根据rate计算派彩金额（默认100%全派）
         $rate = $lottery->rate > 0 ? $lottery->rate : 100;
@@ -1421,11 +1397,11 @@ class GameLotteryServices
         // 3. 应用最大金额限制（双倍后也不能超过）
         if ($lottery->max_status == 1) {
             if ($lottery->max_amount > 0 && $amount > $lottery->max_amount) {
-                $amount = floatval($lottery->max_amount);
+                $amount = $lottery->max_amount;
             }
         }
 
-        return floatval($amount);
+        return (float)$amount;
     }
 
     /**
