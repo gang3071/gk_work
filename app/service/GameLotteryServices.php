@@ -358,18 +358,8 @@ class GameLotteryServices
                 // 获取并处理爆彩状态
                 $burstInfo = $this->getBurstInfo($lottery);
 
-                $this->log->debug('准备调用 processLotteryCheck', [
-                    'lottery_id' => $lottery->id,
-                    'lottery_name' => $lottery->name,
-                ]);
-
                 // 处理派彩检查
                 $this->processLotteryCheck($lottery, $bet, $participateTimes, $burstInfo, $playGameRecordId);
-
-                $this->log->debug('processLotteryCheck 执行完成', [
-                    'lottery_id' => $lottery->id,
-                    'lottery_name' => $lottery->name,
-                ]);
             } catch (\Exception $e) {
                 // 记录异常但不中断循环，确保其他彩金仍然能被检查
                 $this->log->error('彩金检查异常，跳过该彩金继续检查下一个:', [
@@ -497,56 +487,17 @@ class GameLotteryServices
         // 即使中途中奖退出，也应该记录完整的检查机会数，这样统计才能反映真实概率
         $this->incrementLotteryStats($lottery->id, 'total', $participateTimes);
 
-        $this->log->debug('🔍 开始派彩概率检查循环', [
-            'lottery_id' => $lottery->id,
-            'lottery_name' => $lottery->name,
-            'participate_times' => $participateTimes,
-            'adjusted_win_ratio' => $adjustedWinRatio,
-        ]);
-
         // 循环检查多次派彩机会
         for ($i = 1; $i <= $participateTimes; $i++) {
-            $this->log->debug('派彩检查尝试', [
-                'lottery_id' => $lottery->id,
-                'attempt' => $i,
-                'of' => $participateTimes,
-            ]);
-
             $service = new LotteryProbabilityService();
-            try {
-                $result = $service->checkSmart($adjustedWinRatio);
-            } catch (Exception $e) {
-                $this->log->debug('派彩概率检查结果checkSmart', [
-                    'lottery_id' => $lottery->id,
-                    'attempt' => $i,
-                ]);
-                continue;
-            }
-
-            $this->log->debug('派彩概率检查结果', [
-                'lottery_id' => $lottery->id,
-                'attempt' => $i,
-                'result' => $result ? '命中' : '未命中',
-            ]);
-
-            $this->log->debug('准备计算彩金金额', [
-                'lottery_id' => $lottery->id,
-                'attempt' => $i,
-            ]);
+            $result = $service->checkSmart($adjustedWinRatio);
 
             // 计算彩金金额（包含rate、double、max逻辑）
             $isDoubled = false;
             $amount = $this->calculateBurstAmount($lottery, $isDoubled);
 
-            $this->log->debug('彩金金额计算完成', [
-                'lottery_id' => $lottery->id,
-                'attempt' => $i,
-                'amount' => $amount,
-                'is_doubled' => $isDoubled,
-            ]);
-
-            // 彩金倍数标记
-            $lotteryMultiple = $burstInfo['is_bursting'] ? intval($burstInfo['multiplier']) : 1;
+            // 彩金倍数标记（只由双倍派彩决定，爆彩只影响概率不影响金额倍数）
+            $lotteryMultiple = $isDoubled ? 2 : 1;
 
             // 检查中奖条件
             if ($result && $amount > 0) {
@@ -613,13 +564,6 @@ class GameLotteryServices
                 break;
             }
         }
-
-        $this->log->debug('✓ 派彩检查循环结束', [
-            'lottery_id' => $lottery->id,
-            'lottery_name' => $lottery->name,
-            'total_attempts' => $participateTimes,
-            'result' => '未中奖',
-        ]);
     }
 
     /**
@@ -1439,21 +1383,9 @@ class GameLotteryServices
      */
     private function calculateBurstAmount(GameLottery $lottery, bool &$isDoubled = false): float
     {
-        $this->log->debug('calculateBurstAmount 开始', [
-            'lottery_id' => $lottery->id,
-            'lottery_amount' => $lottery->amount,
-            'rate' => $lottery->rate,
-        ]);
-
         // 1. 根据rate计算派彩金额（默认100%全派）
         $rate = $lottery->rate > 0 ? $lottery->rate : 100;
         $amount = bcmul($lottery->amount, bcdiv($rate, 100, 4), 2);
-
-        $this->log->debug('基础金额计算完成', [
-            'lottery_id' => $lottery->id,
-            'rate' => $rate,
-            'amount' => $amount,
-        ]);
 
         // 2. 检查是否应用双倍逻辑
         $isDoubled = false;
@@ -1462,24 +1394,12 @@ class GameLotteryServices
             $isDoubled = true;
         }
 
-        $this->log->debug('双倍检查完成', [
-            'lottery_id' => $lottery->id,
-            'is_doubled' => $isDoubled,
-            'amount' => $amount,
-        ]);
-
         // 3. 应用最大金额限制（双倍后也不能超过）
         if ($lottery->max_status == 1) {
             if ($lottery->max_amount > 0 && $amount > $lottery->max_amount) {
                 $amount = $lottery->max_amount;
             }
         }
-
-        $this->log->debug('calculateBurstAmount 完成', [
-            'lottery_id' => $lottery->id,
-            'final_amount' => $amount,
-            'is_doubled' => $isDoubled,
-        ]);
 
         return (float)$amount;
     }
