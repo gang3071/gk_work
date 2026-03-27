@@ -485,9 +485,15 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'cur' => 'TWD',
                 'dup' => false
             ];
+            Log::info('O8结算完成', [
+                'player_id' => $player->id,
+                'order_no' => $record->order_no,
+                'bet' => $record->bet,
+                'win' => $money
+            ]);
 
             //彩金记录
-            Client::send('game-lottery', ['player_id' => $this->player->id, 'bet' => $record->bet, 'play_game_record_id' => $record->id]);
+            Client::send('game-lottery', ['player_id' => $player->id, 'bet' => $record->bet, 'play_game_record_id' => $record->id]);
         }
 
         return $return;
