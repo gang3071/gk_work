@@ -223,9 +223,9 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'result' => $result
             ]);
 
-            // 检查响应是否包含lobbyUrl
-            if (empty($result['lobbyUrl'])) {
-                Log::channel('qt_server')->error('QT游戏大厅响应缺少lobbyUrl', [
+            // 检查响应是否包含url
+            if (empty($result['url'])) {
+                Log::channel('qt_server')->error('QT游戏大厅响应缺少url', [
                     'result' => $result
                 ]);
                 throw new GameException('获取游戏大厅URL失败', 0);
@@ -233,11 +233,11 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
             Log::channel('qt_server')->info('QT进入游戏大厅成功', [
                 'player_id' => $this->player->id,
-                'lobbyUrl' => $result['lobbyUrl'],
-                'lobbySessionId' => $result['lobbySessionId'] ?? null
+                'url' => $result['url'],
+                'sessionId' => $result['sessionId'] ?? null
             ]);
 
-            return $result['lobbyUrl'];
+            return $result['url'];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT进入游戏大厅异常', [
                 'error' => $e->getMessage(),
