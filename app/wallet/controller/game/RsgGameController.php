@@ -137,7 +137,7 @@ class RsgGameController
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
         } catch (Exception $e) {
             Log::error('RSG cancelBet failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('RSG', '取消下注异常', $e, ['params' => $request->post()]);
@@ -191,7 +191,7 @@ class RsgGameController
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'Balance' => $balance]);
         } catch (Exception $e) {
             Log::error('RSG reBetResult failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('RSG', '重新结算异常', $e, ['params' => $request->post()]);
