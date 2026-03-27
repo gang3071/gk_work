@@ -135,7 +135,7 @@ class QTGameController
 
             $response = [
                 'balance' => number_format($balance, 2, '.', ''),
-                'currency' => 'CNY', // 根据实际情况调整
+                'currency' => 'TWD', // QT平台使用台币
             ];
 
             $this->logger->info('QT验证会话成功', $response);
@@ -214,7 +214,7 @@ class QTGameController
 
             $response = [
                 'balance' => number_format($balance, 2, '.', ''),
-                'currency' => 'CNY', // 根据实际情况调整
+                'currency' => 'TWD', // QT平台使用台币
             ];
 
             $this->logger->info('QT查询余额成功', $response);
