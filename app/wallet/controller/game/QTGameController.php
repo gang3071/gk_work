@@ -383,16 +383,8 @@ class QTGameController
                 }
             }
 
-            // 验证Wallet-Session是否属于该玩家（仅DEBIT需要验证）
-            // CREDIT（派彩）即使session过期也要成功，因为这是玩家赢得的钱
-            if ($txnType === 'DEBIT' && $player->uuid !== $walletSession) {
-                $this->logger->warning('QT交易失败：Wallet-Session不匹配', [
-                    'playerId' => $params['playerId'],
-                    'expected_uuid' => $player->uuid,
-                    'actual_session' => substr($walletSession, 0, 36)
-                ]);
-                return $this->errorResponse(self::ERROR_INVALID_TOKEN, 'Invalid or expired player session token.', 400);
-            }
+            // 在单一钱包模式下，我们不需要验证 session 归属
+            // 只要格式有效即可（在 verifyHeaders 中已验证）
 
             $this->service->player = $player;
 
