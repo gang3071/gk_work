@@ -1435,9 +1435,9 @@ class GameLotteryServices
      * 计算派奖金额
      * @param GameLottery $lottery
      * @param bool $isDoubled 是否触发双倍（引用参数）
-     * @return int
+     * @return float
      */
-    private function calculateBurstAmount(GameLottery $lottery, &$isDoubled = false): int
+    private function calculateBurstAmount(GameLottery $lottery, bool &$isDoubled = false): float
     {
         $this->log->debug('calculateBurstAmount 开始', [
             'lottery_id' => $lottery->id,
@@ -1471,7 +1471,7 @@ class GameLotteryServices
         // 3. 应用最大金额限制（双倍后也不能超过）
         if ($lottery->max_status == 1) {
             if ($lottery->max_amount > 0 && $amount > $lottery->max_amount) {
-                $amount = floatval($lottery->max_amount);
+                $amount = $lottery->max_amount;
             }
         }
 
@@ -1481,7 +1481,7 @@ class GameLotteryServices
             'is_doubled' => $isDoubled,
         ]);
 
-        return floatval($amount);
+        return (float)$amount;
     }
 
     /**
