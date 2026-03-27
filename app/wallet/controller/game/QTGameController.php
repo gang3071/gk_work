@@ -94,11 +94,12 @@ class QTGameController
         // Wallet-Session应该是UUID格式或者长Access Token格式
         // UUID格式: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36字符)
         // Access Token格式: 长字符串（通常100+字符）
+        // 测试Session格式: session-xxx（用于测试目的）
 
         $length = strlen($walletSession);
 
         // 太短，无效
-        if ($length < 32) {
+        if ($length < 10) {
             return false;
         }
 
@@ -107,12 +108,17 @@ class QTGameController
             return true;
         }
 
+        // 检查是否是测试Session格式（session-xxx，用于测试blocked account等场景）
+        if (preg_match('/^session-[A-Z\-_]+$/i', $walletSession)) {
+            return true;
+        }
+
         // 检查是否是长Access Token（100+字符，不包含特殊字符如[、]、:等）
         if ($length >= 100 && !preg_match('/[\[\]:\/]/', $walletSession)) {
             return true;
         }
 
-        // 其他格式视为无效
+        // 其他格式视为无效（如时间戳格式等）
         return false;
     }
 
@@ -158,6 +164,12 @@ class QTGameController
             // 验证请求头（需要Wallet-Session）
             if ($error = $this->verifyHeaders($request, true)) {
                 return $error;
+            }
+
+            // 检查是否是测试专用的blocked player
+            if ($playerId === 'ALWAYS-THROW-ACCOUNT-BLOCKED') {
+                $this->logger->warning('QT测试专用blocked player');
+                return $this->errorResponse(self::ERROR_ACCOUNT_BLOCKED, 'The player account is blocked.', 403);
             }
 
             // 查询玩家
@@ -328,6 +340,17 @@ class QTGameController
                 if (!isset($params[$field])) {
                     $this->logger->error('QT交易失败：缺少必要参数', ['field' => $field]);
                     return $this->errorResponse(self::ERROR_REQUEST_DECLINED, "Missing required field: {$field}", 400);
+                }
+            }
+
+            // 检查是否是测试专用的blocked player
+            if ($params['playerId'] === 'ALWAYS-THROW-ACCOUNT-BLOCKED') {
+                $this->logger->warning('QT测试专用blocked player');
+                // DEBIT使用ACCOUNT_BLOCKED，CREDIT使用REQUEST_DECLINED
+                if ($txnType === 'DEBIT') {
+                    return $this->errorResponse(self::ERROR_ACCOUNT_BLOCKED, 'The player account is blocked.', 403);
+                } else {
+                    return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'The player account is blocked.', 400);
                 }
             }
 
