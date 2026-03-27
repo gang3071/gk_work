@@ -988,7 +988,6 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'win' => 0,
                 'diff' => -$amount,
                 'order_no' => $orderId,
-                'round_no' => $roundId,
                 'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
                 'order_time' => Carbon::now()->toDateTimeString(),
                 'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
@@ -1077,8 +1076,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                         'win' => 0,
                         'diff' => -$betAmount,
                         'order_no' => $orderId,
-                        'round_no' => $roundId,
-                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end'], JSON_UNESCAPED_UNICODE),
+                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end', 'roundId' => $roundId], JSON_UNESCAPED_UNICODE),
                         'order_time' => Carbon::now()->toDateTimeString(),
                         'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
                     ];
@@ -1110,8 +1108,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                         'win' => 0,
                         'diff' => 0,
                         'order_no' => $orderId,
-                        'round_no' => $roundId,
-                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end', 'type' => 'free_game'], JSON_UNESCAPED_UNICODE),
+                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end', 'type' => 'free_game', 'roundId' => $roundId], JSON_UNESCAPED_UNICODE),
                         'order_time' => Carbon::now()->toDateTimeString(),
                         'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
                     ];
@@ -1418,7 +1415,6 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'win' => $rewardAmount,
                 'diff' => $rewardAmount,
                 'order_no' => $orderId,
-                'round_no' => $roundId,
                 'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
                 'action_data' => json_encode($betformDetails, JSON_UNESCAPED_UNICODE),
                 'order_time' => Carbon::now()->toDateTimeString(),

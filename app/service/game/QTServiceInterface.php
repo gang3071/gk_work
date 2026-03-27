@@ -462,7 +462,6 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'win' => 0,
                 'diff' => -$amount,
                 'order_no' => $orderId,
-                'round_no' => $roundId,
                 'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
                 'order_time' => Carbon::now()->toDateTimeString(),
                 'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
@@ -551,8 +550,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                         'win' => 0,
                         'diff' => -$betAmount,
                         'order_no' => $orderId,
-                        'round_no' => $roundId,
-                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end'], JSON_UNESCAPED_UNICODE),
+                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end', 'roundId' => $roundId], JSON_UNESCAPED_UNICODE),
                         'order_time' => Carbon::now()->toDateTimeString(),
                         'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
                     ];
@@ -584,8 +582,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                         'win' => 0,
                         'diff' => 0,
                         'order_no' => $orderId,
-                        'round_no' => $roundId,
-                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end', 'type' => 'free_game'], JSON_UNESCAPED_UNICODE),
+                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end', 'type' => 'free_game', 'roundId' => $roundId], JSON_UNESCAPED_UNICODE),
                         'order_time' => Carbon::now()->toDateTimeString(),
                         'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
                     ];
@@ -892,8 +889,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'win' => $rewardAmount,
                 'diff' => $rewardAmount,
                 'order_no' => $orderId,
-                'round_no' => $roundId,
-                'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
+                'original_data' => json_encode(array_merge($params, ['roundId' => $roundId]), JSON_UNESCAPED_UNICODE),
                 'action_data' => json_encode($betformDetails, JSON_UNESCAPED_UNICODE),
                 'order_time' => Carbon::now()->toDateTimeString(),
                 'platform_action_at' => Carbon::now()->toDateTimeString(),
@@ -1083,7 +1079,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             $insert = [
                 'player_id' => $this->player->id,
                 'parent_player_id' => $this->player->recommend_id ?? 0,
-                'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
+                'agent_player_id' => $this->player->recommend_promoter?->recommend_id ?? 0,
                 'player_uuid' => $this->player->uuid,
                 'platform_id' => $this->platform->id,
                 'game_code' => $gameId,
@@ -1092,7 +1088,6 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'win' => 0,
                 'diff' => -$amount,
                 'order_no' => $txnId,
-                'round_no' => $roundId,
                 'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
                 'order_time' => Carbon::now()->toDateTimeString(),
                 'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
@@ -1220,12 +1215,12 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                     ->first();
             }
 
-            // 如果找不到下注记录，尝试根据roundId查找
-            if (!$betRecord) {
+            // 如果找不到下注记录，尝试根据roundId在original_data中查找
+            if (!$betRecord && $roundId) {
                 $betRecord = PlayGameRecord::query()
-                    ->where('round_no', $roundId)
                     ->where('platform_id', $this->platform->id)
                     ->where('settlement_status', PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED)
+                    ->where('original_data', 'like', '%"roundId":"' . $roundId . '"%')
                     ->orderBy('id', 'desc')
                     ->first();
             }
@@ -1270,7 +1265,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 $insert = [
                     'player_id' => $this->player->id,
                     'parent_player_id' => $this->player->recommend_id ?? 0,
-                    'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
+                    'agent_player_id' => $this->player->recommend_promoter?->recommend_id ?? 0,
                     'player_uuid' => $this->player->uuid,
                     'platform_id' => $this->platform->id,
                     'game_code' => $gameId,
@@ -1279,7 +1274,6 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                     'win' => $amount,
                     'diff' => $amount,
                     'order_no' => $txnId,
-                    'round_no' => $roundId,
                     'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
                     'order_time' => Carbon::now()->toDateTimeString(),
                     'platform_action_at' => Carbon::now()->toDateTimeString(),
