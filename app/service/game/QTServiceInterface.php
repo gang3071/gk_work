@@ -182,6 +182,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             $defaultLang = 'zh-TW'; // 默认繁体中文
 
             // 构建请求payload（参数从player和platform获取，不使用$data）
+            // walletSessionId使用玩家UUID，这样每个玩家有自己独特的session
             $payload = [
                 'playerId' => $this->player->uuid,
                 'currency' => 'TWD', // 默认台币
@@ -189,7 +190,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'lang' => $this->lang[$defaultLang] ?? 'zh_TW',
                 'mode' => 'real', // real | fun
                 'device' => 'DESKTOP', // 默认手机端
-                'walletSessionId' => $accessToken,
+                'walletSessionId' => $this->player->uuid, // 使用玩家UUID作为session ID
                 'config' => [
                     'singleUseUrl' => false
                 ]

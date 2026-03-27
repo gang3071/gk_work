@@ -383,12 +383,12 @@ class QTGameController
                 }
             }
 
-            // 验证Wallet-Session是否属于该玩家
-            if ($player->access_token !== $walletSession) {
+            // 验证Wallet-Session是否属于该玩家（walletSessionId应该等于玩家的UUID）
+            if ($player->uuid !== $walletSession) {
                 $this->logger->warning('QT交易失败：Wallet-Session不匹配', [
                     'playerId' => $params['playerId'],
-                    'expected' => substr($player->access_token, 0, 20) . '...',
-                    'actual' => substr($walletSession, 0, 20) . '...'
+                    'expected_uuid' => $player->uuid,
+                    'actual_session' => substr($walletSession, 0, 36)
                 ]);
                 // DEBIT使用INVALID_TOKEN，CREDIT使用REQUEST_DECLINED
                 if ($txnType === 'DEBIT') {
