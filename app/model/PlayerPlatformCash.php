@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string platform_name 平台名称
  * @property float money 点数
  * @property int status 遊戲平台狀態 0=鎖定 1=正常
+ * @property bool is_crashed 是否爆机 0=正常 1=已爆机
  * @property string created_at 创建时间
  * @property string updated_at 最后一次修改时间
  *
@@ -48,5 +49,95 @@ class PlayerPlatformCash extends Model
     public function player(): BelongsTo
     {
         return $this->belongsTo(Player::class, 'player_id')->withTrashed();
+    }
+
+    /**
+     * 模型的 "booted" 方法
+     * 监听余额变化，自动检查爆机状态
+     *
+     * @return void
+     */
+    protected static function booted()
+    {
+        // 监听余额更新事件
+        static::updated(function (PlayerPlatformCash $wallet) {
+            // 只处理实体机平台的余额变化
+            if ($wallet->platform_id != self::PLATFORM_SELF) {
+                return;
+            }
+
+            // 检查 money 字段是否变化
+            if (!$wallet->wasChanged('money')) {
+                return;
+            }
+
+            try {
+                // 获取玩家信息
+                $player = $wallet->player;
+                if (!$player) {
+                    return;
+                }
+
+                // 获取变化前后的余额
+                $previousAmount = floatval($wallet->getOriginal('money'));
+                $currentAmount = floatval($wallet->money);
+
+                // 获取爆机配置
+                $adminUserId = $player->store_admin_id ?? null;
+                if (!$adminUserId) {
+                    return;
+                }
+
+                $crashSetting = \app\model\StoreSetting::getSetting(
+                    'machine_crash_amount',
+                    $player->department_id,
+                    null,
+                    $adminUserId
+                );
+
+                // 如果没有配置或配置被禁用，不处理
+                if (!$crashSetting || $crashSetting->status != 1) {
+                    return;
+                }
+
+                $crashAmount = $crashSetting->num ?? 0;
+                if ($crashAmount <= 0) {
+                    return;
+                }
+
+                // 检查爆机状态变化
+                $wasCrashed = $previousAmount >= $crashAmount;
+                $isCrashed = $currentAmount >= $crashAmount;
+
+                // 更新爆机状态字段（如果状态有变化）
+                if ($wallet->is_crashed != $isCrashed) {
+                    // 使用 withoutEvents 避免递归触发 updated 事件
+                    $wallet->withoutEvents(function () use ($wallet, $isCrashed) {
+                        $wallet->is_crashed = $isCrashed;
+                        $wallet->save();
+                    });
+                }
+
+                // 从未爆机变为爆机 -> 发送爆机通知
+                if (!$wasCrashed && $isCrashed) {
+                    $crashInfo = [
+                        'crashed' => true,
+                        'crash_amount' => $crashAmount,
+                        'current_amount' => $currentAmount,
+                    ];
+                    notifyMachineCrash($player, $crashInfo);
+                }
+
+                // 从爆机变为未爆机 -> 发送解锁通知
+                if ($wasCrashed && !$isCrashed) {
+                    checkAndNotifyCrashUnlock($player, $previousAmount);
+                }
+            } catch (\Exception $e) {
+                \support\Log::error('PlayerPlatformCash: Failed to check machine crash', [
+                    'player_id' => $wallet->player_id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        });
     }
 }
