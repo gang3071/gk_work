@@ -358,8 +358,18 @@ class GameLotteryServices
                 // 获取并处理爆彩状态
                 $burstInfo = $this->getBurstInfo($lottery);
 
+                $this->log->debug('准备调用 processLotteryCheck', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                ]);
+
                 // 处理派彩检查
                 $this->processLotteryCheck($lottery, $bet, $participateTimes, $burstInfo, $playGameRecordId);
+
+                $this->log->debug('processLotteryCheck 执行完成', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                ]);
             } catch (\Exception $e) {
                 // 记录异常但不中断循环，确保其他彩金仍然能被检查
                 $this->log->error('彩金检查异常，跳过该彩金继续检查下一个:', [
