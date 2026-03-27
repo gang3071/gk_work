@@ -36,16 +36,16 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
     ];
 
     private $lang = [
-        'zh-CN' => 'zh-cn',
-        'zh-TW' => 'zh-tw',
-        'jp' => 'ja',
-        'en' => 'en',
-        'th' => 'th',
-        'vi' => 'vi',
-        'my' => 'my',
-        'id' => 'id',
-        'hi_hi' => 'hi',
-        'kr_ko' => 'ko',
+        'zh-CN' => 'zh_CN',
+        'zh-TW' => 'zh_TW',
+        'jp' => 'ja_JP',
+        'en' => 'en_US',
+        'th' => 'th_TH',
+        'vi' => 'vi_VN',
+        'my' => 'my_MM',
+        'id' => 'id_ID',
+        'hi_hi' => 'hi_IN',
+        'kr_ko' => 'ko_KR',
     ];
 
     /**
@@ -167,8 +167,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
     public function lobbyLogin(array $data = []): string
     {
         Log::channel('qt_server')->info('QT进入游戏大厅开始', [
-            'player_id' => $this->player->id,
-            'lang' => $data['lang'] ?? 'zh-CN'
+            'player_id' => $this->player->id
         ]);
 
         try {
@@ -178,48 +177,23 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             // 构建请求URL
             $url = $this->apiDomain . $this->path['lobbyLogin'];
 
-            // 构建请求payload
+            // 从player获取默认语言（如果有的话）
+            $defaultLang = 'zh-TW'; // 默认繁体中文
+
+            // 构建请求payload（参数从player和platform获取，不使用$data）
             $payload = [
                 'playerId' => $this->player->uuid,
-                'currency' => $data['currency'] ?? 'CNY',
-                'country' => $data['country'] ?? 'CN',
-                'lang' => $this->lang[$data['lang']] ?? 'zh-cn',
-                'mode' => $data['mode'] ?? 'real', // real | fun
-                'device' => $data['device'] ?? 'mobile', // mobile | desktop
+                'currency' => 'TWD', // 默认台币
+                'country' => 'TW', // 默认台湾
+                'lang' => $this->lang[$defaultLang] ?? 'zh_TW',
+                'mode' => 'real', // real | fun
+                'device' => 'mobile', // 默认手机端
                 'walletSessionId' => $accessToken,
             ];
 
-            // 可选参数
-            if (!empty($data['displayName'])) {
-                $payload['displayName'] = $data['displayName'];
-            }
-            if (!empty($data['gender'])) {
-                $payload['gender'] = $data['gender']; // m | f
-            }
-            if (!empty($data['birthDate'])) {
-                $payload['birthDate'] = $data['birthDate']; // YYYY-MM-DD
-            }
-            if (!empty($data['gameLaunchTarget'])) {
-                $payload['gameLaunchTarget'] = $data['gameLaunchTarget']; // iframe | window | self
-            }
-            if (!empty($data['betLimitCode'])) {
-                $payload['betLimitCode'] = $data['betLimitCode'];
-            }
-            if (!empty($data['jurisdiction'])) {
-                $payload['jurisdiction'] = $data['jurisdiction'];
-            }
-            if (!empty($data['maxWinAmount'])) {
-                $payload['maxWinAmount'] = (float)$data['maxWinAmount'];
-            }
-
-            // filters 参数
-            if (!empty($data['filters'])) {
-                $payload['filters'] = $data['filters'];
-            }
-
-            // config 参数
-            if (!empty($data['config'])) {
-                $payload['config'] = $data['config'];
+            // 可选参数（从player获取）
+            if (!empty($this->player->nickname)) {
+                $payload['displayName'] = $this->player->nickname;
             }
 
             Log::channel('qt_server')->info('QT发送游戏大厅请求', [
