@@ -544,16 +544,15 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     public function jackpotResult($data)
     {
+        //单独使用
         /** @var PlayGameRecord $record */
         $record = PlayGameRecord::query()->where('order_no', $data['SequenNumber'])->first();
 
-        if (empty($record)) {
-            return $this->error = RsgGameController::API_CODE_ORDER_NOT_EXIST;
-        }
-
-        if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+        if ($record) {
             return $this->error = RsgGameController::API_CODE_ORDER_SETTLED;
         }
+
+
         //处理用户中奖金额
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
