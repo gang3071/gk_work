@@ -1752,8 +1752,17 @@ function notifyMachineCrash(Player $player, array $crashInfo): void
         $channelAdminChannel = 'private-admin_group-channel-' . $player->department_id;
         sendSocketMessage($channelAdminChannel, $adminMessage, 'system');
 
-        // 3. 发送给总后台
-        sendSocketMessage('private-admin_group-admin-1', $adminMessage, 'system');
+        // 3. 创建通知记录（渠道后台）
+        $channelNotice = new Notice();
+        $channelNotice->department_id = $player->department_id;
+        $channelNotice->player_id = $player->id;
+        $channelNotice->source_id = $player->id;
+        $channelNotice->type = Notice::TYPE_MACHINE_CRASH;
+        $channelNotice->receiver = Notice::RECEIVER_DEPARTMENT;
+        $channelNotice->is_private = 0;
+        $channelNotice->title = '設備爆機通知';
+        $channelNotice->content = "設備已爆機：玩家 {$player->name} (UID:{$player->uuid}) 餘額達到 " . number_format($crashInfo['current_amount'], 2) . "，超過爆機金額 " . number_format($crashInfo['crash_amount'], 2) . "，請聯繫管理員處理！";
+        $channelNotice->save();
 
         Log::info('Machine crash notification sent', [
             'player_id' => $player->id,

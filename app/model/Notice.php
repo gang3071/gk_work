@@ -58,6 +58,7 @@ class Notice extends Model
     const TYPE_ACTIVITY_RECEIVE = 18; // 活動獎勵待领取
     const TYPE_REVERSE_WATER = 19; // 电子游戏反水奖励待领取
     const TYPE_MACHINE_LOCK = 20; // 机台锁定通知
+    const TYPE_MACHINE_CRASH = 21; // 设备爆机通知
 
     const RECEIVER_PLAYER = 1; // 玩家
     const RECEIVER_ADMIN = 2; // 总站
