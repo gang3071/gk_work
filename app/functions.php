@@ -1847,32 +1847,9 @@ function checkAndNotifyCrashUnlock(Player $player, float $previousAmount): void
                     'timestamp' => time(),
                 ];
 
-                // 后台消息
-                $adminMessage = [
-                    'type' => 'machine_crash_unlock',
-                    'event' => 'player_crash_unlocked',
-                    'player_id' => $player->id,
-                    'player_name' => $player->name ?? '',
-                    'player_uuid' => $player->uuid ?? '',
-                    'store_admin_id' => $player->store_admin_id ?? null,
-                    'department_id' => $player->department_id,
-                    'crash_amount' => $crashCheckBefore['crash_amount'],
-                    'previous_amount' => $previousAmount,
-                    'current_amount' => $crashCheckBefore['current_amount'],
-                    'message' => "设备爆机已解锁：{$player->name} (ID:{$player->id}) 余额从 {$previousAmount} 降至 {$crashCheckBefore['current_amount']}",
-                    'timestamp' => time(),
-                ];
-
                 // 1. 发送给玩家
                 $playerChannel = 'player_' . $player->id;
                 sendSocketMessage([$playerChannel], $playerMessage, 'system');
-
-                // 2. 发送给渠道后台
-                $channelAdminChannel = 'private-admin_group-channel-' . $player->department_id;
-                sendSocketMessage($channelAdminChannel, $adminMessage, 'system');
-
-                // 3. 发送给总后台
-                sendSocketMessage('private-admin_group-admin-1', $adminMessage, 'system');
 
                 Log::info('Machine crash unlock notification sent', [
                     'player_id' => $player->id,
