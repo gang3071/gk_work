@@ -188,7 +188,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'country' => 'TW', // 默认台湾
                 'lang' => $this->lang[$defaultLang] ?? 'zh_TW',
                 'mode' => 'real', // real | fun
-                'device' => 'mobile', // 默认手机端
+                'device' => 'DESKTOP', // 默认手机端
                 'walletSessionId' => $accessToken,
                 'config' => [
                     'singleUseUrl' => false
