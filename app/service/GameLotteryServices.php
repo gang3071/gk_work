@@ -317,6 +317,7 @@ class GameLotteryServices
 
         // 记录彩金列表总数
         $this->log->info('开始遍历彩金列表:', [
+            'play_game_record_id' => $playGameRecordId,
             'total_lotteries' => count($lotteryList),
             'bet' => $bet,
             'player_id' => $this->player->id,
@@ -343,6 +344,7 @@ class GameLotteryServices
 
                 // 记录打码量检查通过
                 $this->log->info('✅ 打码量检查通过，开始派彩检查:', [
+                    'play_game_record_id' => $playGameRecordId,
                     'lottery_id' => $lottery->id,
                     'lottery_name' => $lottery->name,
                     'bet' => $bet,
@@ -361,6 +363,7 @@ class GameLotteryServices
             } catch (\Exception $e) {
                 // 记录异常但不中断循环，确保其他彩金仍然能被检查
                 $this->log->error('彩金检查异常，跳过该彩金继续检查下一个:', [
+                    'play_game_record_id' => $playGameRecordId,
                     'lottery_id' => $lottery->id,
                     'lottery_name' => $lottery->name,
                     'error' => $e->getMessage(),
@@ -371,7 +374,8 @@ class GameLotteryServices
         }
 
         // 循环结束后记录
-        $this->log->info('彩金遍历完成:', [
+        $this->log->info('✅ 彩金遍历完成:', [
+            'play_game_record_id' => $playGameRecordId,
             'checked_count' => count($lotteryList),
             'total_expected' => count($this->lotteryList),
         ]);
@@ -503,6 +507,7 @@ class GameLotteryServices
                 $stats = $this->getLotteryStats($lottery->id);
 
                 $this->log->info('🎉 派彩检查命中，玩家中奖!', [
+                    'play_game_record_id' => $playGameRecordId,
                     'lottery_id' => $lottery->id,
                     'lottery_name' => $lottery->name,
                     'player_id' => $this->player->id,
@@ -528,13 +533,15 @@ class GameLotteryServices
                 $distributed = $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $i, $participateTimes, $isDoubled);
 
                 if ($distributed) {
-                    $this->log->info('彩金派发成功', [
+                    $this->log->info('💰 彩金派发成功', [
+                        'play_game_record_id' => $playGameRecordId,
                         'lottery_id' => $lottery->id,
                         'lottery_name' => $lottery->name,
                         'amount' => $amount,
                     ]);
                 } else {
-                    $this->log->warning('彩金派发失败，但继续检查下一个彩金', [
+                    $this->log->warning('⚠️ 彩金派发失败，但继续检查下一个彩金', [
+                        'play_game_record_id' => $playGameRecordId,
                         'lottery_id' => $lottery->id,
                         'lottery_name' => $lottery->name,
                         'amount' => $amount,

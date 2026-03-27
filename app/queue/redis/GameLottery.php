@@ -21,20 +21,28 @@ class GameLottery implements Consumer
     public function consume($data)
     {
         $log = Log::channel('game_lottery');
-        $log->info('开始处理游戏抽奖', ['data' => $data]);
+        $log->info('🎲 开始处理游戏抽奖', [
+            'play_game_record_id' => $data['play_game_record_id'] ?? 0,
+            'player_id' => $data['player_id'],
+            'bet' => $data['bet'],
+        ]);
 
         try {
             /** @var Player $player */
             $player = Player::query()->find($data['player_id']);
 
             if (empty($player)) {
-                $log->warning('玩家不存在', ['player_id' => $data['player_id']]);
+                $log->warning('玩家不存在', [
+                    'player_id' => $data['player_id'],
+                    'play_game_record_id' => $data['play_game_record_id'] ?? 0,
+                ]);
                 return;
             }
 
             if ($player->channel->lottery_status == 0) {
                 $log->info('渠道抽奖功能未开启', [
                     'player_id' => $data['player_id'],
+                    'play_game_record_id' => $data['play_game_record_id'] ?? 0,
                     'channel_id' => $player->channel->id
                 ]);
                 return;
