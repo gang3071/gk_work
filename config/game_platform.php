@@ -11,6 +11,13 @@ return [
         'admin_user' => env('BTG_ADMIN_USER'),
         'admin_password' => env('BTG_ADMIN_PASSWORD'),
     ],
+    'QT' => [
+        'api_domain' => env('QT_API_DOMAIN'),
+        'domain' => '',
+        'username' => env('QT_USERNAME'),
+        'password' => env('QT_PASSWORD'),
+        'passkey' => env('QT_PASSKEY'),
+    ],
     'WM' => [
         'api_domain' => env('WM_API_DOMAIN'),
         'domain' => '',

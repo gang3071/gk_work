@@ -20,6 +20,7 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
 class GameServiceFactory
 {
     const TYPE_BTG = 'BTG'; // BTGaming
+    const TYPE_QT = 'QT'; // QT
     const TYPE_WM = 'WM'; // WM
     const TYPE_RSG = 'RSG'; // RSG
     const TYPE_RSG_LIVE = 'RSGLIVE'; // RSG真人
@@ -61,6 +62,8 @@ class GameServiceFactory
         switch ($type) {
             case self::TYPE_BTG:
                 return new BTGServiceInterface($player);
+            case self::TYPE_QT:
+                return new QTServiceInterface($player);
             case self::TYPE_WM:
                 return new WMServiceInterface($player);
             case self::TYPE_RSG:
