@@ -86,8 +86,8 @@ class QTGameController
             return $this->errorResponse(self::ERROR_ACCOUNT_BLOCKED, 'The player account is blocked.', 403);
         }
 
-        // 检查玩家状态（假设有status字段，0=正常，1=锁定）
-        if (isset($player->status) && $player->status != 0) {
+        // 检查玩家状态（1=正常，0=锁定）
+        if (isset($player->status) && $player->status != 1) {
             $this->logger->error('QT玩家账户被锁定', ['player_id' => $player->id, 'status' => $player->status]);
             return $this->errorResponse(self::ERROR_ACCOUNT_BLOCKED, 'The player account is blocked.', 403);
         }
@@ -196,7 +196,8 @@ class QTGameController
                 return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player account is deleted', 400);
             }
 
-            if (isset($player->status) && $player->status != 0) {
+            // 检查玩家状态（1=正常，0=锁定）
+            if (isset($player->status) && $player->status != 1) {
                 $this->logger->error('QT查询余额失败：玩家账户被锁定', ['player_id' => $player->id, 'status' => $player->status]);
                 return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player account is blocked', 400);
             }
@@ -305,7 +306,8 @@ class QTGameController
                 }
             }
 
-            if (isset($player->status) && $player->status != 0) {
+            // 检查玩家状态（1=正常，0=锁定）
+            if (isset($player->status) && $player->status != 1) {
                 $this->logger->error('QT交易失败：玩家账户被锁定', ['player_id' => $player->id, 'status' => $player->status]);
                 // DEBIT使用ACCOUNT_BLOCKED，CREDIT使用REQUEST_DECLINED
                 if ($txnType === 'DEBIT') {
@@ -417,7 +419,8 @@ class QTGameController
                 return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player account is deleted', 400);
             }
 
-            if (isset($player->status) && $player->status != 0) {
+            // 检查玩家状态（1=正常，0=锁定）
+            if (isset($player->status) && $player->status != 1) {
                 $this->logger->error('QT回滚失败：玩家账户被锁定', ['player_id' => $player->id, 'status' => $player->status]);
                 return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player account is blocked', 400);
             }
