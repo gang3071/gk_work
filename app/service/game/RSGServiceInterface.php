@@ -402,11 +402,18 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
     public function bet($data)
     {
         if (PlayGameRecord::query()->where('order_no', $data['SequenNumber'])->exists()) {
-            return $this->error = RsgGameController::API_CODE_INSUFFICIENT_BALANCE;
+            return $this->error = RsgGameController::API_CODE_DUPLICATE_ORDER;
         }
 
         $player = $this->player;
         $bet = $data['Amount'];
+
+        /** @var PlayerPlatformCash $machineWallet */
+        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+        if ($machineWallet->money < $bet) {
+            return $this->error = RsgGameController::API_CODE_INSUFFICIENT_BALANCE;
+        }
+
         //下注记录
         $insert = [
             'player_id' => $this->player->id,
@@ -429,12 +436,6 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         /** @var PlayGameRecord $record */
         $record = PlayGameRecord::query()->create($insert);
 
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-        if ($machineWallet->money < $bet) {
-            return $this->error = RsgGameController::API_CODE_INSUFFICIENT_BALANCE;
-        }
-
         return $this->createBetRecord($machineWallet, $player, $record, $bet);
 
     }
@@ -450,7 +451,7 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         $record = PlayGameRecord::query()->where('order_no', $data['SequenNumber'])->first();
 
         if (!$record) {
-            return $this->error = RsgGameController::API_CODE_DUPLICATE_ORDER;
+            return $this->error = RsgGameController::API_CODE_ORDER_NOT_EXIST;
         }
 
         if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
