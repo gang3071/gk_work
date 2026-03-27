@@ -424,7 +424,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                     'original_amount' => $params['amount']
                 ]);
                 $this->error = 'BAD_FORMAT_PARAMS';
-                return ['balance' => $this->player->machine_wallet->money ?? 0];
+                return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
             }
 
             /** @var PlayerPlatformCash $machineWallet */
@@ -433,7 +433,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             // 检查余额
             if ($machineWallet->money < $amount) {
                 $this->error = 'INSUFFICIENT_BALANCE';
-                return ['balance' => $machineWallet->money];
+                return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
             // 检查订单是否已存在（使用 order_id）
@@ -445,7 +445,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             if ($existingRecord) {
                 // 订单已存在，返回当前余额（幂等性）
                 $this->error = 'DUPLICATE_TRAN_ID';
-                return ['balance' => $machineWallet->money];
+                return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
             // 创建游戏记录
@@ -473,11 +473,11 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             // 扣款并创建交易记录
             $afterBalance = $this->createBetRecord($machineWallet, $this->player, $record, $amount);
 
-            return ['balance' => (float)$afterBalance];
+            return ['balance' => round((float)$afterBalance, 2)];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferStart error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = 'SOMETHING_WRONG';
-            return ['balance' => $this->player->machine_wallet->money ?? 0];
+            return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
         }
     }
 
@@ -534,7 +534,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                             'balance' => $machineWallet->money
                         ]);
                         $this->error = 'INSUFFICIENT_BALANCE';
-                        return ['balance' => $machineWallet->money];
+                        return ['balance' => round((float)$machineWallet->money, 2)];
                     }
 
                     // 创建下注记录
@@ -609,7 +609,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
                 // 已结算，返回当前余额（幂等性）
                 $this->error = 'TRANSACTION_SETTLED';
-                return ['balance' => $machineWallet->money];
+                return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
             // 派彩加款
@@ -661,7 +661,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'play_game_record_id' => $record->id
             ]);
 
-            return ['balance' => (float)$machineWallet->money];
+            return ['balance' => round((float)$machineWallet->money, 2)];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferEnd error', [
                 'error' => $e->getMessage(),
@@ -671,7 +671,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'player_id' => $this->player->id ?? null
             ]);
             $this->error = 'SOMETHING_WRONG';
-            return ['balance' => $this->player->machine_wallet->money ?? 0];
+            return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
         }
     }
 
@@ -699,14 +699,14 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
             if (!$record) {
                 $this->error = 'TRANSACTION_NOT_EXIST';
-                return ['balance' => $machineWallet->money];
+                return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
             // 检查是否已取消
             if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
                 // 已退款，返回当前余额（幂等性）
                 $this->error = 'TRANSACTION_SETTLED';
-                return ['balance' => $machineWallet->money];
+                return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
             // 退款加款
@@ -738,11 +738,11 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             $record->action_data = json_encode($params, JSON_UNESCAPED_UNICODE);
             $record->save();
 
-            return ['balance' => (float)$machineWallet->money];
+            return ['balance' => round((float)$machineWallet->money, 2)];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferRefund error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = 'SOMETHING_WRONG';
-            return ['balance' => $this->player->machine_wallet->money ?? 0];
+            return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
         }
     }
 
@@ -764,7 +764,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
             // 如果调整金额为0，直接返回
             if ($adjustAmount == 0) {
-                return ['balance' => (float)$machineWallet->money];
+                return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
             // 查找对应的游戏记录
@@ -776,7 +776,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
             if (!$record) {
                 $this->error = 'TRANSACTION_NOT_EXIST';
-                return ['balance' => $machineWallet->money];
+                return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
             // 调整余额
@@ -789,7 +789,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 $deductAmount = abs($adjustAmount);
                 if ($machineWallet->money < $deductAmount) {
                     $this->error = 'INSUFFICIENT_BALANCE';
-                    return ['balance' => $machineWallet->money];
+                    return ['balance' => round((float)$machineWallet->money, 2)];
                 }
                 $machineWallet->money = bcsub($machineWallet->money, $deductAmount, 2);
             }
@@ -831,11 +831,11 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 $record->save();
             }
 
-            return ['balance' => (float)$machineWallet->money];
+            return ['balance' => round((float)$machineWallet->money, 2)];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferAdjust error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = 'SOMETHING_WRONG';
-            return ['balance' => $this->player->machine_wallet->money ?? 0];
+            return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
         }
     }
 
@@ -855,7 +855,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
             if ($rewardAmount <= 0) {
                 $this->error = 'BAD_FORMAT_PARAMS';
-                return ['balance' => $this->player->machine_wallet->money ?? 0];
+                return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
             }
 
             /** @var PlayerPlatformCash $machineWallet */
@@ -870,7 +870,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             if ($existingRecord) {
                 // 订单已存在，返回当前余额（幂等性）
                 $this->error = 'DUPLICATE_TRAN_ID';
-                return ['balance' => $machineWallet->money];
+                return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
             // 奖励加款
@@ -927,11 +927,11 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'play_game_record_id' => $record->id
             ]);
 
-            return ['balance' => (float)$machineWallet->money];
+            return ['balance' => round((float)$machineWallet->money, 2)];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferReward error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = 'SOMETHING_WRONG';
-            return ['balance' => $this->player->machine_wallet->money ?? 0];
+            return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
         }
     }
 
@@ -1038,28 +1038,25 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
-            // 幂等性检查 - 根据txnId查找是否已存在交易
-            $existingRecord = PlayGameRecord::query()
-                ->where('order_no', $txnId)
+            // 幂等性检查 - 根据txnId查找是否已存在下注交易
+            $existingDebitDelivery = PlayerDeliveryRecord::query()
+                ->where('tradeno', $txnId)
+                ->where('player_id', $this->player->id)
                 ->where('platform_id', $this->platform->id)
+                ->whereIn('type', [PlayerDeliveryRecord::TYPE_BET])
+                ->whereIn('source', ['player_bet', 'qt_bonus_bet'])
                 ->first();
 
-            if ($existingRecord) {
+            if ($existingDebitDelivery) {
                 // 已存在，返回原响应（幂等性）
                 Log::channel('qt_server')->info('QT DEBIT交易已存在（幂等）', [
                     'txnId' => $txnId,
-                    'record_id' => $existingRecord->id
+                    'delivery_record_id' => $existingDebitDelivery->id
                 ]);
-
-                // 查找对应的交易记录
-                $deliveryRecord = PlayerDeliveryRecord::query()
-                    ->where('target_id', $existingRecord->id)
-                    ->where('type', PlayerDeliveryRecord::TYPE_BET)
-                    ->first();
 
                 return [
                     'balance' => round((float)$machineWallet->money, 2),
-                    'referenceId' => $deliveryRecord ? (string)$deliveryRecord->id : (string)$existingRecord->id
+                    'referenceId' => (string)$existingDebitDelivery->id
                 ];
             }
 
@@ -1104,8 +1101,17 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             $record = PlayGameRecord::query()->create($insert);
 
             // 扣款（如果不是奖金回合）
+            $playerDeliveryRecord = null;
             if (!$bonusType) {
                 $afterBalance = $this->createBetRecord($machineWallet, $this->player, $record, $amount);
+
+                // 查找刚创建的交易记录
+                $playerDeliveryRecord = PlayerDeliveryRecord::query()
+                    ->where('target_id', $record->id)
+                    ->where('type', PlayerDeliveryRecord::TYPE_BET)
+                    ->where('platform_id', $this->platform->id)
+                    ->orderBy('id', 'desc')
+                    ->first();
             } else {
                 // 奖金回合，不扣款
                 $afterBalance = $machineWallet->money;
@@ -1139,12 +1145,13 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             Log::channel('qt_server')->info('QT DEBIT成功', [
                 'txnId' => $txnId,
                 'record_id' => $record->id,
+                'delivery_record_id' => $playerDeliveryRecord ? $playerDeliveryRecord->id : null,
                 'balance' => $machineWallet->money
             ]);
 
             return [
                 'balance' => round((float)$machineWallet->money, 2),
-                'referenceId' => (string)$record->id
+                'referenceId' => $playerDeliveryRecord ? (string)$playerDeliveryRecord->id : (string)$record->id
             ];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT DEBIT异常', [
@@ -1183,28 +1190,23 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
-            // 幂等性检查 - 根据txnId查找是否已存在交易
-            $existingCreditRecord = PlayGameRecord::query()
-                ->where('order_no', $txnId)
-                ->where('platform_id', $this->platform->id)
+            // 幂等性检查 - 根据txnId查找是否已存在派彩交易
+            $existingCreditDelivery = PlayerDeliveryRecord::query()
+                ->where('tradeno', $txnId)
+                ->where('type', PlayerDeliveryRecord::TYPE_SETTLEMENT)
+                ->where('source', 'qt_credit')
                 ->first();
 
-            if ($existingCreditRecord) {
+            if ($existingCreditDelivery) {
                 // 已存在，返回原响应（幂等性）
                 Log::channel('qt_server')->info('QT CREDIT交易已存在（幂等）', [
                     'txnId' => $txnId,
-                    'record_id' => $existingCreditRecord->id
+                    'delivery_record_id' => $existingCreditDelivery->id
                 ]);
-
-                // 查找对应的交易记录
-                $deliveryRecord = PlayerDeliveryRecord::query()
-                    ->where('target_id', $existingCreditRecord->id)
-                    ->where('type', PlayerDeliveryRecord::TYPE_SETTLEMENT)
-                    ->first();
 
                 return [
                     'balance' => round((float)$machineWallet->money, 2),
-                    'referenceId' => $deliveryRecord ? (string)$deliveryRecord->id : (string)$existingCreditRecord->id
+                    'referenceId' => (string)$existingCreditDelivery->id
                 ];
             }
 
@@ -1369,27 +1371,22 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
             // 幂等性检查 - 根据txnId查找是否已处理过该回滚
-            $existingRollback = PlayGameRecord::query()
-                ->where('order_no', $txnId)
-                ->where('platform_id', $this->platform->id)
-                ->where('settlement_status', PlayGameRecord::SETTLEMENT_STATUS_CANCELLED)
+            $existingRollbackDelivery = PlayerDeliveryRecord::query()
+                ->where('tradeno', $txnId)
+                ->where('type', PlayerDeliveryRecord::TYPE_CANCEL_BET)
+                ->where('source', 'qt_rollback')
                 ->first();
 
-            if ($existingRollback) {
+            if ($existingRollbackDelivery) {
                 // 已回滚过，返回原响应（幂等性）
                 Log::channel('qt_server')->info('QT ROLLBACK已处理（幂等）', [
                     'txnId' => $txnId,
-                    'record_id' => $existingRollback->id
+                    'delivery_record_id' => $existingRollbackDelivery->id
                 ]);
-
-                $deliveryRecord = PlayerDeliveryRecord::query()
-                    ->where('target_id', $existingRollback->id)
-                    ->where('type', PlayerDeliveryRecord::TYPE_CANCEL_BET)
-                    ->first();
 
                 return [
                     'balance' => round((float)$machineWallet->money, 2),
-                    'referenceId' => $deliveryRecord ? (string)$deliveryRecord->id : null
+                    'referenceId' => (string)$existingRollbackDelivery->id
                 ];
             }
 
