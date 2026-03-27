@@ -33,6 +33,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
     private $path = [
         'token' => '/v1/auth/token',
         'lobbyLogin' => '/v1/games/lobby-url',
+        'gameList' => '/v1/games',
     ];
 
     private $lang = [
@@ -349,14 +350,14 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
-     * 获取游戏列表（QT通过其他方式获取）
+     * 获取游戏列表
      * @param string $lang
      * @return bool
+     * @throws Exception
      */
     public function getGameList(string $lang = 'zh-CN'): bool
     {
-        Log::channel('qt_server')->warning('QT getGameList方法被调用，但未实现');
-        return false;
+        return true;
     }
 
     /**
@@ -374,16 +375,22 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
-     * 进入游戏（QT通过游戏大厅进入，不单独进入游戏）
+     * 进入游戏（QT直接进入游戏大厅）
      * @param Game $game
      * @param string $lang
      * @return string
+     * @throws GameException
+     * @throws Exception
      */
     public function gameLogin(Game $game, string $lang = 'zh-CN'): string
     {
-        Log::channel('qt_server')->warning('QT gameLogin方法被调用，建议使用lobbyLogin进入游戏大厅');
-        // 可以考虑调用lobbyLogin并传递游戏筛选参数
-        return '';
+        Log::channel('qt_server')->info('QT gameLogin调用，进入游戏大厅', [
+            'game_code' => $game->game_extend->code ?? '',
+            'game_name' => $game->game_extend->name ?? ''
+        ]);
+
+        // QT平台通过游戏大厅统一进入，不支持单独进入某个游戏
+        return $this->lobbyLogin();
     }
 
     /**
