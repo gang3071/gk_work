@@ -334,17 +334,13 @@ class QTGameController
                 }
             }
 
-            // 验证Wallet-Session格式
-            if (!$this->isValidWalletSession($walletSession)) {
+            // 验证Wallet-Session格式（仅DEBIT需要验证）
+            // CREDIT（派彩）即使session过期或格式无效也要成功，因为这是玩家赢得的钱
+            if ($txnType === 'DEBIT' && !$this->isValidWalletSession($walletSession)) {
                 $this->logger->error('QT交易失败：Wallet-Session格式无效', [
                     'wallet_session' => substr($walletSession, 0, 20) . '...'
                 ]);
-                // DEBIT使用INVALID_TOKEN，CREDIT使用REQUEST_DECLINED
-                if ($txnType === 'DEBIT') {
-                    return $this->errorResponse(self::ERROR_INVALID_TOKEN, 'Invalid or expired player session token.', 400);
-                } else {
-                    return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Invalid or expired player session token.', 400);
-                }
+                return $this->errorResponse(self::ERROR_INVALID_TOKEN, 'Invalid or expired player session token.', 400);
             }
 
             // 验证必要参数
