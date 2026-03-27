@@ -1058,7 +1058,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                     ->first();
 
                 return [
-                    'balance' => number_format($machineWallet->money, 2, '.', ''),
+                    'balance' => round((float)$machineWallet->money, 2),
                     'referenceId' => $deliveryRecord ? (string)$deliveryRecord->id : (string)$existingRecord->id
                 ];
             }
@@ -1071,14 +1071,14 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                     'balance' => $machineWallet->money,
                     'amount' => $amount
                 ]);
-                return ['balance' => number_format($machineWallet->money, 2, '.', '')];
+                return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
             // TODO: 检查游戏限制（根据业务需求实现）
             // 示例：检查玩家的单次下注限额、日限额等
             // if ($amount > $player->bet_limit) {
             //     $this->error = 'LIMIT_EXCEEDED';
-            //     return ['balance' => number_format($machineWallet->money, 2, '.', '')];
+            //     return ['balance' => round((float)$machineWallet->money, 2)];
             // }
 
             // 创建游戏记录
@@ -1143,7 +1143,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             ]);
 
             return [
-                'balance' => number_format($machineWallet->money, 2, '.', ''),
+                'balance' => round((float)$machineWallet->money, 2),
                 'referenceId' => (string)$record->id
             ];
         } catch (Exception $e) {
@@ -1152,7 +1152,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'trace' => $e->getTraceAsString()
             ]);
             $this->error = 'INTERNAL_ERROR';
-            return ['balance' => number_format($this->player->machine_wallet->money ?? 0, 2, '.', '')];
+            return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
         }
     }
 
@@ -1203,7 +1203,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                     ->first();
 
                 return [
-                    'balance' => number_format($machineWallet->money, 2, '.', ''),
+                    'balance' => round((float)$machineWallet->money, 2),
                     'referenceId' => $deliveryRecord ? (string)$deliveryRecord->id : (string)$existingCreditRecord->id
                 ];
             }
@@ -1330,7 +1330,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             ]);
 
             return [
-                'balance' => number_format($machineWallet->money, 2, '.', ''),
+                'balance' => round((float)$machineWallet->money, 2),
                 'referenceId' => $referenceId
             ];
         } catch (Exception $e) {
@@ -1339,7 +1339,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'trace' => $e->getTraceAsString()
             ]);
             $this->error = 'INTERNAL_ERROR';
-            return ['balance' => number_format($this->player->machine_wallet->money ?? 0, 2, '.', '')];
+            return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
         }
     }
 
@@ -1388,7 +1388,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                     ->first();
 
                 return [
-                    'balance' => number_format($machineWallet->money, 2, '.', ''),
+                    'balance' => round((float)$machineWallet->money, 2),
                     'referenceId' => $deliveryRecord ? (string)$deliveryRecord->id : null
                 ];
             }
@@ -1406,7 +1406,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 ]);
 
                 return [
-                    'balance' => number_format($machineWallet->money, 2, '.', '')
+                    'balance' => round((float)$machineWallet->money, 2)
                     // 不返回referenceId
                 ];
             }
@@ -1418,7 +1418,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                     'settlement_status' => $betRecord->settlement_status
                 ]);
                 $this->error = 'TRANSACTION_ALREADY_SETTLED';
-                return ['balance' => number_format($machineWallet->money, 2, '.', '')];
+                return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
             // 执行回滚 - 退还下注金额
@@ -1461,7 +1461,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             ]);
 
             return [
-                'balance' => number_format($machineWallet->money, 2, '.', ''),
+                'balance' => round((float)$machineWallet->money, 2),
                 'referenceId' => (string)$playerDeliveryRecord->id
             ];
         } catch (Exception $e) {
@@ -1470,7 +1470,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'trace' => $e->getTraceAsString()
             ]);
             $this->error = 'INTERNAL_ERROR';
-            return ['balance' => number_format($this->player->machine_wallet->money ?? 0, 2, '.', '')];
+            return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
         }
     }
 }

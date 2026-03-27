@@ -135,7 +135,7 @@ class QTGameController
             $balance = $this->service->balance();
 
             $response = [
-                'balance' => number_format($balance, 2, '.', ''),
+                'balance' => round((float)$balance, 2),
                 'currency' => 'TWD', // QT平台使用台币
             ];
 
@@ -214,7 +214,7 @@ class QTGameController
             }
 
             $response = [
-                'balance' => number_format($balance, 2, '.', ''),
+                'balance' => round((float)$balance, 2),
                 'currency' => 'TWD', // QT平台使用台币
             ];
 
@@ -534,7 +534,7 @@ class QTGameController
                 // 返回当前余额
                 $machineWallet = $player->machine_wallet;
                 return new Response(200, ['Content-Type' => 'application/json'], json_encode([
-                    'balance' => number_format($machineWallet->money ?? 0, 2, '.', ''),
+                    'balance' => round((float)($machineWallet->money ?? 0), 2),
                     'referenceId' => (string)$existingReward->id
                 ]));
             }
@@ -575,7 +575,7 @@ class QTGameController
             ]);
 
             return new Response(200, ['Content-Type' => 'application/json'], json_encode([
-                'balance' => number_format($machineWallet->money, 2, '.', ''),
+                'balance' => round((float)$machineWallet->money, 2),
                 'referenceId' => (string)$playerDeliveryRecord->id
             ]));
         } catch (Exception $e) {
