@@ -3,6 +3,7 @@
 namespace app\wallet\controller\game;
 
 use app\model\Player;
+use app\model\PlayerDeliveryRecord;
 use app\service\game\QTServiceInterface;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
@@ -54,8 +55,8 @@ class QTGameController
         $walletSession = $request->header('Wallet-Session');
 
         $this->logger->info('QT验证请求头', [
-            'pass_key' => $passKey ? substr($passKey, 0, 10) . '...' : 'missing',
-            'wallet_session' => $walletSession ? substr($walletSession, 0, 10) . '...' : 'missing'
+            'pass_key' => $passKey ?? 'missing',
+            'wallet_session' => $walletSession ?? 'missing'
         ]);
 
         // 验证Pass-Key
@@ -86,8 +87,8 @@ class QTGameController
             return $this->errorResponse(self::ERROR_ACCOUNT_BLOCKED, 'The player account is blocked.', 403);
         }
 
-        // 检查玩家状态（假设有status字段，0=正常，1=锁定）
-        if (isset($player->status) && $player->status != 0) {
+        // 检查玩家状态（1=正常，0=锁定）
+        if (isset($player->status) && $player->status != 1) {
             $this->logger->error('QT玩家账户被锁定', ['player_id' => $player->id, 'status' => $player->status]);
             return $this->errorResponse(self::ERROR_ACCOUNT_BLOCKED, 'The player account is blocked.', 403);
         }
@@ -135,7 +136,7 @@ class QTGameController
 
             $response = [
                 'balance' => number_format($balance, 2, '.', ''),
-                'currency' => 'CNY', // 根据实际情况调整
+                'currency' => 'TWD', // QT平台使用台币
             ];
 
             $this->logger->info('QT验证会话成功', $response);
@@ -196,7 +197,8 @@ class QTGameController
                 return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player account is deleted', 400);
             }
 
-            if (isset($player->status) && $player->status != 0) {
+            // 检查玩家状态（1=正常，0=锁定）
+            if (isset($player->status) && $player->status != 1) {
                 $this->logger->error('QT查询余额失败：玩家账户被锁定', ['player_id' => $player->id, 'status' => $player->status]);
                 return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player account is blocked', 400);
             }
@@ -213,7 +215,7 @@ class QTGameController
 
             $response = [
                 'balance' => number_format($balance, 2, '.', ''),
-                'currency' => 'CNY', // 根据实际情况调整
+                'currency' => 'TWD', // QT平台使用台币
             ];
 
             $this->logger->info('QT查询余额成功', $response);
@@ -305,7 +307,8 @@ class QTGameController
                 }
             }
 
-            if (isset($player->status) && $player->status != 0) {
+            // 检查玩家状态（1=正常，0=锁定）
+            if (isset($player->status) && $player->status != 1) {
                 $this->logger->error('QT交易失败：玩家账户被锁定', ['player_id' => $player->id, 'status' => $player->status]);
                 // DEBIT使用ACCOUNT_BLOCKED，CREDIT使用REQUEST_DECLINED
                 if ($txnType === 'DEBIT') {
@@ -369,7 +372,225 @@ class QTGameController
 
     #[RateLimiter(limit: 10)]
     /**
-     * 4. 回滚交易 - Rollback
+     * 4. 活动状态 - Promotion Status
+     * POST /bonus/status
+     *
+     * 这是一个信息型回调，应该静默处理，除非Pass-Key验证失败
+     *
+     * 可能的错误:
+     * - LOGIN_FAILED (401) - Pass-Key不正确
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function promotionStatus(Request $request): Response
+    {
+        try {
+            $params = json_decode($request->rawBody(), true);
+            $this->logger->info('QT活动状态通知', ['params' => $params]);
+
+            // 验证Pass-Key（这是唯一应该返回错误的情况）
+            $passKey = $request->header('Pass-Key');
+            if (!$this->service->verifyPassKey($passKey)) {
+                $this->logger->error('QT活动状态失败：Pass-Key验证失败');
+                return $this->errorResponse(self::ERROR_LOGIN_FAILED, 'The given pass-key is incorrect.', 401);
+            }
+
+            // 注意：此接口不包含Wallet-Session，不需要验证
+
+            // 查询玩家（静默处理，即使玩家不存在也返回成功）
+            $player = Player::query()->where('uuid', $params['playerId'] ?? '')->first();
+
+            if ($player) {
+                // 记录活动状态到数据库（根据业务需求实现）
+                // 这里可以创建一个表来记录免费游戏局活动状态
+                $this->logger->info('QT活动状态记录', [
+                    'player_id' => $player->id,
+                    'bonus_id' => $params['bonusId'] ?? '',
+                    'status' => $params['status'] ?? '',
+                    'total_bet_value' => $params['totalBetValue'] ?? 0,
+                    'total_payout' => $params['totalPayout'] ?? 0,
+                    'game_ids' => $params['gameIds'] ?? [],
+                    'round_options' => $params['roundOptions'] ?? [],
+                    'claimed_round_option' => $params['claimedRoundOption'] ?? null,
+                    'claimed_game_id' => $params['claimedGameId'] ?? null,
+                    'promo_code' => $params['promoCode'] ?? null,
+                    'validity_days' => $params['validityDays'] ?? null,
+                ]);
+
+                // TODO: 根据业务需求，将活动状态保存到数据库
+                // 例如：创建或更新 player_bonus_promotions 表
+                // 状态变化：PROMOTED -> CLAIMED -> IN_PROGRESS -> COMPLETED
+                //          PROMOTED -> CLAIMED -> EXPIRED
+                //          PROMOTED -> DELETED
+                //          PROMOTED -> CANCELLED
+                //          PROMOTED -> CLAIMED -> FAILED
+            } else {
+                $this->logger->warning('QT活动状态通知：玩家不存在（静默处理）', [
+                    'playerId' => $params['playerId'] ?? ''
+                ]);
+            }
+
+            // 静默处理，始终返回成功（除非Pass-Key验证失败）
+            $this->logger->info('QT活动状态处理成功', [
+                'bonusId' => $params['bonusId'] ?? '',
+                'status' => $params['status'] ?? ''
+            ]);
+
+            // 返回空的成功响应
+            return new Response(200, ['Content-Type' => 'application/json'], json_encode(new \stdClass()));
+        } catch (Exception $e) {
+            // 即使发生异常，也应该静默处理，返回成功
+            $this->logger->error('QT活动状态异常（静默处理）', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            // 静默处理异常，返回成功
+            return new Response(200, ['Content-Type' => 'application/json'], json_encode(new \stdClass()));
+        }
+    }
+
+    #[RateLimiter(limit: 10)]
+    /**
+     * 5. 奖金发放 - Rewards
+     * POST /bonus/rewards
+     *
+     * 用于接收QT平台推送的竞赛、锦标赛等活动的奖励
+     *
+     * 可能的错误:
+     * - REQUEST_DECLINED (400) - 通用错误，请求无法处理
+     * - LOGIN_FAILED (401) - Pass-Key不正确
+     * - UNKNOWN_ERROR (500) - 意外错误
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function rewards(Request $request): Response
+    {
+        try {
+            $params = json_decode($request->rawBody(), true);
+            $this->logger->info('QT奖金发放请求', ['params' => $params]);
+
+            // 验证Pass-Key
+            $passKey = $request->header('Pass-Key');
+            if (!$this->service->verifyPassKey($passKey)) {
+                $this->logger->error('QT奖金发放失败：Pass-Key验证失败');
+                return $this->errorResponse(self::ERROR_LOGIN_FAILED, 'The given pass-key is incorrect.', 401);
+            }
+
+            // 验证必要参数
+            $requiredFields = ['rewardType', 'rewardTitle', 'txnId', 'playerId', 'amount', 'currency', 'created'];
+            foreach ($requiredFields as $field) {
+                if (!isset($params[$field])) {
+                    $this->logger->error('QT奖金发放失败：缺少必要参数', ['field' => $field]);
+                    return $this->errorResponse(self::ERROR_REQUEST_DECLINED, "Missing required field: {$field}", 400);
+                }
+            }
+
+            // 查询玩家
+            $player = Player::query()->where('uuid', $params['playerId'])->first();
+            if (!$player) {
+                $this->logger->error('QT奖金发放失败：玩家不存在', ['playerId' => $params['playerId']]);
+                return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player not found', 400);
+            }
+
+            // 检查玩家状态（软删除或锁定）
+            if ($player->trashed()) {
+                $this->logger->error('QT奖金发放失败：玩家账户已删除', ['player_id' => $player->id]);
+                return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player account is deleted', 400);
+            }
+
+            // 检查玩家状态（1=正常，0=锁定）
+            if (isset($player->status) && $player->status != 1) {
+                $this->logger->error('QT奖金发放失败：玩家账户被锁定', ['player_id' => $player->id, 'status' => $player->status]);
+                return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player account is blocked', 400);
+            }
+
+            $this->service->player = $player;
+
+            $txnId = $params['txnId'];
+            $amount = (float)$params['amount'];
+            $rewardType = $params['rewardType'];
+            $rewardTitle = $params['rewardTitle'];
+
+            if ($amount <= 0) {
+                $this->logger->error('QT奖金发放失败：金额无效', ['amount' => $amount]);
+                return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Invalid amount', 400);
+            }
+
+            // 幂等性检查 - 检查是否已发放过该奖金
+            $existingReward = PlayerDeliveryRecord::query()
+                ->where('tradeno', $txnId)
+                ->where('source', 'qt_reward')
+                ->first();
+
+            if ($existingReward) {
+                $this->logger->info('QT奖金已发放（幂等）', [
+                    'txnId' => $txnId,
+                    'record_id' => $existingReward->id
+                ]);
+
+                // 返回当前余额
+                $machineWallet = $player->machine_wallet;
+                return new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                    'balance' => number_format($machineWallet->money ?? 0, 2, '.', ''),
+                    'referenceId' => (string)$existingReward->id
+                ]));
+            }
+
+            // 锁定玩家钱包
+            $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+
+            // 发放奖金 - 加款
+            $beforeBalance = $machineWallet->money;
+            $machineWallet->money = bcadd($machineWallet->money, $amount, 2);
+            $machineWallet->save();
+
+            // 创建奖金交易记录
+            $playerDeliveryRecord = new PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = $player->id;
+            $playerDeliveryRecord->department_id = $player->department_id;
+            $playerDeliveryRecord->target = 'qt_rewards';
+            $playerDeliveryRecord->target_id = 0;
+            $playerDeliveryRecord->platform_id = $this->service->platform->id;
+            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
+            $playerDeliveryRecord->source = 'qt_reward';
+            $playerDeliveryRecord->amount = $amount;
+            $playerDeliveryRecord->amount_before = $beforeBalance;
+            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->tradeno = $txnId;
+            $playerDeliveryRecord->remark = "QT奖金: {$rewardTitle} ({$rewardType})";
+            $playerDeliveryRecord->user_id = 0;
+            $playerDeliveryRecord->user_name = 'QT系统';
+            $playerDeliveryRecord->save();
+
+            $this->logger->info('QT奖金发放成功', [
+                'txnId' => $txnId,
+                'player_id' => $player->id,
+                'amount' => $amount,
+                'reward_type' => $rewardType,
+                'reward_title' => $rewardTitle,
+                'balance' => $machineWallet->money
+            ]);
+
+            return new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'balance' => number_format($machineWallet->money, 2, '.', ''),
+                'referenceId' => (string)$playerDeliveryRecord->id
+            ]));
+        } catch (Exception $e) {
+            $this->logger->error('QT奖金发放异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            $this->sendTelegramAlert('QT', '奖金发放异常', $e, ['params' => $request->rawBody()]);
+            return $this->errorResponse(self::ERROR_UNKNOWN_ERROR, 'Unexpected error', 500);
+        }
+    }
+
+    #[RateLimiter(limit: 10)]
+    /**
+     * 6. 回滚交易 - Rollback
      * POST /transactions/rollback
      *
      * 可能的错误:
@@ -417,7 +638,8 @@ class QTGameController
                 return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player account is deleted', 400);
             }
 
-            if (isset($player->status) && $player->status != 0) {
+            // 检查玩家状态（1=正常，0=锁定）
+            if (isset($player->status) && $player->status != 1) {
                 $this->logger->error('QT回滚失败：玩家账户被锁定', ['player_id' => $player->id, 'status' => $player->status]);
                 return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Player account is blocked', 400);
             }

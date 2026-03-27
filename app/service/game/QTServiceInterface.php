@@ -190,7 +190,12 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'mode' => 'real', // real | fun
                 'device' => 'mobile', // 默认手机端
                 'walletSessionId' => $accessToken,
+                'config' => [
+                    'singleUseUrl' => false
+                ]
             ];
+
+
 
             // 可选参数（从player获取）
             if (!empty($this->player->nickname)) {
