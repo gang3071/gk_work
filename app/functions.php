@@ -24,6 +24,7 @@ use app\model\PlayerWithdrawRecord;
 use app\model\PlayGameRecord;
 use app\model\PromoterProfitRecord;
 use app\model\PromoterProfitSettlementRecord;
+use app\model\StoreSetting;
 use app\model\SystemSetting;
 use app\service\ActivityServices;
 use app\service\LotteryServices;
@@ -1630,4 +1631,255 @@ function nationalPromoterRebate(): void
         }
     }
     $log->info('全民代理统计结束: NationalPromoterRebate' . date('Y-m-d H:i:s'));
+}
+
+/**
+ * 检查设备是否爆机
+ * @param Player $player 玩家对象
+ * @return array 返回爆机状态信息 ['crashed' => bool, 'crash_amount' => float|null, 'current_amount' => float]
+ */
+function checkMachineCrash(Player $player): array
+{
+    $currentAmount = $player->machine_wallet->money ?? 0;
+
+    // 优先检查 is_crashed 字段（高效）
+    if (isset($player->machine_wallet->is_crashed)) {
+        $isCrashed = (bool)$player->machine_wallet->is_crashed;
+
+        // 如果已标记为爆机，获取爆机金额配置
+        if ($isCrashed) {
+            $adminUserId = $player->store_admin_id ?? null;
+            if ($adminUserId) {
+                $crashSetting = StoreSetting::getSetting(
+                    'machine_crash_amount',
+                    $player->department_id,
+                    null,
+                    $adminUserId
+                );
+                $crashAmount = ($crashSetting && $crashSetting->status == 1) ? ($crashSetting->num ?? 0) : null;
+            } else {
+                $crashAmount = null;
+            }
+
+            return [
+                'crashed' => true,
+                'crash_amount' => $crashAmount,
+                'current_amount' => $currentAmount,
+            ];
+        }
+    }
+
+    // 获取玩家绑定的店家ID
+    $adminUserId = $player->store_admin_id ?? null;
+
+    if (!$adminUserId) {
+        // 如果玩家没有绑定店家，不限制爆机
+        return [
+            'crashed' => false,
+            'crash_amount' => null,
+            'current_amount' => $currentAmount,
+        ];
+    }
+
+    // 获取店家的爆机金额配置
+    $crashSetting = StoreSetting::getSetting(
+        'machine_crash_amount',
+        $player->department_id,
+        null,
+        $adminUserId
+    );
+
+    // 如果没有配置或配置被禁用，不限制爆机
+    if (!$crashSetting || $crashSetting->status != 1) {
+        return [
+            'crashed' => false,
+            'crash_amount' => null,
+            'current_amount' => $currentAmount,
+        ];
+    }
+
+    $crashAmount = $crashSetting->num ?? 0;
+
+    // 判断是否爆机（余额超过爆机金额）
+    $isCrashed = $crashAmount > 0 && $currentAmount >= $crashAmount;
+
+    return [
+        'crashed' => $isCrashed,
+        'crash_amount' => $crashAmount,
+        'current_amount' => $currentAmount,
+    ];
+}
+
+/**
+ * 通知设备爆机
+ * @param Player $player 玩家对象
+ * @param array $crashInfo 爆机信息
+ * @return void
+ */
+function notifyMachineCrash(Player $player, array $crashInfo): void
+{
+    try {
+        // 玩家端消息
+        $playerMessage = [
+            'type' => 'machine_crash',
+            'player_id' => $player->id,
+            'crash_amount' => $crashInfo['crash_amount'],
+            'current_amount' => $crashInfo['current_amount'],
+            'message' => trans('machine_crashed_contact_admin', [], 'message'),
+            'timestamp' => time(),
+        ];
+
+        // 后台消息（包含更多信息）
+        $adminMessage = [
+            'type' => 'machine_crash',
+            'event' => 'player_crashed',
+            'player_id' => $player->id,
+            'player_name' => $player->name ?? '',
+            'player_uuid' => $player->uuid ?? '',
+            'store_admin_id' => $player->store_admin_id ?? null,
+            'department_id' => $player->department_id,
+            'crash_amount' => $crashInfo['crash_amount'],
+            'current_amount' => $crashInfo['current_amount'],
+            'message' => "设备已爆机：{$player->name} (ID:{$player->id}) 余额达到 {$crashInfo['current_amount']}，超过爆机金额 {$crashInfo['crash_amount']}",
+            'timestamp' => time(),
+        ];
+
+        // 1. 发送给玩家
+        $playerChannel = 'player_' . $player->id;
+        sendSocketMessage([$playerChannel], $playerMessage, 'system');
+
+        // 2. 发送给渠道后台
+        $channelAdminChannel = 'private-admin_group-channel-' . $player->department_id;
+        sendSocketMessage($channelAdminChannel, $adminMessage, 'system');
+
+        // 3. 发送给总后台
+        sendSocketMessage('private-admin_group-admin-1', $adminMessage, 'system');
+
+        Log::info('Machine crash notification sent', [
+            'player_id' => $player->id,
+            'player_name' => $player->name,
+            'store_admin_id' => $player->store_admin_id,
+            'department_id' => $player->department_id,
+            'crash_amount' => $crashInfo['crash_amount'],
+            'current_amount' => $crashInfo['current_amount'],
+        ]);
+    } catch (Exception $e) {
+        Log::error('Failed to send machine crash notification', [
+            'player_id' => $player->id,
+            'error' => $e->getMessage(),
+        ]);
+    }
+}
+
+/**
+ * 计算爆机状态下允许的最大洗分金额
+ * 用于渠道后台洗分：如果余额超过爆机金额，只能洗到爆机金额
+ * @param Player $player 玩家对象
+ * @param float $requestedAmount 请求洗分的金额
+ * @return array 返回 ['allowed_amount' => float, 'is_limited' => bool, 'crash_info' => array]
+ */
+function calculateAllowedWithdrawAmount(Player $player, float $requestedAmount): array
+{
+    $crashCheck = checkMachineCrash($player);
+    $currentAmount = $player->machine_wallet->money ?? 0;
+    $allowedAmount = $requestedAmount;
+    $isLimited = false;
+
+    // 如果当前爆机，并且有爆机金额设置
+    if ($crashCheck['crashed'] && $crashCheck['crash_amount'] > 0) {
+        // 最多只能洗到刚好等于爆机金额
+        // 即：当前余额 - 爆机金额 = 最大可洗金额
+        $maxAllowedAmount = $currentAmount - $crashCheck['crash_amount'];
+
+        if ($maxAllowedAmount < 0) {
+            $maxAllowedAmount = 0;
+        }
+
+        if ($requestedAmount > $maxAllowedAmount) {
+            $allowedAmount = $maxAllowedAmount;
+            $isLimited = true;
+        }
+    }
+
+    return [
+        'allowed_amount' => $allowedAmount,
+        'is_limited' => $isLimited,
+        'crash_info' => $crashCheck,
+        'original_amount' => $requestedAmount,
+    ];
+}
+
+/**
+ * 检查并通知爆机解锁
+ * 用于洗分后检查是否已解锁爆机状态
+ * @param Player $player 玩家对象
+ * @param float $previousAmount 洗分前的余额
+ * @return void
+ */
+function checkAndNotifyCrashUnlock(Player $player, float $previousAmount): void
+{
+    try {
+        $crashCheckBefore = checkMachineCrash($player);
+
+        // 如果当前没有爆机，检查之前是否爆机
+        if (!$crashCheckBefore['crashed'] && $crashCheckBefore['crash_amount'] > 0) {
+            // 检查之前的余额是否达到爆机金额
+            $wasCrashed = $previousAmount >= $crashCheckBefore['crash_amount'];
+
+            // 如果之前爆机，现在已解锁，发送通知
+            if ($wasCrashed) {
+                // 玩家端消息
+                $playerMessage = [
+                    'type' => 'machine_crash_unlock',
+                    'player_id' => $player->id,
+                    'crash_amount' => $crashCheckBefore['crash_amount'],
+                    'current_amount' => $crashCheckBefore['current_amount'],
+                    'message' => trans('machine_crash_unlocked', [], 'message'),
+                    'timestamp' => time(),
+                ];
+
+                // 后台消息
+                $adminMessage = [
+                    'type' => 'machine_crash_unlock',
+                    'event' => 'player_crash_unlocked',
+                    'player_id' => $player->id,
+                    'player_name' => $player->name ?? '',
+                    'player_uuid' => $player->uuid ?? '',
+                    'store_admin_id' => $player->store_admin_id ?? null,
+                    'department_id' => $player->department_id,
+                    'crash_amount' => $crashCheckBefore['crash_amount'],
+                    'previous_amount' => $previousAmount,
+                    'current_amount' => $crashCheckBefore['current_amount'],
+                    'message' => "设备爆机已解锁：{$player->name} (ID:{$player->id}) 余额从 {$previousAmount} 降至 {$crashCheckBefore['current_amount']}",
+                    'timestamp' => time(),
+                ];
+
+                // 1. 发送给玩家
+                $playerChannel = 'player_' . $player->id;
+                sendSocketMessage([$playerChannel], $playerMessage, 'system');
+
+                // 2. 发送给渠道后台
+                $channelAdminChannel = 'private-admin_group-channel-' . $player->department_id;
+                sendSocketMessage($channelAdminChannel, $adminMessage, 'system');
+
+                // 3. 发送给总后台
+                sendSocketMessage('private-admin_group-admin-1', $adminMessage, 'system');
+
+                Log::info('Machine crash unlock notification sent', [
+                    'player_id' => $player->id,
+                    'player_name' => $player->name,
+                    'store_admin_id' => $player->store_admin_id,
+                    'department_id' => $player->department_id,
+                    'previous_amount' => $previousAmount,
+                    'current_amount' => $crashCheckBefore['current_amount'],
+                    'crash_amount' => $crashCheckBefore['crash_amount'],
+                ]);
+            }
+        }
+    } catch (Exception $e) {
+        Log::error('Failed to check and notify crash unlock', [
+            'player_id' => $player->id,
+            'error' => $e->getMessage(),
+        ]);
+    }
 }
