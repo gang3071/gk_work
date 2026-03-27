@@ -986,6 +986,7 @@ function doSettlement($id, int $userId = 0, string $userName = ''): void
             $playerDeliveryRecord->save();
 
             $playerPromoter->player->machine_wallet->money = $amountAfter;
+            $playerPromoter->player->machine_wallet->save();
         }
         $playerPromoter->push();
         DB::commit();
