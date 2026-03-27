@@ -304,8 +304,24 @@ class GameLotteryServices
         }
 
         $lotteryList = $this->lotteryList;
+
+        // 记录彩金列表总数
+        $this->log->info('开始遍历彩金列表:', [
+            'total_lotteries' => count($lotteryList),
+            'bet' => $bet,
+            'player_id' => $this->player->id,
+        ]);
+
         /** @var GameLottery $lottery */
         foreach ($lotteryList as $lottery) {
+            // 记录每个彩金的检查开始
+            $this->log->debug('检查彩金:', [
+                'lottery_id' => $lottery->id,
+                'lottery_name' => $lottery->name,
+                'base_bet_amount' => $lottery->base_bet_amount,
+                'win_ratio' => $lottery->win_ratio,
+            ]);
+
             // 检查是否应该处理这个彩金
             if (!$this->shouldCheckLottery($lottery, $bet)) {
                 continue;
@@ -315,7 +331,7 @@ class GameLotteryServices
             $participateTimes = intval(floor($bet / $lottery->base_bet_amount));
 
             // 记录打码量检查通过
-            $this->log->info('打码量检查通过，开始派彩检查:', [
+            $this->log->info('✅ 打码量检查通过，开始派彩检查:', [
                 'lottery_id' => $lottery->id,
                 'lottery_name' => $lottery->name,
                 'bet' => $bet,
@@ -359,12 +375,13 @@ class GameLotteryServices
 
         // 打码量不足
         if ($participateTimes <= 0) {
-            $this->log->debug('打码量不足，跳过派彩检查:', [
+            $this->log->info('❌ 打码量不足，跳过派彩检查:', [
                 'lottery_id' => $lottery->id,
                 'lottery_name' => $lottery->name,
                 'bet' => $bet,
                 'base_bet_amount' => $lottery->base_bet_amount,
                 'participate_times' => $participateTimes,
+                'reason' => '下注金额未达到该彩金的基础打码量要求',
             ]);
             return false;
         }
