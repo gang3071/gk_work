@@ -496,10 +496,29 @@ class GameLotteryServices
         // 即使中途中奖退出，也应该记录完整的检查机会数，这样统计才能反映真实概率
         $this->incrementLotteryStats($lottery->id, 'total', $participateTimes);
 
+        $this->log->debug('🔍 开始派彩概率检查循环', [
+            'lottery_id' => $lottery->id,
+            'lottery_name' => $lottery->name,
+            'participate_times' => $participateTimes,
+            'adjusted_win_ratio' => $adjustedWinRatio,
+        ]);
+
         // 循环检查多次派彩机会
         for ($i = 1; $i <= $participateTimes; $i++) {
+            $this->log->debug('派彩检查尝试', [
+                'lottery_id' => $lottery->id,
+                'attempt' => $i,
+                'of' => $participateTimes,
+            ]);
+
             $service = new LotteryProbabilityService();
             $result = $service->checkSmart($adjustedWinRatio);
+
+            $this->log->debug('派彩概率检查结果', [
+                'lottery_id' => $lottery->id,
+                'attempt' => $i,
+                'result' => $result ? '命中' : '未命中',
+            ]);
 
             // 计算彩金金额（包含rate、double、max逻辑）
             $isDoubled = false;
@@ -562,6 +581,13 @@ class GameLotteryServices
                 break;
             }
         }
+
+        $this->log->debug('✓ 派彩检查循环结束', [
+            'lottery_id' => $lottery->id,
+            'lottery_name' => $lottery->name,
+            'total_attempts' => $participateTimes,
+            'result' => '未中奖',
+        ]);
     }
 
     /**
