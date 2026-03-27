@@ -134,6 +134,8 @@ Route::group('/single-wallet', function () {
         Route::get('/accounts/{playerId}/balance', [\app\wallet\controller\game\QTGameController::class, 'getBalance']);
         Route::post('/transactions', [\app\wallet\controller\game\QTGameController::class, 'transaction']);
         Route::post('/transactions/rollback', [\app\wallet\controller\game\QTGameController::class, 'rollback']);
+        Route::post('/bonus/status', [\app\wallet\controller\game\QTGameController::class, 'promotionStatus']);
+        Route::post('/bonus/rewards', [\app\wallet\controller\game\QTGameController::class, 'rewards']);
     });
 });
 Route::disableDefaultRoute();
