@@ -130,8 +130,8 @@ Route::group('/single-wallet', function () {
     });
     Route::group('/qt-channel', function () {
         // 中心钱包接口
-        Route::get('/accounts/{playerId}/session', [\app\wallet\controller\game\QTGameController::class, 'verifySession']);
-        Route::get('/accounts/{playerId}/balance', [\app\wallet\controller\game\QTGameController::class, 'getBalance']);
+        Route::any('/accounts/{playerId}/session', [\app\wallet\controller\game\QTGameController::class, 'verifySession']);
+        Route::any('/accounts/{playerId}/balance', [\app\wallet\controller\game\QTGameController::class, 'getBalance']);
         Route::post('/transactions', [\app\wallet\controller\game\QTGameController::class, 'transaction']);
         Route::post('/transactions/rollback', [\app\wallet\controller\game\QTGameController::class, 'rollback']);
         Route::post('/bonus/status', [\app\wallet\controller\game\QTGameController::class, 'promotionStatus']);
