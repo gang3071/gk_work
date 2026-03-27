@@ -1038,28 +1038,25 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
-            // 幂等性检查 - 根据txnId查找是否已存在交易
-            $existingRecord = PlayGameRecord::query()
-                ->where('order_no', $txnId)
+            // 幂等性检查 - 根据txnId查找是否已存在下注交易
+            $existingDebitDelivery = PlayerDeliveryRecord::query()
+                ->where('tradeno', $txnId)
+                ->where('player_id', $this->player->id)
                 ->where('platform_id', $this->platform->id)
+                ->whereIn('type', [PlayerDeliveryRecord::TYPE_BET])
+                ->whereIn('source', ['player_bet', 'qt_bonus_bet'])
                 ->first();
 
-            if ($existingRecord) {
+            if ($existingDebitDelivery) {
                 // 已存在，返回原响应（幂等性）
                 Log::channel('qt_server')->info('QT DEBIT交易已存在（幂等）', [
                     'txnId' => $txnId,
-                    'record_id' => $existingRecord->id
+                    'delivery_record_id' => $existingDebitDelivery->id
                 ]);
-
-                // 查找对应的交易记录
-                $deliveryRecord = PlayerDeliveryRecord::query()
-                    ->where('target_id', $existingRecord->id)
-                    ->where('type', PlayerDeliveryRecord::TYPE_BET)
-                    ->first();
 
                 return [
                     'balance' => round((float)$machineWallet->money, 2),
-                    'referenceId' => $deliveryRecord ? (string)$deliveryRecord->id : (string)$existingRecord->id
+                    'referenceId' => (string)$existingDebitDelivery->id
                 ];
             }
 
@@ -1193,28 +1190,23 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
-            // 幂等性检查 - 根据txnId查找是否已存在交易
-            $existingCreditRecord = PlayGameRecord::query()
-                ->where('order_no', $txnId)
-                ->where('platform_id', $this->platform->id)
+            // 幂等性检查 - 根据txnId查找是否已存在派彩交易
+            $existingCreditDelivery = PlayerDeliveryRecord::query()
+                ->where('tradeno', $txnId)
+                ->where('type', PlayerDeliveryRecord::TYPE_SETTLEMENT)
+                ->where('source', 'qt_credit')
                 ->first();
 
-            if ($existingCreditRecord) {
+            if ($existingCreditDelivery) {
                 // 已存在，返回原响应（幂等性）
                 Log::channel('qt_server')->info('QT CREDIT交易已存在（幂等）', [
                     'txnId' => $txnId,
-                    'record_id' => $existingCreditRecord->id
+                    'delivery_record_id' => $existingCreditDelivery->id
                 ]);
-
-                // 查找对应的交易记录
-                $deliveryRecord = PlayerDeliveryRecord::query()
-                    ->where('target_id', $existingCreditRecord->id)
-                    ->where('type', PlayerDeliveryRecord::TYPE_SETTLEMENT)
-                    ->first();
 
                 return [
                     'balance' => round((float)$machineWallet->money, 2),
-                    'referenceId' => $deliveryRecord ? (string)$deliveryRecord->id : (string)$existingCreditRecord->id
+                    'referenceId' => (string)$existingCreditDelivery->id
                 ];
             }
 
