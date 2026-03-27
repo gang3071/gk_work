@@ -480,6 +480,7 @@ class GameLotteryServices
      * @param array $burstInfo
      * @param int $playGameRecordId
      * @return void
+     * @throws Exception
      */
     private function processLotteryCheck(
         GameLottery $lottery,
@@ -512,7 +513,15 @@ class GameLotteryServices
             ]);
 
             $service = new LotteryProbabilityService();
-            $result = $service->checkSmart($adjustedWinRatio);
+            try {
+                $result = $service->checkSmart($adjustedWinRatio);
+            } catch (Exception $e) {
+                $this->log->debug('派彩概率检查结果checkSmart', [
+                    'lottery_id' => $lottery->id,
+                    'attempt' => $i,
+                ]);
+                continue;
+            }
 
             $this->log->debug('派彩概率检查结果', [
                 'lottery_id' => $lottery->id,
@@ -520,9 +529,21 @@ class GameLotteryServices
                 'result' => $result ? '命中' : '未命中',
             ]);
 
+            $this->log->debug('准备计算彩金金额', [
+                'lottery_id' => $lottery->id,
+                'attempt' => $i,
+            ]);
+
             // 计算彩金金额（包含rate、double、max逻辑）
             $isDoubled = false;
             $amount = $this->calculateBurstAmount($lottery, $isDoubled);
+
+            $this->log->debug('彩金金额计算完成', [
+                'lottery_id' => $lottery->id,
+                'attempt' => $i,
+                'amount' => $amount,
+                'is_doubled' => $isDoubled,
+            ]);
 
             // 彩金倍数标记
             $lotteryMultiple = $burstInfo['is_bursting'] ? intval($burstInfo['multiplier']) : 1;
@@ -559,7 +580,18 @@ class GameLotteryServices
                     'stats_daily_win_rate' => $stats['daily_win_rate'],
                 ]);
 
-                $distributed = $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $i, $participateTimes, $isDoubled);
+                try {
+                    $distributed = $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $i, $participateTimes, $isDoubled);
+                } catch (PushException $e) {
+                    $this->log->info('💰 彩金派发tryDistributeLottery', [
+                        'play_game_record_id' => $playGameRecordId,
+                        'lottery_id' => $lottery->id,
+                        'lottery_name' => $lottery->name,
+                        'amount' => $amount,
+                        'error' => $e->getMessage(),
+                    ]);
+                    continue;
+                }
 
                 if ($distributed) {
                     $this->log->info('💰 彩金派发成功', [
@@ -1407,9 +1439,21 @@ class GameLotteryServices
      */
     private function calculateBurstAmount(GameLottery $lottery, &$isDoubled = false): int
     {
+        $this->log->debug('calculateBurstAmount 开始', [
+            'lottery_id' => $lottery->id,
+            'lottery_amount' => $lottery->amount,
+            'rate' => $lottery->rate,
+        ]);
+
         // 1. 根据rate计算派彩金额（默认100%全派）
         $rate = $lottery->rate > 0 ? $lottery->rate : 100;
         $amount = bcmul($lottery->amount, bcdiv($rate, 100, 4), 2);
+
+        $this->log->debug('基础金额计算完成', [
+            'lottery_id' => $lottery->id,
+            'rate' => $rate,
+            'amount' => $amount,
+        ]);
 
         // 2. 检查是否应用双倍逻辑
         $isDoubled = false;
@@ -1418,12 +1462,24 @@ class GameLotteryServices
             $isDoubled = true;
         }
 
+        $this->log->debug('双倍检查完成', [
+            'lottery_id' => $lottery->id,
+            'is_doubled' => $isDoubled,
+            'amount' => $amount,
+        ]);
+
         // 3. 应用最大金额限制（双倍后也不能超过）
         if ($lottery->max_status == 1) {
             if ($lottery->max_amount > 0 && $amount > $lottery->max_amount) {
                 $amount = floatval($lottery->max_amount);
             }
         }
+
+        $this->log->debug('calculateBurstAmount 完成', [
+            'lottery_id' => $lottery->id,
+            'final_amount' => $amount,
+            'is_doubled' => $isDoubled,
+        ]);
 
         return floatval($amount);
     }
