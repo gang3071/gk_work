@@ -506,18 +506,52 @@ class GameLotteryServices
 
             if ($type === 'total') {
                 // 总开奖次数
-                $redis->incrBy(self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId, $count);
+                $newTotal = $redis->incrBy(self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId, $count);
                 // 每日开奖次数（24小时过期）
                 $dailyKey = self::REDIS_KEY_LOTTERY_STATS_DAILY_TOTAL . $lotteryId . ':' . $today;
-                $redis->incrBy($dailyKey, $count);
+                $newDailyTotal = $redis->incrBy($dailyKey, $count);
                 $redis->expire($dailyKey, 86400 * 2); // 保留2天
+
+                // 获取彩金名称
+                $lotteryName = $this->getLotteryName($lotteryId);
+
+                // 记录日志
+                $this->log->info('【彩金统计】开奖次数增加', [
+                    'lottery_id' => $lotteryId,
+                    'lottery_name' => $lotteryName,
+                    'type' => '开奖检查',
+                    'increment' => $count,
+                    'total_checks' => $newTotal,
+                    'daily_checks' => $newDailyTotal,
+                    'date' => $today,
+                ]);
             } elseif ($type === 'win') {
                 // 总中奖次数
-                $redis->incrBy(self::REDIS_KEY_LOTTERY_STATS_WIN . $lotteryId, $count);
+                $newWin = $redis->incrBy(self::REDIS_KEY_LOTTERY_STATS_WIN . $lotteryId, $count);
                 // 每日中奖次数（24小时过期）
                 $dailyKey = self::REDIS_KEY_LOTTERY_STATS_DAILY_WIN . $lotteryId . ':' . $today;
-                $redis->incrBy($dailyKey, $count);
+                $newDailyWin = $redis->incrBy($dailyKey, $count);
                 $redis->expire($dailyKey, 86400 * 2); // 保留2天
+
+                // 获取累计开奖次数用于计算中奖率
+                $totalChecks = (int)$redis->get(self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId) ?: 0;
+                $winRate = $totalChecks > 0 ? round(($newWin / $totalChecks) * 100, 4) : 0;
+
+                // 获取彩金名称
+                $lotteryName = $this->getLotteryName($lotteryId);
+
+                // 记录日志
+                $this->log->info('【彩金统计】中奖次数增加', [
+                    'lottery_id' => $lotteryId,
+                    'lottery_name' => $lotteryName,
+                    'type' => '中奖',
+                    'increment' => $count,
+                    'total_wins' => $newWin,
+                    'total_checks' => $totalChecks,
+                    'win_rate' => $winRate . '%',
+                    'daily_wins' => $newDailyWin,
+                    'date' => $today,
+                ]);
             }
         } catch (\Exception $e) {
             $this->log->error('记录彩金统计失败', [
@@ -525,6 +559,30 @@ class GameLotteryServices
                 'type' => $type,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * 获取彩金名称
+     * @param int $lotteryId
+     * @return string
+     */
+    private function getLotteryName(int $lotteryId): string
+    {
+        try {
+            if (empty($this->lotteryList)) {
+                $this->setLotteryList();
+            }
+
+            foreach ($this->lotteryList as $lottery) {
+                if ($lottery->id === $lotteryId) {
+                    return $lottery->name;
+                }
+            }
+
+            return '未知彩金';
+        } catch (\Exception) {
+            return '彩金ID:' . $lotteryId;
         }
     }
 
