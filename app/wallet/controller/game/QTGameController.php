@@ -54,8 +54,8 @@ class QTGameController
         $walletSession = $request->header('Wallet-Session');
 
         $this->logger->info('QT验证请求头', [
-            'pass_key' => $passKey ? substr($passKey, 0, 10) . '...' : 'missing',
-            'wallet_session' => $walletSession ? substr($walletSession, 0, 10) . '...' : 'missing'
+            'pass_key' => $passKey ?? 'missing',
+            'wallet_session' => $walletSession ?? 'missing'
         ]);
 
         // 验证Pass-Key
