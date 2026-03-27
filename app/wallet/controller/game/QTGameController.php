@@ -383,6 +383,21 @@ class QTGameController
                 }
             }
 
+            // 验证Wallet-Session是否属于该玩家
+            if ($player->access_token !== $walletSession) {
+                $this->logger->warning('QT交易失败：Wallet-Session不匹配', [
+                    'playerId' => $params['playerId'],
+                    'expected' => substr($player->access_token, 0, 20) . '...',
+                    'actual' => substr($walletSession, 0, 20) . '...'
+                ]);
+                // DEBIT使用INVALID_TOKEN，CREDIT使用REQUEST_DECLINED
+                if ($txnType === 'DEBIT') {
+                    return $this->errorResponse(self::ERROR_INVALID_TOKEN, 'Invalid or expired player session token.', 400);
+                } else {
+                    return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Invalid or expired player session token.', 400);
+                }
+            }
+
             $this->service->player = $player;
 
             // 根据交易类型处理
