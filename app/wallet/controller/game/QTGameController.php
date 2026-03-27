@@ -383,19 +383,15 @@ class QTGameController
                 }
             }
 
-            // 验证Wallet-Session是否属于该玩家（walletSessionId应该等于玩家的UUID）
-            if ($player->uuid !== $walletSession) {
+            // 验证Wallet-Session是否属于该玩家（仅DEBIT需要验证）
+            // CREDIT（派彩）即使session过期也要成功，因为这是玩家赢得的钱
+            if ($txnType === 'DEBIT' && $player->uuid !== $walletSession) {
                 $this->logger->warning('QT交易失败：Wallet-Session不匹配', [
                     'playerId' => $params['playerId'],
                     'expected_uuid' => $player->uuid,
                     'actual_session' => substr($walletSession, 0, 36)
                 ]);
-                // DEBIT使用INVALID_TOKEN，CREDIT使用REQUEST_DECLINED
-                if ($txnType === 'DEBIT') {
-                    return $this->errorResponse(self::ERROR_INVALID_TOKEN, 'Invalid or expired player session token.', 400);
-                } else {
-                    return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Invalid or expired player session token.', 400);
-                }
+                return $this->errorResponse(self::ERROR_INVALID_TOKEN, 'Invalid or expired player session token.', 400);
             }
 
             $this->service->player = $player;
