@@ -248,11 +248,21 @@ class GameLotteryServices
                 ->orderBy('sort', 'desc')
                 ->get();
 
+            $this->log->info('从数据库加载彩金列表（无缓存）:', [
+                'count' => count($this->lotteryList),
+                'ids' => $this->lotteryList->pluck('id')->toArray(),
+            ]);
+
             // 缓存为数组以减少序列化开销
             Cache::set(self::CACHE_KEY_LOTTERY_LIST, $this->lotteryList->toArray(), self::CACHE_TTL_LOTTERY);
         } else {
             // 从缓存的数组重建模型集合
             $this->lotteryList = GameLottery::query()->hydrate($cachedList);
+
+            $this->log->info('从缓存加载彩金列表:', [
+                'count' => count($this->lotteryList),
+                'ids' => $this->lotteryList->pluck('id')->toArray(),
+            ]);
         }
 
         return $this;
@@ -348,6 +358,12 @@ class GameLotteryServices
             // 处理派彩检查
             $this->processLotteryCheck($lottery, $bet, $participateTimes, $burstInfo, $playGameRecordId);
         }
+
+        // 循环结束后记录
+        $this->log->info('彩金遍历完成:', [
+            'checked_count' => count($lotteryList),
+            'total_expected' => count($this->lotteryList),
+        ]);
 
         return true;
     }
