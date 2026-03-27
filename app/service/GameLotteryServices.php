@@ -324,39 +324,50 @@ class GameLotteryServices
 
         /** @var GameLottery $lottery */
         foreach ($lotteryList as $lottery) {
-            // 记录每个彩金的检查开始
-            $this->log->debug('检查彩金:', [
-                'lottery_id' => $lottery->id,
-                'lottery_name' => $lottery->name,
-                'base_bet_amount' => $lottery->base_bet_amount,
-                'win_ratio' => $lottery->win_ratio,
-            ]);
+            try {
+                // 记录每个彩金的检查开始
+                $this->log->debug('检查彩金:', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                    'base_bet_amount' => $lottery->base_bet_amount,
+                    'win_ratio' => $lottery->win_ratio,
+                ]);
 
-            // 检查是否应该处理这个彩金
-            if (!$this->shouldCheckLottery($lottery, $bet)) {
+                // 检查是否应该处理这个彩金
+                if (!$this->shouldCheckLottery($lottery, $bet)) {
+                    continue;
+                }
+
+                // 计算参与派彩次数
+                $participateTimes = intval(floor($bet / $lottery->base_bet_amount));
+
+                // 记录打码量检查通过
+                $this->log->info('✅ 打码量检查通过，开始派彩检查:', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                    'bet' => $bet,
+                    'win_ratio' => $lottery->win_ratio,
+                    'base_bet_amount' => $lottery->base_bet_amount,
+                    'participate_times' => $participateTimes,
+                    'player_id' => $this->player->id,
+                    'uuid' => $this->player->uuid,
+                ]);
+
+                // 获取并处理爆彩状态
+                $burstInfo = $this->getBurstInfo($lottery);
+
+                // 处理派彩检查
+                $this->processLotteryCheck($lottery, $bet, $participateTimes, $burstInfo, $playGameRecordId);
+            } catch (\Exception $e) {
+                // 记录异常但不中断循环，确保其他彩金仍然能被检查
+                $this->log->error('彩金检查异常，跳过该彩金继续检查下一个:', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
                 continue;
             }
-
-            // 计算参与派彩次数
-            $participateTimes = intval(floor($bet / $lottery->base_bet_amount));
-
-            // 记录打码量检查通过
-            $this->log->info('✅ 打码量检查通过，开始派彩检查:', [
-                'lottery_id' => $lottery->id,
-                'lottery_name' => $lottery->name,
-                'bet' => $bet,
-                'win_ratio' => $lottery->win_ratio,
-                'base_bet_amount' => $lottery->base_bet_amount,
-                'participate_times' => $participateTimes,
-                'player_id' => $this->player->id,
-                'uuid' => $this->player->uuid,
-            ]);
-
-            // 获取并处理爆彩状态
-            $burstInfo = $this->getBurstInfo($lottery);
-
-            // 处理派彩检查
-            $this->processLotteryCheck($lottery, $bet, $participateTimes, $burstInfo, $playGameRecordId);
         }
 
         // 循环结束后记录
@@ -455,8 +466,6 @@ class GameLotteryServices
      * @param array $burstInfo
      * @param int $playGameRecordId
      * @return void
-     * @throws Exception
-     * @throws PushException
      */
     private function processLotteryCheck(
         GameLottery $lottery,
@@ -516,7 +525,21 @@ class GameLotteryServices
                     'stats_daily_win_rate' => $stats['daily_win_rate'],
                 ]);
 
-                $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $i, $participateTimes, $isDoubled);
+                $distributed = $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $i, $participateTimes, $isDoubled);
+
+                if ($distributed) {
+                    $this->log->info('彩金派发成功', [
+                        'lottery_id' => $lottery->id,
+                        'lottery_name' => $lottery->name,
+                        'amount' => $amount,
+                    ]);
+                } else {
+                    $this->log->warning('彩金派发失败，但继续检查下一个彩金', [
+                        'lottery_id' => $lottery->id,
+                        'lottery_name' => $lottery->name,
+                        'amount' => $amount,
+                    ]);
+                }
 
                 // 跳出当前彩金的检查循环，继续检查下一个彩金
                 break;
@@ -832,8 +855,10 @@ class GameLotteryServices
             $this->log->error('派发彩金失败', [
                 'error' => $e->getMessage(),
                 'lottery_id' => $lottery->id,
+                'player_id' => $this->player->id,
+                'trace' => $e->getTraceAsString(),
             ]);
-            throw new Exception($e->getMessage());
+            return false;
         }
     }
 
