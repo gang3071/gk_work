@@ -459,7 +459,7 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         }
 
         //返还用户金钱  修改注单状态
-        $bet = $record['BetAmount'];
+        $bet = $data['BetAmount'];
 
         return $this->createCancelBetRecord($record, $data, $bet);
     }
