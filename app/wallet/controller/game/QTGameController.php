@@ -66,12 +66,54 @@ class QTGameController
         }
 
         // 验证Wallet-Session（如果需要）
-        if ($requireWalletSession && !$walletSession) {
-            $this->logger->error('QT Wallet-Session缺失');
-            return $this->errorResponse(self::ERROR_INVALID_TOKEN, 'Missing player session token.', 400);
+        if ($requireWalletSession) {
+            if (!$walletSession) {
+                $this->logger->error('QT Wallet-Session缺失');
+                return $this->errorResponse(self::ERROR_INVALID_TOKEN, 'Missing player session token.', 400);
+            }
+
+            // 验证Wallet-Session格式（应该是UUID格式）
+            if (!$this->isValidWalletSession($walletSession)) {
+                $this->logger->error('QT Wallet-Session格式无效', [
+                    'wallet_session' => substr($walletSession, 0, 20) . '...'
+                ]);
+                return $this->errorResponse(self::ERROR_INVALID_TOKEN, 'Invalid or expired player session token.', 400);
+            }
         }
 
         return null;
+    }
+
+    /**
+     * 验证Wallet-Session格式
+     * @param string $walletSession
+     * @return bool
+     */
+    private function isValidWalletSession(string $walletSession): bool
+    {
+        // Wallet-Session应该是UUID格式或者长Access Token格式
+        // UUID格式: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36字符)
+        // Access Token格式: 长字符串（通常100+字符）
+
+        $length = strlen($walletSession);
+
+        // 太短，无效
+        if ($length < 32) {
+            return false;
+        }
+
+        // 检查是否是UUID格式（标准UUID是36个字符）
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $walletSession)) {
+            return true;
+        }
+
+        // 检查是否是长Access Token（100+字符，不包含特殊字符如[、]、:等）
+        if ($length >= 100 && !preg_match('/[\[\]:\/]/', $walletSession)) {
+            return true;
+        }
+
+        // 其他格式视为无效
+        return false;
     }
 
     /**
