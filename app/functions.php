@@ -1645,10 +1645,13 @@ function nationalPromoterRebate(): void
  */
 function checkMachineCrash(Player $player): array
 {
-    $currentAmount = $player->machine_wallet->money ?? 0;
+    // 直接通过玩家ID查询钱包的爆机状态
+    $wallet = PlayerPlatformCash::where('player_id', $player->id)
+        ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+        ->first();
 
-    // 只检查钱包的 is_crashed 字段
-    $isCrashed = isset($player->machine_wallet->is_crashed) && $player->machine_wallet->is_crashed == 1;
+    $currentAmount = $wallet->money ?? 0;
+    $isCrashed = $wallet && $wallet->is_crashed == 1;
 
     // 获取爆机金额配置（用于返回信息）
     $crashAmount = null;
