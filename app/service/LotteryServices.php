@@ -1105,12 +1105,12 @@ class LotteryServices
             'burst_multiplier' => $burstInfo['multiplier'],
             'is_doubled' => $isDoubled ? 1 : 0,
             'lottery_rate' => $record->lottery_rate,
-            'title' => '🎊 恭喜玩家中奖！',
+            'title' => '🎊 恭喜玩家中獎！',
             'content' => sprintf(
-                '恭喜玩家在%s机台 %s 中赢得 %s%d 彩金！',
+                '恭喜玩家在%s機台 %s 中贏得 %s%d 彩金！',
                 $this->machine->code,
                 $lottery->name,
-                $isDoubled ? '【双倍】' : '',
+                $isDoubled ? '【雙倍】' : '',
                 $record->amount
             ),
         ];

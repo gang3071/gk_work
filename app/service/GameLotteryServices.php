@@ -1144,7 +1144,7 @@ class GameLotteryServices
         $notice->receiver = Notice::RECEIVER_PLAYER;
         $notice->is_private = 1;
         $notice->title = '彩金派彩';
-        $notice->content = '恭喜您在电子游戏中获得' . $lotteryName . '的彩金獎勵彩金金額';
+        $notice->content = '恭喜您在電子遊戲中獲得' . $lotteryName . '的彩金獎勵彩金金額';
         $notice->save();
 
         return $notice;
@@ -1455,9 +1455,9 @@ class GameLotteryServices
 
             if ($type === 'start') {
                 // 爆彩开启通知
-                $message['title'] = '🎉 彩金池爆彩开启！';
+                $message['title'] = '🎉 彩金池爆彩開啟！';
                 $message['content'] = sprintf(
-                    '%s 爆彩活动正式开启！持续时间：%d分钟',
+                    '%s 爆彩活動正式開啟！持續時間：%d分鐘',
                     $lottery->name,
                     $lottery->burst_duration
                 );
@@ -1465,10 +1465,10 @@ class GameLotteryServices
             } elseif ($type === 'win') {
                 // 有玩家中奖通知
                 $isDoubled = $extraData['is_doubled'] ?? false;
-                $doubleText = $isDoubled ? '【双倍】' : '';
-                $message['title'] = '🎊 恭喜玩家中得爆彩大奖！';
+                $doubleText = $isDoubled ? '【雙倍】' : '';
+                $message['title'] = '🎊 恭喜玩家中得爆彩大獎！';
                 $message['content'] = sprintf(
-                    '恭喜玩家在 %s 爆彩活动中赢得 %s%d 彩金！',
+                    '恭喜玩家在 %s 爆彩活動中贏得 %s%d 彩金！',
                     $lottery->name,
                     $doubleText,
                     $extraData['amount'] ?? 0
@@ -1478,9 +1478,9 @@ class GameLotteryServices
                 $message['player_name'] = $extraData['player_name'] ?? '';
             } elseif ($type === 'end') {
                 // 爆彩结束通知
-                $message['title'] = '⏰ 爆彩活动结束';
+                $message['title'] = '⏰ 爆彩活動結束';
                 $message['content'] = sprintf(
-                    '%s 爆彩活动已结束，感谢参与！',
+                    '%s 爆彩活動已結束，感謝參與！',
                     $lottery->name
                 );
             }
