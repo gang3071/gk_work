@@ -259,8 +259,22 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
      * @param $data
      * @return mixed
      */
+    /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return TNineSlotGameController::API_CODE_INSUFFICIENT_BALANCE;
+    }
+
     public function bet($data): mixed
     {
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
+            return $this->player->machine_wallet->money;
+        }
+
         $player = $this->player;
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
@@ -268,7 +282,7 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
         $bet = $data['betAmount'];
 
         if ($machineWallet->money < $bet) {
-            $this->error = TNineSlotGameController::API_CODE_ERROR;
+            $this->error = TNineSlotGameController::API_CODE_INSUFFICIENT_BALANCE;
             return $player->machine_wallet->money;
         }
 

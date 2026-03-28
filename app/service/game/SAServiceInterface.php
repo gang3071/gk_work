@@ -275,6 +275,15 @@ class SAServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return SAGameController::API_CODE_INSUFFICIENT_BALANCE;
+    }
+
+    /**
      * 下注
      * @param $data
      * @return mixed
@@ -288,11 +297,16 @@ class SAServiceInterface extends GameServiceFactory implements GameServiceInterf
 
         $player = $this->player;
 
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
+            return $this->player->machine_wallet->money;
+        }
+
         $bet = $data['amount'];
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
         if ($machineWallet->money < $bet) {
-            $this->error = MtGameController::API_CODE_INSUFFICIENT_BALANCE;
+            $this->error = SAGameController::API_CODE_INSUFFICIENT_BALANCE;
             return $this->player->machine_wallet->money;
         }
         //下注记录  todo 暂时使用原表结构 待后续优化

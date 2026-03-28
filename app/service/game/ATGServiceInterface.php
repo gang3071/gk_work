@@ -459,6 +459,15 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
     }
 
     /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return ATGGameController::API_CODE_INSUFFICIENT_BALANCE;
+    }
+
+    /**
      * 下注
      * @return mixed
      */
@@ -470,6 +479,11 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         $player = $this->player;
         $bet = $data['amount'];
+
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
+            return $this->error;
+        }
 
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();

@@ -399,6 +399,15 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         return $res['Data']['URL'] ?? '';
     }
 
+    /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return RsgGameController::API_CODE_INSUFFICIENT_BALANCE;
+    }
+
     public function bet($data)
     {
         if (PlayGameRecord::query()->where('order_no', $data['SequenNumber'])->exists()) {
@@ -407,6 +416,11 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         $player = $this->player;
         $bet = $data['Amount'];
+
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
+            return $this->error;
+        }
 
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();

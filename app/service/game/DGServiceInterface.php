@@ -472,6 +472,15 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return DGGameController::API_CODE_INSUFFICIENT_BALANCE;
+    }
+
+    /**
      * 下注
      * @return mixed
      */
@@ -481,6 +490,11 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
         $player = $this->player;
         $detail = json_decode($data['detail'], true);
         $bet = abs($data['member']['amount']);
+
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
+            return $player->machine_wallet->money;
+        }
 
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $player->machine_wallet()->lockForUpdate()->first();

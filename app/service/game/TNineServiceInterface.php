@@ -275,6 +275,15 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
      * @param $data
      * @return mixed
      */
+    /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return TNineGameController::API_CODE_INSUFFICIENT_BALANCE;
+    }
+
     public function bet($data): mixed
     {
         $orders = $data['OrderList'];
@@ -282,6 +291,15 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
         $return = [];
         /** @var Player $player */
         $player = Player::query()->where('uuid', $data['MemberAccount'])->first();
+
+        // 临时设置player供爆机检查使用
+        $this->player = $player;
+
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
+            return $player->machine_wallet->money;
+        }
+
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
         $allAmount = array_sum(array_column($orders, 'BetAmount'));

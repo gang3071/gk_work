@@ -399,8 +399,22 @@ class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceI
         return '';
     }
 
+    /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return RsgLiveGameController::API_CODE_AMOUNT_OVER_BALANCE;
+    }
+
     public function bet($data)
     {
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
+            return $this->error;
+        }
+
         $bet = $data['transaction']['amount'];
 
         //RSG真人会把多次下注整合到一笔订单当中

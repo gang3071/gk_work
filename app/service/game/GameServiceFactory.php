@@ -250,4 +250,76 @@ class GameServiceFactory
     {
         return $this->player->machine_wallet->money;
     }
+
+    /**
+     * 检查设备是否爆机
+     * 如果设备已爆机，返回true，否则返回false
+     *
+     * @return bool
+     */
+    protected function checkMachineCrash(): bool
+    {
+        try {
+            // 只检查实体机平台（platform_id = 1）
+            /** @var PlayerPlatformCash $machineWallet */
+            $machineWallet = $this->player->machine_wallet;
+
+            if (!$machineWallet) {
+                return false;
+            }
+
+            // 检查是否为实体机平台
+            if ($machineWallet->platform_id != PlayerPlatformCash::PLATFORM_SELF) {
+                return false;
+            }
+
+            // 返回爆机状态
+            return (bool)$machineWallet->is_crashed;
+        } catch (\Exception $e) {
+            \support\Log::error('GameServiceFactory: Failed to check machine crash', [
+                'player_id' => $this->player->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+            // 发生异常时返回false，不影响正常游戏流程
+            return false;
+        }
+    }
+
+    /**
+     * 获取爆机时的余额不足错误码/错误信息
+     * 子类可以重写此方法以返回平台特定的错误码
+     *
+     * @return mixed 返回平台特定的余额不足错误码或错误响应
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        // 默认返回通用错误信息
+        // 子类应该重写此方法返回各自平台的错误码
+        return 'INSUFFICIENT_BALANCE';
+    }
+
+    /**
+     * 在下注前检查设备爆机状态
+     * 如果设备已爆机，设置错误码并返回true
+     * 如果未爆机，返回false，继续正常流程
+     *
+     * @return bool 如果已爆机返回true，否则返回false
+     */
+    protected function checkAndHandleMachineCrash(): bool
+    {
+        if ($this->checkMachineCrash()) {
+            // 设备已爆机，设置余额不足错误
+            $this->error = $this->getInsufficientBalanceError();
+
+            \support\Log::warning('GameServiceFactory: Machine crashed, bet denied', [
+                'player_id' => $this->player->id ?? null,
+                'platform' => $this->platform->code ?? null,
+                'wallet_balance' => $this->player->machine_wallet->money ?? 0,
+            ]);
+
+            return true;
+        }
+
+        return false;
+    }
 }

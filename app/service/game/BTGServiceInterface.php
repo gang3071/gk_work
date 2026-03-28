@@ -664,6 +664,15 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
      * @param $data
      * @return array|float
      */
+    /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return self::ERROR_CODE_WITHDRAW_FAILED;
+    }
+
     public function bet($data): array|float
     {
         try {
@@ -682,6 +691,11 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 return 0;
             }
             $this->player = $player;
+
+            // 检查设备是否爆机
+            if ($this->checkAndHandleMachineCrash()) {
+                return $player->machine_wallet->money;
+            }
 
             $bet = (float)$params['deposit_amount'];
 

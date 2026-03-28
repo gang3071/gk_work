@@ -54,6 +54,15 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
         -999 => '发生错误/指令错误'
     ];
 
+    /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return SPSDYGameController::API_CODE_INSUFFICIENT_BALANCE;
+    }
+
     public function bet($data)
     {
         if (PlayGameRecord::query()->where('order_no', $data['TransferCode'])->exists()) {
@@ -65,6 +74,11 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
         $bet = $data['Point'];
 
         $data['TicketData'] = json_decode($data['TicketData'], true);
+
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
+            return $this->player->machine_wallet->money;
+        }
 
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();

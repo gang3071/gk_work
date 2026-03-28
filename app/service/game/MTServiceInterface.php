@@ -411,6 +411,15 @@ class MTServiceInterface extends GameServiceFactory implements GameServiceInterf
      * @param $data
      * @return mixed
      */
+    /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return MtGameController::API_CODE_INSUFFICIENT_BALANCE;
+    }
+
     public function bet($data): mixed
     {
         if (PlayGameRecord::query()->where('order_no', $data['bet_sn'])->exists()) {
@@ -419,6 +428,12 @@ class MTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
         $player = $this->player;
         $bet = $data['order_money'];
+
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
+            return $this->error;
+        }
+
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
         if ($machineWallet->money < $bet) {
