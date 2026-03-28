@@ -757,7 +757,7 @@ class LotteryServices
      */
     private function tryDistributeLottery(
         Lottery   $lottery,
-        int       $amount,
+        float $amount,
         int       $lotteryMultiple,
         float|int $bet,
         array     $burstInfo,
@@ -902,7 +902,7 @@ class LotteryServices
      */
     private function createLotteryRecord(
         Lottery   $lottery,
-        int       $amount,
+        float $amount,
         int       $lotteryMultiple,
         float|int $bet,
         bool      $isDoubled = false
@@ -972,7 +972,7 @@ class LotteryServices
      */
     private function logWinning(
         Lottery $lottery,
-        int     $amount,
+        float $amount,
         array   $burstInfo,
         int     $attemptIndex,
         int     $totalAttempts,
@@ -1043,8 +1043,8 @@ class LotteryServices
     {
         // 发送派彩消息（给中奖玩家）
         sendSocketMessage('player-' . $this->player->id, [
-            'machine_id' => $this->machine->id,
             'msg_type' => 'player_lottery_allow',
+            'machine_id' => $this->machine->id,
             'machine_name' => $this->machine->name,
             'machine_code' => $this->machine->code,
             'machine_odds' => $this->machine->odds_x . ':' . $this->machine->odds_y,
@@ -1062,6 +1062,7 @@ class LotteryServices
             'is_burst' => $burstInfo['is_bursting'] ? 1 : 0,
             'burst_multiplier' => $burstInfo['multiplier'],
             'is_doubled' => $isDoubled ? 1 : 0,
+            'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'lottery_rate' => $record->lottery_rate,
             'next_lottery' => []
         ]);
@@ -1079,6 +1080,7 @@ class LotteryServices
             'lottery_name' => $record->lottery_name,
             'lottery_type' => $record->lottery_type,
             'game_type' => $record->game_type,
+            'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'lottery_multiple' => $record->lottery_multiple,
             'is_burst' => $burstInfo['is_bursting'] ? 1 : 0,
             'is_doubled' => $isDoubled ? 1 : 0,
@@ -1101,16 +1103,17 @@ class LotteryServices
             'player_uuid' => $this->player->uuid,
             'amount' => $record->amount,
             'lottery_pool_amount' => $lottery->amount,
+            'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'is_burst' => $burstInfo['is_bursting'] ? 1 : 0,
             'burst_multiplier' => $burstInfo['multiplier'],
             'is_doubled' => $isDoubled ? 1 : 0,
             'lottery_rate' => $record->lottery_rate,
-            'title' => '🎊 恭喜玩家中奖！',
+            'title' => '🎊 恭喜玩家中獎！',
             'content' => sprintf(
-                '恭喜玩家在%s机台 %s 中赢得 %s%d 彩金！',
+                '恭喜玩家在%s機台 %s 中贏得 %s%d 彩金！',
                 $this->machine->code,
                 $lottery->name,
-                $isDoubled ? '【双倍】' : '',
+                $isDoubled ? '【雙倍】' : '',
                 $record->amount
             ),
         ];

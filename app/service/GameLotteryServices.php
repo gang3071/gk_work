@@ -721,13 +721,13 @@ class GameLotteryServices
      * @param int $attemptIndex
      * @param int $totalAttempts
      * @param bool $isDoubled
-     * @return bool
+     * @return void
      * @throws Exception
      * @throws PushException
      */
     private function tryDistributeLottery(
         GameLottery $lottery,
-        int         $amount,
+        float $amount,
         int         $lotteryMultiple,
         float|int   $bet,
         int         $playGameRecordId,
@@ -735,13 +735,13 @@ class GameLotteryServices
         int         $attemptIndex,
         int         $totalAttempts,
         bool        $isDoubled = false
-    ): bool
+    ): void
     {
         // 增加业务锁
         $actionLockerKey = 'game_lottery_pool_random_locker_' . $lottery->id;
         $lock = Locker::lock($actionLockerKey, 2, true);
         if (!$lock->acquire()) {
-            return false;
+            return;
         }
 
         DB::beginTransaction();
@@ -773,7 +773,7 @@ class GameLotteryServices
                     'available' => $lottery->amount,
                 ]);
                 DB::rollback();
-                return false;
+                return;
             }
 
             // 创建派彩记录
@@ -793,7 +793,7 @@ class GameLotteryServices
                     'player_id' => $this->player->id,
                 ]);
                 DB::rollback();
-                return false;
+                return;
             }
 
             $beforeAmount = $machineWallet->money;
@@ -868,7 +868,7 @@ class GameLotteryServices
             // 发送派彩和通知消息
             $this->sendWinningMessages($playerLotteryRecord, $lottery, $notice, $burstInfo, $isDoubled);
 
-            return true;
+            return;
         } catch (\Exception $e) {
             DB::rollback();
             $this->log->error('派发彩金失败', [
@@ -877,7 +877,7 @@ class GameLotteryServices
                 'player_id' => $this->player->id,
                 'trace' => $e->getTraceAsString(),
             ]);
-            return false;
+            return;
         }
     }
 
@@ -893,7 +893,7 @@ class GameLotteryServices
      */
     private function createLotteryRecord(
         GameLottery $lottery,
-        int         $amount,
+        float $amount,
         int         $lotteryMultiple,
         float|int   $bet,
         int         $playGameRecordId,
@@ -945,7 +945,7 @@ class GameLotteryServices
      */
     private function logWinning(
         GameLottery $lottery,
-        int         $amount,
+        float $amount,
         array       $burstInfo,
         int         $attemptIndex,
         int         $totalAttempts,
@@ -1053,6 +1053,7 @@ class GameLotteryServices
             'burst_multiplier' => $burstInfo['multiplier'],
             'game_name' => $gameName,
             'machine_info' => $machineInfo,
+            'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'source' => $record->source,
             'next_lottery' => []
         ]);
@@ -1108,6 +1109,7 @@ class GameLotteryServices
             'player_name' => $this->player->name ?? $this->player->uuid,
             'player_uuid' => $this->player->uuid,
             'amount' => $record->amount,
+            'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'lottery_pool_amount' => $lottery->amount,
             'is_burst' => $burstInfo['is_bursting'] ? 1 : 0,
             'burst_multiplier' => $burstInfo['multiplier'],
@@ -1144,7 +1146,7 @@ class GameLotteryServices
         $notice->receiver = Notice::RECEIVER_PLAYER;
         $notice->is_private = 1;
         $notice->title = '彩金派彩';
-        $notice->content = '恭喜您在电子游戏中获得' . $lotteryName . '的彩金獎勵彩金金額';
+        $notice->content = '恭喜您在電子遊戲中獲得' . $lotteryName . '的彩金獎勵彩金金額';
         $notice->save();
 
         return $notice;
@@ -1455,9 +1457,9 @@ class GameLotteryServices
 
             if ($type === 'start') {
                 // 爆彩开启通知
-                $message['title'] = '🎉 彩金池爆彩开启！';
+                $message['title'] = '🎉 彩金池爆彩開啟！';
                 $message['content'] = sprintf(
-                    '%s 爆彩活动正式开启！持续时间：%d分钟',
+                    '%s 爆彩活動正式開啟！持續時間：%d分鐘',
                     $lottery->name,
                     $lottery->burst_duration
                 );
@@ -1465,10 +1467,10 @@ class GameLotteryServices
             } elseif ($type === 'win') {
                 // 有玩家中奖通知
                 $isDoubled = $extraData['is_doubled'] ?? false;
-                $doubleText = $isDoubled ? '【双倍】' : '';
-                $message['title'] = '🎊 恭喜玩家中得爆彩大奖！';
+                $doubleText = $isDoubled ? '【雙倍】' : '';
+                $message['title'] = '🎊 恭喜玩家中得爆彩大獎！';
                 $message['content'] = sprintf(
-                    '恭喜玩家在 %s 爆彩活动中赢得 %s%d 彩金！',
+                    '恭喜玩家在 %s 爆彩活動中贏得 %s%d 彩金！',
                     $lottery->name,
                     $doubleText,
                     $extraData['amount'] ?? 0
@@ -1478,9 +1480,9 @@ class GameLotteryServices
                 $message['player_name'] = $extraData['player_name'] ?? '';
             } elseif ($type === 'end') {
                 // 爆彩结束通知
-                $message['title'] = '⏰ 爆彩活动结束';
+                $message['title'] = '⏰ 爆彩活動結束';
                 $message['content'] = sprintf(
-                    '%s 爆彩活动已结束，感谢参与！',
+                    '%s 爆彩活動已結束，感謝參與！',
                     $lottery->name
                 );
             }
