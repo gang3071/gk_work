@@ -1636,6 +1636,10 @@ function nationalPromoterRebate(): void
 
 /**
  * 检查设备是否爆机
+ *
+ * 只检查钱包的 is_crashed 字段，不判断当前余额
+ * 这样可以让最后一笔触发爆机的交易正常完成，从而更新爆机状态和发送通知
+ *
  * @param Player $player 玩家对象
  * @return array 返回爆机状态信息 ['crashed' => bool, 'crash_amount' => float|null, 'current_amount' => float]
  */
@@ -1643,66 +1647,22 @@ function checkMachineCrash(Player $player): array
 {
     $currentAmount = $player->machine_wallet->money ?? 0;
 
-    // 优先检查 is_crashed 字段（高效）
-    if (isset($player->machine_wallet->is_crashed)) {
-        $isCrashed = (bool)$player->machine_wallet->is_crashed;
+    // 只检查钱包的 is_crashed 字段
+    $isCrashed = isset($player->machine_wallet->is_crashed) && $player->machine_wallet->is_crashed == 1;
 
-        // 如果已标记为爆机，获取爆机金额配置
-        if ($isCrashed) {
-            $adminUserId = $player->store_admin_id ?? null;
-            if ($adminUserId) {
-                $crashSetting = StoreSetting::getSetting(
-                    'machine_crash_amount',
-                    $player->department_id,
-                    null,
-                    $adminUserId
-                );
-                $crashAmount = ($crashSetting && $crashSetting->status == 1) ? ($crashSetting->num ?? 0) : null;
-            } else {
-                $crashAmount = null;
-            }
-
-            return [
-                'crashed' => true,
-                'crash_amount' => $crashAmount,
-                'current_amount' => $currentAmount,
-            ];
-        }
-    }
-
-    // 获取玩家绑定的店家ID
+    // 获取爆机金额配置（用于返回信息）
+    $crashAmount = null;
     $adminUserId = $player->store_admin_id ?? null;
 
-    if (!$adminUserId) {
-        // 如果玩家没有绑定店家，不限制爆机
-        return [
-            'crashed' => false,
-            'crash_amount' => null,
-            'current_amount' => $currentAmount,
-        ];
+    if ($adminUserId) {
+        $crashSetting = StoreSetting::getSetting(
+            'machine_crash_amount',
+            $player->department_id,
+            null,
+            $adminUserId
+        );
+        $crashAmount = ($crashSetting && $crashSetting->status == 1) ? ($crashSetting->num ?? 0) : null;
     }
-
-    // 获取店家的爆机金额配置
-    $crashSetting = StoreSetting::getSetting(
-        'machine_crash_amount',
-        $player->department_id,
-        null,
-        $adminUserId
-    );
-
-    // 如果没有配置或配置被禁用，不限制爆机
-    if (!$crashSetting || $crashSetting->status != 1) {
-        return [
-            'crashed' => false,
-            'crash_amount' => null,
-            'current_amount' => $currentAmount,
-        ];
-    }
-
-    $crashAmount = $crashSetting->num ?? 0;
-
-    // 判断是否爆机（余额超过爆机金额）
-    $isCrashed = $crashAmount > 0 && $currentAmount >= $crashAmount;
 
     return [
         'crashed' => $isCrashed,
