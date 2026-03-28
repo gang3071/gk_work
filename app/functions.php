@@ -1709,7 +1709,7 @@ function notifyMachineCrash(Player $player, array $crashInfo): void
         ];
 
         // 1. 发送给玩家
-        $playerChannel = 'player_' . $player->id;
+        $playerChannel = 'player-' . $player->id;
         sendSocketMessage([$playerChannel], $playerMessage, 'system');
 
         // 2. 发送给渠道后台
@@ -1812,7 +1812,7 @@ function checkAndNotifyCrashUnlock(Player $player, float $previousAmount): void
                 ];
 
                 // 1. 发送给玩家
-                $playerChannel = 'player_' . $player->id;
+                $playerChannel = 'player-' . $player->id;
                 sendSocketMessage([$playerChannel], $playerMessage, 'system');
 
                 Log::info('Machine crash unlock notification sent', [
