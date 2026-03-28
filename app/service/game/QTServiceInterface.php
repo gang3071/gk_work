@@ -194,7 +194,11 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'walletSessionId' => $accessToken, // 使用access token
                 'config' => [
                     'singleUseUrl' => false,
-                    'oneClickPlay' => true
+                    'oneClickPlay' => true,
+                    'displays' =>[
+                        'balance' => true,
+                        'language' => true
+                    ]
                 ]
             ];
 
@@ -1013,6 +1017,15 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return 'INSUFFICIENT_BALANCE';
+    }
+
+    /**
      * 中心钱包 - DEBIT (下注扣款)
      * @param array $params
      * @return array
@@ -1033,6 +1046,13 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'amount' => $amount,
                 'player_id' => $this->player->id
             ]);
+
+            // 检查设备是否爆机
+            if ($this->checkAndHandleMachineCrash()) {
+                /** @var PlayerPlatformCash $machineWallet */
+                $machineWallet = $this->player->machine_wallet()->first();
+                return ['balance' => round((float)$machineWallet->money, 2)];
+            }
 
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();

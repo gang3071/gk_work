@@ -291,10 +291,24 @@ class SPServiceInterface extends GameServiceFactory implements GameServiceInterf
      * @param $data
      * @return mixed
      */
+    /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return SPGameController::API_CODE_INSUFFICIENT_BALANCE;
+    }
+
     public function bet($data): mixed
     {
         if (PlayGameRecord::query()->where('order_no', $data['txnid'])->exists()) {
             $this->error = SPGameController::API_CODE_GENERAL_ERROR;
+            return $this->player->machine_wallet->money;
+        }
+
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
             return $this->player->machine_wallet->money;
         }
 
@@ -325,7 +339,7 @@ class SPServiceInterface extends GameServiceFactory implements GameServiceInterf
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
         if ($machineWallet->money < $bet) {
-            $this->error = MtGameController::API_CODE_INSUFFICIENT_BALANCE;
+            $this->error = SPGameController::API_CODE_INSUFFICIENT_BALANCE;
             return $this->player->machine_wallet->money;
         }
 

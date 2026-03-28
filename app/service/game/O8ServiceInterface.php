@@ -326,6 +326,15 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
      * @param $data
      * @return mixed
      */
+    /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return O8GameController::API_CODE_AMOUNT_OVER_BALANCE;
+    }
+
     public function bet($data): mixed
     {
         $orders = $data['transactions'];
@@ -338,6 +347,15 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
             if (empty($player)) {
                 continue;
             }
+
+            // 临时设置player供爆机检查使用
+            $this->player = $player;
+
+            // 检查设备是否爆机
+            if ($this->checkAndHandleMachineCrash()) {
+                return $player->machine_wallet->money;
+            }
+
             $bet = $order['amt'];
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $player->machine_wallet()->lockForUpdate()->first();

@@ -264,11 +264,26 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
      * @param $data
      * @return mixed
      */
+    /**
+     * 获取爆机时的余额不足错误码
+     * @return mixed
+     */
+    protected function getInsufficientBalanceError(): mixed
+    {
+        return KTGameController::API_CODE_AMOUNT_OVER_BALANCE;
+    }
+
     public function bet($data): mixed
     {
 
         /** @var Player $player */
         $player = $this->player;
+
+        // 检查设备是否爆机
+        if ($this->checkAndHandleMachineCrash()) {
+            return $player->machine_wallet->money;
+        }
+
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
         $bet = $data['Bet'];
