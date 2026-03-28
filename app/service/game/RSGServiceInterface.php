@@ -11,6 +11,8 @@ use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
+use app\model\AdminUserLimitGroup;
+use app\model\PlatformLimitGroupConfig;
 use app\wallet\controller\game\RsgGameController;
 use Carbon\Carbon;
 use Exception;
@@ -330,6 +332,57 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
     }
 
     /**
+     * 获取玩家的限红配置
+     * @return array|null 返回限红配置数组，包含MinBetAmount和MaxBetAmount，如果没有配置则返回null
+     */
+    private function getLimitRedConfig(): ?array
+    {
+        // 如果玩家没有店家ID，返回null
+        if (empty($this->player->store_admin_id)) {
+            return null;
+        }
+
+        // 查询店家绑定的RSG平台限红组配置
+        $adminUserLimitGroup = AdminUserLimitGroup::query()
+            ->where('admin_user_id', $this->player->store_admin_id)
+            ->where('platform_id', $this->platform->id)
+            ->where('status', 1)
+            ->first();
+
+        // 如果店家没有绑定限红组，返回null
+        if (!$adminUserLimitGroup) {
+            return null;
+        }
+
+        // 获取限红组的平台配置
+        $limitGroupConfig = PlatformLimitGroupConfig::query()
+            ->where('limit_group_id', $adminUserLimitGroup->limit_group_id)
+            ->where('platform_id', $this->platform->id)
+            ->where('status', 1)
+            ->first();
+
+        // 如果没有配置数据，返回null
+        if (!$limitGroupConfig || empty($limitGroupConfig->config_data)) {
+            return null;
+        }
+
+        $configData = $limitGroupConfig->config_data;
+
+        // 构建限红参数（RSG支持MinBetAmount和MaxBetAmount）
+        $limitConfig = [];
+
+        if (isset($configData['min_bet_amount']) && $configData['min_bet_amount'] > 0) {
+            $limitConfig['MinBetAmount'] = $configData['min_bet_amount'];
+        }
+
+        if (isset($configData['max_bet_amount']) && $configData['max_bet_amount'] > 0) {
+            $limitConfig['MaxBetAmount'] = $configData['max_bet_amount'];
+        }
+
+        return !empty($limitConfig) ? $limitConfig : null;
+    }
+
+    /**
      * 进入游戏
      * @param Game $game
      * @param string $lang
@@ -349,6 +402,18 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             'Language' => $this->lang[$lang],
             'ExitAction' => '',
         ];
+
+        // 获取并应用限红配置
+        $limitConfig = $this->getLimitRedConfig();
+        if ($limitConfig) {
+            $params = array_merge($params, $limitConfig);
+            $this->log->info('RSG应用限红配置', [
+                'player_id' => $this->player->id,
+                'store_admin_id' => $this->player->store_admin_id,
+                'limit_config' => $limitConfig
+            ]);
+        }
+
         Log::channel('rsg_server')->error('gamelogin', ['params' => $params]);
         $res = $this->doCurl($this->createUrl('gameLogin'), $params);
         $this->log->info('gameLogin', [$res]);
