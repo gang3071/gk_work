@@ -721,13 +721,13 @@ class GameLotteryServices
      * @param int $attemptIndex
      * @param int $totalAttempts
      * @param bool $isDoubled
-     * @return bool
+     * @return void
      * @throws Exception
      * @throws PushException
      */
     private function tryDistributeLottery(
         GameLottery $lottery,
-        int         $amount,
+        float $amount,
         int         $lotteryMultiple,
         float|int   $bet,
         int         $playGameRecordId,
@@ -735,13 +735,13 @@ class GameLotteryServices
         int         $attemptIndex,
         int         $totalAttempts,
         bool        $isDoubled = false
-    ): bool
+    ): void
     {
         // 增加业务锁
         $actionLockerKey = 'game_lottery_pool_random_locker_' . $lottery->id;
         $lock = Locker::lock($actionLockerKey, 2, true);
         if (!$lock->acquire()) {
-            return false;
+            return;
         }
 
         DB::beginTransaction();
@@ -773,7 +773,7 @@ class GameLotteryServices
                     'available' => $lottery->amount,
                 ]);
                 DB::rollback();
-                return false;
+                return;
             }
 
             // 创建派彩记录
@@ -793,7 +793,7 @@ class GameLotteryServices
                     'player_id' => $this->player->id,
                 ]);
                 DB::rollback();
-                return false;
+                return;
             }
 
             $beforeAmount = $machineWallet->money;
@@ -868,7 +868,7 @@ class GameLotteryServices
             // 发送派彩和通知消息
             $this->sendWinningMessages($playerLotteryRecord, $lottery, $notice, $burstInfo, $isDoubled);
 
-            return true;
+            return;
         } catch (\Exception $e) {
             DB::rollback();
             $this->log->error('派发彩金失败', [
@@ -877,7 +877,7 @@ class GameLotteryServices
                 'player_id' => $this->player->id,
                 'trace' => $e->getTraceAsString(),
             ]);
-            return false;
+            return;
         }
     }
 
@@ -893,7 +893,7 @@ class GameLotteryServices
      */
     private function createLotteryRecord(
         GameLottery $lottery,
-        int         $amount,
+        float $amount,
         int         $lotteryMultiple,
         float|int   $bet,
         int         $playGameRecordId,
@@ -945,7 +945,7 @@ class GameLotteryServices
      */
     private function logWinning(
         GameLottery $lottery,
-        int         $amount,
+        float $amount,
         array       $burstInfo,
         int         $attemptIndex,
         int         $totalAttempts,

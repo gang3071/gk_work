@@ -757,7 +757,7 @@ class LotteryServices
      */
     private function tryDistributeLottery(
         Lottery   $lottery,
-        int       $amount,
+        float $amount,
         int       $lotteryMultiple,
         float|int $bet,
         array     $burstInfo,
@@ -902,7 +902,7 @@ class LotteryServices
      */
     private function createLotteryRecord(
         Lottery   $lottery,
-        int       $amount,
+        float $amount,
         int       $lotteryMultiple,
         float|int $bet,
         bool      $isDoubled = false
@@ -972,7 +972,7 @@ class LotteryServices
      */
     private function logWinning(
         Lottery $lottery,
-        int     $amount,
+        float $amount,
         array   $burstInfo,
         int     $attemptIndex,
         int     $totalAttempts,
