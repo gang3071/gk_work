@@ -1043,8 +1043,8 @@ class LotteryServices
     {
         // 发送派彩消息（给中奖玩家）
         sendSocketMessage('player-' . $this->player->id, [
-            'machine_id' => $this->machine->id,
             'msg_type' => 'player_lottery_allow',
+            'machine_id' => $this->machine->id,
             'machine_name' => $this->machine->name,
             'machine_code' => $this->machine->code,
             'machine_odds' => $this->machine->odds_x . ':' . $this->machine->odds_y,
