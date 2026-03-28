@@ -1685,7 +1685,7 @@ function notifyMachineCrash(Player $player, array $crashInfo): void
     try {
         // 玩家端消息
         $playerMessage = [
-            'type' => 'machine_crash',
+            'msg_type' => 'machine_crash',
             'player_id' => $player->id,
             'crash_amount' => $crashInfo['crash_amount'],
             'current_amount' => $crashInfo['current_amount'],
@@ -1695,7 +1695,7 @@ function notifyMachineCrash(Player $player, array $crashInfo): void
 
         // 后台消息（包含更多信息）
         $adminMessage = [
-            'type' => 'machine_crash',
+            'msg_type' => 'machine_crash',
             'event' => 'player_crashed',
             'player_id' => $player->id,
             'player_name' => $player->name ?? '',
@@ -1803,7 +1803,7 @@ function checkAndNotifyCrashUnlock(Player $player, float $previousAmount): void
             if ($wasCrashed) {
                 // 玩家端消息
                 $playerMessage = [
-                    'type' => 'machine_crash_unlock',
+                    'msg_type' => 'machine_crash_unlock',
                     'player_id' => $player->id,
                     'crash_amount' => $crashCheckBefore['crash_amount'],
                     'current_amount' => $crashCheckBefore['current_amount'],
