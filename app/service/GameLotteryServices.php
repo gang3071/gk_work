@@ -1053,6 +1053,7 @@ class GameLotteryServices
             'burst_multiplier' => $burstInfo['multiplier'],
             'game_name' => $gameName,
             'machine_info' => $machineInfo,
+            'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'source' => $record->source,
             'next_lottery' => []
         ]);
@@ -1108,6 +1109,7 @@ class GameLotteryServices
             'player_name' => $this->player->name ?? $this->player->uuid,
             'player_uuid' => $this->player->uuid,
             'amount' => $record->amount,
+            'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'lottery_pool_amount' => $lottery->amount,
             'is_burst' => $burstInfo['is_bursting'] ? 1 : 0,
             'burst_multiplier' => $burstInfo['multiplier'],

@@ -1062,6 +1062,7 @@ class LotteryServices
             'is_burst' => $burstInfo['is_bursting'] ? 1 : 0,
             'burst_multiplier' => $burstInfo['multiplier'],
             'is_doubled' => $isDoubled ? 1 : 0,
+            'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'lottery_rate' => $record->lottery_rate,
             'next_lottery' => []
         ]);
@@ -1079,6 +1080,7 @@ class LotteryServices
             'lottery_name' => $record->lottery_name,
             'lottery_type' => $record->lottery_type,
             'game_type' => $record->game_type,
+            'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'lottery_multiple' => $record->lottery_multiple,
             'is_burst' => $burstInfo['is_bursting'] ? 1 : 0,
             'is_doubled' => $isDoubled ? 1 : 0,
@@ -1101,6 +1103,7 @@ class LotteryServices
             'player_uuid' => $this->player->uuid,
             'amount' => $record->amount,
             'lottery_pool_amount' => $lottery->amount,
+            'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'is_burst' => $burstInfo['is_bursting'] ? 1 : 0,
             'burst_multiplier' => $burstInfo['multiplier'],
             'is_doubled' => $isDoubled ? 1 : 0,
