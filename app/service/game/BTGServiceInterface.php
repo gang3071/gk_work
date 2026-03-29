@@ -829,12 +829,21 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $record->diff = $money - $record->bet;
             $record->save();
 
-            // 彩金记录
-            Client::send('game-lottery', [
-                'player_id' => $player->id,
-                'bet' => $record->bet,
-                'play_game_record_id' => $record->id
-            ]);
+            // 彩金记录 - 过滤鱼机类型
+            $originalData = json_decode($record->original_data, true);
+            $gameType = $originalData['game_type'] ?? $params['game_type'] ?? '';
+            if ($gameType !== 'fish') {
+                Client::send('game-lottery', [
+                    'player_id' => $player->id,
+                    'bet' => $record->bet,
+                    'play_game_record_id' => $record->id
+                ]);
+            } else {
+                Log::channel('btg_server')->info('BTG betResulet 鱼机游戏跳过彩金记录', [
+                    'order_id' => $record->order_no,
+                    'game_type' => $gameType
+                ]);
+            }
 
             return [
                 'balance' => (float)$machineWallet->money,
@@ -1198,12 +1207,20 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             $record->save();
 
-            // 彩金记录
-            Client::send('game-lottery', [
-                'player_id' => $this->player->id,
-                'bet' => $record->bet,
-                'play_game_record_id' => $record->id
-            ]);
+            // 彩金记录 - 过滤鱼机类型
+            $gameType = $params['game_type'] ?? '';
+            if ($gameType !== 'fish') {
+                Client::send('game-lottery', [
+                    'player_id' => $this->player->id,
+                    'bet' => $record->bet,
+                    'play_game_record_id' => $record->id
+                ]);
+            } else {
+                Log::channel('btg_server')->info('BTG transferEnd 鱼机游戏跳过彩金记录', [
+                    'order_id' => $record->order_no,
+                    'game_type' => $gameType
+                ]);
+            }
 
             return ['balance' => (float)$machineWallet->money];
         } catch (Exception $e) {
