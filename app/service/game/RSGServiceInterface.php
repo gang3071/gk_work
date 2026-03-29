@@ -12,6 +12,7 @@ use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
 use app\model\AdminUserLimitGroup;
+use app\model\PlatformLimitGroup;
 use app\model\PlatformLimitGroupConfig;
 use app\wallet\controller\game\RsgGameController;
 use Carbon\Carbon;
@@ -337,29 +338,60 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
      */
     private function getLimitRedConfig(): ?array
     {
-        // 如果玩家没有店家ID，返回null
-        if (empty($this->player->store_admin_id)) {
-            return null;
+        $limitGroupConfig = null;
+
+        // 如果玩家有店家ID，优先查询店家绑定的限红组配置
+        if (!empty($this->player->store_admin_id)) {
+            // 查询店家绑定的RSG平台限红组配置
+            $adminUserLimitGroup = AdminUserLimitGroup::query()
+                ->where('admin_user_id', $this->player->store_admin_id)
+                ->where('platform_id', $this->platform->id)
+                ->where('status', 1)
+                ->first();
+
+            // 如果店家有绑定限红组，获取该限红组的平台配置
+            if ($adminUserLimitGroup) {
+                $limitGroupConfig = PlatformLimitGroupConfig::query()
+                    ->where('limit_group_id', $adminUserLimitGroup->limit_group_id)
+                    ->where('platform_id', $this->platform->id)
+                    ->where('status', 1)
+                    ->first();
+            }
         }
 
-        // 查询店家绑定的RSG平台限红组配置
-        $adminUserLimitGroup = AdminUserLimitGroup::query()
-            ->where('admin_user_id', $this->player->store_admin_id)
-            ->where('platform_id', $this->platform->id)
-            ->where('status', 1)
-            ->first();
+        // 如果没有找到店家限红组配置，则使用平台默认限红组配置
+        if (!$limitGroupConfig) {
+            // 查询平台默认限红组（通过PlatformLimitGroup表中code或name为'default'的限红组）
+            $defaultLimitGroup = PlatformLimitGroup::query()
+                ->where('department_id', $this->player->department_id)
+                ->where('status', 1)
+                ->where(function ($query) {
+                    $query->where('code', 'default')
+                        ->orWhere('name', '默认限红组')
+                        ->orWhere('name', 'LIKE', '%默认%');
+                })
+                ->orderBy('sort', 'asc')
+                ->first();
 
-        // 如果店家没有绑定限红组，返回null
-        if (!$adminUserLimitGroup) {
-            return null;
+            // 如果找到默认限红组，获取该组的平台配置
+            if ($defaultLimitGroup) {
+                $limitGroupConfig = PlatformLimitGroupConfig::query()
+                    ->where('limit_group_id', $defaultLimitGroup->id)
+                    ->where('platform_id', $this->platform->id)
+                    ->where('status', 1)
+                    ->first();
+
+                // 记录使用了默认限红组
+                if ($limitGroupConfig) {
+                    $this->log->info('RSG使用平台默认限红组', [
+                        'player_id' => $this->player->id,
+                        'store_admin_id' => $this->player->store_admin_id ?? 'null',
+                        'default_limit_group_id' => $defaultLimitGroup->id,
+                        'default_limit_group_name' => $defaultLimitGroup->name,
+                    ]);
+                }
+            }
         }
-
-        // 获取限红组的平台配置
-        $limitGroupConfig = PlatformLimitGroupConfig::query()
-            ->where('limit_group_id', $adminUserLimitGroup->limit_group_id)
-            ->where('platform_id', $this->platform->id)
-            ->where('status', 1)
-            ->first();
 
         // 如果没有配置数据，返回null
         if (!$limitGroupConfig || empty($limitGroupConfig->config_data)) {
