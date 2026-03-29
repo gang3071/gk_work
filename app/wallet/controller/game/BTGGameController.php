@@ -84,7 +84,7 @@ class BTGGameController
             ]);
 
             return $this->success([
-                'balance' => number_format($balance, 1, '.', ''),
+                'balance' => number_format($balance, 2, '.', ''),
                 'currency' => $params['currency'],
                 'tran_id' => $params['tran_id'],
             ]);
@@ -189,7 +189,7 @@ class BTGGameController
             ]);
 
             return $this->success([
-                'balance' => number_format($result['balance'], 1, '.', ''),
+                'balance' => number_format($result['balance'], 2, '.', ''),
                 'currency' => $params['currency'],
                 'tran_id' => $params['tran_id'],
             ]);
