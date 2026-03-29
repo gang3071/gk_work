@@ -956,7 +956,8 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'order_id' => $orderId,
                 'round_id' => $roundId,
                 'amount' => $amount,
-                'player_id' => $this->player->id
+                'player_id' => $this->player->id,
+                'balance' => $this->player->machine_wallet->money
             ]);
 
             if ($amount <= 0) {
