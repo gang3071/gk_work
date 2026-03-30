@@ -647,7 +647,8 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         try {
             // 返回玩家余额
             if (!$this->player) {
-                $this->error = self::ERROR_CODE_PLAYER_NOT_EXIST;
+                // 单一钱包模式：player不存在视为参数错误（不使用4202游戏平台错误码）
+                $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
                 return 0;
             }
 
@@ -678,19 +679,14 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         try {
             $params = $data;
 
-            // 验证必要参数
-            if (!isset($params['username']) || !isset($params['external_order_id']) || !isset($params['deposit_amount'])) {
-                $this->error = self::ERROR_CODE_PARAM_FORMAT_ERROR;
-                return $this->player->machine_wallet->money ?? 0;
-            }
-
-            // 查询玩家
-            $player = Player::query()->where('uuid', $params['username'])->first();
-            if (!$player) {
-                $this->error = self::ERROR_CODE_PLAYER_NOT_EXIST;
+            // 防御性检查：player应该由Controller设置，这里只做防御性验证
+            if (!$this->player) {
+                // 单一钱包模式：player不存在视为参数错误（不使用4202游戏平台错误码）
+                $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
                 return 0;
             }
-            $this->player = $player;
+
+            $player = $this->player;
 
             // 检查设备是否爆机
             if ($this->checkAndHandleMachineCrash()) {
@@ -758,19 +754,14 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         try {
             $params = $data;
 
-            // 验证必要参数
-            if (!isset($params['username']) || !isset($params['external_order_id']) || !isset($params['withdraw_amount'])) {
-                $this->error = self::ERROR_CODE_PARAM_FORMAT_ERROR;
-                return $this->player->machine_wallet->money ?? 0;
-            }
-
-            // 查询玩家
-            $player = Player::query()->where('uuid', $params['username'])->first();
-            if (!$player) {
-                $this->error = self::ERROR_CODE_PLAYER_NOT_EXIST;
+            // 防御性检查：player应该由Controller设置，这里只做防御性验证
+            if (!$this->player) {
+                // 单一钱包模式：player不存在视为参数错误（不使用4202游戏平台错误码）
+                $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
                 return 0;
             }
-            $this->player = $player;
+
+            $player = $this->player;
 
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
@@ -866,19 +857,14 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         try {
             $params = $data;
 
-            // 验证必要参数
-            if (!isset($params['username']) || !isset($params['external_order_id'])) {
-                $this->error = self::ERROR_CODE_PARAM_FORMAT_ERROR;
-                return $this->player->machine_wallet->money ?? 0;
-            }
-
-            // 查询玩家
-            $player = Player::query()->where('uuid', $params['username'])->first();
-            if (!$player) {
-                $this->error = self::ERROR_CODE_PLAYER_NOT_EXIST;
+            // 防御性检查：player应该由Controller设置，这里只做防御性验证
+            if (!$this->player) {
+                // 单一钱包模式：player不存在视为参数错误（不使用4202游戏平台错误码）
+                $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
                 return 0;
             }
-            $this->player = $player;
+
+            $player = $this->player;
 
             // 查找下注记录
             /** @var PlayGameRecord $record */
