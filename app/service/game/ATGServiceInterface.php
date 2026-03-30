@@ -64,6 +64,8 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $this->player = $player;
         $this->log = Log::channel('atg_server');
 
+        $config = config('game_platform.ATG');
+
         // 如果有玩家，必须从数据库获取配置
         if ($player) {
             $limitConfig = $this->getLimitRedConfig();
@@ -77,7 +79,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
 
             // 验证配置完整性（必须包含所有字段）
-            $requiredFields = ['operator', 'key', 'providerId', 'api_domain'];
+            $requiredFields = ['operator', 'key', 'providerId'];
             $missingFields = [];
             foreach ($requiredFields as $field) {
                 if (empty($limitConfig[$field])) {
@@ -95,7 +97,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
 
             $this->config = [
-                'api_domain' => $limitConfig['api_domain'],
+                'api_domain' => $config['api_domain'],
                 'operator' => $limitConfig['operator'],
                 'providerId' => $limitConfig['providerId'],
                 'key' => $limitConfig['key'],
@@ -110,7 +112,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         } else {
             // player=null时（控制器初始化或公共API调用），使用配置文件作为fallback
             // decrypt方法会在解密成功后从数据库重新获取配置
-            $this->config = config('game_platform.ATG');
+            $this->config = $config;
         }
 
         $this->apiDomain = $this->config['api_domain'] ?? '';
