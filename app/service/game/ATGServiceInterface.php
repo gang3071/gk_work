@@ -937,7 +937,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         }
 
         // 验证配置完整性（必须包含所有字段）
-        $requiredFields = ['operator', 'key', 'providerId', 'api_domain'];
+        $requiredFields = ['operator', 'key', 'providerId'];
         $missingFields = [];
         foreach ($requiredFields as $field) {
             if (empty($playerLimitConfig[$field])) {
