@@ -181,18 +181,25 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $configData = $limitGroupConfig->config_data;
 
         // 构建ATG限红参数（ATG使用营运账号：operator, key, providerId）
+        // 支持多种字段命名方式：key/operator_key, providerId/provider_id
         $limitConfig = [];
 
         if (!empty($configData['operator'])) {
             $limitConfig['operator'] = $configData['operator'];
         }
 
+        // 支持 key 或 operator_key
         if (!empty($configData['key'])) {
             $limitConfig['key'] = $configData['key'];
+        } elseif (!empty($configData['operator_key'])) {
+            $limitConfig['key'] = $configData['operator_key'];
         }
 
+        // 支持 providerId 或 provider_id
         if (!empty($configData['providerId'])) {
             $limitConfig['providerId'] = $configData['providerId'];
+        } elseif (!empty($configData['provider_id'])) {
+            $limitConfig['providerId'] = $configData['provider_id'];
         }
 
         if (!empty($configData['api_domain'])) {
