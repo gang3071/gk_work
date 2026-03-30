@@ -45,6 +45,9 @@ class BTGGameController
             $params = $request->post();
             $this->logger->info('BTG查询余额请求', ['params' => $params]);
 
+            // 获取系统币别配置
+            $systemCurrency = config('app.currency', 'TWD');
+
             // 验证必要参数
             if ($error = $this->validateRequiredParams($params, [
                 'tran_id' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
@@ -61,11 +64,21 @@ class BTGGameController
                 return $this->error(BTGServiceInterface::ERROR_CODE_AUTHORIZATION_INVALID);
             }
 
+            // 验证币别
+            if ($params['currency'] !== $systemCurrency) {
+                $this->logger->error('BTG查询余额失败：币别错误（返回参数错误）', [
+                    'request_currency' => $params['currency'],
+                    'system_currency' => $systemCurrency
+                ]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'currency');
+            }
+
             // 查询玩家
             $player = Player::query()->where('uuid', $params['username'])->first();
             if (!$player) {
-                $this->logger->error('BTG查询余额失败：玩家不存在', ['username' => $params['username']]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_PLAYER_NOT_EXIST);
+                // 单一钱包模式：用户不存在视为参数格式错误
+                $this->logger->error('BTG查询余额失败：玩家不存在（返回参数错误）', ['username' => $params['username']]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'username');
             }
 
             $this->service->player = $player;
@@ -85,7 +98,7 @@ class BTGGameController
 
             return $this->success([
                 'balance' => number_format($balance, 2, '.', ''),
-                'currency' => $params['currency'],
+                'currency' => $systemCurrency, // 使用系统币别，不是请求的币别
                 'tran_id' => $params['tran_id'],
             ]);
         } catch (Exception $e) {
@@ -108,6 +121,9 @@ class BTGGameController
             $params = $request->post();
             $this->logger->info('BTG转账请求', ['params' => $params]);
 
+            // 获取系统币别配置
+            $systemCurrency = config('app.currency', 'TWD');
+
             // 验证必要参数
             if ($error = $this->validateRequiredParams($params, [
                 'tran_id' => BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS,
@@ -129,6 +145,15 @@ class BTGGameController
                 return $this->error(BTGServiceInterface::ERROR_CODE_AUTHORIZATION_INVALID);
             }
 
+            // 验证币别
+            if ($params['currency'] !== $systemCurrency) {
+                $this->logger->error('BTG转账失败：币别错误（返回参数错误）', [
+                    'request_currency' => $params['currency'],
+                    'system_currency' => $systemCurrency
+                ]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'currency');
+            }
+
             // 验证 transfer_type
             $allowedTypes = ['start', 'end', 'refund', 'adjust', 'reward'];
             if (!in_array($params['transfer_type'], $allowedTypes)) {
@@ -139,8 +164,9 @@ class BTGGameController
             // 查询玩家
             $player = Player::query()->where('uuid', $params['username'])->first();
             if (!$player) {
-                $this->logger->error('BTG转账失败：玩家不存在', ['username' => $params['username']]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_PLAYER_NOT_EXIST);
+                // 单一钱包模式：用户不存在视为参数格式错误
+                $this->logger->error('BTG转账失败：玩家不存在（返回参数错误）', ['username' => $params['username']]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'username');
             }
 
             $this->service->player = $player;
@@ -190,7 +216,7 @@ class BTGGameController
 
             return $this->success([
                 'balance' => number_format($result['balance'], 2, '.', ''),
-                'currency' => $params['currency'],
+                'currency' => $systemCurrency, // 使用系统币别，不是请求的币别
                 'tran_id' => $params['tran_id'],
             ]);
         } catch (Exception $e) {
