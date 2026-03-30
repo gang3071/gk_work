@@ -139,7 +139,7 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
         } catch (Exception $e) {
-            Log::error('RSG cancelBet failed', ['error' => $e->getMessage()]);
+            Log::error('RSG cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('RSG', '取消下注异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -166,7 +166,7 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
         } catch (Exception $e) {
-            Log::error('RSG betResult failed', ['error' => $e->getMessage()]);
+            Log::error('RSG betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('RSG', '结算异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -193,7 +193,7 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'Balance' => $balance]);
         } catch (Exception $e) {
-            Log::error('RSG reBetResult failed', ['error' => $e->getMessage()]);
+            Log::error('RSG reBetResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('RSG', '重新结算异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -220,7 +220,7 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
         } catch (Exception $e) {
-            Log::error('RSG jackpotResult failed', ['error' => $e->getMessage()]);
+            Log::error('RSG jackpotResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('RSG', 'Jackpot异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -246,7 +246,7 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $balance);
         } catch (Exception $e) {
-            Log::error('RSG prepay failed', ['error' => $e->getMessage()]);
+            Log::error('RSG prepay failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('RSG', '预扣金额异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -272,7 +272,7 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $balance);
         } catch (Exception $e) {
-            Log::error('RSG refund failed', ['error' => $e->getMessage()]);
+            Log::error('RSG refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('RSG', '退款异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -299,7 +299,7 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $result);
         } catch (Exception $e) {
-            Log::error('RSG checkTransaction failed', ['error' => $e->getMessage()]);
+            Log::error('RSG checkTransaction failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('RSG', '检查交易异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
