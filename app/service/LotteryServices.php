@@ -31,7 +31,7 @@ class LotteryServices
     const BURST_CHECK_INTERVAL = 5;           // 爆彩检查间隔（秒）
     const REDIS_KEY_LAST_BURST_CHECK = 'machine_lottery_last_burst_check:';
     const DB_SYNC_THRESHOLD = 10;            // 累积达到此金额后同步到数据库
-    const DB_SYNC_INTERVAL = 1;               // 定期同步到数据库的间隔（秒）
+    const DB_SYNC_INTERVAL = 2;               // 定期同步到数据库的间隔（秒）
 
     // 实时推送优化配置
     const PUSH_DEBOUNCE_INTERVAL = 1;         // 推送防抖间隔（秒）
