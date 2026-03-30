@@ -175,6 +175,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         // 构建ATG限红参数（ATG使用营运账号：operator, key, providerId）
         // 支持多种字段命名方式：key/operator_key, providerId/provider_id
+        // 注意：api_domain 固定使用配置文件，不从数据库读取
         $limitConfig = [];
 
         if (!empty($configData['operator'])) {
@@ -193,10 +194,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             $limitConfig['providerId'] = $configData['providerId'];
         } elseif (!empty($configData['provider_id'])) {
             $limitConfig['providerId'] = $configData['provider_id'];
-        }
-
-        if (!empty($configData['api_domain'])) {
-            $limitConfig['api_domain'] = $configData['api_domain'];
         }
 
         return !empty($limitConfig) ? $limitConfig : null;
@@ -870,7 +867,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                             'operator' => $operator,
                             'key' => $key,
                             'providerId' => $configData['providerId'] ?? $configData['provider_id'] ?? null,
-                            'api_domain' => $configData['api_domain'] ?? null,
                             'limit_group_id' => $limitGroupConfig->limit_group_id,
                             'source' => 'limit_group',
                         ];
@@ -954,8 +950,11 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             return $this->error = ATGGameController::API_CODE_FAIL;
         }
 
+        // 获取配置文件中的 api_domain（固定使用配置文件，不使用数据库）
+        $configFile = config('game_platform.ATG');
+
         $this->config = [
-            'api_domain' => $playerLimitConfig['api_domain'],
+            'api_domain' => $configFile['api_domain'],  // 固定使用配置文件的 api_domain
             'operator' => $playerLimitConfig['operator'],
             'providerId' => $playerLimitConfig['providerId'],
             'key' => $playerLimitConfig['key'],
