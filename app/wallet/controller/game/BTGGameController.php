@@ -3,6 +3,7 @@
 namespace app\wallet\controller\game;
 
 use app\model\Player;
+use app\model\PlayGameRecord;
 use app\service\game\BTGServiceInterface;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
@@ -27,6 +28,9 @@ class BTGGameController
 
     private $logger;
 
+    // 允许的transfer类型
+    private const ALLOWED_TRANSFER_TYPES = ['start', 'end', 'refund', 'adjust', 'reward'];
+
     public function __construct()
     {
         $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_BTG);
@@ -45,7 +49,6 @@ class BTGGameController
             $params = $request->post();
             $this->logger->info('BTG查询余额请求', ['params' => $params]);
 
-            // 获取系统币别配置
             $systemCurrency = config('app.currency', 'TWD');
 
             // 验证必要参数
@@ -58,60 +61,20 @@ class BTGGameController
                 return $error;
             }
 
-            // 验证签名
-            if (!$this->service->verifyAuthCode($params)) {
-                $this->logger->error('BTG查询余额失败：auth_code验证失败', ['params' => $params]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_AUTHORIZATION_INVALID);
+            // 验证签名和币别
+            if ($error = $this->validateAuthAndCurrency($params, $systemCurrency, 'BTG查询余额')) {
+                return $error;
             }
 
-            // 验证币别
-            if ($params['currency'] !== $systemCurrency) {
-                $this->logger->error('BTG查询余额失败：币别错误（返回参数错误）', [
-                    'request_currency' => $params['currency'],
-                    'system_currency' => $systemCurrency
-                ]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'currency');
-            }
-
-            // 检查 tran_id 是否重复（从数据库查询original_data和action_data）
-            // 注意：balance操作不产生游戏记录，这里主要检查transfer类操作的重复
-            $existingRecord = \app\model\PlayGameRecord::query()
-                ->where('platform_id', $this->service->platform->id)
-                ->where(function ($query) use ($params) {
-                    $query->where("original_data->tran_id", $params['tran_id'])
-                          ->orWhere("action_data->tran_id", $params['tran_id']);
-                })
-                ->first();
-
-            if ($existingRecord) {
-                // 幂等性：重复请求返回成功和当前余额
-                $this->logger->info('BTG查询余额：请求已处理（幂等性，返回成功）', [
-                    'tran_id' => $params['tran_id'],
-                    'existing_record_id' => $existingRecord->id
-                ]);
-
-                // 查询玩家获取当前余额
-                $player = Player::query()->where('uuid', $params['username'])->first();
-                if (!$player) {
-                    $this->logger->error('BTG查询余额失败：玩家不存在（返回参数错误）', ['username' => $params['username']]);
-                    return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'username');
-                }
-
-                // 返回成功和当前余额（幂等性）
-                $balance = $player->machine_wallet->money ?? 0;
-                return $this->success([
-                    'balance' => number_format($balance, 2, '.', ''),
-                    'currency' => $systemCurrency,
-                    'tran_id' => $params['tran_id'],
-                ]);
+            // 检查幂等性
+            if ($response = $this->checkIdempotency($params['tran_id'], $params['username'], $systemCurrency)) {
+                return $response;
             }
 
             // 查询玩家
-            $player = Player::query()->where('uuid', $params['username'])->first();
-            if (!$player) {
-                // 单一钱包模式：用户不存在视为参数格式错误
-                $this->logger->error('BTG查询余额失败：玩家不存在（返回参数错误）', ['username' => $params['username']]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'username');
+            $player = $this->getPlayer($params['username'], 'BTG查询余额');
+            if ($player instanceof Response) {
+                return $player;
             }
 
             $this->service->player = $player;
@@ -119,7 +82,10 @@ class BTGGameController
             // 获取余额
             $balance = $this->service->balance();
             if ($this->service->error) {
-                $this->logger->error('BTG查询余额失败：获取余额错误', ['error' => $this->service->error, 'player_id' => $player->id]);
+                $this->logger->error('BTG查询余额失败：获取余额错误', [
+                    'error' => $this->service->error,
+                    'player_id' => $player->id
+                ]);
                 return $this->error($this->service->error);
             }
 
@@ -131,11 +97,14 @@ class BTGGameController
 
             return $this->success([
                 'balance' => number_format($balance, 2, '.', ''),
-                'currency' => $systemCurrency, // 使用系统币别，不是请求的币别
+                'currency' => $systemCurrency,
                 'tran_id' => $params['tran_id'],
             ]);
         } catch (Exception $e) {
-            $this->logger->error('BTG查询余额异常', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('BTG查询余额异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('BTG', '查询余额异常', $e, ['params' => $request->post()]);
             return $this->error(BTGServiceInterface::ERROR_CODE_SOMETHING_WRONG, [], 'message');
         }
@@ -154,7 +123,6 @@ class BTGGameController
             $params = $request->post();
             $this->logger->info('BTG转账请求', ['params' => $params]);
 
-            // 获取系统币别配置
             $systemCurrency = config('app.currency', 'TWD');
 
             // 验证必要参数
@@ -172,86 +140,44 @@ class BTGGameController
                 return $error;
             }
 
-            // 验证签名
-            if (!$this->service->verifyAuthCode($params)) {
-                $this->logger->error('BTG转账失败：auth_code验证失败', ['params' => $params]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_AUTHORIZATION_INVALID);
-            }
-
-            // 验证币别
-            if ($params['currency'] !== $systemCurrency) {
-                $this->logger->error('BTG转账失败：币别错误（返回参数错误）', [
-                    'request_currency' => $params['currency'],
-                    'system_currency' => $systemCurrency
-                ]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'currency');
+            // 验证签名和币别
+            if ($error = $this->validateAuthAndCurrency($params, $systemCurrency, 'BTG转账')) {
+                return $error;
             }
 
             // 验证 transfer_type
-            $allowedTypes = ['start', 'end', 'refund', 'adjust', 'reward'];
-            if (!in_array($params['transfer_type'], $allowedTypes)) {
-                $this->logger->error('BTG转账失败：无效的transfer_type', ['transfer_type' => $params['transfer_type']]);
+            if (!in_array($params['transfer_type'], self::ALLOWED_TRANSFER_TYPES)) {
+                $this->logger->error('BTG转账失败：无效的transfer_type', [
+                    'transfer_type' => $params['transfer_type']
+                ]);
                 return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'transfer_type');
             }
 
-            // 检查 tran_id 是否重复（从数据库查询original_data和action_data）
-            // original_data: start操作的tran_id
-            // action_data: end/refund/adjust/reward操作的tran_id
-            $existingRecord = \app\model\PlayGameRecord::query()
-                ->where('platform_id', $this->service->platform->id)
-                ->where(function ($query) use ($params) {
-                    $query->where("original_data->tran_id", $params['tran_id'])
-                          ->orWhere("action_data->tran_id", $params['tran_id']);
-                })
-                ->first();
-
-            if ($existingRecord) {
-                // 幂等性：重复请求返回成功和当前余额
-                $this->logger->info('BTG转账：请求已处理（幂等性，返回成功）', [
-                    'tran_id' => $params['tran_id'],
-                    'existing_record_id' => $existingRecord->id
-                ]);
-
-                // 查询玩家获取当前余额
-                $player = Player::query()->where('uuid', $params['username'])->first();
-                if (!$player) {
-                    $this->logger->error('BTG转账失败：玩家不存在（返回参数错误）', ['username' => $params['username']]);
-                    return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'username');
-                }
-
-                // 返回成功和当前余额（幂等性）
-                $balance = $player->machine_wallet->money ?? 0;
-                return $this->success([
-                    'balance' => number_format($balance, 2, '.', ''),
-                    'currency' => $systemCurrency,
-                    'tran_id' => $params['tran_id'],
-                ]);
+            // 检查幂等性
+            if ($response = $this->checkIdempotency($params['tran_id'], $params['username'], $systemCurrency)) {
+                return $response;
             }
 
             // 查询玩家
-            $player = Player::query()->where('uuid', $params['username'])->first();
-            if (!$player) {
-                // 单一钱包模式：用户不存在视为参数格式错误
-                $this->logger->error('BTG转账失败：玩家不存在（返回参数错误）', ['username' => $params['username']]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'username');
+            $player = $this->getPlayer($params['username'], 'BTG转账');
+            if ($player instanceof Response) {
+                return $player;
             }
 
             $this->service->player = $player;
 
             // 解析 trans_details
-            $transDetails = json_decode($params['trans_details'], true);
-            if (!$transDetails) {
-                $this->logger->error('BTG转账失败：trans_details格式错误', ['trans_details' => $params['trans_details']]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'trans_details');
+            $transDetails = $this->parseJsonParam($params['trans_details'], 'trans_details', 'BTG转账');
+            if ($transDetails instanceof Response) {
+                return $transDetails;
             }
 
             // 解析 betform_details（如果存在）
             $betformDetails = [];
-            if (isset($params['betform_details']) && $params['betform_details'] !== '{}') {
-                $betformDetails = json_decode($params['betform_details'], true);
-                if (!$betformDetails) {
-                    $this->logger->error('BTG转账失败：betform_details格式错误', ['betform_details' => $params['betform_details']]);
-                    return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'betform_details');
+            if (isset($params['betform_details'])) {
+                $betformDetails = $this->parseJsonParam($params['betform_details'], 'betform_details', 'BTG转账');
+                if ($betformDetails instanceof Response) {
+                    return $betformDetails;
                 }
             }
 
@@ -283,11 +209,14 @@ class BTGGameController
 
             return $this->success([
                 'balance' => number_format($result['balance'], 2, '.', ''),
-                'currency' => $systemCurrency, // 使用系统币别，不是请求的币别
+                'currency' => $systemCurrency,
                 'tran_id' => $params['tran_id'],
             ]);
         } catch (Exception $e) {
-            $this->logger->error('BTG转账异常', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('BTG转账异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('BTG', '转账异常', $e, ['params' => $request->post()]);
             return $this->error(BTGServiceInterface::ERROR_CODE_SOMETHING_WRONG);
         }
@@ -337,6 +266,121 @@ class BTGGameController
             }
         }
         return null;
+    }
+
+    /**
+     * 验证签名和币别
+     *
+     * @param array $params 请求参数
+     * @param string $systemCurrency 系统币别
+     * @param string $logPrefix 日志前缀
+     * @return Response|null 如果验证失败返回错误响应，成功返回null
+     */
+    private function validateAuthAndCurrency(array $params, string $systemCurrency, string $logPrefix = 'BTG'): ?Response
+    {
+        // 验证签名
+        if (!$this->service->verifyAuthCode($params)) {
+            $this->logger->error("{$logPrefix}失败：auth_code验证失败", ['params' => $params]);
+            return $this->error(BTGServiceInterface::ERROR_CODE_AUTHORIZATION_INVALID);
+        }
+
+        // 验证币别
+        if ($params['currency'] !== $systemCurrency) {
+            $this->logger->error("{$logPrefix}失败：币别错误", [
+                'request_currency' => $params['currency'],
+                'system_currency' => $systemCurrency
+            ]);
+            return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'currency');
+        }
+
+        return null;
+    }
+
+    /**
+     * 查询玩家并返回
+     *
+     * @param string $username 玩家用户名
+     * @param string $logPrefix 日志前缀
+     * @return Player|Response 成功返回Player对象，失败返回Response
+     */
+    private function getPlayer(string $username, string $logPrefix = 'BTG')
+    {
+        $player = Player::query()->where('uuid', $username)->first();
+        if (!$player) {
+            $this->logger->error("{$logPrefix}失败：玩家不存在", ['username' => $username]);
+            return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'username');
+        }
+        return $player;
+    }
+
+    /**
+     * 检查tran_id是否重复（幂等性）
+     *
+     * @param string $tranId 交易ID
+     * @param string $username 玩家用户名
+     * @param string $systemCurrency 系统币别
+     * @return Response|null 如果是重复请求返回成功响应，否则返回null
+     */
+    private function checkIdempotency(string $tranId, string $username, string $systemCurrency): ?Response
+    {
+        $existingRecord = PlayGameRecord::query()
+            ->where('platform_id', $this->service->platform->id)
+            ->where(function ($query) use ($tranId) {
+                $query->where("original_data->tran_id", $tranId)
+                      ->orWhere("action_data->tran_id", $tranId);
+            })
+            ->first();
+
+        if (!$existingRecord) {
+            return null;
+        }
+
+        // 幂等性：重复请求返回成功和当前余额
+        $this->logger->info('BTG请求已处理（幂等性，返回成功）', [
+            'tran_id' => $tranId,
+            'existing_record_id' => $existingRecord->id
+        ]);
+
+        // 查询玩家获取当前余额
+        $player = $this->getPlayer($username, 'BTG幂等性');
+        if ($player instanceof Response) {
+            return $player;
+        }
+
+        // 返回成功和当前余额（幂等性）
+        $balance = $player->machine_wallet->money ?? 0;
+        return $this->success([
+            'balance' => number_format($balance, 2, '.', ''),
+            'currency' => $systemCurrency,
+            'tran_id' => $tranId,
+        ]);
+    }
+
+    /**
+     * 解析JSON参数
+     *
+     * @param string $jsonString JSON字符串
+     * @param string $paramName 参数名称
+     * @param string $logPrefix 日志前缀
+     * @return array|Response 成功返回数组，失败返回Response
+     */
+    private function parseJsonParam(string $jsonString, string $paramName, string $logPrefix = 'BTG')
+    {
+        // 空JSON对象视为空数组
+        if ($jsonString === '{}') {
+            return [];
+        }
+
+        $data = json_decode($jsonString, true);
+        if ($data === null && json_last_error() !== JSON_ERROR_NONE) {
+            $this->logger->error("{$logPrefix}失败：{$paramName}格式错误", [
+                $paramName => $jsonString,
+                'json_error' => json_last_error_msg()
+            ]);
+            return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], $paramName);
+        }
+
+        return $data ?? [];
     }
 
     /**

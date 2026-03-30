@@ -192,6 +192,81 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
     }
 
     /**
+     * 创建游戏记录的基础数据
+     *
+     * @param string $orderId 订单号
+     * @param array $params 请求参数
+     * @return array 基础记录数据
+     */
+    private function buildGameRecordBaseData(string $orderId, array $params): array
+    {
+        return [
+            'player_id' => $this->player->id,
+            'parent_player_id' => $this->player->recommend_id ?? 0,
+            'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
+            'player_uuid' => $this->player->uuid,
+            'platform_id' => $this->platform->id,
+            'game_code' => $params['game_code'] ?? '',
+            'department_id' => $this->player->department_id,
+            'order_no' => $orderId,
+            'order_time' => Carbon::now()->toDateTimeString(),
+        ];
+    }
+
+    /**
+     * 创建资金交易记录
+     *
+     * @param PlayerPlatformCash $wallet 钱包
+     * @param PlayGameRecord $record 游戏记录
+     * @param float $amount 金额
+     * @param int $type 交易类型
+     * @param string $source 来源
+     * @param string $remark 备注
+     * @param float $beforeBalance 交易前余额
+     */
+    private function createDeliveryRecord(
+        PlayerPlatformCash $wallet,
+        PlayGameRecord $record,
+        float $amount,
+        int $type,
+        string $source,
+        string $remark,
+        float $beforeBalance
+    ): void {
+        $playerDeliveryRecord = new PlayerDeliveryRecord();
+        $playerDeliveryRecord->player_id = $this->player->id;
+        $playerDeliveryRecord->department_id = $this->player->department_id;
+        $playerDeliveryRecord->target = $record->getTable();
+        $playerDeliveryRecord->target_id = $record->id;
+        $playerDeliveryRecord->platform_id = $this->platform->id;
+        $playerDeliveryRecord->type = $type;
+        $playerDeliveryRecord->source = $source;
+        $playerDeliveryRecord->amount = $amount;
+        $playerDeliveryRecord->amount_before = $beforeBalance;
+        $playerDeliveryRecord->amount_after = $wallet->money;
+        $playerDeliveryRecord->tradeno = $record->order_no;
+        $playerDeliveryRecord->remark = $remark;
+        $playerDeliveryRecord->user_id = 0;
+        $playerDeliveryRecord->user_name = '';
+        $playerDeliveryRecord->save();
+    }
+
+    /**
+     * 查找并锁定游戏记录
+     *
+     * @param string $orderId 订单号
+     * @return PlayGameRecord|null
+     */
+    private function findAndLockGameRecord(string $orderId): ?PlayGameRecord
+    {
+        return PlayGameRecord::query()
+            ->where('order_no', $orderId)
+            ->where('platform_id', $this->platform->id)
+            ->lockForUpdate()
+            ->first();
+    }
+
+    /**
      * 检查玩家
      * @throws GameException
      */
@@ -992,22 +1067,13 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 ]);
 
                 // 创建游戏记录（不扣款）
-                $insert = [
-                    'player_id' => $this->player->id,
-                    'parent_player_id' => $this->player->recommend_id ?? 0,
-                    'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
-                    'player_uuid' => $this->player->uuid,
-                    'platform_id' => $this->platform->id,
-                    'game_code' => $params['game_code'] ?? '',
-                    'department_id' => $this->player->department_id,
+                $insert = array_merge($this->buildGameRecordBaseData($orderId, $params), [
                     'bet' => 0,
                     'win' => 0,
                     'diff' => 0,
-                    'order_no' => $orderId,
                     'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
-                    'order_time' => Carbon::now()->toDateTimeString(),
                     'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-                ];
+                ]);
 
                 PlayGameRecord::query()->create($insert);
 
@@ -1027,22 +1093,13 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
 
             // 创建游戏记录
-            $insert = [
-                'player_id' => $this->player->id,
-                'parent_player_id' => $this->player->recommend_id ?? 0,
-                'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
-                'player_uuid' => $this->player->uuid,
-                'platform_id' => $this->platform->id,
-                'game_code' => $params['game_code'] ?? '',
-                'department_id' => $this->player->department_id,
+            $insert = array_merge($this->buildGameRecordBaseData($orderId, $params), [
                 'bet' => $amount,
                 'win' => 0,
                 'diff' => -$amount,
-                'order_no' => $orderId,
                 'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
-                'order_time' => Carbon::now()->toDateTimeString(),
                 'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-            ];
+            ]);
 
             /** @var PlayGameRecord $record */
             $record = PlayGameRecord::query()->create($insert);
@@ -1083,12 +1140,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
             // 查找对应的下注记录（加锁防止并发）
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()
-                ->where('order_no', $orderId)
-                ->where('platform_id', $this->platform->id)
-                ->lockForUpdate()
-                ->first();
+            $record = $this->findAndLockGameRecord($orderId);
 
             // 如果找不到下注记录，返回交易不存在错误
             if (!$record) {
@@ -1126,22 +1178,15 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 $machineWallet->save();
 
                 // 创建派彩交易记录
-                $playerDeliveryRecord = new PlayerDeliveryRecord();
-                $playerDeliveryRecord->player_id = $this->player->id;
-                $playerDeliveryRecord->department_id = $this->player->department_id;
-                $playerDeliveryRecord->target = $record->getTable();
-                $playerDeliveryRecord->target_id = $record->id;
-                $playerDeliveryRecord->platform_id = $this->platform->id;
-                $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
-                $playerDeliveryRecord->source = 'player_bet_settlement';
-                $playerDeliveryRecord->amount = $winAmount;
-                $playerDeliveryRecord->amount_before = $beforeBalance;
-                $playerDeliveryRecord->amount_after = $machineWallet->money;
-                $playerDeliveryRecord->tradeno = $orderId;
-                $playerDeliveryRecord->remark = '遊戲結算';
-                $playerDeliveryRecord->user_id = 0;
-                $playerDeliveryRecord->user_name = '';
-                $playerDeliveryRecord->save();
+                $this->createDeliveryRecord(
+                    $machineWallet,
+                    $record,
+                    $winAmount,
+                    PlayerDeliveryRecord::TYPE_SETTLEMENT,
+                    'player_bet_settlement',
+                    '遊戲結算',
+                    $beforeBalance
+                );
             }
 
             // 更新游戏记录
@@ -1207,12 +1252,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
             // 查找对应的下注记录（加锁防止并发）
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()
-                ->where('order_no', $orderId)
-                ->where('platform_id', $this->platform->id)
-                ->lockForUpdate()
-                ->first();
+            $record = $this->findAndLockGameRecord($orderId);
 
             if (!$record) {
                 $this->error = self::ERROR_CODE_TRANSACTION_NOT_EXIST;
@@ -1236,22 +1276,15 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $machineWallet->save();
 
             // 创建退款交易记录
-            $playerDeliveryRecord = new PlayerDeliveryRecord();
-            $playerDeliveryRecord->player_id = $this->player->id;
-            $playerDeliveryRecord->department_id = $this->player->department_id;
-            $playerDeliveryRecord->target = $record->getTable();
-            $playerDeliveryRecord->target_id = $record->id;
-            $playerDeliveryRecord->platform_id = $this->platform->id;
-            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_CANCEL_BET;
-            $playerDeliveryRecord->source = 'player_bet_refund';
-            $playerDeliveryRecord->amount = $refundAmount;
-            $playerDeliveryRecord->amount_before = $beforeBalance;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
-            $playerDeliveryRecord->tradeno = $orderId;
-            $playerDeliveryRecord->remark = '下注退款';
-            $playerDeliveryRecord->user_id = 0;
-            $playerDeliveryRecord->user_name = '';
-            $playerDeliveryRecord->save();
+            $this->createDeliveryRecord(
+                $machineWallet,
+                $record,
+                $refundAmount,
+                PlayerDeliveryRecord::TYPE_CANCEL_BET,
+                'player_bet_refund',
+                '下注退款',
+                $beforeBalance
+            );
 
             // 更新游戏记录状态
             $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_CANCELLED;
@@ -1294,12 +1327,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
 
             // 查找对应的游戏记录（加锁防止并发）
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()
-                ->where('order_no', $orderId)
-                ->where('platform_id', $this->platform->id)
-                ->lockForUpdate()
-                ->first();
+            $record = $this->findAndLockGameRecord($orderId);
 
             if (!$record) {
                 $this->error = self::ERROR_CODE_TRANSACTION_NOT_EXIST;
@@ -1323,22 +1351,15 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $machineWallet->save();
 
             // 创建调整交易记录
-            $playerDeliveryRecord = new PlayerDeliveryRecord();
-            $playerDeliveryRecord->player_id = $this->player->id;
-            $playerDeliveryRecord->department_id = $this->player->department_id;
-            $playerDeliveryRecord->target = $record->getTable();
-            $playerDeliveryRecord->target_id = $record->id;
-            $playerDeliveryRecord->platform_id = $this->platform->id;
-            $playerDeliveryRecord->type = $adjustAmount > 0 ? PlayerDeliveryRecord::TYPE_SETTLEMENT : PlayerDeliveryRecord::TYPE_BET;
-            $playerDeliveryRecord->source = 'player_bet_adjust';
-            $playerDeliveryRecord->amount = abs($adjustAmount);
-            $playerDeliveryRecord->amount_before = $beforeBalance;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
-            $playerDeliveryRecord->tradeno = $orderId;
-            $playerDeliveryRecord->remark = '金額調整';
-            $playerDeliveryRecord->user_id = 0;
-            $playerDeliveryRecord->user_name = '';
-            $playerDeliveryRecord->save();
+            $this->createDeliveryRecord(
+                $machineWallet,
+                $record,
+                abs($adjustAmount),
+                $adjustAmount > 0 ? PlayerDeliveryRecord::TYPE_SETTLEMENT : PlayerDeliveryRecord::TYPE_BET,
+                'player_bet_adjust',
+                '金額調整',
+                $beforeBalance
+            );
 
             // 更新游戏记录（保存完整params和betform_details，确保tran_id可被查询）
             $record->win = (float)($betformDetails['win'] ?? $record->win);
@@ -1410,45 +1431,29 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $machineWallet->save();
 
             // 创建游戏记录（奖励记录）
-            $insert = [
-                'player_id' => $this->player->id,
-                'parent_player_id' => $this->player->recommend_id ?? 0,
-                'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
-                'player_uuid' => $this->player->uuid,
-                'platform_id' => $this->platform->id,
-                'game_code' => $params['game_code'] ?? '',
-                'department_id' => $this->player->department_id,
+            $insert = array_merge($this->buildGameRecordBaseData($orderId, $params), [
                 'bet' => 0,
                 'win' => $rewardAmount,
                 'diff' => $rewardAmount,
-                'order_no' => $orderId,
                 'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
                 'action_data' => json_encode($betformDetails, JSON_UNESCAPED_UNICODE),
-                'order_time' => Carbon::now()->toDateTimeString(),
                 'platform_action_at' => Carbon::now()->toDateTimeString(),
                 'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_SETTLED
-            ];
+            ]);
 
             /** @var PlayGameRecord $record */
             $record = PlayGameRecord::query()->create($insert);
 
             // 创建奖励交易记录
-            $playerDeliveryRecord = new PlayerDeliveryRecord();
-            $playerDeliveryRecord->player_id = $this->player->id;
-            $playerDeliveryRecord->department_id = $this->player->department_id;
-            $playerDeliveryRecord->target = $record->getTable();
-            $playerDeliveryRecord->target_id = $record->id;
-            $playerDeliveryRecord->platform_id = $this->platform->id;
-            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
-            $playerDeliveryRecord->source = 'player_bet_reward';
-            $playerDeliveryRecord->amount = $rewardAmount;
-            $playerDeliveryRecord->amount_before = $beforeBalance;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
-            $playerDeliveryRecord->tradeno = $orderId;
-            $playerDeliveryRecord->remark = '額外獎金';
-            $playerDeliveryRecord->user_id = 0;
-            $playerDeliveryRecord->user_name = '';
-            $playerDeliveryRecord->save();
+            $this->createDeliveryRecord(
+                $machineWallet,
+                $record,
+                $rewardAmount,
+                PlayerDeliveryRecord::TYPE_SETTLEMENT,
+                'player_bet_reward',
+                '額外獎金',
+                $beforeBalance
+            );
 
             return ['balance' => (float)$machineWallet->money];
         } catch (Exception $e) {
