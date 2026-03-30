@@ -639,32 +639,51 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     public function jackpotResult($data)
     {
-        //单独使用
-        /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->where('order_no', $data['SequenNumber'])->first();
+        //单独使用（没有成对的 Bet，直接创建记录并结算）
 
-        if ($record) {
-            return $this->error = RsgGameController::API_CODE_ORDER_SETTLED;
+        // 检查是否重复
+        if (PlayGameRecord::query()->where('order_no', $data['SequenNumber'])->exists()) {
+            return $this->error = RsgGameController::API_CODE_DUPLICATE_ORDER;
         }
 
+        $player = $this->player;
+        $money = $data['Amount'];
 
-        //处理用户中奖金额
+        // 锁定玩家钱包
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+        $beforeGameAmount = $machineWallet->money;
 
-        //判断输赢
-        if ($data['Amount'] > 0) {
-            //赢
-            $money = $data['Amount'];
-            $beforeGameAmount = $machineWallet->money;
-            //处理用户金额记录
-            // 更新玩家统计
+        // 创建游戏记录（JackpotResult 没有下注，bet=0，直接是已结算状态）
+        $insert = [
+            'player_id' => $this->player->id,
+            'parent_player_id' => $player->recommend_id ?? 0,
+            'agent_player_id' => $player->recommend_promoter->recommend_id ?? 0,
+            'player_uuid' => $player->uuid,
+            'platform_id' => $this->platform->id,
+            'game_code' => $data['GameId'],
+            'department_id' => $player->department_id,
+            'bet' => 0, // JackpotResult 没有下注金额
+            'win' => $money,
+            'diff' => $money, // diff = win - bet = money - 0
+            'order_no' => $data['SequenNumber'],
+            'original_data' => json_encode($data, JSON_UNESCAPED_UNICODE),
+            'order_time' => Carbon::now()->toDateTimeString(),
+            'platform_action_at' => $data['PlayTime'],
+            'action_data' => json_encode($data, JSON_UNESCAPED_UNICODE),
+            'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_SETTLED // 直接已结算
+        ];
+
+        /** @var PlayGameRecord $record */
+        $record = PlayGameRecord::query()->create($insert);
+
+        // 处理中奖金额（只赢不输）
+        if ($money > 0) {
+            // 更新玩家余额
             $machineWallet->money = bcadd($machineWallet->money, $money, 2);
             $machineWallet->save();
 
-            $player = $this->player;
-            //todo 语言文件后续处理
-            //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
+            // 创建交易记录
             $playerDeliveryRecord = new PlayerDeliveryRecord;
             $playerDeliveryRecord->player_id = $player->id;
             $playerDeliveryRecord->department_id = $player->department_id;
@@ -683,12 +702,7 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             $playerDeliveryRecord->save();
         }
 
-        $record->platform_action_at = $data['PlayTime'];
-        $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
-        $record->action_data = json_encode($data, JSON_UNESCAPED_UNICODE);
-        $record->win = $data['Amount'];
-        $record->diff = $data['Amount'];
-        $record->save();
+
 
         return $this->player->machine_wallet->money;
     }
