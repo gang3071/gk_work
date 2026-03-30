@@ -25,7 +25,7 @@ class LotteryPoolSocket
     public function onWorkerStart()
     {
         // 每2秒执行一次检查
-        new Crontab('*/2 * * * * *', function () {
+        new Crontab('*/1 * * * * *', function () {
             try {
                 $this->sendLotteryPoolData();
             } catch (\Throwable $e) {
