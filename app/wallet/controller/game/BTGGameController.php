@@ -73,16 +73,37 @@ class BTGGameController
                 return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'currency');
             }
 
-            // 检查 tran_id 是否重复（从数据库查询original_data）
+            // 检查 tran_id 是否重复（从数据库查询original_data和action_data）
             // 注意：balance操作不产生游戏记录，这里主要检查transfer类操作的重复
             $existingRecord = \app\model\PlayGameRecord::query()
                 ->where('platform_id', $this->service->platform->id)
-                ->where("original_data->tran_id", $params['tran_id'])
+                ->where(function ($query) use ($params) {
+                    $query->where("original_data->tran_id", $params['tran_id'])
+                          ->orWhere("action_data->tran_id", $params['tran_id']);
+                })
                 ->first();
 
             if ($existingRecord) {
-                $this->logger->info('BTG查询余额：请求已处理（幂等性）', ['tran_id' => $params['tran_id']]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_TRANSACTION_SETTLED);
+                // 幂等性：重复请求返回成功和当前余额
+                $this->logger->info('BTG查询余额：请求已处理（幂等性，返回成功）', [
+                    'tran_id' => $params['tran_id'],
+                    'existing_record_id' => $existingRecord->id
+                ]);
+
+                // 查询玩家获取当前余额
+                $player = Player::query()->where('uuid', $params['username'])->first();
+                if (!$player) {
+                    $this->logger->error('BTG查询余额失败：玩家不存在（返回参数错误）', ['username' => $params['username']]);
+                    return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'username');
+                }
+
+                // 返回成功和当前余额（幂等性）
+                $balance = $player->machine_wallet->money ?? 0;
+                return $this->success([
+                    'balance' => number_format($balance, 2, '.', ''),
+                    'currency' => $systemCurrency,
+                    'tran_id' => $params['tran_id'],
+                ]);
             }
 
             // 查询玩家
@@ -185,8 +206,26 @@ class BTGGameController
                 ->first();
 
             if ($existingRecord) {
-                $this->logger->info('BTG转账：请求已处理（幂等性）', ['tran_id' => $params['tran_id']]);
-                return $this->error(BTGServiceInterface::ERROR_CODE_TRANSACTION_SETTLED);
+                // 幂等性：重复请求返回成功和当前余额
+                $this->logger->info('BTG转账：请求已处理（幂等性，返回成功）', [
+                    'tran_id' => $params['tran_id'],
+                    'existing_record_id' => $existingRecord->id
+                ]);
+
+                // 查询玩家获取当前余额
+                $player = Player::query()->where('uuid', $params['username'])->first();
+                if (!$player) {
+                    $this->logger->error('BTG转账失败：玩家不存在（返回参数错误）', ['username' => $params['username']]);
+                    return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'username');
+                }
+
+                // 返回成功和当前余额（幂等性）
+                $balance = $player->machine_wallet->money ?? 0;
+                return $this->success([
+                    'balance' => number_format($balance, 2, '.', ''),
+                    'currency' => $systemCurrency,
+                    'tran_id' => $params['tran_id'],
+                ]);
             }
 
             // 查询玩家
