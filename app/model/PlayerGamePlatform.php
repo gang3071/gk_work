@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * @property int id 主键
  * @property int platform_id 平台id
  * @property int player_id 游戏编号
+ * @property string operator 营运账号标识（ATG平台使用）
  * @property string player_name 平台游戏类型
  * @property string player_code 游戏类型
  * @property string player_password 玩家密码

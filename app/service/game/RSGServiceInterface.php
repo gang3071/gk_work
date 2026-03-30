@@ -11,6 +11,8 @@ use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
+use app\model\AdminUserLimitGroup;
+use app\model\PlatformLimitGroupConfig;
 use app\wallet\controller\game\RsgGameController;
 use Carbon\Carbon;
 use Exception;
@@ -330,6 +332,73 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
     }
 
     /**
+     * 获取玩家的限红配置
+     * @return array|null 返回限红配置数组，包含MinBetAmount和MaxBetAmount，如果没有配置则返回null
+     */
+    private function getLimitRedConfig(): ?array
+    {
+        $limitGroupConfig = null;
+
+        // 如果玩家有店家ID，优先查询店家绑定的限红组配置
+        if (!empty($this->player->store_admin_id)) {
+            // 查询店家绑定的RSG平台限红组配置
+            $adminUserLimitGroup = AdminUserLimitGroup::query()
+                ->where('admin_user_id', $this->player->store_admin_id)
+                ->where('platform_id', $this->platform->id)
+                ->where('status', 1)
+                ->first();
+
+            // 如果店家有绑定限红组，获取该限红组的平台配置
+            if ($adminUserLimitGroup) {
+                $limitGroupConfig = PlatformLimitGroupConfig::query()
+                    ->where('limit_group_id', $adminUserLimitGroup->limit_group_id)
+                    ->where('platform_id', $this->platform->id)
+                    ->where('status', 1)
+                    ->first();
+            }
+        }
+
+        // 如果没有找到店家限红组配置，则使用平台的默认限红组配置
+        if (!$limitGroupConfig && !empty($this->platform->default_limit_group_id)) {
+            // 从游戏平台表的 default_limit_group_id 字段获取默认限红组配置
+            $limitGroupConfig = PlatformLimitGroupConfig::query()
+                ->where('limit_group_id', $this->platform->default_limit_group_id)
+                ->where('platform_id', $this->platform->id)
+                ->where('status', 1)
+                ->first();
+
+            // 记录使用了默认限红组
+            if ($limitGroupConfig) {
+                $this->log->info('RSG使用平台默认限红组', [
+                    'player_id' => $this->player->id,
+                    'store_admin_id' => $this->player->store_admin_id ?? 'null',
+                    'default_limit_group_id' => $this->platform->default_limit_group_id,
+                ]);
+            }
+        }
+
+        // 如果没有配置数据，返回null
+        if (!$limitGroupConfig || empty($limitGroupConfig->config_data)) {
+            return null;
+        }
+
+        $configData = $limitGroupConfig->config_data;
+
+        // 构建限红参数（RSG支持MinBetAmount和MaxBetAmount）
+        $limitConfig = [];
+
+        if (isset($configData['min_bet_amount']) && $configData['min_bet_amount'] > 0) {
+            $limitConfig['MinBetAmount'] = $configData['min_bet_amount'];
+        }
+
+        if (isset($configData['max_bet_amount']) && $configData['max_bet_amount'] > 0) {
+            $limitConfig['MaxBetAmount'] = $configData['max_bet_amount'];
+        }
+
+        return !empty($limitConfig) ? $limitConfig : null;
+    }
+
+    /**
      * 进入游戏
      * @param Game $game
      * @param string $lang
@@ -349,6 +418,18 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             'Language' => $this->lang[$lang],
             'ExitAction' => '',
         ];
+
+        // 获取并应用限红配置
+        $limitConfig = $this->getLimitRedConfig();
+        if ($limitConfig) {
+            $params = array_merge($params, $limitConfig);
+            $this->log->info('RSG应用限红配置', [
+                'player_id' => $this->player->id,
+                'store_admin_id' => $this->player->store_admin_id,
+                'limit_config' => $limitConfig
+            ]);
+        }
+
         Log::channel('rsg_server')->error('gamelogin', ['params' => $params]);
         $res = $this->doCurl($this->createUrl('gameLogin'), $params);
         $this->log->info('gameLogin', [$res]);
@@ -558,32 +639,51 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     public function jackpotResult($data)
     {
-        //单独使用
-        /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->where('order_no', $data['SequenNumber'])->first();
+        //单独使用（没有成对的 Bet，直接创建记录并结算）
 
-        if ($record) {
-            return $this->error = RsgGameController::API_CODE_ORDER_SETTLED;
+        // 检查是否重复
+        if (PlayGameRecord::query()->where('order_no', $data['SequenNumber'])->exists()) {
+            return $this->error = RsgGameController::API_CODE_DUPLICATE_ORDER;
         }
 
+        $player = $this->player;
+        $money = $data['Amount'];
 
-        //处理用户中奖金额
+        // 锁定玩家钱包
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+        $beforeGameAmount = $machineWallet->money;
 
-        //判断输赢
-        if ($data['Amount'] > 0) {
-            //赢
-            $money = $data['Amount'];
-            $beforeGameAmount = $machineWallet->money;
-            //处理用户金额记录
-            // 更新玩家统计
+        // 创建游戏记录（JackpotResult 没有下注，bet=0，直接是已结算状态）
+        $insert = [
+            'player_id' => $this->player->id,
+            'parent_player_id' => $player->recommend_id ?? 0,
+            'agent_player_id' => $player->recommend_promoter->recommend_id ?? 0,
+            'player_uuid' => $player->uuid,
+            'platform_id' => $this->platform->id,
+            'game_code' => $data['GameId'],
+            'department_id' => $player->department_id,
+            'bet' => 0, // JackpotResult 没有下注金额
+            'win' => $money,
+            'diff' => $money, // diff = win - bet = money - 0
+            'order_no' => $data['SequenNumber'],
+            'original_data' => json_encode($data, JSON_UNESCAPED_UNICODE),
+            'order_time' => Carbon::now()->toDateTimeString(),
+            'platform_action_at' => $data['PlayTime'],
+            'action_data' => json_encode($data, JSON_UNESCAPED_UNICODE),
+            'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_SETTLED // 直接已结算
+        ];
+
+        /** @var PlayGameRecord $record */
+        $record = PlayGameRecord::query()->create($insert);
+
+        // 处理中奖金额（只赢不输）
+        if ($money > 0) {
+            // 更新玩家余额
             $machineWallet->money = bcadd($machineWallet->money, $money, 2);
             $machineWallet->save();
 
-            $player = $this->player;
-            //todo 语言文件后续处理
-            //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
+            // 创建交易记录
             $playerDeliveryRecord = new PlayerDeliveryRecord;
             $playerDeliveryRecord->player_id = $player->id;
             $playerDeliveryRecord->department_id = $player->department_id;
@@ -602,12 +702,7 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             $playerDeliveryRecord->save();
         }
 
-        $record->platform_action_at = $data['PlayTime'];
-        $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
-        $record->action_data = json_encode($data, JSON_UNESCAPED_UNICODE);
-        $record->win = $data['Amount'];
-        $record->diff = $data['Amount'];
-        $record->save();
+
 
         return $this->player->machine_wallet->money;
     }

@@ -670,7 +670,7 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
      */
     protected function getInsufficientBalanceError(): mixed
     {
-        return self::ERROR_CODE_WITHDRAW_FAILED;
+        return self::ERROR_CODE_INSUFFICIENT_BALANCE;
     }
 
     public function bet($data): array|float
@@ -829,12 +829,21 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $record->diff = $money - $record->bet;
             $record->save();
 
-            // 彩金记录
-            Client::send('game-lottery', [
-                'player_id' => $player->id,
-                'bet' => $record->bet,
-                'play_game_record_id' => $record->id
-            ]);
+            // 彩金记录 - 过滤鱼机类型
+            $originalData = json_decode($record->original_data, true);
+            $gameType = $originalData['game_type'] ?? $params['game_type'] ?? '';
+            if ($gameType !== 'fish') {
+                Client::send('game-lottery', [
+                    'player_id' => $player->id,
+                    'bet' => $record->bet,
+                    'play_game_record_id' => $record->id
+                ]);
+            } else {
+                Log::channel('btg_server')->info('BTG betResulet 鱼机游戏跳过彩金记录', [
+                    'order_id' => $record->order_no,
+                    'game_type' => $gameType
+                ]);
+            }
 
             return [
                 'balance' => (float)$machineWallet->money,
@@ -956,7 +965,8 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'order_id' => $orderId,
                 'round_id' => $roundId,
                 'amount' => $amount,
-                'player_id' => $this->player->id
+                'player_id' => $this->player->id,
+                'balance' => $this->player->machine_wallet->money
             ]);
 
             if ($amount <= 0) {
@@ -965,6 +975,11 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                     'original_amount' => $params['amount']
                 ]);
                 $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
+                return ['balance' => $this->player->machine_wallet->money ?? 0];
+            }
+
+            // 检查设备是否爆机
+            if ($this->checkAndHandleMachineCrash()) {
                 return ['balance' => $this->player->machine_wallet->money ?? 0];
             }
 
@@ -1192,12 +1207,20 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             $record->save();
 
-            // 彩金记录
-            Client::send('game-lottery', [
-                'player_id' => $this->player->id,
-                'bet' => $record->bet,
-                'play_game_record_id' => $record->id
-            ]);
+            // 彩金记录 - 过滤鱼机类型
+            $gameType = $params['game_type'] ?? '';
+            if ($gameType !== 'fish') {
+                Client::send('game-lottery', [
+                    'player_id' => $this->player->id,
+                    'bet' => $record->bet,
+                    'play_game_record_id' => $record->id
+                ]);
+            } else {
+                Log::channel('btg_server')->info('BTG transferEnd 鱼机游戏跳过彩金记录', [
+                    'order_id' => $record->order_no,
+                    'game_type' => $gameType
+                ]);
+            }
 
             return ['balance' => (float)$machineWallet->money];
         } catch (Exception $e) {
@@ -1296,6 +1319,11 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         try {
             $adjustAmount = (float)$params['amount']; // amount 可正可负
             $orderId = $transDetails['order_id'] ?? '';
+
+            // 如果是扣款操作，检查设备是否爆机
+            if ($adjustAmount < 0 && $this->checkAndHandleMachineCrash()) {
+                return ['balance' => $this->player->machine_wallet->money ?? 0];
+            }
 
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
