@@ -566,6 +566,9 @@ class LotteryServices
                         }
                     }
 
+                    // 4. 发放金额向下取整（只保留整数位）
+                    $amount = floor($amount);
+
                     // 彩金倍数标记（只由双倍派彩决定）
                     $lotteryMultiple = $isDoubled ? 2 : 1;
 
@@ -686,6 +689,9 @@ class LotteryServices
                     $amount = floatval($lottery->max_amount);
                 }
             }
+
+            // 4. 发放金额向下取整（只保留整数位）
+            $amount = floor($amount);
 
             // 彩金倍数标记（只由双倍派彩决定，爆彩只影响概率不影响金额倍数）
             $lotteryMultiple = $isDoubled ? 2 : 1;
@@ -1247,6 +1253,9 @@ class LotteryServices
                             $amount = floatval($lottery->max_amount);
                         }
                     }
+
+                    // 4. 发放金额向下取整（只保留整数位）
+                    $amount = floor($amount);
 
                     // 彩金倍数标记（只由双倍派彩决定）
                     $lotteryMultiple = $isDoubled ? 2 : 1;

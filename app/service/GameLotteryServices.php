@@ -1403,6 +1403,9 @@ class GameLotteryServices
             }
         }
 
+        // 4. 发放金额向下取整（只保留整数位）
+        $amount = floor($amount);
+
         return (float)$amount;
     }
 
