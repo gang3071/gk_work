@@ -6,12 +6,14 @@
 
 require_once __DIR__ . '/vendor/autoload.php';
 
+// 初始化 Webman 配置和数据库
+\Webman\Config::load(config_path(), ['route', 'container']);
+
 use app\model\Player;
 use app\model\GamePlatform;
 use app\model\AdminUserLimitGroup;
 use app\model\PlatformLimitGroupConfig;
 use app\model\PlatformLimitGroup;
-use Illuminate\Database\Capsule\Manager as DB;
 
 echo "\n========================================\n";
 echo "ATG限红组诊断工具\n";
