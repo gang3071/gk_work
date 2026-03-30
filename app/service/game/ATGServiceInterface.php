@@ -80,13 +80,22 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'key' => $limitConfig['key'],
             ];
 
-            $this->log->info('ATG使用限红组营运账号', [
+            $this->log->info('✅ ATG使用限红组营运账号', [
                 'player_id' => $player->id,
                 'store_admin_id' => $player->store_admin_id,
                 'operator' => $limitConfig['operator'],
+                'providerId' => $this->config['providerId'],
             ]);
         } else {
             $this->config = config('game_platform.ATG');
+
+            $this->log->info('⚠️ ATG使用默认配置（未找到限红组配置）', [
+                'player_id' => $player->id ?? 'null',
+                'store_admin_id' => $player->store_admin_id ?? 'null',
+                'has_limit_config' => $limitConfig ? 'yes' : 'no',
+                'has_operator' => isset($limitConfig['operator']) ? 'yes' : 'no',
+                'has_key' => isset($limitConfig['key']) ? 'yes' : 'no',
+            ]);
         }
 
         $this->apiDomain = $this->config['api_domain'];
@@ -101,6 +110,13 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
     {
         $limitGroupConfig = null;
 
+        // 记录调试信息
+        $this->log->info('ATG开始查询限红组配置', [
+            'player_id' => $this->player->id,
+            'store_admin_id' => $this->player->store_admin_id ?? 'null',
+            'platform_id' => $this->platform->id,
+        ]);
+
         // 如果玩家有店家ID，优先查询店家绑定的限红组配置
         if (!empty($this->player->store_admin_id)) {
             // 查询店家绑定的ATG平台限红组配置
@@ -110,6 +126,13 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                 ->where('status', 1)
                 ->first();
 
+            $this->log->info('ATG查询店家限红组分配', [
+                'admin_user_id' => $this->player->store_admin_id,
+                'platform_id' => $this->platform->id,
+                'found' => $adminUserLimitGroup ? 'yes' : 'no',
+                'limit_group_id' => $adminUserLimitGroup->limit_group_id ?? 'null',
+            ]);
+
             // 如果店家有绑定限红组，获取该限红组的平台配置
             if ($adminUserLimitGroup) {
                 $limitGroupConfig = PlatformLimitGroupConfig::query()
@@ -117,6 +140,13 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                     ->where('platform_id', $this->platform->id)
                     ->where('status', 1)
                     ->first();
+
+                $this->log->info('ATG查询限红组平台配置', [
+                    'limit_group_id' => $adminUserLimitGroup->limit_group_id,
+                    'platform_id' => $this->platform->id,
+                    'found' => $limitGroupConfig ? 'yes' : 'no',
+                    'config_data' => $limitGroupConfig->config_data ?? 'null',
+                ]);
             }
         }
 
@@ -141,6 +171,10 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         // 如果没有配置数据，返回null
         if (!$limitGroupConfig || empty($limitGroupConfig->config_data)) {
+            $this->log->info('ATG限红组配置为空', [
+                'has_config' => $limitGroupConfig ? 'yes' : 'no',
+                'config_data_empty' => empty($limitGroupConfig->config_data ?? null) ? 'yes' : 'no',
+            ]);
             return null;
         }
 
@@ -164,6 +198,13 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         if (!empty($configData['api_domain'])) {
             $limitConfig['api_domain'] = $configData['api_domain'];
         }
+
+        $this->log->info('ATG限红组配置解析结果', [
+            'has_operator' => isset($limitConfig['operator']) ? 'yes' : 'no',
+            'has_key' => isset($limitConfig['key']) ? 'yes' : 'no',
+            'has_providerId' => isset($limitConfig['providerId']) ? 'yes' : 'no',
+            'operator' => $limitConfig['operator'] ?? 'null',
+        ]);
 
         return !empty($limitConfig) ? $limitConfig : null;
     }
