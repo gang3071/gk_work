@@ -11,6 +11,8 @@ use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
+use app\model\AdminUserLimitGroup;
+use app\model\PlatformLimitGroupConfig;
 use app\wallet\controller\game\ATGGameController;
 use app\wallet\controller\game\RsgGameController;
 use Carbon\Carbon;
@@ -51,19 +53,119 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
 
     public ?\Monolog\Logger $log = null;
+
     /**
      * @param Player|null $player
      * @throws Exception
      */
     public function __construct(Player $player = null)
     {
-        $config = config('game_platform.ATG');
-        $this->config = $config;
-        $this->apiDomain = $config['api_domain'];
-        $this->providerId = $config['providerId'];
         $this->platform = GamePlatform::query()->where('code', 'ATG')->first();
         $this->player = $player;
         $this->log = Log::channel('atg_server');
+
+        // 尝试获取玩家的限红组配置（ATG使用营运账号分组）
+        $limitConfig = null;
+        if ($player) {
+            $limitConfig = $this->getLimitRedConfig();
+        }
+
+        // 如果有限红组配置且包含营运账号信息，使用限红组的营运账号；否则使用默认配置
+        if ($limitConfig && isset($limitConfig['operator']) && isset($limitConfig['key'])) {
+            $defaultConfig = config('game_platform.ATG');
+            $this->config = [
+                'api_domain' => $limitConfig['api_domain'] ?? $defaultConfig['api_domain'],
+                'operator' => $limitConfig['operator'],
+                'providerId' => $limitConfig['providerId'] ?? $defaultConfig['providerId'],
+                'key' => $limitConfig['key'],
+            ];
+
+            $this->log->info('ATG使用限红组营运账号', [
+                'player_id' => $player->id,
+                'store_admin_id' => $player->store_admin_id,
+                'operator' => $limitConfig['operator'],
+            ]);
+        } else {
+            $this->config = config('game_platform.ATG');
+        }
+
+        $this->apiDomain = $this->config['api_domain'];
+        $this->providerId = $this->config['providerId'];
+    }
+
+    /**
+     * 获取玩家的限红配置（ATG使用营运账号分组）
+     * @return array|null 返回限红配置数组，包含ATG营运账号信息，如果没有配置则返回null
+     */
+    private function getLimitRedConfig(): ?array
+    {
+        $limitGroupConfig = null;
+
+        // 如果玩家有店家ID，优先查询店家绑定的限红组配置
+        if (!empty($this->player->store_admin_id)) {
+            // 查询店家绑定的ATG平台限红组配置
+            $adminUserLimitGroup = AdminUserLimitGroup::query()
+                ->where('admin_user_id', $this->player->store_admin_id)
+                ->where('platform_id', $this->platform->id)
+                ->where('status', 1)
+                ->first();
+
+            // 如果店家有绑定限红组，获取该限红组的平台配置
+            if ($adminUserLimitGroup) {
+                $limitGroupConfig = PlatformLimitGroupConfig::query()
+                    ->where('limit_group_id', $adminUserLimitGroup->limit_group_id)
+                    ->where('platform_id', $this->platform->id)
+                    ->where('status', 1)
+                    ->first();
+            }
+        }
+
+        // 如果没有找到店家限红组配置，则使用平台的默认限红组配置
+        if (!$limitGroupConfig && !empty($this->platform->default_limit_group_id)) {
+            // 从游戏平台表的 default_limit_group_id 字段获取默认限红组配置
+            $limitGroupConfig = PlatformLimitGroupConfig::query()
+                ->where('limit_group_id', $this->platform->default_limit_group_id)
+                ->where('platform_id', $this->platform->id)
+                ->where('status', 1)
+                ->first();
+
+            // 记录使用了默认限红组
+            if ($limitGroupConfig) {
+                $this->log->info('ATG使用平台默认限红组', [
+                    'player_id' => $this->player->id,
+                    'store_admin_id' => $this->player->store_admin_id ?? 'null',
+                    'default_limit_group_id' => $this->platform->default_limit_group_id,
+                ]);
+            }
+        }
+
+        // 如果没有配置数据，返回null
+        if (!$limitGroupConfig || empty($limitGroupConfig->config_data)) {
+            return null;
+        }
+
+        $configData = $limitGroupConfig->config_data;
+
+        // 构建ATG限红参数（ATG使用营运账号：operator, key, providerId）
+        $limitConfig = [];
+
+        if (!empty($configData['operator'])) {
+            $limitConfig['operator'] = $configData['operator'];
+        }
+
+        if (!empty($configData['key'])) {
+            $limitConfig['key'] = $configData['key'];
+        }
+
+        if (!empty($configData['providerId'])) {
+            $limitConfig['providerId'] = $configData['providerId'];
+        }
+
+        if (!empty($configData['api_domain'])) {
+            $limitConfig['api_domain'] = $configData['api_domain'];
+        }
+
+        return !empty($limitConfig) ? $limitConfig : null;
     }
 
     /**
