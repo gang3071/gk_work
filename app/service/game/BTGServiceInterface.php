@@ -955,8 +955,9 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'balance' => $this->player->machine_wallet->money
             ]);
 
-            if ($amount <= 0) {
-                Log::channel('btg_server')->warning('BTG transferStart 金额无效', [
+            // 只拒绝负数金额，允许0（免费游戏）
+            if ($amount < 0) {
+                Log::channel('btg_server')->warning('BTG transferStart 金额无效（负数）', [
                     'amount' => $amount,
                     'original_amount' => $params['amount']
                 ]);
@@ -964,19 +965,8 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 return ['balance' => $this->player->machine_wallet->money ?? 0];
             }
 
-            // 检查设备是否爆机
-            if ($this->checkAndHandleMachineCrash()) {
-                return ['balance' => $this->player->machine_wallet->money ?? 0];
-            }
-
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-            // 检查余额
-            if ($machineWallet->money < $amount) {
-                $this->error = self::ERROR_CODE_INSUFFICIENT_BALANCE;
-                return ['balance' => $machineWallet->money];
-            }
 
             // 检查订单是否已存在（使用 order_id）
             $existingRecord = PlayGameRecord::query()
@@ -986,7 +976,53 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             if ($existingRecord) {
                 // 订单已存在，返回当前余额（幂等性）
-                $this->error = self::ERROR_CODE_DUPLICATE_TRAN_ID;
+                Log::channel('btg_server')->info('BTG transferStart 订单已存在（幂等性）', [
+                    'order_id' => $orderId,
+                    'existing_record_id' => $existingRecord->id
+                ]);
+                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
+                return ['balance' => $machineWallet->money];
+            }
+
+            // amount=0 的情况（免费游戏）
+            if ($amount == 0) {
+                Log::channel('btg_server')->info('BTG transferStart 免费游戏（amount=0）', [
+                    'order_id' => $orderId,
+                    'player_id' => $this->player->id
+                ]);
+
+                // 创建游戏记录（不扣款）
+                $insert = [
+                    'player_id' => $this->player->id,
+                    'parent_player_id' => $this->player->recommend_id ?? 0,
+                    'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
+                    'player_uuid' => $this->player->uuid,
+                    'platform_id' => $this->platform->id,
+                    'game_code' => $params['game_code'] ?? '',
+                    'department_id' => $this->player->department_id,
+                    'bet' => 0,
+                    'win' => 0,
+                    'diff' => 0,
+                    'order_no' => $orderId,
+                    'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
+                    'order_time' => Carbon::now()->toDateTimeString(),
+                    'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
+                ];
+
+                PlayGameRecord::query()->create($insert);
+
+                return ['balance' => (float)$machineWallet->money];
+            }
+
+            // amount>0 的情况（正常下注）
+            // 检查设备是否爆机
+            if ($this->checkAndHandleMachineCrash()) {
+                return ['balance' => $this->player->machine_wallet->money ?? 0];
+            }
+
+            // 检查余额
+            if ($machineWallet->money < $amount) {
+                $this->error = self::ERROR_CODE_INSUFFICIENT_BALANCE;
                 return ['balance' => $machineWallet->money];
             }
 
@@ -1046,107 +1082,39 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
-            // 查找对应的下注记录
+            // 查找对应的下注记录（加锁防止并发）
             /** @var PlayGameRecord $record */
             $record = PlayGameRecord::query()
                 ->where('order_no', $orderId)
                 ->where('platform_id', $this->platform->id)
+                ->lockForUpdate()
                 ->first();
 
-            // 如果找不到下注记录，根据betform_details自动创建
+            // 如果找不到下注记录，返回交易不存在错误
             if (!$record) {
-                Log::channel('btg_server')->warning('BTG transferEnd 找不到下注记录，尝试自动创建', [
+                Log::channel('btg_server')->error('BTG transferEnd 找不到下注记录', [
                     'order_id' => $orderId,
                     'platform_id' => $this->platform->id,
-                    'player_id' => $this->player->id,
-                    'betform_details' => $betformDetails
+                    'player_id' => $this->player->id
                 ]);
-
-                // 从 betform_details 获取下注金额
-                $betAmount = (float)($betformDetails['bet'] ?? 0);
-
-                // 如果有下注金额，需要先扣款
-                if ($betAmount > 0) {
-                    // 检查余额
-                    if ($machineWallet->money < $betAmount) {
-                        Log::channel('btg_server')->error('BTG transferEnd 自动创建下注记录失败：余额不足', [
-                            'order_id' => $orderId,
-                            'bet_amount' => $betAmount,
-                            'balance' => $machineWallet->money
-                        ]);
-                        $this->error = self::ERROR_CODE_INSUFFICIENT_BALANCE;
-                        return ['balance' => $machineWallet->money];
-                    }
-
-                    // 创建下注记录
-                    $insert = [
-                        'player_id' => $this->player->id,
-                        'parent_player_id' => $this->player->recommend_id ?? 0,
-                        'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
-                        'player_uuid' => $this->player->uuid,
-                        'platform_id' => $this->platform->id,
-                        'game_code' => $params['game_code'] ?? '',
-                        'department_id' => $this->player->department_id,
-                        'bet' => $betAmount,
-                        'win' => 0,
-                        'diff' => -$betAmount,
-                        'order_no' => $orderId,
-                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end', 'roundId' => $roundId], JSON_UNESCAPED_UNICODE),
-                        'order_time' => Carbon::now()->toDateTimeString(),
-                        'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-                    ];
-
-                    $record = PlayGameRecord::query()->create($insert);
-
-                    // 扣款
-                    $this->createBetRecord($machineWallet, $this->player, $record, $betAmount);
-
-                    // 重新获取钱包（因为扣款后余额变了）
-                    $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-                    Log::channel('btg_server')->info('BTG transferEnd 自动创建下注记录成功', [
-                        'record_id' => $record->id,
-                        'bet_amount' => $betAmount,
-                        'balance_after_bet' => $machineWallet->money
-                    ]);
-                } else {
-                    // 没有下注金额（免费游戏或奖励），直接创建记录
-                    $insert = [
-                        'player_id' => $this->player->id,
-                        'parent_player_id' => $this->player->recommend_id ?? 0,
-                        'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
-                        'player_uuid' => $this->player->uuid,
-                        'platform_id' => $this->platform->id,
-                        'game_code' => $params['game_code'] ?? '',
-                        'department_id' => $this->player->department_id,
-                        'bet' => 0,
-                        'win' => 0,
-                        'diff' => 0,
-                        'order_no' => $orderId,
-                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end', 'type' => 'free_game', 'roundId' => $roundId], JSON_UNESCAPED_UNICODE),
-                        'order_time' => Carbon::now()->toDateTimeString(),
-                        'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-                    ];
-
-                    $record = PlayGameRecord::query()->create($insert);
-
-                    Log::channel('btg_server')->info('BTG transferEnd 创建免费游戏记录', [
-                        'record_id' => $record->id,
-                        'order_id' => $orderId
-                    ]);
-                }
-            } else {
-                Log::channel('btg_server')->info('BTG transferEnd 找到下注记录', [
-                    'record_id' => $record->id,
-                    'order_no' => $record->order_no,
-                    'settlement_status' => $record->settlement_status,
-                    'bet' => $record->bet
-                ]);
+                $this->error = self::ERROR_CODE_TRANSACTION_NOT_EXIST;
+                return ['balance' => $machineWallet->money];
             }
+
+            Log::channel('btg_server')->info('BTG transferEnd 找到下注记录', [
+                'record_id' => $record->id,
+                'order_no' => $record->order_no,
+                'settlement_status' => $record->settlement_status,
+                'bet' => $record->bet
+            ]);
 
             // 检查是否已结算
             if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
                 // 已结算，返回当前余额（幂等性）
+                Log::channel('btg_server')->info('BTG transferEnd 订单已结算（幂等性）', [
+                    'order_id' => $orderId,
+                    'record_id' => $record->id
+                ]);
                 $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
                 return ['balance' => $machineWallet->money];
             }
@@ -1179,7 +1147,8 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             // 更新游戏记录
             $record->platform_action_at = Carbon::now()->toDateTimeString();
             $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
-            $record->action_data = json_encode($betformDetails, JSON_UNESCAPED_UNICODE);
+            // 保存完整的params和betformDetails，确保tran_id可被查询
+            $record->action_data = json_encode(array_merge($params, ['betform_details' => $betformDetails]), JSON_UNESCAPED_UNICODE);
             $record->win = $winAmount;
             $record->diff = $winAmount - $record->bet;
 
@@ -1237,11 +1206,12 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
-            // 查找对应的下注记录
+            // 查找对应的下注记录（加锁防止并发）
             /** @var PlayGameRecord $record */
             $record = PlayGameRecord::query()
                 ->where('order_no', $orderId)
                 ->where('platform_id', $this->platform->id)
+                ->lockForUpdate()
                 ->first();
 
             if (!$record) {
@@ -1252,6 +1222,10 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             // 检查是否已取消
             if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
                 // 已退款，返回当前余额（幂等性）
+                Log::channel('btg_server')->info('BTG transferRefund 订单已退款（幂等性）', [
+                    'order_id' => $orderId,
+                    'record_id' => $record->id
+                ]);
                 $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
                 return ['balance' => $machineWallet->money];
             }
@@ -1319,11 +1293,12 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 return ['balance' => (float)$machineWallet->money];
             }
 
-            // 查找对应的游戏记录
+            // 查找对应的游戏记录（加锁防止并发）
             /** @var PlayGameRecord $record */
             $record = PlayGameRecord::query()
                 ->where('order_no', $orderId)
                 ->where('platform_id', $this->platform->id)
+                ->lockForUpdate()
                 ->first();
 
             if (!$record) {
@@ -1365,23 +1340,23 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $playerDeliveryRecord->user_name = '';
             $playerDeliveryRecord->save();
 
-            // 更新游戏记录（使用新的betform_details）
-            if (!empty($betformDetails)) {
-                $record->win = (float)($betformDetails['win'] ?? $record->win);
-                $record->diff = (float)($betformDetails['diff'] ?? $record->diff);
-                $record->action_data = json_encode($betformDetails, JSON_UNESCAPED_UNICODE);
-                $record->platform_action_at = Carbon::now()->toDateTimeString();
+            // 更新游戏记录（保存完整params和betform_details，确保tran_id可被查询）
+            $record->win = (float)($betformDetails['win'] ?? $record->win);
+            $record->diff = (float)($betformDetails['diff'] ?? $record->diff);
+            $record->action_data = json_encode(array_merge($params, ['betform_details' => $betformDetails]), JSON_UNESCAPED_UNICODE);
+            $record->platform_action_at = Carbon::now()->toDateTimeString();
 
-                // 有效投注保存在 action_data 中
+            // 有效投注保存在 action_data 中
+            if (!empty($betformDetails)) {
                 Log::channel('btg_server')->info('BTG transferAdjust 更新记录', [
                     'order_id' => $record->order_no,
                     'valid_bet' => $betformDetails['valid_bet'] ?? null,
                     'win' => $record->win,
                     'diff' => $record->diff
                 ]);
-
-                $record->save();
             }
+
+            $record->save();
 
             return ['balance' => (float)$machineWallet->money];
         } catch (Exception $e) {
@@ -1421,7 +1396,11 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             if ($existingRecord) {
                 // 订单已存在，返回当前余额（幂等性）
-                $this->error = self::ERROR_CODE_DUPLICATE_TRAN_ID;
+                Log::channel('btg_server')->info('BTG transferReward 订单已存在（幂等性）', [
+                    'order_id' => $orderId,
+                    'existing_record_id' => $existingRecord->id
+                ]);
+                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
                 return ['balance' => $machineWallet->money];
             }
 

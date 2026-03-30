@@ -73,6 +73,18 @@ class BTGGameController
                 return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'currency');
             }
 
+            // 检查 tran_id 是否重复（从数据库查询original_data）
+            // 注意：balance操作不产生游戏记录，这里主要检查transfer类操作的重复
+            $existingRecord = \app\model\PlayGameRecord::query()
+                ->where('platform_id', $this->service->platform->id)
+                ->where("original_data->tran_id", $params['tran_id'])
+                ->first();
+
+            if ($existingRecord) {
+                $this->logger->info('BTG查询余额：请求已处理（幂等性）', ['tran_id' => $params['tran_id']]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_TRANSACTION_SETTLED);
+            }
+
             // 查询玩家
             $player = Player::query()->where('uuid', $params['username'])->first();
             if (!$player) {
@@ -159,6 +171,22 @@ class BTGGameController
             if (!in_array($params['transfer_type'], $allowedTypes)) {
                 $this->logger->error('BTG转账失败：无效的transfer_type', ['transfer_type' => $params['transfer_type']]);
                 return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'transfer_type');
+            }
+
+            // 检查 tran_id 是否重复（从数据库查询original_data和action_data）
+            // original_data: start操作的tran_id
+            // action_data: end/refund/adjust/reward操作的tran_id
+            $existingRecord = \app\model\PlayGameRecord::query()
+                ->where('platform_id', $this->service->platform->id)
+                ->where(function ($query) use ($params) {
+                    $query->where("original_data->tran_id", $params['tran_id'])
+                          ->orWhere("action_data->tran_id", $params['tran_id']);
+                })
+                ->first();
+
+            if ($existingRecord) {
+                $this->logger->info('BTG转账：请求已处理（幂等性）', ['tran_id' => $params['tran_id']]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_TRANSACTION_SETTLED);
             }
 
             // 查询玩家
