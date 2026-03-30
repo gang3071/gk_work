@@ -424,8 +424,8 @@ class LotteryServices
                 // 更新内存中的金额（用于后续逻辑）
                 $lottery->amount = $newAmount;
 
-                // 实时推送彩池数据变化（基于Redis变化）
-                self::pushLotteryPoolData();
+                // 实时推送已禁用，改用定时任务推送（LotteryPoolSocket）
+                // self::pushLotteryPoolData();
 
                 // 优化：只在达到阈值或超过时间间隔时才同步到数据库
                 $shouldSyncToDB = false;
@@ -874,8 +874,8 @@ class LotteryServices
             // 清除彩金缓存（事务提交后）
             self::clearLotteryListCache($this->machine->type);
 
-            // 实时推送彩池数据变化
-            self::pushLotteryPoolData();
+            // 实时推送已禁用，改用定时任务推送（LotteryPoolSocket）
+            // self::pushLotteryPoolData();
 
             // 发送派彩和通知消息
             $this->sendWinningMessages($playerLotteryRecord, $lottery, $notice, $burstInfo, $isDoubled);
@@ -1471,8 +1471,8 @@ class LotteryServices
                     // 清除彩金缓存（事务提交后）
                     self::clearLotteryListCache($this->machine->type);
 
-                    // 实时推送彩池数据变化
-                    self::pushLotteryPoolData();
+                    // 实时推送已禁用，改用定时任务推送（LotteryPoolSocket）
+                    // self::pushLotteryPoolData();
 
                     if ($hasSend) {
                         sendSocketMessage('player-' . $this->player->id, $fixedAllowLottery);

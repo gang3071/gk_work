@@ -3,7 +3,6 @@
 namespace process;
 
 use app\model\Lottery;
-use app\model\LotteryPool;
 use app\service\GameLotteryServices;
 use app\service\LotteryServices;
 use support\Log;
@@ -19,14 +18,14 @@ class LotteryPoolSocket
     private static $lastDataHash = null;
 
     /**
-     * 发送彩金变化消息（兜底机制）
-     * 注意：主要推送逻辑已改为实时推送，此定时任务仅作为兜底
+     * 发送彩金变化消息（定时推送机制）
+     * 注意：已禁用实时推送，改为使用定时任务作为主要推送方式
      * @return void
      */
     public function onWorkerStart()
     {
-        // 每30秒执行一次检查（降低频率，仅作为兜底）
-        new Crontab('*/30 * * * * *', function () {
+        // 每2秒执行一次检查
+        new Crontab('*/2 * * * * *', function () {
             try {
                 $this->sendLotteryPoolData();
             } catch (\Throwable $e) {
@@ -40,8 +39,8 @@ class LotteryPoolSocket
     }
 
     /**
-     * 发送彩金池数据 - 新版：使用独立彩池（兜底机制）
-     * 注意：主要推送逻辑已改为实时推送，此方法仅作为兜底检查
+     * 发送彩金池数据 - 新版：使用独立彩池（定时推送机制）
+     * 注意：已禁用实时推送，此方法为主要推送方式
      * @return void
      */
     private function sendLotteryPoolData()
@@ -58,15 +57,16 @@ class LotteryPoolSocket
         // 数据变化检测，避免发送重复数据
         $currentHash = md5(json_encode($messageData));
         if ($currentHash === self::$lastDataHash) {
-            Log::debug('LotteryPoolSocket兜底检查: 数据无变化，跳过推送');
+            Log::debug('LotteryPoolSocket定时检查: 数据无变化，跳过推送');
             return;
         }
         // 发送消息
         try {
             sendSocketMessage('group-lottery-pool', $messageData);
-            Log::info('LotteryPoolSocket兜底推送成功', [
+            Log::info('LotteryPoolSocket定时推送成功', [
                 'slot_count' => count($messageData['slot_amount']),
                 'jack_count' => count($messageData['jack_amount']),
+                'game_count' => count($messageData['game_lottery_list']),
             ]);
         } catch (PushException $e) {
             Log::error($e->getMessage());

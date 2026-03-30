@@ -106,8 +106,8 @@ class GameLotteryServices
                 return;
             }
 
-            // 触发机台彩池的实时推送（包含电子游戏彩池）
-            LotteryServices::pushLotteryPoolData();
+            // 实时推送已禁用，改用定时任务推送（LotteryPoolSocket）
+            // LotteryServices::pushLotteryPoolData();
 
             // 更新最后推送时间和数据哈希
             $redis->set(self::REDIS_KEY_LAST_PUSH_TIME, time());
@@ -862,8 +862,8 @@ class GameLotteryServices
             self::clearLotteryPoolCache();
             self::clearLotteryListCache();
 
-            // 实时推送彩池数据变化
-            self::pushLotteryPoolData();
+            // 实时推送已禁用，改用定时任务推送（LotteryPoolSocket）
+            // self::pushLotteryPoolData();
 
             // 发送派彩和通知消息
             $this->sendWinningMessages($playerLotteryRecord, $lottery, $notice, $burstInfo, $isDoubled);
@@ -1579,8 +1579,8 @@ class GameLotteryServices
                 // 更新内存中的金额（用于后续逻辑）
                 $lottery->amount = $newAmount;
 
-                // 实时推送彩池数据变化（基于Redis变化）
-                self::pushLotteryPoolData();
+                // 实时推送已禁用，改用定时任务推送（LotteryPoolSocket）
+                // self::pushLotteryPoolData();
 
                 // 优化：只在达到阈值或超过时间间隔时才同步到数据库
                 $shouldSyncToDB = false;
