@@ -421,8 +421,9 @@ class LotteryServices
                 // 使用 Redis 的 INCRBYFLOAT 原子操作累积
                 $currentRedisAmount = $redis->incrByFloat($redisKey, (float)$addAmount);
 
-                // 更新内存中的金额（用于后续逻辑）
-                $lottery->amount = $newAmount;
+                // 注意：不要更新内存中的 lottery.amount，同步时会从数据库 refresh() 重新读取
+                // 避免内存值覆盖导致数据丢失（Redis累积金额会在同步时叠加到数据库值）
+                // $lottery->amount = $newAmount;  // ← 已禁用
 
                 // 实时推送已禁用，改用定时任务推送（LotteryPoolSocket）
                 // self::pushLotteryPoolData();
@@ -458,6 +459,13 @@ class LotteryServices
                     $accumulatedAmount = $redis->get($redisKey);
 
                     if ($accumulatedAmount > 0) {
+                        // 重新从数据库读取最新值，避免内存值覆盖导致数据丢失
+                        $lottery->refresh();
+
+                        // 累加Redis中的金额到数据库金额
+                        $oldAmount = $lottery->amount;
+                        $lottery->amount = bcadd($lottery->amount, $accumulatedAmount, 4);
+
                         // 更新数据库
                         $lottery->save();
 
@@ -473,8 +481,9 @@ class LotteryServices
 
                         \support\Log::debug('彩金已同步到数据库', [
                             'lottery_id' => $lottery->id,
-                            'amount' => $lottery->amount,
+                            'old_amount' => $oldAmount,
                             'accumulated' => $accumulatedAmount,
+                            'new_amount' => $lottery->amount,
                         ]);
 
                         // 注意：推送已在Redis累积时触发，这里不需要重复推送
