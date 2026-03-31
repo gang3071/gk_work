@@ -1160,10 +1160,20 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'bet' => $record->bet
             ]);
 
-            // 检查是否已结算
+            // 检查是否已结算或已取消
             if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
-                // 已结算，返回当前余额（幂等性）
-                Log::channel('btg_server')->info('BTG transferEnd 订单已结算（幂等性）', [
+                // 已结算，不允许重复结算
+                Log::channel('btg_server')->info('BTG transferEnd 订单已结算', [
+                    'order_id' => $orderId,
+                    'record_id' => $record->id
+                ]);
+                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
+                return ['balance' => $machineWallet->money];
+            }
+
+            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
+                // 已取消，不允许结算
+                Log::channel('btg_server')->info('BTG transferEnd 订单已取消', [
                     'order_id' => $orderId,
                     'record_id' => $record->id
                 ]);
@@ -1259,10 +1269,20 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 return ['balance' => $machineWallet->money];
             }
 
-            // 检查是否已取消
+            // 检查是否已结算或已取消
+            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+                // 已结算，不允许退款
+                Log::channel('btg_server')->info('BTG transferRefund 订单已结算', [
+                    'order_id' => $orderId,
+                    'record_id' => $record->id
+                ]);
+                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
+                return ['balance' => $machineWallet->money];
+            }
+
             if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-                // 已退款，返回当前余额（幂等性）
-                Log::channel('btg_server')->info('BTG transferRefund 订单已退款（幂等性）', [
+                // 已退款，不允许重复退款
+                Log::channel('btg_server')->info('BTG transferRefund 订单已退款', [
                     'order_id' => $orderId,
                     'record_id' => $record->id
                 ]);

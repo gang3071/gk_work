@@ -66,8 +66,8 @@ class BTGGameController
                 return $error;
             }
 
-            // 检查幂等性
-            if ($response = $this->checkIdempotency($params['tran_id'], $params['username'], $systemCurrency)) {
+            // 检查tran_id重复
+            if ($response = $this->checkIdempotency($params['tran_id'])) {
                 return $response;
             }
 
@@ -153,8 +153,8 @@ class BTGGameController
                 return $this->error(BTGServiceInterface::ERROR_CODE_BAD_FORMAT_PARAMS, [], 'transfer_type');
             }
 
-            // 检查幂等性
-            if ($response = $this->checkIdempotency($params['tran_id'], $params['username'], $systemCurrency)) {
+            // 检查tran_id重复
+            if ($response = $this->checkIdempotency($params['tran_id'])) {
                 return $response;
             }
 
@@ -314,14 +314,12 @@ class BTGGameController
     }
 
     /**
-     * 检查tran_id是否重复（幂等性）
+     * 检查tran_id是否重复
      *
      * @param string $tranId 交易ID
-     * @param string $username 玩家用户名
-     * @param string $systemCurrency 系统币别
-     * @return Response|null 如果是重复请求返回成功响应，否则返回null
+     * @return Response|null 如果是重复请求返回错误响应，否则返回null
      */
-    private function checkIdempotency(string $tranId, string $username, string $systemCurrency): ?Response
+    private function checkIdempotency(string $tranId): ?Response
     {
         $existingRecord = PlayGameRecord::query()
             ->where('platform_id', $this->service->platform->id)
@@ -335,25 +333,25 @@ class BTGGameController
             return null;
         }
 
-        // 幂等性：重复请求返回成功和当前余额
-        $this->logger->info('BTG请求已处理（幂等性，返回成功）', [
-            'tran_id' => $tranId,
-            'existing_record_id' => $existingRecord->id
-        ]);
-
-        // 查询玩家获取当前余额
-        $player = $this->getPlayer($username, 'BTG幂等性');
-        if ($player instanceof Response) {
-            return $player;
+        // 根据订单状态返回不同的错误码
+        if ($existingRecord->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED ||
+            $existingRecord->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
+            // 已结算或已取消的订单，返回交易已处理
+            $this->logger->error('BTG请求失败：交易已处理', [
+                'tran_id' => $tranId,
+                'existing_record_id' => $existingRecord->id,
+                'settlement_status' => $existingRecord->settlement_status
+            ]);
+            return $this->error(BTGServiceInterface::ERROR_CODE_TRANSACTION_SETTLED);
+        } else {
+            // 未结算的订单，返回重复的tran_id
+            $this->logger->error('BTG请求失败：重复的tran_id', [
+                'tran_id' => $tranId,
+                'existing_record_id' => $existingRecord->id,
+                'settlement_status' => $existingRecord->settlement_status
+            ]);
+            return $this->error(BTGServiceInterface::ERROR_CODE_DUPLICATE_TRAN_ID);
         }
-
-        // 返回成功和当前余额（幂等性）
-        $balance = $player->machine_wallet->money ?? 0;
-        return $this->success([
-            'balance' => number_format($balance, 2, '.', ''),
-            'currency' => $systemCurrency,
-            'tran_id' => $tranId,
-        ]);
     }
 
     /**
