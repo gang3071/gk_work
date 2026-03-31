@@ -333,25 +333,13 @@ class BTGGameController
             return null;
         }
 
-        // 根据订单状态返回不同的错误码
-        if ($existingRecord->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED ||
-            $existingRecord->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-            // 已结算或已取消的订单，返回交易已处理
-            $this->logger->error('BTG请求失败：交易已处理', [
-                'tran_id' => $tranId,
-                'existing_record_id' => $existingRecord->id,
-                'settlement_status' => $existingRecord->settlement_status
-            ]);
-            return $this->error(BTGServiceInterface::ERROR_CODE_TRANSACTION_SETTLED);
-        } else {
-            // 未结算的订单，返回重复的tran_id
-            $this->logger->error('BTG请求失败：重复的tran_id', [
-                'tran_id' => $tranId,
-                'existing_record_id' => $existingRecord->id,
-                'settlement_status' => $existingRecord->settlement_status
-            ]);
-            return $this->error(BTGServiceInterface::ERROR_CODE_DUPLICATE_TRAN_ID);
-        }
+        // 重复的 tran_id，不管订单状态如何，都返回 5107
+        $this->logger->error('BTG请求失败：重复的tran_id', [
+            'tran_id' => $tranId,
+            'existing_record_id' => $existingRecord->id,
+            'settlement_status' => $existingRecord->settlement_status
+        ]);
+        return $this->error(BTGServiceInterface::ERROR_CODE_DUPLICATE_TRAN_ID);
     }
 
     /**
