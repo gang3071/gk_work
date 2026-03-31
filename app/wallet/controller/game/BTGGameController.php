@@ -12,7 +12,6 @@ use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 /**
  * BTG单一钱包
@@ -37,7 +36,6 @@ class BTGGameController
         $this->logger = Log::channel('btg_server');
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 查询余额 - get_user_balance
      * @param Request $request
@@ -110,7 +108,6 @@ class BTGGameController
         }
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 转账 - transfer
      * 处理所有类型的金额变动：下注、结算、退款、调整、奖励

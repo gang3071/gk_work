@@ -11,7 +11,6 @@ use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 /**
  * O8平台
@@ -53,7 +52,6 @@ class KTGameController
     }
 
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -79,7 +77,6 @@ class KTGameController
         ]);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -103,7 +100,6 @@ class KTGameController
         ]);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -141,7 +137,6 @@ class KTGameController
      * @param $params
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function betResult($params)
     {
         return $this->service->betResulet($params);
@@ -152,7 +147,6 @@ class KTGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function reBetResult(Request $request): Response
     {
         $params = $request->post();

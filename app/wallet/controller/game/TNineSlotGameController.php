@@ -12,7 +12,6 @@ use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 /**
  * T9电子平台
@@ -68,7 +67,6 @@ class TNineSlotGameController
     }
 
 
-    #[RateLimiter(limit: 5)]
     /**
      *
      * 获取玩家钱包
@@ -94,7 +92,6 @@ class TNineSlotGameController
         ]);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -139,7 +136,6 @@ class TNineSlotGameController
     }
 
 
-    #[RateLimiter(limit: 5)]
     /**
      * 取消下注
      * @param Request $request

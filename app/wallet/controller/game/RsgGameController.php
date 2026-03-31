@@ -9,7 +9,6 @@ use Throwable;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 /**
  * RSG皇家电子
@@ -54,12 +53,14 @@ class RsgGameController
 
     private GameServiceInterface|SingleWalletServiceInterface $service;
 
+    private $logger;
+
     public function __construct()
     {
         $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_RSG);
+        $this->logger = Log::channel('rsg_server');
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -71,9 +72,9 @@ class RsgGameController
         try {
             $params = $request->post();
 
-            Log::channel('rsg_server')->info('rsg余额查询记录', ['params' => $params]);
+            $this->logger->info('RSG余额查询请求', ['params' => $params]);
             $data = $this->service->decrypt($params['Msg']);
-            Log::channel('rsg_server')->info('rsg余额查询记录', ['params' => $data]);
+            $this->logger->info('RSG余额查询（解密后）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -82,13 +83,15 @@ class RsgGameController
             $balance = $this->service->balance();
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
         } catch (Throwable $e) {
-            Log::error('RSG balance failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('RSG余额查询异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('RSG', '余额查询异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -102,7 +105,7 @@ class RsgGameController
 
             $data = $this->service->decrypt($params['Msg']);
 
-            Log::channel('rsg_server')->info('rsg下注记录', ['params' => $data]);
+            $this->logger->info('RSG下注请求', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -112,7 +115,10 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
         } catch (Throwable $e) {
-            Log::error('RSG bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('RSG下注异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('RSG', '下注异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -123,13 +129,12 @@ class RsgGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function cancelBet(Request $request): Response
     {
         try {
             $params = $request->post();
             $data = $this->service->decrypt($params['Msg']);
-            Log::channel('rsg_server')->info('rsg取消下注记录', ['params' => $data]);
+            $this->logger->info('RSG取消下注请求', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -139,7 +144,10 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
         } catch (Throwable $e) {
-            Log::error('RSG cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('RSG取消下注异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('RSG', '取消下注异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -150,13 +158,12 @@ class RsgGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function betResult(Request $request): Response
     {
         try {
             $params = $request->post();
             $data = $this->service->decrypt($params['Msg']);
-            Log::channel('rsg_server')->info('rsg结算记录', ['params' => $data]);
+            $this->logger->info('RSG结算请求', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -166,7 +173,10 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
         } catch (Throwable $e) {
-            Log::error('RSG betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('RSG结算异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('RSG', '结算异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -177,13 +187,12 @@ class RsgGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function reBetResult(Request $request): Response
     {
         try {
             $params = $request->post();
             $data = $this->service->decrypt($params['Msg']);
-            Log::channel('mt_server')->info('rsg余额查询记录', ['params' => $data]);
+            $this->logger->info('RSG重新结算请求', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -193,7 +202,10 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'Balance' => $balance]);
         } catch (Throwable $e) {
-            Log::error('RSG reBetResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('RSG重新结算异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('RSG', '重新结算异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -204,13 +216,12 @@ class RsgGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function jackpotResult(Request $request): Response
     {
         try {
             $params = $request->post();
             $data = $this->service->decrypt($params['Msg']);
-            Log::channel('rsg_server')->info('rsgJackpot记录', ['params' => $data]);
+            $this->logger->info('RSG Jackpot中奖请求', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -220,7 +231,10 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
         } catch (Throwable $e) {
-            Log::error('RSG jackpotResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('RSG Jackpot中奖异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('RSG', 'Jackpot异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -236,7 +250,7 @@ class RsgGameController
         try {
             $params = $request->post();
             $data = $this->service->decrypt($params['Msg']);
-            Log::channel('rsg_server')->info('打鱼机预扣金额记录', ['params' => $data]);
+            $this->logger->info('RSG打鱼机预扣金额请求', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -246,7 +260,10 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $balance);
         } catch (Throwable $e) {
-            Log::error('RSG prepay failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('RSG打鱼机预扣金额异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('RSG', '预扣金额异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -262,7 +279,7 @@ class RsgGameController
         try {
             $params = $request->post();
             $data = $this->service->decrypt($params['Msg']);
-            Log::channel('rsg_server')->info('打鱼退款金额记录', ['params' => $data]);
+            $this->logger->info('RSG打鱼机退款请求', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -272,7 +289,10 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $balance);
         } catch (Throwable $e) {
-            Log::error('RSG refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('RSG打鱼机退款异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('RSG', '退款异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
@@ -289,7 +309,7 @@ class RsgGameController
         try {
             $params = $request->post();
             $data = $this->service->decrypt($params['Msg']);
-            Log::channel('rsg_server')->info('检查交易记录', ['params' => $data]);
+            $this->logger->info('RSG检查交易请求', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -299,7 +319,10 @@ class RsgGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $result);
         } catch (Throwable $e) {
-            Log::error('RSG checkTransaction failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->logger->error('RSG检查交易异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             $this->sendTelegramAlert('RSG', '检查交易异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }

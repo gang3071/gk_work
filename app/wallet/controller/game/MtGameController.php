@@ -10,7 +10,6 @@ use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 class MtGameController
 {
@@ -63,7 +62,6 @@ class MtGameController
         $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_MT);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -94,7 +92,6 @@ class MtGameController
         }
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -134,7 +131,6 @@ class MtGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function cancelBet(Request $request): Response
     {
         try {
@@ -167,7 +163,6 @@ class MtGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function betResult(Request $request): Response
     {
         try {
@@ -200,7 +195,6 @@ class MtGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function reBetResult(Request $request): Response
     {
         try {
@@ -233,7 +227,6 @@ class MtGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function gift(Request $request): Response
     {
         try {

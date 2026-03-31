@@ -12,7 +12,6 @@ use Firebase\JWT\JWT;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 /**
  * O8平台
@@ -69,7 +68,6 @@ class O8GameController
     }
 
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -108,7 +106,6 @@ class O8GameController
         ]);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -145,7 +142,6 @@ class O8GameController
         return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -178,7 +174,6 @@ class O8GameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function betResult(Request $request): Response
     {
         $params = $request->post();
@@ -197,7 +192,6 @@ class O8GameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function reBetResult(Request $request): Response
     {
         $params = $request->post();

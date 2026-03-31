@@ -11,7 +11,6 @@ use SimpleXMLElement;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 class SPGameController
 {
@@ -44,7 +43,6 @@ class SPGameController
         $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_SP);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -69,7 +67,6 @@ class SPGameController
         }
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -107,7 +104,6 @@ class SPGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function cancelBet(Request $request): Response
     {
         try {
@@ -139,7 +135,6 @@ class SPGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function betResult(Request $request): Response
     {
         try {

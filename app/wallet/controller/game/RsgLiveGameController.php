@@ -11,7 +11,6 @@ use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 /**
  * RSG皇家真人
@@ -70,7 +69,6 @@ class RsgLiveGameController
     }
 
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -99,7 +97,6 @@ class RsgLiveGameController
         ]);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -122,7 +119,6 @@ class RsgLiveGameController
     }
 
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -151,7 +147,6 @@ class RsgLiveGameController
         ]);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -189,7 +184,6 @@ class RsgLiveGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function betResult(Request $request): Response
     {
         $params = $request->post();

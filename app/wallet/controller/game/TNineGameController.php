@@ -12,7 +12,6 @@ use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 /**
  * T9真人视讯平台
@@ -68,7 +67,6 @@ class TNineGameController
     }
 
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -108,7 +106,6 @@ class TNineGameController
         return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -140,7 +137,6 @@ class TNineGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function betResult(Request $request): Response
     {
         $params = $request->post();
@@ -158,7 +154,6 @@ class TNineGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function check(Request $request): Response
     {
         $params = $request->post();
@@ -188,7 +183,6 @@ class TNineGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function update(Request $request): Response
     {
         $params = $request->post();
@@ -214,7 +208,6 @@ class TNineGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function gift(Request $request): Response
     {
         $params = $request->post();

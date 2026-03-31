@@ -12,7 +12,6 @@ use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 /**
  * QT中心钱包
@@ -144,7 +143,6 @@ class QTGameController
         return null;
     }
 
-    #[RateLimiter(limit: 10)]
     /**
      * 1. 验证会话 - Verify Session
      * GET /accounts/{playerId}/session?gameId={gameId}
@@ -206,7 +204,6 @@ class QTGameController
         }
     }
 
-    #[RateLimiter(limit: 10)]
     /**
      * 2. 查询余额 - Get Balance
      * GET /accounts/{playerId}/balance?gameId={gameId}
@@ -285,7 +282,6 @@ class QTGameController
         }
     }
 
-    #[RateLimiter(limit: 20)]
     /**
      * 3. 交易接口 - Transactions (DEBIT/CREDIT)
      * POST /transactions
@@ -447,7 +443,6 @@ class QTGameController
         }
     }
 
-    #[RateLimiter(limit: 10)]
     /**
      * 4. 活动状态 - Promotion Status
      * POST /bonus/status
@@ -528,7 +523,6 @@ class QTGameController
         }
     }
 
-    #[RateLimiter(limit: 10)]
     /**
      * 5. 奖金发放 - Rewards
      * POST /bonus/rewards
@@ -665,7 +659,6 @@ class QTGameController
         }
     }
 
-    #[RateLimiter(limit: 10)]
     /**
      * 6. 回滚交易 - Rollback
      * POST /transactions/rollback

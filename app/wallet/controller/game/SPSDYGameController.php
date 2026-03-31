@@ -12,7 +12,6 @@ use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 class SPSDYGameController
 {
@@ -46,7 +45,6 @@ class SPSDYGameController
     }
 
 
-    #[RateLimiter(limit: 5)]
     public function index(Request $request): Response
     {
         $params = $request->all();
@@ -92,7 +90,6 @@ class SPSDYGameController
         return $this->success(self::API_CODE_SUCCESS, ['User' => $params['User'], 'Balance' => $balance]);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -138,7 +135,6 @@ class SPSDYGameController
      * @param $params
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function betResult($params): Response
     {
 

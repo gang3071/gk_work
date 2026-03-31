@@ -9,7 +9,6 @@ use app\service\game\SingleWalletServiceInterface;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 /**
  * DG
@@ -46,7 +45,6 @@ class DGGameController
         $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_DG);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -77,7 +75,6 @@ class DGGameController
         return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -116,7 +113,6 @@ class DGGameController
      * @param $data
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function betResult($data): Response
     {
         Log::channel('rsg_server')->info('dg结算记录', ['params' => $data]);

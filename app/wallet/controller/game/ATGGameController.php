@@ -9,7 +9,6 @@ use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
-use Webman\RateLimiter\Annotation\RateLimiter;
 
 /**
  * ATG电子平台
@@ -64,7 +63,6 @@ class ATGGameController
         $this->log = Log::channel('atg_server');
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 获取玩家钱包
      * @param Request $request
@@ -90,7 +88,6 @@ class ATGGameController
         }
     }
 
-    #[RateLimiter(limit: 5)]
     /**
      * 下注
      * @param Request $request
@@ -123,7 +120,6 @@ class ATGGameController
      * @param Request $request
      * @return Response
      */
-    #[RateLimiter(limit: 5)]
     public function betResult(Request $request): Response
     {
         try {
