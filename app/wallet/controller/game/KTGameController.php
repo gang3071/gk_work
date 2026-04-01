@@ -60,21 +60,27 @@ class KTGameController
      */
     public function auth(Request $request): Response
     {
-        $params = $request->post();
-        $hash = $request->get('Hash');
+        try {
+            $params = $request->post();
+            $hash = $request->get('Hash');
 
-        $this->service->verifyToken($params, $hash);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $this->service->verifyToken($params, $hash);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            $this->service->player = Player::query()->where('uuid', $params['Token'])->first();
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'Username' => $this->service->player->uuid,
+                'Currency' => 'TWD',
+                'Balance' => $this->service->balance(),
+            ]);
+        } catch (Exception $e) {
+            Log::error('KT auth failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('KT', '认证异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_TOKEN_DOES_NOT_EXIST);
         }
-
-        $this->service->player = Player::query()->where('uuid', $params['Token'])->first();
-
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-            'Username' => $this->service->player->uuid,
-            'Currency' => 'TWD',
-            'Balance' => $this->service->balance(),
-        ]);
     }
 
     /**
@@ -85,19 +91,25 @@ class KTGameController
      */
     public function balance(Request $request): Response
     {
-        $params = $request->post();
-        $hash = $request->get('Hash');
+        try {
+            $params = $request->post();
+            $hash = $request->get('Hash');
 
-        $this->service->verifyToken($params, $hash);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $this->service->verifyToken($params, $hash);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            $this->service->player = Player::query()->where('uuid', $params['Username'])->first();
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'Balance' => $this->service->balance(),
+            ]);
+        } catch (Exception $e) {
+            Log::error('KT balance failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('KT', '余额查询异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_OTHER_ERROR);
         }
-
-        $this->service->player = Player::query()->where('uuid', $params['Username'])->first();
-
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-            'Balance' => $this->service->balance(),
-        ]);
     }
 
     /**
@@ -108,28 +120,34 @@ class KTGameController
      */
     public function bet(Request $request): Response
     {
-        $params = $request->post();
-        $hash = $request->get('Hash');
+        try {
+            $params = $request->post();
+            $hash = $request->get('Hash');
 
-        $this->logger->info('kt_server 下注记录', ['params' => $params, 'get' => $hash]);
+            $this->logger->info('kt_server 下注记录', ['params' => $params, 'get' => $hash]);
 
-        $this->service->verifyToken($params, $hash);
+            $this->service->verifyToken($params, $hash);
 
-        $this->service->player = Player::query()->where('uuid', $params['Username'])->first();
-        $balance = $this->service->bet($params);
+            $this->service->player = Player::query()->where('uuid', $params['Username'])->first();
+            $balance = $this->service->bet($params);
 
-        //是否结算
-        if ($params['TakeWin'] == 1) {
-            $balance = $this->betResult($params);
+            //是否结算
+            if ($params['TakeWin'] == 1) {
+                $balance = $this->betResult($params);
+            }
+
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'Balance' => $balance,
+            ]);
+        } catch (Exception $e) {
+            Log::error('KT bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('KT', '下注异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_OTHER_ERROR);
         }
-
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-            'Balance' => $balance,
-        ]);
     }
 
     /**
@@ -149,19 +167,25 @@ class KTGameController
      */
     public function reBetResult(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $data = $this->service->decrypt($params['Msg']);
-        $this->logger->info('rsg_live余额查询记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $data = $this->service->decrypt($params['Msg']);
+            $this->logger->info('rsg_live余额查询记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->reBetResulet($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
+        } catch (Exception $e) {
+            Log::error('KT reBetResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('KT', '重新结算异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_OTHER_ERROR);
         }
-        $balance = $this->service->reBetResulet($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
     }
 
     /**
@@ -171,19 +195,25 @@ class KTGameController
      */
     public function refund(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $data = $this->service->decrypt($params['Msg']);
-        $this->logger->info('打鱼退款金额记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $data = $this->service->decrypt($params['Msg']);
+            $this->logger->info('打鱼退款金额记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->refund($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $balance);
+        } catch (Exception $e) {
+            Log::error('KT refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('KT', '退款异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_OTHER_ERROR);
         }
-        $balance = $this->service->refund($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $balance);
     }
 
     /**
