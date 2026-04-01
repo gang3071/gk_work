@@ -327,6 +327,7 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             ];
         }
 
+        Log::channel('dg_server')->info('lobbyLogin', ['params'=>$params]);
         $res = $this->doCurl($this->createUrl('lobbyLogin'), $params);
         if ($res['codeId'] != $this->successCode) {
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
@@ -487,6 +488,8 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'min' => $limitConfig['min'],
             ];
         }
+
+        Log::channel('dg_server')->info('lobbyLogin', ['params'=>$params]);
 
         $res = $this->doCurl($this->createUrl('lobbyLogin'), $params);
         if ($res['codeId'] != $this->successCode) {
