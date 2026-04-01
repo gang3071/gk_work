@@ -6,9 +6,11 @@ return [
     // 处理游戏相关的实时业务，需要立即响应
     // 包括：下注记录、游戏转账、游戏彩票、玩家活动、取消充值
     // ============================================================
+    // 🚀 性能优化: 降低进程数，减少对API的资源争抢
+    // 只要队列不积压，进程越少，系统整体IO抖动越小
     'redis_consumer_fast' => [
         'handler' => Webman\RedisQueue\Process\Consumer::class,
-        'count' => 12, // 12个进程（游戏业务优先，分配更多资源）
+        'count' => 4, // 4个进程（从12降低，避免抢占API资源）
         'constructor' => [
             'consumer_dir' => app_path() . '/queue/redis/fast'
         ]
@@ -22,7 +24,7 @@ return [
     // ============================================================
     'redis_consumer_slow' => [
         'handler' => Webman\RedisQueue\Process\Consumer::class,
-        'count' => 4, // 4个进程（慢业务可以排队处理）
+        'count' => 2, // 2个进程（从4降低，慢业务可以排队）
         'constructor' => [
             'consumer_dir' => app_path() . '/queue/redis/slow'
         ]
