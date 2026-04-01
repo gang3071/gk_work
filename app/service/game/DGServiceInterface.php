@@ -3,8 +3,10 @@
 namespace app\service\game;
 
 use app\exception\GameException;
+use app\model\AdminUserLimitGroup;
 use app\model\Game;
 use app\model\GamePlatform;
+use app\model\PlatformLimitGroupConfig;
 use app\model\Player;
 use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGamePlatform;
@@ -128,10 +130,58 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             'username' => $this->player->uuid,
         ]);
         if ($res['codeId'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['codeId']], 0);
+            throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
         return $res['balance'] ?? 0;
+    }
+
+    /**
+     * 获取玩家的DG限红组配置（通过店家）
+     * @return array|null
+     */
+    private function getPlayerLimitConfig(): ?array
+    {
+        // 获取玩家所属的店家
+        $adminUserId = $this->player->admin_user_id ?? null;
+        if (!$adminUserId) {
+            return null;
+        }
+
+        // 查询店家限红分配
+        $platformId = $this->platform->id;
+        $adminUserLimit = AdminUserLimitGroup::query()
+            ->where('admin_user_id', $adminUserId)
+            ->where(function($query) use ($platformId) {
+                $query->where('platform_id', $platformId)
+                      ->orWhereNull('platform_id');
+            })
+            ->where('status', 1)
+            ->first();
+
+        if (!$adminUserLimit) {
+            return null;
+        }
+
+        // 获取限红组配置
+        $groupConfig = PlatformLimitGroupConfig::query()
+            ->where('limit_group_id', $adminUserLimit->limit_group_id)
+            ->where('platform_id', $this->platform->id)
+            ->where('status', 1)
+            ->first();
+
+        if (!$groupConfig || !$groupConfig->config_data) {
+            return null;
+        }
+
+        // 从config_data中获取DG限红配置 {"max": 2, "min": 1}
+        $configData = $groupConfig->config_data;
+
+        return [
+            'max' => $configData['max'] ?? null,
+            'min' => $configData['min'] ?? null,
+            'limit_group_id' => $adminUserLimit->limit_group_id,
+        ];
     }
 
     /**
@@ -146,12 +196,27 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             ->first();
         if (empty($playerGamePlatform)) {
             $result = $this->createPlayer();
+
+            // 获取限红组配置
+            $limitConfig = $this->getPlayerLimitConfig();
+
             $playerGamePlatform = new PlayerGamePlatform();
             $playerGamePlatform->player_id = $this->player->id;
             $playerGamePlatform->platform_id = $this->platform->id;
             $playerGamePlatform->player_name = $this->player->name;
             $playerGamePlatform->player_code = $this->player->uuid;
             $playerGamePlatform->player_password = $result['password'] ?? '';
+
+            // 记录使用的限红组和配置快照
+            if ($limitConfig) {
+                $playerGamePlatform->limit_group_id = $limitConfig['limit_group_id'];
+                $playerGamePlatform->limit_config_data = [
+                    'max' => $limitConfig['max'],
+                    'min' => $limitConfig['min'],
+                    'cached_at' => Carbon::now()->toDateTimeString(),
+                ];
+            }
+
             $playerGamePlatform->save();
         }
 
@@ -168,12 +233,12 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
         $params = [
             'username' => $this->player->uuid,
             'password' => md5($password),
-            'currencyName' => $this->currency[$this->player->currency],
+            'currencyName' => $this->currency[$this->player->currency] ?? 'TWD',
             'winLimit' => 0,
         ];
         $res = $this->doCurl($this->createUrl('createPlayer'), $params);
         if ($res['codeId'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['codeId']], 0);
+            throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
         return [
@@ -245,16 +310,26 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
     {
         $playerGamePlatform = $this->checkPlayer();
         $password = $playerGamePlatform->player_password;
-        $res = $this->doCurl($this->createUrl('lobbyLogin'), [
+
+        $params = [
             'username' => $this->player->uuid,
             'password' => md5($password),
-            'currencyName' => $this->currency[$this->player->currency],
-            'language' => $this->lang[$data['lang']],
-            'limitGroup' => 'C',
-            'winLimit' => 0,
-        ]);
+            'currencyName' => $this->currency[$this->player->currency] ?? 'TWD',
+            'language' => $this->lang[$data['lang'] ?? 'zh-TW'] ?? 'tw',
+        ];
+
+        // 获取限红组配置
+        $limitConfig = $this->getPlayerLimitConfig();
+        if ($limitConfig && isset($limitConfig['max']) && isset($limitConfig['min'])) {
+            $params['limits'] = [
+                'max' => $limitConfig['max'],
+                'min' => $limitConfig['min'],
+            ];
+        }
+
+        $res = $this->doCurl($this->createUrl('lobbyLogin'), $params);
         if ($res['codeId'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['codeId']], 0);
+            throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
         Log::channel('dg_server')->info('ss', [$res]);
@@ -277,7 +352,7 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             'serial' => $data['order_no'] ?? '',
         ]);
         if ($res['codeId'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['codeId']], 0);
+            throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
         Cache::set('depositAmount_' . $this->player->id, $this->platform->id, 3 * 24 * 60 * 60);
         Cache::delete('withdrawAmount_' . $this->player->id);
@@ -300,7 +375,7 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             'serial' => $data['order_no'] ?? '',
         ]);
         if ($res['codeId'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['codeId']], 0);
+            throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
         Cache::set('withdrawAmount_' . $this->player->id, $this->platform->id, 3 * 24 * 60 * 60);
         Cache::delete('depositAmount_' . $this->player->id);
@@ -323,7 +398,7 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             'list' => $data,
         ]);
         if ($res['codeId'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['codeId']], 0);
+            throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
         return true;
@@ -379,7 +454,7 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
     {
         $res = $this->doCurl($this->createUrl('getGameHistories'));
         if ($res['codeId'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['codeId']], 0);
+            throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
         return $res['list'] ?? [];
@@ -396,16 +471,26 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
     {
         $playerGamePlatform = $this->checkPlayer();
         $password = $playerGamePlatform->player_password;
-        $res = $this->doCurl($this->createUrl('lobbyLogin'), [
+
+        $params = [
             'username' => $this->player->uuid,
             'password' => md5($password),
-            'currencyName' => $this->currency[$this->player->currency],
-            'language' => $this->lang[$lang],
-            'limitGroup' => 'C',
-            'winLimit' => 0,
-        ]);
+            'currencyName' => $this->currency[$this->player->currency] ?? 'TWD',
+            'language' => $this->lang[$lang] ?? 'tw',
+        ];
+
+        // 获取限红组配置
+        $limitConfig = $this->getPlayerLimitConfig();
+        if ($limitConfig && isset($limitConfig['max']) && isset($limitConfig['min'])) {
+            $params['limits'] = [
+                'max' => $limitConfig['max'],
+                'min' => $limitConfig['min'],
+            ];
+        }
+
+        $res = $this->doCurl($this->createUrl('lobbyLogin'), $params);
         if ($res['codeId'] != $this->successCode) {
-            throw new GameException($this->failCode[$res['codeId']], 0);
+            throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
         Log::channel('dg_server')->info('ss', [$res]);
@@ -523,7 +608,7 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             $insert = [
                 'player_id' => $player->id,
                 'parent_player_id' => $player->recommend_id ?? 0,
-                'agent_player_id' => $player->recommend_promoter->recommend_id ?? 0,
+                'agent_player_id' => $player->recommend_promoter?->recommend_id ?? 0,
                 'player_uuid' => $player->uuid,
                 'platform_id' => $this->platform->id,
                 'game_code' => $detail['gameId'],
