@@ -148,12 +148,12 @@ class GameServiceFactory
     }
 
     /**
-     * 查询余额
+     * 查询余额（只读操作，无需加锁）
      * @return mixed
      */
     public function balance(): mixed
     {
-        return $this->player->machine_wallet()->lockForUpdate()->value('money');
+        return $this->player->machine_wallet->money;
     }
 
     /**
