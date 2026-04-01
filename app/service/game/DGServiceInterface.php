@@ -142,20 +142,9 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
      */
     private function getPlayerLimitConfig(): ?array
     {
-        // 获取玩家所属的店家
-        $adminUserId = $this->player->admin_user_id ?? null;
-        if (!$adminUserId) {
-            return null;
-        }
-
-        // 查询店家限红分配
-        $platformId = $this->platform->id;
         $adminUserLimit = AdminUserLimitGroup::query()
-            ->where('admin_user_id', $adminUserId)
-            ->where(function($query) use ($platformId) {
-                $query->where('platform_id', $platformId)
-                      ->orWhereNull('platform_id');
-            })
+            ->where('admin_user_id', $this->player->store_admin_id)
+            ->where('platform_id', $this->platform->id)
             ->where('status', 1)
             ->first();
 
