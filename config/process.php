@@ -18,13 +18,10 @@ use process\GamePoolSocket;
 use process\LogClear;
 use process\LotteryPoolSocket;
 use process\LotteryRemind;
-use process\MachineKeepOutPlayer;
 use process\NationalPromoterRebate;
 use process\OnlinePlayerSocket;
 use process\ProfitSettlement;
 use process\ReverseWater;
-use process\SyncMachineActivity;
-use process\TencentStream;
 use process\WithdrawRemind;
 use Workerman\Worker;
 
@@ -55,12 +52,6 @@ return [
             ]
         ]
     ],
-    'MachineKeepOutPlayer' => [
-        'handler' => MachineKeepOutPlayer::class
-    ],
-    'SyncMachineActivity' => [
-        'handler' => SyncMachineActivity::class
-    ],
     'ProfitSettlement' => [
         'handler' => ProfitSettlement::class
     ],
@@ -84,9 +75,6 @@ return [
     ],
     'ReverseWater' => [
         'handler' => ReverseWater::class
-    ],
-    'TencentStream' => [
-        'handler' => TencentStream::class
     ],
     'ChannelSettlement' => [
         'handler' => ChannelSettlement::class
