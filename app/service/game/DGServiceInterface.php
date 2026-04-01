@@ -23,6 +23,8 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
 
 class DGServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
+    use LimitGroupTrait;
+
     public $method = 'POST';
     public $successCode = '0';
     public $failCode = [
@@ -142,34 +144,21 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
      */
     private function getPlayerLimitConfig(): ?array
     {
-        $adminUserLimit = AdminUserLimitGroup::query()
-            ->where('admin_user_id', $this->player->store_admin_id)
-            ->where('platform_id', $this->platform->id)
-            ->where('status', 1)
-            ->first();
+        // 使用 Trait 中的通用方法获取限红组配置
+        $limitGroupConfig = $this->getLimitGroupConfig('dg_server');
 
-        if (!$adminUserLimit) {
-            return null;
-        }
-
-        // 获取限红组配置
-        $groupConfig = PlatformLimitGroupConfig::query()
-            ->where('limit_group_id', $adminUserLimit->limit_group_id)
-            ->where('platform_id', $this->platform->id)
-            ->where('status', 1)
-            ->first();
-
-        if (!$groupConfig || !$groupConfig->config_data) {
+        // 如果没有配置数据，返回null
+        if (!$this->hasLimitGroupConfigData($limitGroupConfig)) {
             return null;
         }
 
         // 从config_data中获取DG限红配置 {"max": 2, "min": 1}
-        $configData = $groupConfig->config_data;
+        $configData = $limitGroupConfig->config_data;
 
         return [
             'max' => $configData['max'] ?? null,
             'min' => $configData['min'] ?? null,
-            'limit_group_id' => $adminUserLimit->limit_group_id,
+            'limit_group_id' => $limitGroupConfig->limit_group_id,
         ];
     }
 

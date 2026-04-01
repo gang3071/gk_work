@@ -23,6 +23,8 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
 
 class RSGServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
+    use LimitGroupTrait;
+
     public $method = 'POST';
     public $successCode = '0';
     public $failCode = [
@@ -337,48 +339,11 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
      */
     private function getLimitRedConfig(): ?array
     {
-        $limitGroupConfig = null;
-
-        // 如果玩家有店家ID，优先查询店家绑定的限红组配置
-        if (!empty($this->player->store_admin_id)) {
-            // 查询店家绑定的RSG平台限红组配置
-            $adminUserLimitGroup = AdminUserLimitGroup::query()
-                ->where('admin_user_id', $this->player->store_admin_id)
-                ->where('platform_id', $this->platform->id)
-                ->where('status', 1)
-                ->first();
-
-            // 如果店家有绑定限红组，获取该限红组的平台配置
-            if ($adminUserLimitGroup) {
-                $limitGroupConfig = PlatformLimitGroupConfig::query()
-                    ->where('limit_group_id', $adminUserLimitGroup->limit_group_id)
-                    ->where('platform_id', $this->platform->id)
-                    ->where('status', 1)
-                    ->first();
-            }
-        }
-
-        // 如果没有找到店家限红组配置，则使用平台的默认限红组配置
-        if (!$limitGroupConfig && !empty($this->platform->default_limit_group_id)) {
-            // 从游戏平台表的 default_limit_group_id 字段获取默认限红组配置
-            $limitGroupConfig = PlatformLimitGroupConfig::query()
-                ->where('limit_group_id', $this->platform->default_limit_group_id)
-                ->where('platform_id', $this->platform->id)
-                ->where('status', 1)
-                ->first();
-
-            // 记录使用了默认限红组
-            if ($limitGroupConfig) {
-                $this->log->info('RSG使用平台默认限红组', [
-                    'player_id' => $this->player->id,
-                    'store_admin_id' => $this->player->store_admin_id ?? 'null',
-                    'default_limit_group_id' => $this->platform->default_limit_group_id,
-                ]);
-            }
-        }
+        // 使用 Trait 中的通用方法获取限红组配置
+        $limitGroupConfig = $this->getLimitGroupConfig('rsg_server');
 
         // 如果没有配置数据，返回null
-        if (!$limitGroupConfig || empty($limitGroupConfig->config_data)) {
+        if (!$this->hasLimitGroupConfigData($limitGroupConfig)) {
             return null;
         }
 
