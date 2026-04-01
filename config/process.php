@@ -22,7 +22,6 @@ use process\NationalPromoterRebate;
 use process\OnlinePlayerSocket;
 use process\ProfitSettlement;
 use process\ReverseWater;
-use process\WithdrawRemind;
 use Workerman\Worker;
 
 return [
@@ -61,14 +60,8 @@ return [
     'OnlinePlayerSocket' => [
         'handler' => OnlinePlayerSocket::class
     ],
-    'LogClear' => [
-        'handler' => LogClear::class
-    ],
     'LotteryRemind' => [
         'handler' => LotteryRemind::class
-    ],
-    'WithdrawRemind' => [
-        'handler' => WithdrawRemind::class
     ],
     'NationalPromoterRebate' => [
         'handler' => NationalPromoterRebate::class
