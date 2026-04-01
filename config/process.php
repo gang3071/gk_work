@@ -23,7 +23,6 @@ use process\LotteryPoolSocket;
 use process\LotteryRemind;
 use process\MachineKeepOutPlayer;
 use process\MediaClear;
-use process\MediaRecordingClear;
 use process\NationalPromoterRebate;
 use process\OnlinePlayerSocket;
 use process\ProfitSettlement;
@@ -93,9 +92,6 @@ return [
     ],
     'NationalPromoterRebate' => [
         'handler' => NationalPromoterRebate::class
-    ],
-    'MediaRecordingClear' => [
-        'handler' => MediaRecordingClear::class
     ],
     'ReverseWater' => [
         'handler' => ReverseWater::class
