@@ -318,11 +318,11 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
 
         Log::channel('dg_server')->info('lobbyLogin', ['params'=>$params]);
         $res = $this->doCurl($this->createUrl('lobbyLogin'), $params);
+        Log::channel('dg_server')->info('lobbyLogin_response', [$res]);
         if ($res['codeId'] != $this->successCode) {
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
-        Log::channel('dg_server')->info('ss', [$res]);
         return $res['list'][0] . '&showapp=off' . '&isapp=1';
     }
 
