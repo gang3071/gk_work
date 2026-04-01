@@ -174,26 +174,12 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             ->first();
         if (empty($playerGamePlatform)) {
             $result = $this->createPlayer();
-
-            // 获取限红组配置
-            $limitConfig = $this->getPlayerLimitConfig();
-
             $playerGamePlatform = new PlayerGamePlatform();
             $playerGamePlatform->player_id = $this->player->id;
             $playerGamePlatform->platform_id = $this->platform->id;
             $playerGamePlatform->player_name = $this->player->name;
             $playerGamePlatform->player_code = $this->player->uuid;
             $playerGamePlatform->player_password = $result['password'] ?? '';
-
-            // 记录使用的限红组和配置快照
-            if ($limitConfig) {
-                $playerGamePlatform->limit_group_id = $limitConfig['limit_group_id'];
-                $playerGamePlatform->limit_config_data = [
-                    'max' => $limitConfig['max'],
-                    'min' => $limitConfig['min'],
-                    'cached_at' => Carbon::now()->toDateTimeString(),
-                ];
-            }
 
             $playerGamePlatform->save();
         }
