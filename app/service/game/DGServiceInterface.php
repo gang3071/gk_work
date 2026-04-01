@@ -304,13 +304,13 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             'username' => $this->player->uuid,
             'password' => md5($password),
             'currencyName' => $this->currency[$this->player->currency] ?? 'TWD',
-            'language' => $this->lang[$data['lang'] ?? 'zh-TW'] ?? 'tw',
+            'language' => 'tw',
         ];
 
         // 获取限红组配置
         $limitConfig = $this->getPlayerLimitConfig();
         if ($limitConfig && isset($limitConfig['max']) && isset($limitConfig['min'])) {
-            $params['limits'] = [
+            $params['limits'][] = [
                 'max' => $limitConfig['max'],
                 'min' => $limitConfig['min'],
             ];
@@ -472,7 +472,7 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
         // 获取限红组配置
         $limitConfig = $this->getPlayerLimitConfig();
         if ($limitConfig && isset($limitConfig['max']) && isset($limitConfig['min'])) {
-            $params['limits'] = [
+            $params['limits'][] = [
                 'max' => $limitConfig['max'],
                 'min' => $limitConfig['min'],
             ];
