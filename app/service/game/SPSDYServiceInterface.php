@@ -6,20 +6,20 @@ use app\exception\GameException;
 use app\model\Game;
 use app\model\GamePlatform;
 use app\model\Player;
-use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
+use app\traits\AsyncGameRecordTrait;
 use app\wallet\controller\game\SAGameController;
 use app\wallet\controller\game\SPSDYGameController;
 use Carbon\Carbon;
 use Exception;
 use support\Cache;
-use Webman\RedisQueue\Client;
 use WebmanTech\LaravelHttpClient\Facades\Http;
 
 class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
+    use AsyncGameRecordTrait;
     public $method = 'POST';
     public $successCode = 200;
     public $failCode = [
@@ -65,11 +65,6 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
 
     public function bet($data)
     {
-        if (PlayGameRecord::query()->where('order_no', $data['TransferCode'])->exists()) {
-            $this->error = SPSDYGameController::API_CODE_DECRYPT_ERROR;
-            return $this->player->machine_wallet->money;
-        }
-
         $player = $this->player;
         $bet = $data['Point'];
 
@@ -82,6 +77,13 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
 
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+
+        // ✅ 幂等性检查：防止重复下注（在锁保护下检查，防止TOCTOU竞态条件）
+        if (PlayGameRecord::query()->where('order_no', $data['TransferCode'])->exists()) {
+            $this->error = SPSDYGameController::API_CODE_DECRYPT_ERROR;
+            return $this->player->machine_wallet->money;
+        }
+
         if ($machineWallet->money < $bet) {
             $this->error = SPSDYGameController::API_CODE_INSUFFICIENT_BALANCE;
             return $this->player->machine_wallet->money;
@@ -89,35 +91,26 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
 
         $beforeBalance = $machineWallet->money;
 
-        //下注记录
-        $insert = [
-            'player_id' => $this->player->id,
-            'parent_player_id' => $player->recommend_id ?? 0,
-            'agent_player_id' => $player->recommend_promoter->recommend_id ?? 0,
-            'player_uuid' => $player->uuid,
-            'platform_id' => $this->platform->id,
-            'game_code' => '',
-            'department_id' => $player->department_id,
-            'bet' => $bet,
-            'win' => 0,
-            'diff' => 0,
-            'order_no' => $data['TransferCode'],
-            'original_data' => json_encode($data),
-            'order_time' => Carbon::createFromTimestampMs($data['Timestamp'])->toDateTimeString(),
-            'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-        ];
+        // 同步扣款
+        $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
+        $machineWallet->save();
 
-        /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->create($insert);
-
-
-        $balance = $this->createBetRecord($machineWallet, $player, $record, $bet);
+        // ⚡ 异步创建下注记录（不阻塞API响应）
+        $this->asyncCreateBetRecord(
+            playerId: $player->id,
+            platformId: $this->platform->id,
+            gameCode: '',
+            orderNo: $data['TransferCode'],
+            bet: $bet,
+            originalData: $data,
+            orderTime: Carbon::createFromTimestampMs($data['Timestamp'])->toDateTimeString()
+        );
 
         return [
             'TransferCode' => $data['TransferCode'],
             'User' => $data['User'],
             'BeforeBalance' => $beforeBalance,
-            'Balance' => $balance,
+            'Balance' => \app\service\WalletService::getBalance($player->id),
         ];
     }
 
@@ -129,10 +122,14 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
     public function betResulet($data)
     {
         /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->where('order_no', $data['TransferCode'])->first();
+        // ✅ 加锁查询record，防止并发重复派彩
+        $record = PlayGameRecord::query()
+            ->where('order_no', $data['TransferCode'])
+            ->lockForUpdate()
+            ->first();
 
         $player = $this->player;
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+
         if (!$record) {
             $this->error = SPSDYGameController::API_CODE_DECRYPT_ERROR;
             return $player->machine_wallet->money;
@@ -143,50 +140,32 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
             return $player->machine_wallet->money;
         }
 
+        // 锁钱包
+        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+
         $money = $data['Point'];
 
         $beforeGameAmount = $machineWallet->money;
         //有金额则为赢
         if ($data['Point'] > 0) {
-            //处理用户金额记录
-            // 更新玩家统计
+            // 同步增加余额
             $machineWallet->money = bcadd($machineWallet->money, $money, 2);
             $machineWallet->save();
-            //todo 语言文件后续处理
-            //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
-            $playerDeliveryRecord = new PlayerDeliveryRecord;
-            $playerDeliveryRecord->player_id = $player->id;
-            $playerDeliveryRecord->department_id = $player->department_id;
-            $playerDeliveryRecord->target = $record->getTable();
-            $playerDeliveryRecord->target_id = $record->id;
-            $playerDeliveryRecord->platform_id = $this->platform->id;
-            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
-            $playerDeliveryRecord->source = 'player_bet_settlement';
-            $playerDeliveryRecord->amount = $money;
-            $playerDeliveryRecord->amount_before = $beforeGameAmount;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
-            $playerDeliveryRecord->tradeno = $record->order_no ?? '';
-            $playerDeliveryRecord->remark = '遊戲結算';
-            $playerDeliveryRecord->user_id = 0;
-            $playerDeliveryRecord->user_name = '';
-            $playerDeliveryRecord->save();
         }
 
-        $record->platform_action_at = Carbon::createFromTimestampMs($data['Timestamp'])->toDateTimeString();
-        $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
-        $record->action_data = json_encode($data, JSON_UNESCAPED_UNICODE);
-        $record->win = $money;
-        $record->diff = $record->bet - $money;
-        $record->save();
-
-        //彩金记录
-        Client::send('game-lottery', ['player_id' => $player->id, 'bet' => $record->bet, 'play_game_record_id' => $record->id]);
+        // ⚡ 异步更新结算记录（不阻塞API响应）
+        // 彩金记录会在Consumer中处理
+        $this->asyncUpdateSettleRecord(
+            orderNo: $record->order_no,
+            win: $money,
+            diff: $record->bet - $money
+        );
 
         return [
             'TransferCode' => $data['TransferCode'],
             'User' => $data['User'],
             'BeforeBalance' => $beforeGameAmount,
-            'Balance' => $machineWallet->money,
+            'Balance' => \app\service\WalletService::getBalance($player->id),
         ];
     }
 

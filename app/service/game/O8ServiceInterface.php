@@ -8,23 +8,22 @@ use app\model\GameExtend;
 use app\model\GamePlatform;
 use app\model\GameType;
 use app\model\Player;
-use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
+use app\traits\AsyncGameRecordTrait;
 use app\wallet\controller\game\O8GameController;
-use app\wallet\controller\game\SAGameController;
 use Carbon\Carbon;
 use Exception;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use support\Cache;
 use support\Log;
-use Webman\RedisQueue\Client;
 use WebmanTech\LaravelHttpClient\Facades\Http;
 
 class O8ServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
+    use AsyncGameRecordTrait;
     public string $method = 'POST';
     public string $successCode = '0';
     private mixed $apiDomain;
@@ -353,43 +352,60 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
 
             // 检查设备是否爆机
             if ($this->checkAndHandleMachineCrash()) {
-                return $player->machine_wallet->money;
+                return \app\service\WalletService::getBalance($player->id);
             }
 
             $bet = $order['amt'];
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+
+            // ✅ 幂等性检查：防止重复下注（在锁保护下检查，防止TOCTOU竞态条件）
+            $existingRecord = PlayGameRecord::query()
+                ->where('order_no', $order['externalroundid'])
+                ->first();
+
+            if ($existingRecord) {
+                // 重复订单，返回当前余额和dup=true
+                $balance = \app\service\WalletService::getBalance($player->id);
+                $return['transactions'][] = [
+                    'txid' => $order['externalroundid'],
+                    'ptxid' => $order['ptxid'],
+                    'bal' => $balance,
+                    'cur' => 'TWD',
+                    'dup' => true  // ✅ 标记为重复订单
+                ];
+                continue;  // 跳过此订单，不重复扣款
+            }
+
             if ($machineWallet->money < $bet) {
                 $this->error = O8GameController::API_CODE_AMOUNT_OVER_BALANCE;
-                return $player->machine_wallet->money;
+                return \app\service\WalletService::getBalance($player->id);
             }
-            //下注记录
 
-            //根据游戏code查找当前游戏所属的游戏平台
-            $platformId = GameExtend::query()->where('code',$order['gamecode'])->value('platform_id')??'';
-            $insert = [
-                'player_id' => $player->id,
-                'parent_player_id' => $player->recommend_id ?? 0,
-                'agent_player_id' => $player->recommend_promoter->recommend_id ?? 0,
-                'player_uuid' => $player->uuid,
-                'platform_id' => $platformId?:$this->platform->id,
-                'game_code' => $order['gamecode'],
-                'department_id' => $player->department_id,
-                'bet' => $bet,
-                'win' => 0,
-                'diff' => 0,
-                'order_no' => $order['externalroundid'],
-                'original_data' => json_encode($order),
-                'order_time' => Carbon::createFromTimestamp($order['timestamp']),
-                'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-            ];
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()->create($insert);
+            // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
+            $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
+            $machineWallet->save();
 
-            $balance = $this->createBetRecord($machineWallet, $player, $record, $bet);
+            // ⚡ 异步创建下注记录（不阻塞API响应）
+            $platformId = GameExtend::query()
+                ->where('code', $order['gamecode'])
+                ->value('platform_id') ?? $this->platform->id;
+
+            $this->asyncCreateBetRecord(
+                playerId: $player->id,
+                platformId: $platformId,
+                gameCode: $order['gamecode'],
+                orderNo: $order['externalroundid'],
+                bet: $bet,
+                originalData: $order,
+                orderTime: Carbon::createFromTimestamp($order['timestamp'])->toDateTimeString()
+            );
+
+            // ✅ 立即从缓存读取余额
+            $balance = \app\service\WalletService::getBalance($player->id);
 
             $return['transactions'][] = [
-                'txid' => $record->id,
+                'txid' => $order['externalroundid'], // ✅ 使用外部订单号
                 'ptxid' => $order['ptxid'],
                 'bal' => $balance,
                 'cur' => 'TWD',
@@ -401,28 +417,24 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
-     * 取消单
+     * 取消单（异步优化版）
      * @param $data
      * @return float|string
      */
     public function cancelBet($data): float|string
     {
-        /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->where('order_no', $data['txn_reverse_id'])->first();
-
-        if (!$record) {
-            $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-            return $this->player->machine_wallet->money;
-        }
-
-        if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-            $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-            return $this->player->machine_wallet->money;
-        }
-
-        //返还用户金钱  修改注单状态
+        // ✅ 同步退还用户金钱（触发 updated 事件，自动更新 Redis 缓存）
         $bet = $data['amount'];
-        return $this->createCancelBetRecord($record, $data, $bet);
+        /** @var PlayerPlatformCash $machineWallet */
+        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+        $machineWallet->money = bcadd($machineWallet->money, $bet, 2);
+        $machineWallet->save();
+
+        // ⚡ 异步更新取消状态（不阻塞API响应）
+        $this->asyncCancelBetRecord($data['txn_reverse_id']);
+
+        // ✅ 立即从缓存返回余额
+        return \app\service\WalletService::getBalance($this->player->id);
     }
 
     /**
@@ -445,73 +457,38 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
 
-            //需要循环处理下注订单
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()->where('order_no', $order['externalroundid'])->first();
-
-            if (!$record) {
-                $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-                return $this->player->machine_wallet->money;
-            }
-
-            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
-                $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-                return $this->player->machine_wallet->money;
-            }
-
             $money = $order['turnover'] - $order['ggr'];
 
-            //有金额则为赢  todo 需要额外优化O8不同状态时候的余额处理
-            if ($order['txtype'] == 510) {
-                $beforeGameAmount = $machineWallet->money;
-                //处理用户金额记录
-                // 更新玩家统计
+            // ✅ 同步增加余额（有金额时，触发 updated 事件，自动更新 Redis 缓存）
+            if ($order['txtype'] == 510 && $money > 0) {
                 $machineWallet->money = bcadd($machineWallet->money, $money, 2);
                 $machineWallet->save();
-                //todo 语言文件后续处理
-                //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
-                $platformId = GameExtend::query()->where('code',$order['gamecode'])->value('platform_id')??'';
-                $playerDeliveryRecord = new PlayerDeliveryRecord;
-                $playerDeliveryRecord->player_id = $player->id;
-                $playerDeliveryRecord->department_id = $player->department_id;
-                $playerDeliveryRecord->target = $record->getTable();
-                $playerDeliveryRecord->target_id = $record->id;
-                $playerDeliveryRecord->platform_id = $platformId?:$this->platform->id;
-                $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
-                $playerDeliveryRecord->source = 'player_bet_settlement';
-                $playerDeliveryRecord->amount = $money;
-                $playerDeliveryRecord->amount_before = $beforeGameAmount;
-                $playerDeliveryRecord->amount_after = $machineWallet->money;
-                $playerDeliveryRecord->tradeno = $record->order_no ?? '';
-                $playerDeliveryRecord->remark = '遊戲結算';
-                $playerDeliveryRecord->user_id = 0;
-                $playerDeliveryRecord->user_name = '';
-                $playerDeliveryRecord->save();
             }
 
-            $record->platform_action_at = Carbon::createFromTimeString($order['timestamp']);
-            $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
-            $record->action_data = json_encode($order, JSON_UNESCAPED_UNICODE);
-            $record->win = $money;
-            $record->diff = -$order['ggr'];
-            $record->save();
+            // ⚡ 异步更新结算记录（不阻塞API响应）
+            // 彩金记录会在Consumer中处理
+            $this->asyncUpdateSettleRecord(
+                orderNo: $order['externalroundid'],
+                win: $money,
+                diff: -$order['ggr']
+            );
+
+            // ✅ 立即从缓存读取余额
+            $balance = \app\service\WalletService::getBalance($player->id);
 
             $return['transactions'][] = [
-                'txid' => $record->id,
+                'txid' => $order['externalroundid'], // ✅ 使用外部订单号
                 'ptxid' => $order['ptxid'],
-                'bal' => $machineWallet->money,
+                'bal' => $balance,
                 'cur' => 'TWD',
                 'dup' => false
             ];
+
             Log::info('O8结算完成', [
                 'player_id' => $player->id,
-                'order_no' => $record->order_no,
-                'bet' => $record->bet,
+                'order_no' => $order['externalroundid'],
                 'win' => $money
             ]);
-
-            //彩金记录
-            Client::send('game-lottery', ['player_id' => $player->id, 'bet' => $record->bet, 'play_game_record_id' => $record->id]);
         }
 
         return $return;
@@ -559,7 +536,8 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
 
     public function balance(): mixed
     {
-        return $this->player->machine_wallet->money;
+        // ✅ 使用 Redis 缓存查询余额
+        return \app\service\WalletService::getBalance($this->player->id);
     }
 
     /**

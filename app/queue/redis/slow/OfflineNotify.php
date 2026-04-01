@@ -1,6 +1,6 @@
 <?php
 
-namespace app\queue\redis;
+namespace app\queue\redis\slow;
 
 use app\model\ExternalApp;
 use app\model\Player;

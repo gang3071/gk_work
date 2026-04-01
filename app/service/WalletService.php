@@ -12,8 +12,11 @@ use support\Redis;
  */
 class WalletService
 {
-    // Redis 缓存键前缀
-    private const CACHE_PREFIX = 'wallet:balance:';
+    // Redis 缓存键前缀（包含项目标识避免跨项目冲突）
+    private const CACHE_PREFIX = 'gk_work:wallet:balance:';
+
+    // 缓存版本号（修改此值可批量失效所有缓存）
+    private const CACHE_VERSION = 'v1';
 
     // 缓存过期时间（秒）
     private const CACHE_TTL = 3600; // 1小时
@@ -25,6 +28,16 @@ class WalletService
     private const DEFAULT_PLATFORM_ID = 1;
 
     /**
+     * 🚨 紧急开关：禁用 Redis 缓存
+     * 在 .env 中设置 WALLET_CACHE_ENABLED=false 可立即禁用缓存
+     * 用于紧急情况下快速回滚到纯数据库查询
+     */
+    private static function isCacheEnabled(): bool
+    {
+        return env('WALLET_CACHE_ENABLED', true);
+    }
+
+    /**
      * 获取余额（带缓存）
      *
      * @param int $playerId 玩家ID
@@ -34,6 +47,11 @@ class WalletService
      */
     public static function getBalance(int $playerId, int $platformId = self::DEFAULT_PLATFORM_ID, bool $forceRefresh = false): float
     {
+        // 🚨 紧急开关：缓存被禁用时直接查询数据库
+        if (!self::isCacheEnabled()) {
+            return self::getBalanceFromDB($playerId, $platformId);
+        }
+
         $cacheKey = self::getCacheKey($playerId, $platformId);
 
         try {
@@ -112,13 +130,10 @@ class WalletService
             // 扣款
             $newBalance = bcsub($oldBalance, $amount, 2);
             $wallet->money = $newBalance;
-            $wallet->save();
+            $wallet->save(); // 触发 updated 事件自动更新缓存
 
             // 提交事务
             \support\Db::commit();
-
-            // 更新缓存
-            self::updateCache($playerId, $platformId, $newBalance);
 
             return [
                 'success' => true,
@@ -182,13 +197,10 @@ class WalletService
             // 加款
             $newBalance = bcadd($oldBalance, $amount, 2);
             $wallet->money = $newBalance;
-            $wallet->save();
+            $wallet->save(); // 触发 updated 事件自动更新缓存
 
             // 提交事务
             \support\Db::commit();
-
-            // 更新缓存
-            self::updateCache($playerId, $platformId, $newBalance);
 
             return [
                 'success' => true,
@@ -240,6 +252,46 @@ class WalletService
     }
 
     /**
+     * 批量清除缓存
+     *
+     * @param array $playerIds 玩家ID数组
+     * @param int $platformId 平台ID
+     * @return int 成功清除的数量
+     */
+    public static function clearBatchCache(array $playerIds, int $platformId = self::DEFAULT_PLATFORM_ID): int
+    {
+        if (empty($playerIds)) {
+            return 0;
+        }
+
+        try {
+            $cacheKeys = [];
+            foreach ($playerIds as $playerId) {
+                $cacheKeys[] = self::getCacheKey($playerId, $platformId);
+            }
+
+            // 批量删除
+            $deletedCount = Redis::del(...$cacheKeys);
+
+            Log::info('WalletService::clearBatchCache 批量清除', [
+                'count' => count($playerIds),
+                'deleted' => $deletedCount,
+                'platform_id' => $platformId,
+            ]);
+
+            return $deletedCount;
+
+        } catch (\Throwable $e) {
+            Log::error('WalletService::clearBatchCache 异常', [
+                'player_ids' => $playerIds,
+                'platform_id' => $platformId,
+                'error' => $e->getMessage(),
+            ]);
+            return 0;
+        }
+    }
+
+    /**
      * 更新缓存
      *
      * @param int $playerId 玩家ID
@@ -250,16 +302,32 @@ class WalletService
      */
     public static function updateCache(int $playerId, int $platformId, float $balance, int $ttl = self::CACHE_TTL): bool
     {
+        $startTime = microtime(true);
+
         try {
             $cacheKey = self::getCacheKey($playerId, $platformId);
             Redis::setex($cacheKey, $ttl, $balance);
+
+            $duration = (microtime(true) - $startTime) * 1000;
+
+            Log::channel('wallet_service')->info('💾 缓存更新成功', [
+                'player_id' => $playerId,
+                'platform_id' => $platformId,
+                'balance' => $balance,
+                'ttl' => $ttl,
+                'cache_time' => round($duration, 2) . 'ms',
+            ]);
+
             return true;
         } catch (\Throwable $e) {
-            Log::error('WalletService::updateCache 异常', [
+            $duration = (microtime(true) - $startTime) * 1000;
+
+            Log::channel('wallet_service')->error('❌ 缓存更新失败', [
                 'player_id' => $playerId,
                 'platform_id' => $platformId,
                 'balance' => $balance,
                 'error' => $e->getMessage(),
+                'cache_time' => round($duration, 2) . 'ms',
             ]);
             return false;
         }
@@ -283,7 +351,7 @@ class WalletService
     }
 
     /**
-     * 生成缓存键
+     * 生成缓存键（包含版本号）
      *
      * @param int $playerId 玩家ID
      * @param int $platformId 平台ID
@@ -291,7 +359,7 @@ class WalletService
      */
     private static function getCacheKey(int $playerId, int $platformId): string
     {
-        return self::CACHE_PREFIX . "{$playerId}:{$platformId}";
+        return self::CACHE_PREFIX . self::CACHE_VERSION . ":{$playerId}:{$platformId}";
     }
 
     /**
@@ -310,6 +378,9 @@ class WalletService
         try {
             $result = [];
             $missingPlayerIds = [];
+
+            // 重建索引确保数组键是连续的 0, 1, 2...
+            $playerIds = array_values($playerIds);
 
             // 尝试从缓存批量获取
             $cacheKeys = array_map(fn($id) => self::getCacheKey($id, $platformId), $playerIds);
@@ -330,12 +401,22 @@ class WalletService
                     ->where('platform_id', $platformId)
                     ->get(['player_id', 'money']);
 
+                $foundPlayerIds = [];
                 foreach ($wallets as $wallet) {
                     $balance = (float)$wallet->money;
                     $result[$wallet->player_id] = $balance;
+                    $foundPlayerIds[] = $wallet->player_id;
 
                     // 写入缓存
                     self::updateCache($wallet->player_id, $platformId, $balance);
+                }
+
+                // 补充数据库中不存在的玩家（余额为0）
+                $notFoundPlayerIds = array_diff($missingPlayerIds, $foundPlayerIds);
+                foreach ($notFoundPlayerIds as $playerId) {
+                    $result[$playerId] = 0.0;
+                    // 缓存不存在的玩家（避免缓存穿透）
+                    self::updateCache($playerId, $platformId, 0.0);
                 }
             }
 
@@ -356,5 +437,71 @@ class WalletService
                 ->map(fn($v) => (float)$v)
                 ->toArray();
         }
+    }
+
+    /**
+     * 缓存预热（批量加载玩家余额到缓存）
+     *
+     * @param array $playerIds 玩家ID数组
+     * @param int $platformId 平台ID
+     * @return array ['success' => int, 'failed' => int]
+     */
+    public static function warmupCache(array $playerIds, int $platformId = self::DEFAULT_PLATFORM_ID): array
+    {
+        if (empty($playerIds)) {
+            return ['success' => 0, 'failed' => 0];
+        }
+
+        $successCount = 0;
+        $failedCount = 0;
+
+        try {
+            // 从数据库批量查询
+            $wallets = PlayerPlatformCash::query()
+                ->whereIn('player_id', $playerIds)
+                ->where('platform_id', $platformId)
+                ->get(['player_id', 'money']);
+
+            $foundPlayerIds = [];
+
+            // 批量写入缓存
+            foreach ($wallets as $wallet) {
+                $balance = (float)$wallet->money;
+                $foundPlayerIds[] = $wallet->player_id;
+
+                if (self::updateCache($wallet->player_id, $platformId, $balance)) {
+                    $successCount++;
+                } else {
+                    $failedCount++;
+                }
+            }
+
+            // 为不存在的玩家缓存 0 余额
+            $notFoundPlayerIds = array_diff($playerIds, $foundPlayerIds);
+            foreach ($notFoundPlayerIds as $playerId) {
+                if (self::updateCache($playerId, $platformId, 0.0)) {
+                    $successCount++;
+                } else {
+                    $failedCount++;
+                }
+            }
+
+            Log::info('WalletService::warmupCache 缓存预热完成', [
+                'requested' => count($playerIds),
+                'success' => $successCount,
+                'failed' => $failedCount,
+                'platform_id' => $platformId,
+            ]);
+
+        } catch (\Throwable $e) {
+            Log::error('WalletService::warmupCache 异常', [
+                'player_ids' => $playerIds,
+                'platform_id' => $platformId,
+                'error' => $e->getMessage(),
+            ]);
+            $failedCount = count($playerIds) - $successCount;
+        }
+
+        return ['success' => $successCount, 'failed' => $failedCount];
     }
 }

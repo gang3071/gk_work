@@ -12,8 +12,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int player_id 玩家id
  * @property int parent_player_id 上级玩家id
  * @property int agent_player_id 代理玩家id
+ * @property string player_uuid 玩家UUID
  * @property int platform_id 平台id
- * @property int game_code 游戏编号
+ * @property string game_code 游戏编号
  * @property int department_id 渠道id
  * @property int status 状态
  * @property int settlement_status 结算状态 0 未结算 1已结算 2取消
@@ -22,6 +23,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property float diff 玩家輸贏額度
  * @property float reward 奖金(不计入输赢)
  * @property string order_no 单号
+ * @property string order_time 订单时间
  * @property string original_data 原始数据
  * @property string action_data 取消/结算原始数据
  * @property string action_at 结算时间
@@ -74,7 +76,6 @@ class PlayGameRecord extends Model
         'national_damage_ratio',
         'agent_player_id',
         'platform_action_at',
-        'agent_player_id',
         'order_time',
         'settlement_status',
         'action_data',

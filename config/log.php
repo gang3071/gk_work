@@ -685,6 +685,57 @@ $handlers = [
             ]
         ],
     ],
+    // 异步游戏记录日志（API层 - 入队日志）
+    'async_game_record' => [
+        'handlers' => [
+            [
+                'class' => Monolog\Handler\RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/async_game_record.log',
+                    7, //$maxFiles
+                    Monolog\Logger::DEBUG,
+                ],
+                'formatter' => [
+                    'class' => Monolog\Formatter\LineFormatter::class,
+                    'constructor' => [null, 'Y-m-d H:i:s', true],
+                ],
+            ]
+        ],
+    ],
+    // 游戏记录消费者日志（Consumer层 - 处理日志）
+    'game_bet_record' => [
+        'handlers' => [
+            [
+                'class' => Monolog\Handler\RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/game_bet_record.log',
+                    7, //$maxFiles
+                    Monolog\Logger::DEBUG,
+                ],
+                'formatter' => [
+                    'class' => Monolog\Formatter\LineFormatter::class,
+                    'constructor' => [null, 'Y-m-d H:i:s', true],
+                ],
+            ]
+        ],
+    ],
+    // 钱包服务日志（缓存更新）
+    'wallet_service' => [
+        'handlers' => [
+            [
+                'class' => Monolog\Handler\RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/wallet_service.log',
+                    7, //$maxFiles
+                    Monolog\Logger::DEBUG,
+                ],
+                'formatter' => [
+                    'class' => Monolog\Formatter\LineFormatter::class,
+                    'constructor' => [null, 'Y-m-d H:i:s', true],
+                ],
+            ]
+        ],
+    ],
 ];
 
 // 如果启用 Telegram 通知，添加到 default 通道

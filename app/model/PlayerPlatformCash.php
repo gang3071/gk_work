@@ -53,7 +53,7 @@ class PlayerPlatformCash extends Model
 
     /**
      * 模型的 "booted" 方法
-     * 监听余额变化，自动检查爆机状态
+     * 监听余额变化，自动检查爆机状态并同步 Redis 缓存
      *
      * @return void
      */
@@ -61,17 +61,48 @@ class PlayerPlatformCash extends Model
     {
         // 监听余额更新事件
         static::updated(function (PlayerPlatformCash $wallet) {
-            // 只处理实体机平台的余额变化
-            if ($wallet->platform_id != self::PLATFORM_SELF) {
-                return;
-            }
-
             // 检查 money 字段是否变化
             if (!$wallet->wasChanged('money')) {
                 return;
             }
 
+            // ✅ 同步更新 Redis 缓存（先于 try 块，确保缓存同步失败会被捕获）
+            $cacheUpdated = false;
             try {
+                $cacheUpdated = \app\service\WalletService::updateCache(
+                    $wallet->player_id,
+                    $wallet->platform_id,
+                    (float)$wallet->money
+                );
+
+                // 🚨 缓存同步失败告警
+                if (!$cacheUpdated) {
+                    \support\Log::critical('PlayerPlatformCash: Redis cache sync failed!', [
+                        'player_id' => $wallet->player_id,
+                        'platform_id' => $wallet->platform_id,
+                        'old_balance' => $wallet->getOriginal('money'),
+                        'new_balance' => $wallet->money,
+                        'timestamp' => date('Y-m-d H:i:s'),
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                // Redis 缓存同步异常
+                \support\Log::critical('PlayerPlatformCash: Redis cache sync exception!', [
+                    'player_id' => $wallet->player_id,
+                    'platform_id' => $wallet->platform_id,
+                    'new_balance' => $wallet->money,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+            }
+
+            try {
+
+                // 只处理实体机平台的余额变化（爆机检查）
+                if ($wallet->platform_id != self::PLATFORM_SELF) {
+                    return;
+                }
+
                 // 获取玩家信息
                 $player = $wallet->player;
                 if (!$player) {
@@ -133,7 +164,7 @@ class PlayerPlatformCash extends Model
                     checkAndNotifyCrashUnlock($player, $previousAmount);
                 }
             } catch (\Exception $e) {
-                \support\Log::error('PlayerPlatformCash: Failed to check machine crash', [
+                \support\Log::error('PlayerPlatformCash: Failed to check machine crash or update cache', [
                     'player_id' => $wallet->player_id,
                     'error' => $e->getMessage(),
                 ]);

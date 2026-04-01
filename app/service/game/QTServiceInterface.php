@@ -4,17 +4,13 @@ namespace app\service\game;
 
 use app\exception\GameException;
 use app\model\Game;
-use app\model\GameExtend;
 use app\model\GamePlatform;
 use app\model\Player;
 use app\model\PlayerDeliveryRecord;
-use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
+use app\traits\AsyncGameRecordTrait;
 use Carbon\Carbon;
-use DateTime;
-use DateTimeInterface;
-use DateTimeZone;
 use Exception;
 use support\Cache;
 use support\Log;
@@ -22,6 +18,7 @@ use Webman\RedisQueue\Client;
 
 class QTServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
+    use AsyncGameRecordTrait;
     public $method = 'POST';
     public string $error = '';
 
@@ -274,7 +271,8 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 return 0;
             }
 
-            return (float)$this->player->machine_wallet->money;
+            // ✅ 使用 Redis 缓存查询余额
+            return \app\service\WalletService::getBalance($this->player->id);
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT balance异常', ['error' => $e->getMessage()]);
             return 0;
@@ -473,13 +471,22 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
             ];
 
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()->create($insert);
+            // ✅ 同步扣款（触发缓存更新）
+            $machineWallet->money = bcsub($machineWallet->money, $amount, 2);
+            $machineWallet->save();
 
-            // 扣款并创建交易记录
-            $afterBalance = $this->createBetRecord($machineWallet, $this->player, $record, $amount);
+            // ⚡ 异步创建记录（不阻塞响应）
+            $this->asyncCreateBetRecord(
+                playerId: $this->player->id,
+                platformId: $this->platform->id,
+                gameCode: $params['game_id'] ?? '',
+                orderNo: $orderId,
+                bet: $amount,
+                originalData: $params,
+                orderTime: Carbon::now()->toDateTimeString()
+            );
 
-            return ['balance' => round((float)$afterBalance, 2)];
+            return ['balance' => round((float)\app\service\WalletService::getBalance($this->player->id), 2)];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferStart error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = 'SOMETHING_WRONG';
@@ -511,11 +518,12 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
-            // 查找对应的下注记录
+            // 查找对应的下注记录（加锁防止并发重复派彩）
             /** @var PlayGameRecord $record */
             $record = PlayGameRecord::query()
                 ->where('order_no', $orderId)
                 ->where('platform_id', $this->platform->id)
+                ->lockForUpdate()
                 ->first();
 
             // 如果找不到下注记录，根据betform_details自动创建
@@ -561,43 +569,44 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                         'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
                     ];
 
-                    $record = PlayGameRecord::query()->create($insert);
+                    // ✅ 同步扣款（触发缓存更新）
+                    $machineWallet->money = bcsub($machineWallet->money, $betAmount, 2);
+                    $machineWallet->save();
 
-                    // 扣款
-                    $this->createBetRecord($machineWallet, $this->player, $record, $betAmount);
+                    // ⚡ 异步创建下注记录（不阻塞响应）
+                    $this->asyncCreateBetRecord(
+                        playerId: $this->player->id,
+                        platformId: $this->platform->id,
+                        gameCode: $params['game_code'] ?? '',
+                        orderNo: $orderId,
+                        bet: $betAmount,
+                        originalData: ['auto_created' => true, 'from' => 'end', 'roundId' => $roundId],
+                        orderTime: Carbon::now()->toDateTimeString()
+                    );
 
                     // 重新获取钱包（因为扣款后余额变了）
                     $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
                     Log::channel('qt_server')->info('QT transferEnd 自动创建下注记录成功', [
-                        'record_id' => $record->id,
+                        'order_no' => $orderId,
                         'bet_amount' => $betAmount,
                         'balance_after_bet' => $machineWallet->money
                     ]);
                 } else {
-                    // 没有下注金额（免费游戏或奖励），直接创建记录
-                    $insert = [
-                        'player_id' => $this->player->id,
-                        'parent_player_id' => $this->player->recommend_id ?? 0,
-                        'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
-                        'player_uuid' => $this->player->uuid,
-                        'platform_id' => $this->platform->id,
-                        'game_code' => $params['game_code'] ?? '',
-                        'department_id' => $this->player->department_id,
-                        'bet' => 0,
-                        'win' => 0,
-                        'diff' => 0,
-                        'order_no' => $orderId,
-                        'original_data' => json_encode(['auto_created' => true, 'from' => 'end', 'type' => 'free_game', 'roundId' => $roundId], JSON_UNESCAPED_UNICODE),
-                        'order_time' => Carbon::now()->toDateTimeString(),
-                        'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-                    ];
+                    // ⚡ 没有下注金额（免费游戏或奖励），异步创建记录
+                    $this->asyncCreateBetRecord(
+                        playerId: $this->player->id,
+                        platformId: $this->platform->id,
+                        gameCode: $params['game_code'] ?? '',
+                        orderNo: $orderId,
+                        bet: 0,
+                        originalData: ['auto_created' => true, 'from' => 'end', 'type' => 'free_game', 'roundId' => $roundId],
+                        orderTime: Carbon::now()->toDateTimeString()
+                    );
 
-                    $record = PlayGameRecord::query()->create($insert);
-
-                    Log::channel('qt_server')->info('QT transferEnd 创建免费游戏记录', [
-                        'record_id' => $record->id,
-                        'order_id' => $orderId
+                    Log::channel('qt_server')->info('QT transferEnd 异步创建免费游戏记录', [
+                        'order_id' => $orderId,
+                        'round_id' => $roundId
                     ]);
                 }
             } else {
@@ -618,54 +627,19 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
             // 派彩加款
             if ($winAmount > 0) {
-                $beforeBalance = $machineWallet->money;
+                // 同步增加余额
                 $machineWallet->money = bcadd($machineWallet->money, $winAmount, 2);
                 $machineWallet->save();
-
-                // 创建派彩交易记录
-                $playerDeliveryRecord = new PlayerDeliveryRecord();
-                $playerDeliveryRecord->player_id = $this->player->id;
-                $playerDeliveryRecord->department_id = $this->player->department_id;
-                $playerDeliveryRecord->target = $record->getTable();
-                $playerDeliveryRecord->target_id = $record->id;
-                $playerDeliveryRecord->platform_id = $this->platform->id;
-                $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
-                $playerDeliveryRecord->source = 'player_bet_settlement';
-                $playerDeliveryRecord->amount = $winAmount;
-                $playerDeliveryRecord->amount_before = $beforeBalance;
-                $playerDeliveryRecord->amount_after = $machineWallet->money;
-                $playerDeliveryRecord->tradeno = $orderId;
-                $playerDeliveryRecord->remark = '遊戲結算';
-                $playerDeliveryRecord->user_id = 0;
-                $playerDeliveryRecord->user_name = '';
-                $playerDeliveryRecord->save();
             }
 
-            // 更新游戏记录
-            $record->platform_action_at = Carbon::now()->toDateTimeString();
-            $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
-            $record->action_data = json_encode($betformDetails, JSON_UNESCAPED_UNICODE);
-            $record->win = $winAmount;
-            $record->diff = $winAmount - $record->bet;
+            // ⚡ 异步更新结算记录（不阻塞API响应）
+            $this->asyncUpdateSettleRecord(
+                orderNo: $record->order_no,
+                win: $winAmount,
+                diff: $winAmount - $record->bet
+            );
 
-            // 有效投注保存在 action_data 中
-            if (!empty($betformDetails)) {
-                Log::channel('qt_server')->info('QT transferEnd 有效投注', [
-                    'order_id' => $record->order_no,
-                    'valid_bet' => $betformDetails['valid_bet'] ?? $record->bet
-                ]);
-            }
-
-            $record->save();
-
-            // 彩金记录
-            Client::send('game-lottery', [
-                'player_id' => $this->player->id,
-                'bet' => $record->bet,
-                'play_game_record_id' => $record->id
-            ]);
-
-            return ['balance' => round((float)$machineWallet->money, 2)];
+            return ['balance' => round((float)\app\service\WalletService::getBalance($this->player->id), 2)];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferEnd error', [
                 'error' => $e->getMessage(),
@@ -694,11 +668,12 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
-            // 查找对应的下注记录
+            // 查找对应的下注记录（加锁防止并发重复退款）
             /** @var PlayGameRecord $record */
             $record = PlayGameRecord::query()
                 ->where('order_no', $orderId)
                 ->where('platform_id', $this->platform->id)
+                ->lockForUpdate()
                 ->first();
 
             if (!$record) {
@@ -713,36 +688,14 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
-            // 退款加款
-            $beforeBalance = $machineWallet->money;
+            // 同步退款
             $machineWallet->money = bcadd($machineWallet->money, $refundAmount, 2);
             $machineWallet->save();
 
-            // 创建退款交易记录
-            $playerDeliveryRecord = new PlayerDeliveryRecord();
-            $playerDeliveryRecord->player_id = $this->player->id;
-            $playerDeliveryRecord->department_id = $this->player->department_id;
-            $playerDeliveryRecord->target = $record->getTable();
-            $playerDeliveryRecord->target_id = $record->id;
-            $playerDeliveryRecord->platform_id = $this->platform->id;
-            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_CANCEL_BET;
-            $playerDeliveryRecord->source = 'player_bet_refund';
-            $playerDeliveryRecord->amount = $refundAmount;
-            $playerDeliveryRecord->amount_before = $beforeBalance;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
-            $playerDeliveryRecord->tradeno = $orderId;
-            $playerDeliveryRecord->remark = '下注退款';
-            $playerDeliveryRecord->user_id = 0;
-            $playerDeliveryRecord->user_name = '';
-            $playerDeliveryRecord->save();
+            // 异步更新取消状态
+            $this->asyncCancelBetRecord($record->order_no);
 
-            // 更新游戏记录状态
-            $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_CANCELLED;
-            $record->platform_action_at = Carbon::now()->toDateTimeString();
-            $record->action_data = json_encode($params, JSON_UNESCAPED_UNICODE);
-            $record->save();
-
-            return ['balance' => round((float)$machineWallet->money, 2)];
+            return ['balance' => round((float)\app\service\WalletService::getBalance($this->player->id), 2)];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferRefund error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = 'SOMETHING_WRONG';
@@ -771,11 +724,12 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
-            // 查找对应的游戏记录
+            // 查找对应的游戏记录（加锁防止并发问题）
             /** @var PlayGameRecord $record */
             $record = PlayGameRecord::query()
                 ->where('order_no', $orderId)
                 ->where('platform_id', $this->platform->id)
+                ->lockForUpdate()
                 ->first();
 
             if (!$record) {
@@ -817,25 +771,30 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             $playerDeliveryRecord->user_name = '';
             $playerDeliveryRecord->save();
 
-            // 更新游戏记录（使用新的betform_details）
+            // ⚡ 异步更新游戏记录（不阻塞API响应）
             if (!empty($betformDetails)) {
-                $record->win = (float)($betformDetails['win'] ?? $record->win);
-                $record->diff = (float)($betformDetails['diff'] ?? $record->diff);
-                $record->action_data = json_encode($betformDetails, JSON_UNESCAPED_UNICODE);
-                $record->platform_action_at = Carbon::now()->toDateTimeString();
+                $newWin = (float)($betformDetails['win'] ?? $record->win);
+                $newDiff = (float)($betformDetails['diff'] ?? $record->diff);
 
-                // 有效投注保存在 action_data 中
-                Log::channel('qt_server')->info('QT transferAdjust 更新记录', [
+                // 异步更新结算记录
+                $this->asyncUpdateSettleRecord(
+                    orderNo: $record->order_no,
+                    win: $newWin,
+                    diff: $newDiff
+                );
+
+                Log::channel('qt_server')->info('QT transferAdjust 异步更新记录', [
                     'order_id' => $record->order_no,
                     'valid_bet' => $betformDetails['valid_bet'] ?? null,
-                    'win' => $record->win,
-                    'diff' => $record->diff
+                    'win' => $newWin,
+                    'diff' => $newDiff
                 ]);
-
-                $record->save();
             }
 
-            return ['balance' => round((float)$machineWallet->money, 2)];
+            // ✅ 立即从缓存读取余额
+            $balance = \app\service\WalletService::getBalance($this->player->id);
+
+            return ['balance' => round((float)$balance, 2)];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferAdjust error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = 'SOMETHING_WRONG';

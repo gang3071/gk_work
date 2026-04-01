@@ -148,12 +148,12 @@ class GameServiceFactory
     }
 
     /**
-     * 查询余额（只读操作，无需加锁）
+     * 查询余额（使用 Redis 缓存）
      * @return mixed
      */
     public function balance(): mixed
     {
-        return $this->player->machine_wallet->money;
+        return \app\service\WalletService::getBalance($this->player->id);
     }
 
     /**
@@ -242,13 +242,13 @@ class GameServiceFactory
     }
 
     /**
-     * 查詢玩家餘額
+     * 查詢玩家餘額（使用 Redis 缓存）
      * @return float
      * @throws GameException
      */
     public function getBalance(): float
     {
-        return $this->player->machine_wallet->money;
+        return \app\service\WalletService::getBalance($this->player->id);
     }
 
     /**
@@ -314,7 +314,7 @@ class GameServiceFactory
             \support\Log::warning('GameServiceFactory: Machine crashed, bet denied', [
                 'player_id' => $this->player->id ?? null,
                 'platform' => $this->platform->code ?? null,
-                'wallet_balance' => $this->player->machine_wallet->money ?? 0,
+                'wallet_balance' => \app\service\WalletService::getBalance($this->player->id),
             ]);
 
             return true;

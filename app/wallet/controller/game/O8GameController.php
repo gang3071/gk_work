@@ -129,14 +129,25 @@ class O8GameController
             $this->service->verifyToken($token);
             $users = $params['users'];
 
-            $return = [];
+            // ✅ 性能优化：批量查询玩家和余额，避免 N+1 问题
+            $userIds = array_column($users, 'userid');
 
+            // 1. 批量查询玩家（1 次数据库查询）
+            $players = Player::query()->whereIn('uuid', $userIds)->get()->keyBy('uuid');
+
+            // 2. 批量查询余额（使用 WalletService::getBatchBalance）
+            $playerIds = $players->pluck('id')->toArray();
+            $balances = \app\service\WalletService::getBatchBalance($playerIds);
+
+            // 3. 组装返回数据
+            $return = [];
             foreach ($users as $user) {
-                $this->service->player = Player::query()->where('uuid', $user['userid'])->first();
-                if (empty($this->service->player)) {
+                $player = $players->get($user['userid']);
+                if (!$player) {
                     continue;
                 }
-                $balance = $this->service->balance();
+
+                $balance = $balances[$player->id] ?? 0;
                 $return['users'][] = [
                     'userid' => $user['userid'],
                     'wallets' => [

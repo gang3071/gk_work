@@ -87,18 +87,27 @@ class TNineGameController
             }
             $users = $params['Members'];
 
-            $return = [];
+            // ✅ 性能优化：批量查询玩家和余额，避免 N+1 问题
+            // 1. 批量查询玩家（1 次数据库查询）
+            $players = Player::query()->whereIn('uuid', $users)->get()->keyBy('uuid');
 
+            // 2. 批量查询余额（使用 WalletService::getBatchBalance）
+            $playerIds = $players->pluck('id')->toArray();
+            $balances = \app\service\WalletService::getBatchBalance($playerIds);
+
+            // 3. 组装返回数据
+            $return = [];
             $time = date('Y-m-d H:i:s');
+
             foreach ($users as $userId) {
-                $this->service->player = Player::query()->where('uuid', $userId)->first();
-                if (empty($this->service->player)) {
+                $player = $players->get($userId);
+                if (!$player) {
                     continue;
                 }
-                $balance = $this->service->balance();
+
                 $return[] = [
                     'MemberAccount' => $userId,
-                    'Balance' => $balance,
+                    'Balance' => $balances[$player->id] ?? 0,
                     'SyncTime' => $time,
                 ];
             }

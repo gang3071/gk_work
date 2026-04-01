@@ -3,15 +3,13 @@
 namespace app\service\game;
 
 use app\exception\GameException;
-use app\model\AdminUserLimitGroup;
 use app\model\Game;
 use app\model\GamePlatform;
-use app\model\PlatformLimitGroupConfig;
 use app\model\Player;
-use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
+use app\traits\AsyncGameRecordTrait;
 use app\wallet\controller\game\DGGameController;
 use app\wallet\controller\game\O8GameController;
 use Carbon\Carbon;
@@ -23,6 +21,7 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
 
 class DGServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
+    use AsyncGameRecordTrait;
     use LimitGroupTrait;
 
     public $method = 'POST';
@@ -555,46 +554,23 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             return $player->machine_wallet->money;
         }
 
-        //DG单场下注记录是使用的同一个单号  需要合并处理
-        if (PlayGameRecord::query()->where('order_no', $data['ticketId'])->exists()) {
-            /** @var PlayGameRecord $originRecord */
-            $originRecord = PlayGameRecord::query()->where('order_no', $data['ticketId'])->first();
-            $newOriginData = json_decode($originRecord->original_data, true);
-            $newOriginData[] = $data;
-            //需要对原订单进行追加下注
-            $originRecord->bet += $bet;
-            $originRecord->original_data = json_encode($newOriginData);
-        }
-
-        //如果是累计下注则不需要产生新记录
-        if (isset($originRecord)) {
-            $originRecord->save();
-            $record = $originRecord;
-        } else {
-            //下注记录  todo 暂时使用原表结构 待后续优化
-            $insert = [
-                'player_id' => $player->id,
-                'parent_player_id' => $player->recommend_id ?? 0,
-                'agent_player_id' => $player->recommend_promoter?->recommend_id ?? 0,
-                'player_uuid' => $player->uuid,
-                'platform_id' => $this->platform->id,
-                'game_code' => $detail['gameId'],
-                'department_id' => $player->department_id,
-                'bet' => $bet,
-                'win' => 0,
-                'diff' => 0,
-                'order_no' => $data['ticketId'],
-                'original_data' => json_encode([$data]),
-                'order_time' => Carbon::now()->toDateTimeString(),
-                'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-            ];
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()->create($insert);
-
-        }
         $beforeGameAmount = $machineWallet->money;
 
-        $this->createBetRecord($machineWallet, $player, $record, $bet);
+        // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
+        $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
+        $machineWallet->save();
+
+        // ⚡ 异步创建/更新下注记录（累计下注场景）
+        // DG单场下注记录使用同一个单号，需要在Consumer中合并处理
+        $this->asyncCreateBetRecord(
+            playerId: $player->id,
+            platformId: $this->platform->id,
+            gameCode: $detail['gameId'],
+            orderNo: $data['ticketId'],
+            bet: $bet,
+            originalData: $data,
+            orderTime: Carbon::now()->toDateTimeString()
+        );
         $return['member'] = [
             'username' => $data['member']['username'],
             'balance' => $beforeGameAmount,
@@ -627,7 +603,11 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
 
         //需要循环处理下注订单
         /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->where('order_no', $data['ticketId'])->first();
+        // ✅ 加锁查询record，防止并发重复派彩
+        $record = PlayGameRecord::query()
+            ->where('order_no', $data['ticketId'])
+            ->lockForUpdate()
+            ->first();
 
         if (!$record) {
             $this->error = DGGameController::API_CODE_DECRYPT_ERROR;
@@ -637,47 +617,32 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
         $detail = json_decode($data['detail'], true);
         $money = $data['member']['amount'];
         $beforeGameAmount = $machineWallet->money;
-        //有金额则为赢
+
+        // ✅ 同步增加余额（有金额时，触发 updated 事件，自动更新 Redis 缓存）
         if ($money > 0) {
-            //处理用户金额记录
-            // 更新玩家统计
             $machineWallet->money = bcadd($machineWallet->money, $money, 2);
             $machineWallet->save();
-            //todo 语言文件后续处理
-            //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
-            $playerDeliveryRecord = new PlayerDeliveryRecord;
-            $playerDeliveryRecord->player_id = $player->id;
-            $playerDeliveryRecord->department_id = $player->department_id;
-            $playerDeliveryRecord->target = $record->getTable();
-            $playerDeliveryRecord->target_id = $record->id;
-            $playerDeliveryRecord->platform_id = $this->platform->id;
-            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
-            $playerDeliveryRecord->source = 'player_bet_settlement';
-            $playerDeliveryRecord->amount = $money;
-            $playerDeliveryRecord->amount_before = $beforeGameAmount;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
-            $playerDeliveryRecord->tradeno = $record->order_no ?? '';
-            $playerDeliveryRecord->remark = '遊戲結算';
-            $playerDeliveryRecord->user_id = 0;
-            $playerDeliveryRecord->user_name = '';
-            $playerDeliveryRecord->save();
         }
 
-        $record->platform_action_at = Carbon::now()->toDateTimeString();
-        $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
-        $record->action_data = json_encode($data, JSON_UNESCAPED_UNICODE);
-        $record->win = $detail['winOrLoss'];
-        $record->diff = $detail['winOrLoss'] - $record->bet;
-        $record->save();
+        // ⚡ 异步更新结算记录（不阻塞API响应）
+        $this->asyncUpdateSettleRecord(
+            orderNo: $data['ticketId'],
+            win: $detail['winOrLoss'],
+            diff: $detail['winOrLoss'] - $record->bet
+        );
+
+        //彩金记录
+        Client::send('game-lottery', [
+            'player_id' => $this->player->id,
+            'bet' => $record->bet,
+            'play_game_record_id' => $record->id
+        ]);
 
         $return['member'] = [
             'username' => $data['member']['username'],
             'balance' => $beforeGameAmount,
             'amount' => $money,
         ];
-
-        //彩金记录
-        Client::send('game-lottery', ['player_id' => $this->player->id, 'bet' => $record->bet, 'play_game_record_id' => $record->id]);
 
         return $return;
     }

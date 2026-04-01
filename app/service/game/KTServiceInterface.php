@@ -8,10 +8,10 @@ use app\model\GameExtend;
 use app\model\GamePlatform;
 use app\model\GameType;
 use app\model\Player;
-use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
+use app\traits\AsyncGameRecordTrait;
 use app\wallet\controller\game\KTGameController;
 use app\wallet\controller\game\SAGameController;
 use app\wallet\controller\game\TNineGameController;
@@ -23,6 +23,7 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
 
 class KTServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
+    use AsyncGameRecordTrait;
     public string $method = 'POST';
     public string $successCode = '0';
     private mixed $apiDomain;
@@ -280,7 +281,7 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
         // 检查设备是否爆机
         if ($this->checkAndHandleMachineCrash()) {
-            return $player->machine_wallet->money;
+            return \app\service\WalletService::getBalance($player->id);
         }
 
         /** @var PlayerPlatformCash $machineWallet */
@@ -289,46 +290,27 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
         if ($machineWallet->money < $bet) {
             $this->error = KTGameController::API_CODE_AMOUNT_OVER_BALANCE;
-            return $player->machine_wallet->money;
+            return \app\service\WalletService::getBalance($player->id);
         }
 
-        //KT奖金游戏会把多次下注整合到一笔订单当中
-        if (PlayGameRecord::query()->where('order_no', $data['MainTxID'])->exists()) {
-            /** @var PlayGameRecord $originRecord */
-            $originRecord = PlayGameRecord::query()->where('order_no', $data['MainTxID'])->first();
-            $newOriginData = json_decode($originRecord->original_data, true);
-            $newOriginData[] = $data;
-            //需要对原订单进行追加下注
-            $originRecord->bet += $bet;
-            $originRecord->original_data = json_encode($newOriginData);
-        }
+        // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
+        $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
+        $machineWallet->save();
 
-        //如果是累计下注则不需要产生新记录
-        if (isset($originRecord)) {
-            $originRecord->save();
-            $record = $originRecord;
-        } else {
-            $insert = [
-                'player_id' => $player->id,
-                'parent_player_id' => $player->recommend_id ?? 0,
-                'agent_player_id' => $player->recommend_promoter->recommend_id ?? 0,
-                'player_uuid' => $player->uuid,
-                'platform_id' => $this->platform->id,
-                'game_code' => $data['GameID'],
-                'department_id' => $player->department_id,
-                'bet' => $bet,
-                'win' => 0,
-                'diff' => 0,
-                'order_no' => $data['MainTxID'],
-                'original_data' => json_encode([$data]),
-                'order_time' => Carbon::createFromTimestamp($data['BetTimestamp'])->toDateTimeString(),
-                'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-            ];
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()->create($insert);
-        }
+        // ⚡ 异步创建/更新下注记录（累计下注场景）
+        // KT奖金游戏会把多次下注整合到一笔订单中，需要在Consumer中合并处理
+        $this->asyncCreateBetRecord(
+            playerId: $player->id,
+            platformId: $this->platform->id,
+            gameCode: $data['GameID'],
+            orderNo: $data['MainTxID'],
+            bet: $bet,
+            originalData: $data,
+            orderTime: Carbon::createFromTimestamp($data['BetTimestamp'])->toDateTimeString()
+        );
 
-        return $this->createBetRecord($machineWallet, $player, $record, $bet);
+        // ✅ 立即从缓存返回余额
+        return \app\service\WalletService::getBalance($player->id);
     }
 
     /**
@@ -339,21 +321,32 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
     public function cancelBet($data): float|string
     {
         /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->where('order_no', $data['txn_reverse_id'])->first();
+        // ✅ 加锁查询，防止并发重复退款
+        $record = PlayGameRecord::query()
+            ->where('order_no', $data['txn_reverse_id'])
+            ->lockForUpdate()
+            ->first();
 
         if (!$record) {
             $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-            return $this->player->machine_wallet->money;
+            return \app\service\WalletService::getBalance($this->player->id);
         }
 
         if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
             $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-            return $this->player->machine_wallet->money;
+            return \app\service\WalletService::getBalance($this->player->id);
         }
 
         //返还用户金钱  修改注单状态
         $bet = $data['amount'];
-        return $this->createCancelBetRecord($record, $data, $bet);
+        /** @var PlayerPlatformCash $machineWallet */
+        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+        // 同步退款
+        $machineWallet->money = bcadd($machineWallet->money, $bet, 2);
+        $machineWallet->save();
+        // 异步更新状态
+        $this->asyncCancelBetRecord($record->order_no);
+        return \app\service\WalletService::getBalance($this->player->id);
     }
 
     /**
@@ -364,20 +357,27 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
     public function betResulet($data): mixed
     {
         /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->where('order_no', $data['MainTxID'])->first();
+        // ✅ 加锁查询record，防止并发重复派彩
+        $record = PlayGameRecord::query()
+            ->where('order_no', $data['MainTxID'])
+            ->lockForUpdate()
+            ->first();
 
         $player = $this->player;
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+
         if (!$record) {
             $this->error = KTGameController::API_CODE_OTHER_ERROR;
-            return $player->machine_wallet->money;
+            return \app\service\WalletService::getBalance($player->id);
         }
 
         if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
             $this->error = KTGameController::API_CODE_OTHER_ERROR;
-            return $player->machine_wallet->money;
+            return \app\service\WalletService::getBalance($player->id);
         }
+
+        // 锁钱包
+        /** @var PlayerPlatformCash $machineWallet */
+        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
 
         //根据多订单总和进行处理
         $originData = json_decode($record->original_data, true);
@@ -386,41 +386,26 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
         //有金额则为赢
         if ($money > 0) {
-            $beforeGameAmount = $machineWallet->money;
-            //处理用户金额记录
-            // 更新玩家统计
+            // 同步增加余额
             $machineWallet->money = bcadd($machineWallet->money, $money, 2);
             $machineWallet->save();
-            //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
-            $playerDeliveryRecord = new PlayerDeliveryRecord;
-            $playerDeliveryRecord->player_id = $player->id;
-            $playerDeliveryRecord->department_id = $player->department_id;
-            $playerDeliveryRecord->target = $record->getTable();
-            $playerDeliveryRecord->target_id = $record->id;
-            $playerDeliveryRecord->platform_id = $this->platform->id;
-            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
-            $playerDeliveryRecord->source = 'player_bet_settlement';
-            $playerDeliveryRecord->amount = $money;
-            $playerDeliveryRecord->amount_before = $beforeGameAmount;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
-            $playerDeliveryRecord->tradeno = $record->order_no ?? '';
-            $playerDeliveryRecord->remark = '遊戲結算';
-            $playerDeliveryRecord->user_id = 0;
-            $playerDeliveryRecord->user_name = '';
-            $playerDeliveryRecord->save();
         }
 
-        $record->platform_action_at = Carbon::createFromTimestamp($data['Timestamp'])->toDateTimeString();
-        $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
-        $record->action_data = json_encode($data, JSON_UNESCAPED_UNICODE);
-        $record->win = $money;
-        $record->diff = $money - $record->bet;
-        $record->save();
+        // ⚡ 异步更新结算记录（不阻塞API响应）
+        $this->asyncUpdateSettleRecord(
+            orderNo: $record->order_no,
+            win: $money,
+            diff: $money - $record->bet
+        );
 
         //彩金记录
-        Client::send('game-lottery', ['player_id' => $player->id, 'bet' => $record->bet, 'play_game_record_id' => $record->id]);
+        Client::send('game-lottery', [
+            'player_id' => $player->id,
+            'bet' => $record->bet,
+            'play_game_record_id' => $record->id
+        ]);
 
-        return $machineWallet->money;
+        return \app\service\WalletService::getBalance($player->id);
     }
 
     /**
@@ -450,54 +435,28 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
             return $this->error = TNineGameController::API_CODE_INSUFFICIENT_BALANCE;
         }
 
-        //送礼记录
-        $insert = [
-            'player_id' => $player->id,
-            'parent_player_id' => $player->recommend_id ?? 0,
-            'agent_player_id' => $player->recommend_promoter->recommend_id ?? 0,
-            'player_uuid' => $player->uuid,
-            'platform_id' => $this->platform->id,
-            'game_code' => $data['GameType'],
-            'department_id' => $player->department_id,
-            'bet' => $bet,
-            'win' => 0,
-            'diff' => 0,
-            'order_no' => $data['RecordNumber'],
-            'original_data' => json_encode($data),
-            'order_time' => $data['GiftTime'],
-            'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_SETTLED,
-            'type' => PlayGameRecord::TYPE_GIFT
-        ];
-
-        /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->create($insert);
-
-        $beforeGameAmount = $machineWallet->money;
+        // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
         $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
         $machineWallet->save();
 
-        //todo 语言文件后续处理
-        //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
-        $playerDeliveryRecord = new PlayerDeliveryRecord;
-        $playerDeliveryRecord->player_id = $player->id;
-        $playerDeliveryRecord->department_id = $player->department_id;
-        $playerDeliveryRecord->target = $record->getTable();
-        $playerDeliveryRecord->target_id = $record->id;
-        $playerDeliveryRecord->platform_id = $this->platform->id;
-        $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_GIFT;
-        $playerDeliveryRecord->source = 'player_gift';
-        $playerDeliveryRecord->amount = $bet;
-        $playerDeliveryRecord->amount_before = $beforeGameAmount;
-        $playerDeliveryRecord->amount_after = $machineWallet->money;
-        $playerDeliveryRecord->tradeno = $record->order_no;
-        $playerDeliveryRecord->remark = '';
-        $playerDeliveryRecord->user_id = 0;
-        $playerDeliveryRecord->user_name = '';
-        $playerDeliveryRecord->save();
+        // ⚡ 异步创建送礼记录（不阻塞API响应）
+        $this->asyncCreateBetRecord(
+            playerId: $player->id,
+            platformId: $this->platform->id,
+            gameCode: $data['GameType'],
+            orderNo: $data['RecordNumber'],
+            bet: $bet,
+            originalData: $data,
+            orderTime: $data['GiftTime'],
+            updateStats: false // 送礼不更新统计
+        );
+
+        // ✅ 立即从缓存读取余额
+        $balance = \app\service\WalletService::getBalance($player->id);
 
         return [
-            'MerchantOrderNumber' => $record->id,
-            'Balance' => $machineWallet->money,
+            'MerchantOrderNumber' => $data['RecordNumber'], // ✅ 使用外部订单号
+            'Balance' => $balance,
             'SyncTime' => date('Y-m-d H:i:s'),
         ];
     }

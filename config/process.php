@@ -86,3 +86,14 @@ return [
         'handler' => BurstCleaner::class
     ],
 ];
+
+// ============================================================
+// 游戏下注记录异步队列说明
+// ============================================================
+// game-bet-record 队列由 webman-redis-queue 自动管理
+// 消费者配置：config/plugin/webman/redis-queue/process.php
+// 消费者类：app/queue/redis/GameBetRecord.php
+// 进程数：8个（在 config/plugin/webman/redis-queue/process.php 中配置）
+//
+// ⚠️ 不要在这里添加单独的进程配置，webman-redis-queue 会自动发现并消费所有队列
+// ============================================================
