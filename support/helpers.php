@@ -479,7 +479,6 @@ function worker_start($processName, $config)
         require_once base_path('/support/bootstrap.php');
         if (isset($config['handler'])) {
             if (!class_exists($config['handler'])) {
-                echo "process error: class {$config['handler']} not exists\r\n";
                 return;
             }
 

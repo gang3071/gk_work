@@ -74,11 +74,5 @@ Route::post(parse_url(config('plugin.webman.push.app.channel_hook'), PHP_URL_PAT
         }
     }
 
-    // 业务根据需要处理上下线的channel，例如将在线状态写入数据库，通知其它channel等
-    // 上线的所有channel
-    echo 'online channels: ' . implode(',', $channels_online) . "\n";
-    // 下线的所有channel
-    echo 'offline channels: ' . implode(',', $channels_offline) . "\n";
-
     return 'OK';
 });

@@ -92,7 +92,6 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 $query = $this->config['api_domain'] . '/' . $platform . $url;
             }
 
-            var_dump($queryParams, $query);
             $response = Http::timeout(7)
                 ->asJson()
                 ->get($query);
