@@ -77,24 +77,30 @@ class RsgLiveGameController
      */
     public function checkUser(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $this->logger->info('rsg_live檢查使用者', ['params' => $params]);
-        $account = $params['account'];
+            $this->logger->info('rsg_live檢查使用者', ['params' => $params]);
+            $account = $params['account'];
 
-        $player = Player::query()->where('uuid', $account)->first();
+            $player = Player::query()->where('uuid', $account)->first();
 
-        if (!$player) {
-            return $this->error(self::API_CODE_TOKEN_DOES_NOT_EXIST);
+            if (!$player) {
+                return $this->error(self::API_CODE_TOKEN_DOES_NOT_EXIST);
+            }
+
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'authToken' => $this->service->getToken('authToken', $account),
+                'sessionToken' => $this->service->getToken('sessionToken', $account, 86400),
+                'requestId' => $params['requestId'],
+                'account' => $params['account'],
+            ]);
+        } catch (Exception $e) {
+            Log::error('RSGLive checkUser failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('RSG_LIVE', '检查用户异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
         }
-
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-            'authToken' => $this->service->getToken('authToken', $account),
-            'sessionToken' => $this->service->getToken('sessionToken', $account, 86400),
-            'requestId' => $params['requestId'],
-            'account' => $params['account'],
-        ]);
     }
 
     /**
@@ -105,17 +111,23 @@ class RsgLiveGameController
      */
     public function RequestExtendToken(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $token = $this->service->refresh(request()->header('authorization'));
+            $token = $this->service->refresh(request()->header('authorization'));
 
-        $this->logger->info('rsg_live檢查使用者', ['params' => $params]);
+            $this->logger->info('rsg_live檢查使用者', ['params' => $params]);
 
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-            'sessionToken' => $token,
-            'requestId' => $params['requestId'],
-        ]);
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'sessionToken' => $token,
+                'requestId' => $params['requestId'],
+            ]);
+        } catch (Exception $e) {
+            Log::error('RSGLive RequestExtendToken failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('RSG_LIVE', '延长令牌异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_AUTHTOKEN_EXPIRED);
+        }
     }
 
 
@@ -127,24 +139,30 @@ class RsgLiveGameController
      */
     public function balance(Request $request): Response
     {
-        $params = $request->post();
-        $token = request()->header('authorization');
-        $this->logger->info('rsg_live余额查询记录', ['params' => $params, 'token' => $token]);
-        $data = $this->service->decrypt($token);
-        $this->logger->info('rsg_live余额查询记录', ['params' => $data]);
+        try {
+            $params = $request->post();
+            $token = request()->header('authorization');
+            $this->logger->info('rsg_live余额查询记录', ['params' => $params, 'token' => $token]);
+            $data = $this->service->decrypt($token);
+            $this->logger->info('rsg_live余额查询记录', ['params' => $data]);
 
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            $balance = $this->service->balance();
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'balance' => $balance,
+                'status' => 0,
+                'requestId' => $params['requestId'],
+                'account' => $data['memberaccount'],
+            ]);
+        } catch (Exception $e) {
+            Log::error('RSGLive balance failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('RSG_LIVE', '余额查询异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
         }
-
-        $balance = $this->service->balance();
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-            'balance' => $balance,
-            'status' => 0,
-            'requestId' => $params['requestId'],
-            'account' => $data['memberaccount'],
-        ]);
     }
 
     /**
@@ -155,28 +173,34 @@ class RsgLiveGameController
      */
     public function bet(Request $request): Response
     {
-        $params = $request->post();
-        $token = request()->header('authorization');
-        $this->logger->info('rsg_live下注记录', ['params' => $params, 'token' => $token]);
-        $data = $this->service->decrypt($token);
-        $this->logger->info('rsg_live下注记录', ['params' => $data]);
+        try {
+            $params = $request->post();
+            $token = request()->header('authorization');
+            $this->logger->info('rsg_live下注记录', ['params' => $params, 'token' => $token]);
+            $data = $this->service->decrypt($token);
+            $this->logger->info('rsg_live下注记录', ['params' => $data]);
 
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->bet($params);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'transaction' => [
+                    'id' => $params['transaction']['id'],
+                    'balance' => $balance,
+                ],
+                'requestId' => $params['requestId'],
+                'account' => $data['memberaccount'],
+            ]);
+        } catch (Exception $e) {
+            Log::error('RSGLive bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('RSG_LIVE', '下注异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
         }
-        $balance = $this->service->bet($params);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-            'transaction' => [
-                'id' => $params['transaction']['id'],
-                'balance' => $balance,
-            ],
-            'requestId' => $params['requestId'],
-            'account' => $data['memberaccount'],
-        ]);
     }
 
     /**
@@ -186,27 +210,33 @@ class RsgLiveGameController
      */
     public function betResult(Request $request): Response
     {
-        $params = $request->post();
-        $token = request()->header('authorization');
-        $this->logger->info('rsg_live结算记录', ['params' => $params, 'token' => $token]);
-        $data = $this->service->decrypt($token);
-        $this->logger->info('rsg_live结算记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+        try {
+            $params = $request->post();
+            $token = request()->header('authorization');
+            $this->logger->info('rsg_live结算记录', ['params' => $params, 'token' => $token]);
+            $data = $this->service->decrypt($token);
+            $this->logger->info('rsg_live结算记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->betResulet($params);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'transaction' => [
+                    'id' => $params['transaction']['id'],
+                    'balance' => $balance,
+                ],
+                'requestId' => $params['requestId'],
+                'account' => $data['memberaccount'],
+            ]);
+        } catch (Exception $e) {
+            Log::error('RSGLive betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('RSG_LIVE', '结算异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
         }
-        $balance = $this->service->betResulet($params);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-            'transaction' => [
-                'id' => $params['transaction']['id'],
-                'balance' => $balance,
-            ],
-            'requestId' => $params['requestId'],
-            'account' => $data['memberaccount'],
-        ]);
     }
 
 

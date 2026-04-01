@@ -76,20 +76,26 @@ class TNineSlotGameController
      */
     public function balance(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $this->logger->info('t9电子余额查询记录', ['params' => $params]);
+            $this->logger->info('t9电子余额查询记录', ['params' => $params]);
 
 //        $this->service->verifySign($params);
 
-        $user = $params['gameAccount'];
-        $userId = explode('_', $user)[0];
-        $this->service->player = Player::query()->where('uuid', $userId)->first();
-        $balance = $this->service->balance();
+            $user = $params['gameAccount'];
+            $userId = explode('_', $user)[0];
+            $this->service->player = Player::query()->where('uuid', $userId)->first();
+            $balance = $this->service->balance();
 
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-            'balance' => $balance,
-        ]);
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'balance' => $balance,
+            ]);
+        } catch (Exception $e) {
+            Log::error('TNineSlot balance failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('TNINE_SLOT', '余额查询异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_ERROR);
+        }
     }
 
     /**
@@ -100,28 +106,34 @@ class TNineSlotGameController
      */
     public function bet(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        //下注 结算一起处理
-        //免费次数合并到一个订单
-        $this->logger->info('t9电子下注记录', ['params' => $params]);
+            //下注 结算一起处理
+            //免费次数合并到一个订单
+            $this->logger->info('t9电子下注记录', ['params' => $params]);
 
-        $user = $params['gameAccount'];
-        $userId = explode('_', $user)[0];
-        $this->service->player = Player::query()->where('uuid', $userId)->first();
+            $user = $params['gameAccount'];
+            $userId = explode('_', $user)[0];
+            $this->service->player = Player::query()->where('uuid', $userId)->first();
 
-        if ($params['betKind'] == 3) {
-            return $this->betResult($params);
+            if ($params['betKind'] == 3) {
+                return $this->betResult($params);
+            }
+
+            $return = $this->service->bet($params);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            $this->betResult($params);
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('TNineSlot bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('TNINE_SLOT', '下注异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_ERROR);
         }
-
-        $return = $this->service->bet($params);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-
-        $this->betResult($params);
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**
@@ -131,8 +143,14 @@ class TNineSlotGameController
      */
     public function betResult($params): Response
     {
-        $return = $this->service->betResulet($params);
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        try {
+            $return = $this->service->betResulet($params);
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('TNineSlot betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('TNINE_SLOT', '结算异常', $e, ['params' => $params]);
+            return $this->error(self::API_CODE_ERROR);
+        }
     }
 
 
@@ -144,19 +162,25 @@ class TNineSlotGameController
      */
     public function cancelBet(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $this->logger->info('t9电子取消下注', ['params' => $params]);
+            $this->logger->info('t9电子取消下注', ['params' => $params]);
 
-        $user = $params['gameAccount'];
-        $userId = explode('_', $user)[0];
-        $this->service->player = Player::query()->where('uuid', $userId)->first();
-        $return = $this->service->cancelBet($params);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $user = $params['gameAccount'];
+            $userId = explode('_', $user)[0];
+            $this->service->player = Player::query()->where('uuid', $userId)->first();
+            $return = $this->service->cancelBet($params);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('TNineSlot cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('TNINE_SLOT', '取消下注异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_ERROR);
         }
-
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**

@@ -47,23 +47,29 @@ class SPSDYGameController
 
     public function index(Request $request): Response
     {
-        $params = $request->all();
+        try {
+            $params = $request->all();
 
-        $cmd = $params['Cmd'] ?? '';
+            $cmd = $params['Cmd'] ?? '';
 
-        switch ($cmd) {
-            case 'GetUserBalance':
-                return $this->balance($params);
-                break;
-            case 'TransferPoint':
-                return $this->bet($params);
-                break;
-            case 'GetTransferStatus':
-                return $this->getStatus($params);
-                break;
+            switch ($cmd) {
+                case 'GetUserBalance':
+                    return $this->balance($params);
+                    break;
+                case 'TransferPoint':
+                    return $this->bet($params);
+                    break;
+                case 'GetTransferStatus':
+                    return $this->getStatus($params);
+                    break;
+            }
+
+            return $this->error(self::API_CODE_DECRYPT_ERROR);
+        } catch (Exception $e) {
+            Log::error('SPSDY index failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('SPSDY', '请求分发异常', $e, ['params' => $request->all()]);
+            return $this->error(self::API_CODE_DECRYPT_ERROR);
         }
-
-        return true;
     }
 
 
@@ -74,20 +80,26 @@ class SPSDYGameController
      */
     public function balance($params)
     {
-        Log::channel('sps_server')->info('sps余额查询记录', ['params' => $params]);
+        try {
+            Log::channel('sps_server')->info('sps余额查询记录', ['params' => $params]);
 
-        $config = config('game_platform.SPSDY');
+            $config = config('game_platform.SPSDY');
 
-        $checkCode = strtoupper(MD5(strtoupper(MD5($params['VendorId'] . '&' . $params['User'] . '&' . $params['Timestamp'])) . '&' . $config['api_key']));
+            $checkCode = strtoupper(MD5(strtoupper(MD5($params['VendorId'] . '&' . $params['User'] . '&' . $params['Timestamp'])) . '&' . $config['api_key']));
 
-        if ($checkCode != $params['CheckCode']) {
-            return $this->error(self::API_CODE_CHECKCODE_ERROR);
+            if ($checkCode != $params['CheckCode']) {
+                return $this->error(self::API_CODE_CHECKCODE_ERROR);
+            }
+
+            $this->service->player = Player::query()->where('uuid', $params['User'])->first();
+            $balance = $this->service->balance();
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_SUCCESS, ['User' => $params['User'], 'Balance' => $balance]);
+        } catch (Exception $e) {
+            Log::error('SPSDY balance failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('SPSDY', '余额查询异常', $e, ['params' => $params]);
+            return $this->error(self::API_CODE_DECRYPT_ERROR);
         }
-
-        $this->service->player = Player::query()->where('uuid', $params['User'])->first();
-        $balance = $this->service->balance();
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_SUCCESS, ['User' => $params['User'], 'Balance' => $balance]);
     }
 
     /**
@@ -98,36 +110,48 @@ class SPSDYGameController
      */
     public function bet($params): Response
     {
-        Log::channel('sps_server')->info('sps下注记录', ['params' => $params]);
-        $this->service->player = Player::query()->where('uuid', $params['User'])->first();
-        //判断是下注还是结算加钱
-        if ($params['TType'] == 1) {
-            return $this->betResult($params);
-        }
-        $return = $this->service->bet($params);
+        try {
+            Log::channel('sps_server')->info('sps下注记录', ['params' => $params]);
+            $this->service->player = Player::query()->where('uuid', $params['User'])->first();
+            //判断是下注还是结算加钱
+            if ($params['TType'] == 1) {
+                return $this->betResult($params);
+            }
+            $return = $this->service->bet($params);
 
-        if ($this->service->error) {
-            return $this->error($this->service->error, $return);
+            if ($this->service->error) {
+                return $this->error($this->service->error, $return);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_SUCCESS, $return);
+        } catch (Exception $e) {
+            Log::error('SPSDY bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('SPSDY', '下注异常', $e, ['params' => $params]);
+            return $this->error(self::API_CODE_DECRYPT_ERROR);
         }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_SUCCESS, $return);
     }
 
     private function getStatus($params): Response
     {
-        Log::channel('sps_server')->info('sps查詢交易紀錄', ['params' => $params]);
-        $this->service->player = Player::query()->where('uuid', $params['User'])->first();
-        //判断是下注还是结算加钱
-        if ($params['TType'] == 1) {
-            return $this->betResult($params);
-        }
-        $return = $this->service->bet($params);
+        try {
+            Log::channel('sps_server')->info('sps查詢交易紀錄', ['params' => $params]);
+            $this->service->player = Player::query()->where('uuid', $params['User'])->first();
+            //判断是下注还是结算加钱
+            if ($params['TType'] == 1) {
+                return $this->betResult($params);
+            }
+            $return = $this->service->bet($params);
 
-        if ($this->service->error) {
-            return $this->error($this->service->error, $return);
+            if ($this->service->error) {
+                return $this->error($this->service->error, $return);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_SUCCESS, $return);
+        } catch (Exception $e) {
+            Log::error('SPSDY getStatus failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('SPSDY', '查询状态异常', $e, ['params' => $params]);
+            return $this->error(self::API_CODE_DECRYPT_ERROR);
         }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_SUCCESS, $return);
     }
 
     /**
@@ -137,14 +161,19 @@ class SPSDYGameController
      */
     public function betResult($params): Response
     {
+        try {
+            $return = $this->service->betResulet($params);
 
-        $return = $this->service->betResulet($params);
-
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_SUCCESS, $return);
+        } catch (Exception $e) {
+            Log::error('SPSDY betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('SPSDY', '结算异常', $e, ['params' => $params]);
+            return $this->error(self::API_CODE_DECRYPT_ERROR);
         }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_SUCCESS, $return);
     }
 
     /**

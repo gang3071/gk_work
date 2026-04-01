@@ -61,7 +61,7 @@ class SPGameController
             $balance = $this->service->balance();
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], array_merge($data, ['amount' => $balance]));
         } catch (Exception $e) {
-            Log::error('SP balance failed', ['error' => $e->getMessage()]);
+            Log::error('SP balance failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('SP', '余额查询异常', $e, ['params' => $request->rawBody()]);
             return $this->error(self::API_CODE_GENERAL_ERROR);
         }
@@ -93,7 +93,7 @@ class SPGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
-            Log::error('SP bet failed', ['error' => $e->getMessage()]);
+            Log::error('SP bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('SP', '下注异常', $e, ['params' => $request->rawBody()]);
             return $this->error(self::API_CODE_GENERAL_ERROR);
         }
@@ -124,7 +124,7 @@ class SPGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
-            Log::error('SP cancelBet failed', ['error' => $e->getMessage()]);
+            Log::error('SP cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('SP', '取消下注异常', $e, ['params' => $request->rawBody()]);
             return $this->error(self::API_CODE_GENERAL_ERROR);
         }
@@ -155,7 +155,7 @@ class SPGameController
             }
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
-            Log::error('SP betResult failed', ['error' => $e->getMessage()]);
+            Log::error('SP betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('SP', '结算异常', $e, ['params' => $request->rawBody()]);
             return $this->error(self::API_CODE_GENERAL_ERROR);
         }

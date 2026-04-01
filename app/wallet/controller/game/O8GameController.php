@@ -76,34 +76,40 @@ class O8GameController
      */
     public function token(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $this->logger->info('o8_server 获取token', ['params' => $params]);
+            $this->logger->info('o8_server 获取token', ['params' => $params]);
 
-        $clientId = $params['client_id'];
-        $clientSecret = $params['client_secret'];
-        $grantType = $params['grant_type'];
-        $scope = $params['scope'];
+            $clientId = $params['client_id'];
+            $clientSecret = $params['client_secret'];
+            $grantType = $params['grant_type'];
+            $scope = $params['scope'];
 
-        $SessionTokenPayload = [
-            'grant_type' => $grantType, // 签发时间
-            'scope' => $scope, // 签发时间
-            'iat' => time(), // 签发时间
-            'nbf' => time(), // 某个时间点后才能访问
-            'exp' => time() + 3600, // 过期时间
-        ];
+            $SessionTokenPayload = [
+                'grant_type' => $grantType, // 签发时间
+                'scope' => $scope, // 签发时间
+                'iat' => time(), // 签发时间
+                'nbf' => time(), // 某个时间点后才能访问
+                'exp' => time() + 3600, // 过期时间
+            ];
 
-        $key = $clientId . $clientSecret;
-        $token = JWT::encode($SessionTokenPayload, $key, 'HS256');
+            $key = $clientId . $clientSecret;
+            $token = JWT::encode($SessionTokenPayload, $key, 'HS256');
 
 
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-            'expires_in' => 3600,
-            'scope' => 'wallet',
-        ]);
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'access_token' => $token,
+                'token_type' => 'Bearer',
+                'expires_in' => 3600,
+                'scope' => 'wallet',
+            ]);
+        } catch (Exception $e) {
+            Log::error('O8 token failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('O8', '获取Token异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_CERTIFICATE_ERROR);
+        }
     }
 
     /**
@@ -114,32 +120,38 @@ class O8GameController
      */
     public function balance(Request $request): Response
     {
-        $params = $request->post();
-        $token = request()->header('authorization');
+        try {
+            $params = $request->post();
+            $token = request()->header('authorization');
 
-        $this->logger->info('o8_server余额查询记录', ['params' => $params, 'token' => $token]);
+            $this->logger->info('o8_server余额查询记录', ['params' => $params, 'token' => $token]);
 
-        $this->service->verifyToken($token);
-        $users = $params['users'];
+            $this->service->verifyToken($token);
+            $users = $params['users'];
 
-        $return = [];
+            $return = [];
 
-        foreach ($users as $user) {
-            $this->service->player = Player::query()->where('uuid', $user['userid'])->first();
-            if (empty($this->service->player)) {
-                continue;
+            foreach ($users as $user) {
+                $this->service->player = Player::query()->where('uuid', $user['userid'])->first();
+                if (empty($this->service->player)) {
+                    continue;
+                }
+                $balance = $this->service->balance();
+                $return['users'][] = [
+                    'userid' => $user['userid'],
+                    'wallets' => [
+                        ['code' => 'MainWallet', 'bal' => $balance, 'cur' => 'TWD']
+                    ]
+                ];
             }
-            $balance = $this->service->balance();
-            $return['users'][] = [
-                'userid' => $user['userid'],
-                'wallets' => [
-                    ['code' => 'MainWallet', 'bal' => $balance, 'cur' => 'TWD']
-                ]
-            ];
-        }
 
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('O8 balance failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('O8', '余额查询异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
+        }
     }
 
     /**
@@ -150,23 +162,25 @@ class O8GameController
      */
     public function bet(Request $request): Response
     {
-        $params = $request->post();
-        $token = request()->header('authorization');
-
-        $this->logger->info('o8_server下注记录', ['params' => $params, 'token' => $token]);
-
-        $this->service->verifyToken($token);
-
         try {
+            $params = $request->post();
+            $token = request()->header('authorization');
+
+            $this->logger->info('o8_server下注记录', ['params' => $params, 'token' => $token]);
+
+            $this->service->verifyToken($token);
+
             $return = $this->service->bet($params);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
-            $this->logger->error('bet',[$e->getMessage()]);
+            Log::error('O8 bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('O8', '下注异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
         }
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**
@@ -176,15 +190,21 @@ class O8GameController
      */
     public function betResult(Request $request): Response
     {
-        $params = $request->post();
-        $token = request()->header('authorization');
+        try {
+            $params = $request->post();
+            $token = request()->header('authorization');
 
-        $this->logger->info('o8_server下注记录', ['params' => $params, 'token' => $token]);
+            $this->logger->info('o8_server下注记录', ['params' => $params, 'token' => $token]);
 
-        $this->service->verifyToken($token);
-        $return = $this->service->betResulet($params);
+            $this->service->verifyToken($token);
+            $return = $this->service->betResulet($params);
 
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('O8 betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('O8', '结算异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
+        }
     }
 
     /**
@@ -194,19 +214,25 @@ class O8GameController
      */
     public function reBetResult(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $data = $this->service->decrypt($params['Msg']);
-        $this->logger->info('rsg_live余额查询记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $data = $this->service->decrypt($params['Msg']);
+            $this->logger->info('rsg_live余额查询记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->reBetResulet($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
+        } catch (Exception $e) {
+            Log::error('O8 reBetResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('O8', '重新结算异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
         }
-        $balance = $this->service->reBetResulet($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
     }
 
     /**
@@ -216,19 +242,25 @@ class O8GameController
      */
     public function refund(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $data = $this->service->decrypt($params['Msg']);
-        $this->logger->info('打鱼退款金额记录', ['params' => $data]);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $data = $this->service->decrypt($params['Msg']);
+            $this->logger->info('打鱼退款金额记录', ['params' => $data]);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $balance = $this->service->refund($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $balance);
+        } catch (Exception $e) {
+            Log::error('O8 refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('O8', '退款异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
         }
-        $balance = $this->service->refund($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $balance);
     }
 
     /**

@@ -53,26 +53,32 @@ class DGGameController
      */
     public function balance(Request $request, string $agentName): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        Log::channel('dg_server')->info('dg余额查询记录', ['params' => $params, 'name' => $agentName]);
-        $this->service->verifyToken($params, $agentName);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            Log::channel('dg_server')->info('dg余额查询记录', ['params' => $params, 'name' => $agentName]);
+            $this->service->verifyToken($params, $agentName);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $this->service->decrypt($params);
+
+            $balance = $this->service->balance();
+
+            $return = [
+                'member' => [
+                    'username' => $params['member']['username'],
+                    'balance' => $balance,
+                ]
+            ];
+
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (\Exception $e) {
+            Log::error('DG balance failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('DG', '余额查询异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DECRYPT_ERROR);
         }
-        $this->service->decrypt($params);
-
-        $balance = $this->service->balance();
-
-        $return = [
-            'member' => [
-                'username' => $params['member']['username'],
-                'balance' => $balance,
-            ]
-        ];
-
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**
@@ -83,29 +89,35 @@ class DGGameController
      */
     public function bet(Request $request, string $agentName): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        Log::channel('dg_server')->info('dg下注记录', ['params' => $params, 'name' => $agentName]);
-        $this->service->verifyToken($params, $agentName);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            Log::channel('dg_server')->info('dg下注记录', ['params' => $params, 'name' => $agentName]);
+            $this->service->verifyToken($params, $agentName);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $this->service->decrypt($params);
+
+
+            $type = $params['type'];
+            //转账类型(1:下注 2:派彩 3:补单 5:红包 6:小费)
+            if (in_array($type, [2, 5])) {
+                return $this->betResult($params);
+            }
+
+            $return = $this->service->bet($params);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (\Exception $e) {
+            Log::error('DG bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('DG', '下注异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DECRYPT_ERROR);
         }
-        $this->service->decrypt($params);
-
-
-        $type = $params['type'];
-        //转账类型(1:下注 2:派彩 3:补单 5:红包 6:小费)
-        if (in_array($type, [2, 5])) {
-            return $this->betResult($params);
-        }
-
-        $return = $this->service->bet($params);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**
@@ -115,14 +127,20 @@ class DGGameController
      */
     public function betResult($data): Response
     {
-        Log::channel('rsg_server')->info('dg结算记录', ['params' => $data]);
+        try {
+            Log::channel('rsg_server')->info('dg结算记录', ['params' => $data]);
 
-        $return = $this->service->betResulet($data);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $return = $this->service->betResulet($data);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (\Exception $e) {
+            Log::error('DG betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('DG', '结算异常', $e, ['params' => $data]);
+            return $this->error(self::API_CODE_DECRYPT_ERROR);
         }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**

@@ -75,35 +75,41 @@ class TNineGameController
      */
     public function balance(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $this->logger->info('t9余额查询记录', ['params' => $params]);
+            $this->logger->info('t9余额查询记录', ['params' => $params]);
 
-        $this->service->verifySign($params);
+            $this->service->verifySign($params);
 
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        $users = $params['Members'];
-
-        $return = [];
-
-        $time = date('Y-m-d H:i:s');
-        foreach ($users as $userId) {
-            $this->service->player = Player::query()->where('uuid', $userId)->first();
-            if (empty($this->service->player)) {
-                continue;
+            if ($this->service->error) {
+                return $this->error($this->service->error);
             }
-            $balance = $this->service->balance();
-            $return[] = [
-                'MemberAccount' => $userId,
-                'Balance' => $balance,
-                'SyncTime' => $time,
-            ];
-        }
+            $users = $params['Members'];
 
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            $return = [];
+
+            $time = date('Y-m-d H:i:s');
+            foreach ($users as $userId) {
+                $this->service->player = Player::query()->where('uuid', $userId)->first();
+                if (empty($this->service->player)) {
+                    continue;
+                }
+                $balance = $this->service->balance();
+                $return[] = [
+                    'MemberAccount' => $userId,
+                    'Balance' => $balance,
+                    'SyncTime' => $time,
+                ];
+            }
+
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('TNine balance failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('TNINE', '余额查询异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_ERROR);
+        }
     }
 
     /**
@@ -114,22 +120,28 @@ class TNineGameController
      */
     public function bet(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $this->logger->info('t9下注记录', ['params' => $params]);
+            $this->logger->info('t9下注记录', ['params' => $params]);
 
-        $this->service->verifySign($params);
+            $this->service->verifySign($params);
 
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            $return = $this->service->bet($params);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('TNine bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('TNINE', '下注异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_ERROR);
         }
-
-        $return = $this->service->bet($params);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
-        }
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**
@@ -139,13 +151,19 @@ class TNineGameController
      */
     public function betResult(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $this->logger->info('t9结算记录', ['params' => $params]);
+            $this->logger->info('t9结算记录', ['params' => $params]);
 
-        $this->service->verifySign($params);
-        $return = $this->service->betResulet($params);
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            $this->service->verifySign($params);
+            $return = $this->service->betResulet($params);
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('TNine betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('TNINE', '结算异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_ERROR);
+        }
     }
 
 
@@ -156,26 +174,32 @@ class TNineGameController
      */
     public function check(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $this->logger->info('商戶注單查核', ['params' => $params]);
+            $this->logger->info('商戶注單查核', ['params' => $params]);
 
-        $this->service->verifySign($params);
-        /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->where('order_no', $params['OrderNumber'])->first();
-        if (empty($record)) {
-            return $this->error(self::API_CODE_ORDER_NOT_FOUND);
+            $this->service->verifySign($params);
+            /** @var PlayGameRecord $record */
+            $record = PlayGameRecord::query()->where('order_no', $params['OrderNumber'])->first();
+            if (empty($record)) {
+                return $this->error(self::API_CODE_ORDER_NOT_FOUND);
+            }
+            $origin = json_decode($record->action_data, true);
+            $return = [
+                'MerchantOrderNumber' => $record->id,
+                'OrderStatus' => $origin['OrderStatus'],
+                'BetAmount' => $origin['BetAmount'],
+                'ValidBetAmount' => $origin['ValidBetAmount'],
+                'WinAmount' => $origin['WinAmount'],
+            ];
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('TNine check failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('TNINE', '订单查核异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_ERROR);
         }
-        $origin = json_decode($record->action_data, true);
-        $return = [
-            'MerchantOrderNumber' => $record->id,
-            'OrderStatus' => $origin['OrderStatus'],
-            'BetAmount' => $origin['BetAmount'],
-            'ValidBetAmount' => $origin['ValidBetAmount'],
-            'WinAmount' => $origin['WinAmount'],
-        ];
-
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**
@@ -185,22 +209,28 @@ class TNineGameController
      */
     public function update(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $this->logger->info('商戶注單修改', ['params' => $params]);
+            $this->logger->info('商戶注單修改', ['params' => $params]);
 
-        $this->service->verifySign($params);
-        /** @var PlayGameRecord $record */
-        $record = PlayGameRecord::query()->where('order_no', $params['OrderNumber'])->first();
+            $this->service->verifySign($params);
+            /** @var PlayGameRecord $record */
+            $record = PlayGameRecord::query()->where('order_no', $params['OrderNumber'])->first();
 
-        if (empty($record)) {
-            return $this->error(self::API_CODE_ORDER_NOT_FOUND);
+            if (empty($record)) {
+                return $this->error(self::API_CODE_ORDER_NOT_FOUND);
+            }
+
+            $record->settlement_status = self::ORDER_STATUS_MAP[$params['OrderStatus']];
+
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS]);
+        } catch (Exception $e) {
+            Log::error('TNine update failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('TNINE', '订单修改异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_ERROR);
         }
-
-        $record->settlement_status = self::ORDER_STATUS_MAP[$params['OrderStatus']];
-
-
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS]);
     }
 
     /**
@@ -210,18 +240,24 @@ class TNineGameController
      */
     public function gift(Request $request): Response
     {
-        $params = $request->post();
+        try {
+            $params = $request->post();
 
-        $this->logger->info('商戶會員贈禮確認', ['params' => $params]);
+            $this->logger->info('商戶會員贈禮確認', ['params' => $params]);
 
-        $this->service->verifySign($params);
-        $return = $this->service->gift($params);
-        if ($this->service->error) {
-            return $this->error($this->service->error);
+            $this->service->verifySign($params);
+            $return = $this->service->gift($params);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            // 3. 使用常量获取状态码描述
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('TNine gift failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('TNINE', '赠礼异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_ERROR);
         }
-
-        // 3. 使用常量获取状态码描述
-        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
     }
 
     /**
