@@ -14,19 +14,14 @@
 
 use process\BurstCleaner;
 use process\ChannelSettlement;
-use process\ClearAbnormalMachine;
 use process\GamePoolSocket;
-use process\GetAmsViewers;
-use process\GetTencentViewers;
 use process\LogClear;
 use process\LotteryPoolSocket;
 use process\LotteryRemind;
 use process\MachineKeepOutPlayer;
-use process\MediaClear;
 use process\NationalPromoterRebate;
 use process\OnlinePlayerSocket;
 use process\ProfitSettlement;
-use process\RechargeRemind;
 use process\ReverseWater;
 use process\SyncMachineActivity;
 use process\TencentStream;
@@ -81,14 +76,8 @@ return [
     'LotteryRemind' => [
         'handler' => LotteryRemind::class
     ],
-    'RechargeRemind' => [
-        'handler' => RechargeRemind::class
-    ],
     'WithdrawRemind' => [
         'handler' => WithdrawRemind::class
-    ],
-    'ClearAbnormalMachine' => [
-        'handler' => ClearAbnormalMachine::class
     ],
     'NationalPromoterRebate' => [
         'handler' => NationalPromoterRebate::class
@@ -98,15 +87,6 @@ return [
     ],
     'TencentStream' => [
         'handler' => TencentStream::class
-    ],
-    'MediaClear' => [
-        'handler' => MediaClear::class
-    ],
-    'GetAmsViewers' => [
-        'handler' => GetAmsViewers::class
-    ],
-    'GetTencentViewers' => [
-        'handler' => GetTencentViewers::class
     ],
     'ChannelSettlement' => [
         'handler' => ChannelSettlement::class
