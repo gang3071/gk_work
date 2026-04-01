@@ -201,7 +201,7 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             'winLimit' => 0,
         ];
         $res = $this->doCurl($this->createUrl('createPlayer'), $params);
-        if ($res['codeId'] != $this->successCode) {
+        if ($res['codeId'] != $this->successCode && $res['codeId'] != '116') {
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
