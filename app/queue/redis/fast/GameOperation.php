@@ -9,6 +9,7 @@ use app\model\PlayGameRecord;
 use Carbon\Carbon;
 use support\Db;
 use support\Log;
+use Throwable;
 use Webman\RedisQueue\Client;
 use Webman\RedisQueue\Consumer;
 
@@ -27,11 +28,19 @@ class GameOperation implements Consumer
     private const BET_STATUS_WIN = 3;  // 中奖
     private const BET_STATUS_TIE = 4;  // 和局
 
+    private $log;
+
+    public function __construct()
+    {
+        $this->log = Log::channel('game-operation');
+    }
+
     /**
      * 消费队列消息
      *
      * @param array $data 队列数据
      * @return void
+     * @throws Throwable
      */
     public function consume($data)
     {
@@ -42,11 +51,8 @@ class GameOperation implements Consumer
 
         $startTime = microtime(true);
 
-        Log::info("GameOperation: 开始处理", [
-            'platform' => $platform,
-            'operation' => $operation,
-            'order_no' => $orderNo,
-            'player_id' => $playerId,
+        $this->log->info("GameOperation: 开始处理", [
+            'data' => $data
         ]);
 
         // 开启数据库事务
@@ -56,7 +62,7 @@ class GameOperation implements Consumer
             // 1. 幂等性检查（数据库）
             $exists = PlayGameRecord::where('order_no', $orderNo)->exists();
             if ($exists) {
-                Log::warning("GameOperation: 订单已存在，跳过", [
+                $this->log->warning("GameOperation: 订单已存在，跳过", [
                     'order_no' => $orderNo,
                 ]);
                 Db::rollBack();
@@ -66,6 +72,7 @@ class GameOperation implements Consumer
             // 2. 查询玩家
             $player = Player::find($playerId);
             if (!$player) {
+                $this->log->error("玩家不存在: {$playerId}");
                 throw new \Exception("玩家不存在: {$playerId}");
             }
 
@@ -82,17 +89,17 @@ class GameOperation implements Consumer
             Db::commit();
 
             $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::info("GameOperation: 处理完成", [
+            $this->log->info("GameOperation: 处理完成", [
                 'order_no' => $orderNo,
                 'elapsed_ms' => round($elapsed, 2),
             ]);
 
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // 回滚事务
             Db::rollBack();
 
             $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::error("GameOperation: 处理失败", [
+            $this->log->error("GameOperation: 处理失败", [
                 'platform' => $platform,
                 'operation' => $operation,
                 'order_no' => $orderNo,
