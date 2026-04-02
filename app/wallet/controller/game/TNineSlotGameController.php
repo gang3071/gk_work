@@ -145,6 +145,12 @@ class TNineSlotGameController
     {
         try {
             $return = $this->service->betResulet($params);
+
+            // 检查是否有错误
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
             Log::error('TNineSlot betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
