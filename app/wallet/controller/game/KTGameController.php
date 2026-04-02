@@ -10,6 +10,7 @@ use app\service\game\SingleWalletServiceInterface;
 use app\service\GameQueueService;
 use Exception;
 use support\Log;
+use support\Redis;
 use support\Request;
 use support\Response;
 
@@ -148,10 +149,12 @@ class KTGameController
             $currentBalance = \app\service\WalletService::getBalance($player->id);
 
             // 检查幂等性
-            $betKey = "kt:bet:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+            $betKey = "kt:bet:lock:$orderNo";
+            // NX: 仅当键不存在时设置，EX: 过期时间(秒)
+            // 返回 true 表示设置成功(首次)，false 表示键已存在(重复)
+            $isFirstTime = Redis::set($betKey, 1, 'EX', 300, 'NX');
 
-            if ($isDuplicate) {
+            if (!$isFirstTime) {
                 // 重复订单，返回当前余额
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                     'Balance' => $currentBalance,
@@ -169,7 +172,7 @@ class KTGameController
 
             // 立即写入 Redis 预占状态（在入队列之前）
             try {
-                \support\Redis::hMSet("order:pending:{$orderNo}", [
+                Redis::hMSet("order:pending:{$orderNo}", [
                     'player_id' => $player->id,
                     'order_no' => $orderNo,
                     'amount' => $bet,
@@ -178,7 +181,7 @@ class KTGameController
                     'status' => 'pending',
                     'created_at' => time(),
                 ]);
-                \support\Redis::expire("order:pending:{$orderNo}", 300);
+                Redis::expire("order:pending:{$orderNo}", 300);
             } catch (\Throwable $e) {
                 // Redis 失败不影响主流程
             }
@@ -214,7 +217,7 @@ class KTGameController
                 $return = ['Balance' => $estimatedBalance];
             } else {
                 // 队列失败，同步降级
-                \support\Redis::del($betKey);
+                Redis::del($betKey);
                 $balance = $this->service->bet($params);
 
                 // 是否结算
