@@ -287,11 +287,6 @@ class KTGameController
 
             $this->logger->info('kt_server 取消投注记录', ['params' => $params, 'get' => $hash]);
 
-            // 检查必要参数
-            if (!isset($params['Username']) || !isset($params['TransactionId'])) {
-                return $this->error(self::API_CODE_OTHER_ERROR, '缺少必要参数');
-            }
-
             $this->service->verifyToken($params, $hash);
             if ($this->service->error) {
                 return $this->error($this->service->error);
