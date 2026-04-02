@@ -625,6 +625,236 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
+     * 通知接口 - 处理各种类型的通知
+     * @param $data
+     * @return array
+     */
+    public function inform($data): array
+    {
+        $player = $this->player;
+        $type = $data['type']; // 通知类型
+        $orderNo = $data['ticketId'];
+        $amount = abs($data['member']['amount']);
+        $detail = json_decode($data['detail'], true);
+
+        Log::channel('dg_server')->info('DG inform处理', [
+            'type' => $type,
+            'order_no' => $orderNo,
+            'amount' => $amount,
+            'detail' => $detail
+        ]);
+
+        // 根据不同的type处理不同的业务逻辑
+        switch ($type) {
+            case 4: // 取消投注/撤销
+                return $this->handleCancelBet($data, $orderNo, $amount);
+            case 7: // 补偿
+                return $this->handleCompensation($data, $orderNo, $amount);
+            default:
+                Log::channel('dg_server')->warning('DG inform未知类型', ['type' => $type, 'data' => $data]);
+                $this->error = DGGameController::API_CODE_DECRYPT_ERROR;
+                return [
+                    'member' => [
+                        'username' => $data['member']['username'],
+                        'balance' => \app\service\WalletService::getBalance($player->id),
+                        'amount' => 0,
+                    ]
+                ];
+        }
+    }
+
+    /**
+     * 处理取消投注
+     * @param $data
+     * @param $orderNo
+     * @param $amount
+     * @return array
+     */
+    private function handleCancelBet($data, $orderNo, $amount): array
+    {
+        $player = $this->player;
+
+        // Redis预检查幂等性
+        $cancelKey = "dg:cancel:lock:{$orderNo}";
+        $isLocked = \support\Redis::set($cancelKey, 1, ['NX', 'EX' => 300]);
+        if (!$isLocked) {
+            $this->error = DGGameController::API_CODE_DUPLICATE_TRANSACTION;
+            Log::channel('dg_server')->warning('DG 取消投注重复', ['order_no' => $orderNo]);
+            return [
+                'member' => [
+                    'username' => $data['member']['username'],
+                    'balance' => \app\service\WalletService::getBalance($player->id),
+                    'amount' => 0,
+                ]
+            ];
+        }
+
+        try {
+            $result = \support\Db::transaction(function () use ($orderNo, $amount, $player) {
+                // 查询订单
+                /** @var PlayGameRecord $record */
+                $record = PlayGameRecord::query()
+                    ->where('order_no', $orderNo)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$record) {
+                    throw new \RuntimeException('ORDER_NOT_EXIST');
+                }
+
+                if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
+                    throw new \RuntimeException('ORDER_CANCELLED');
+                }
+
+                // 锁定钱包
+                /** @var PlayerPlatformCash $machineWallet */
+                $machineWallet = PlayerPlatformCash::query()
+                    ->where('player_id', $player->id)
+                    ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                    ->lockForUpdate()
+                    ->first();
+
+                $beforeBalance = $machineWallet->money;
+
+                // 退款
+                $newBalance = bcadd($machineWallet->money, $record->bet, 2);
+                \support\Db::table('player_platform_cash')
+                    ->where('id', $machineWallet->id)
+                    ->update([
+                        'money' => $newBalance,
+                        'updated_at' => Carbon::now()
+                    ]);
+
+                return [
+                    'before_balance' => $beforeBalance,
+                    'new_balance' => $newBalance,
+                    'refund_amount' => $record->bet
+                ];
+            });
+
+            // 异步更新订单状态为已取消
+            $this->asyncCancelBetRecord($orderNo);
+
+            // 更新Redis缓存
+            \app\service\WalletService::updateCache(
+                $player->id,
+                PlayerPlatformCash::PLATFORM_SELF,
+                $result['new_balance']
+            );
+
+            Log::channel('dg_server')->info('DG 取消投注成功', [
+                'order_no' => $orderNo,
+                'refund_amount' => $result['refund_amount']
+            ]);
+
+            return [
+                'member' => [
+                    'username' => $data['member']['username'],
+                    'balance' => $result['before_balance'],
+                    'amount' => $result['refund_amount'],
+                ]
+            ];
+
+        } catch (\RuntimeException $e) {
+            \support\Redis::del($cancelKey);
+            if ($e->getMessage() === 'ORDER_NOT_EXIST') {
+                $this->error = DGGameController::API_CODE_DECRYPT_ERROR;
+            } elseif ($e->getMessage() === 'ORDER_CANCELLED') {
+                $this->error = DGGameController::API_CODE_DUPLICATE_TRANSACTION;
+            }
+            return [
+                'member' => [
+                    'username' => $data['member']['username'],
+                    'balance' => \app\service\WalletService::getBalance($player->id),
+                    'amount' => 0,
+                ]
+            ];
+        } catch (\Throwable $e) {
+            \support\Redis::del($cancelKey);
+            throw $e;
+        }
+    }
+
+    /**
+     * 处理补偿
+     * @param $data
+     * @param $orderNo
+     * @param $amount
+     * @return array
+     */
+    private function handleCompensation($data, $orderNo, $amount): array
+    {
+        $player = $this->player;
+
+        // Redis预检查幂等性
+        $compensationKey = "dg:compensation:lock:{$orderNo}";
+        $isLocked = \support\Redis::set($compensationKey, 1, ['NX', 'EX' => 300]);
+        if (!$isLocked) {
+            $this->error = DGGameController::API_CODE_DUPLICATE_TRANSACTION;
+            Log::channel('dg_server')->warning('DG 补偿重复', ['order_no' => $orderNo]);
+            return [
+                'member' => [
+                    'username' => $data['member']['username'],
+                    'balance' => \app\service\WalletService::getBalance($player->id),
+                    'amount' => 0,
+                ]
+            ];
+        }
+
+        try {
+            $result = \support\Db::transaction(function () use ($amount, $player) {
+                // 锁定钱包
+                /** @var PlayerPlatformCash $machineWallet */
+                $machineWallet = PlayerPlatformCash::query()
+                    ->where('player_id', $player->id)
+                    ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                    ->lockForUpdate()
+                    ->first();
+
+                $beforeBalance = $machineWallet->money;
+
+                // 增加补偿金额
+                $newBalance = bcadd($machineWallet->money, $amount, 2);
+                \support\Db::table('player_platform_cash')
+                    ->where('id', $machineWallet->id)
+                    ->update([
+                        'money' => $newBalance,
+                        'updated_at' => Carbon::now()
+                    ]);
+
+                return [
+                    'before_balance' => $beforeBalance,
+                    'new_balance' => $newBalance
+                ];
+            });
+
+            // 更新Redis缓存
+            \app\service\WalletService::updateCache(
+                $player->id,
+                PlayerPlatformCash::PLATFORM_SELF,
+                $result['new_balance']
+            );
+
+            Log::channel('dg_server')->info('DG 补偿成功', [
+                'order_no' => $orderNo,
+                'amount' => $amount
+            ]);
+
+            return [
+                'member' => [
+                    'username' => $data['member']['username'],
+                    'balance' => $result['before_balance'],
+                    'amount' => $amount,
+                ]
+            ];
+
+        } catch (\Throwable $e) {
+            \support\Redis::del($compensationKey);
+            throw $e;
+        }
+    }
+
+    /**
      * 取消单
      * @return mixed
      */

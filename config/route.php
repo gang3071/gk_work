@@ -124,6 +124,7 @@ Route::group('/single-wallet', function () {
     Route::group('/dg-channel', function () {
         Route::post('/v2/specification/user/getBalance/{agentName}', [\app\wallet\controller\game\DGGameController::class, 'balance']);
         Route::post('/v2/specification/account/transfer/{agentName}', [\app\wallet\controller\game\DGGameController::class, 'bet']);
+        Route::post('/v2/specification/account/inform/{agentName}', [\app\wallet\controller\game\DGGameController::class, 'inform']);
     });
     Route::group('/btg-channel', function () {
         Route::post('/get_user_balance', [\app\wallet\controller\game\BTGGameController::class, 'balance']);

@@ -124,7 +124,7 @@ class ATGGameController
     {
         try {
             $params = $request->post();
-            $this->log->info('atg余额查询记录', array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
+            $this->log->info('atg结算记录', array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
             $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
             $this->log->info('atg结算记录', ['params' => $data]);
             if ($this->service->error) {

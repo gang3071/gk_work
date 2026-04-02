@@ -144,6 +144,37 @@ class DGGameController
     }
 
     /**
+     * 通知接口 (取消投注、补偿等)
+     * @param Request $request
+     * @param string $agentName
+     * @return Response
+     */
+    public function inform(Request $request, string $agentName): Response
+    {
+        try {
+            $params = $request->post();
+
+            Log::channel('dg_server')->info('dg通知记录', ['params' => $params, 'name' => $agentName]);
+            $this->service->verifyToken($params, $agentName);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+            $this->service->decrypt($params);
+
+            $return = $this->service->inform($params);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (\Exception $e) {
+            Log::error('DG inform failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('DG', '通知接口异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DECRYPT_ERROR);
+        }
+    }
+
+    /**
      * 成功响应方法
      *
      * @param string $message 响应消息
