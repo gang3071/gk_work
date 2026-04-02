@@ -342,7 +342,6 @@ class GameOperation implements Consumer
         $orderNo = $data['order_no'];
         $platformId = $params['platform_id'] ?? 1;
         $amount = (float)($params['amount'] ?? 0);
-        $betOrderNo = $params['bet_order_no'] ?? '';
         $status = $params['status'] ?? null;
         $settleTime = $params['settle_time'] ?? null;
 
@@ -356,7 +355,6 @@ class GameOperation implements Consumer
         $this->log->info("GameOperation: 处理结算", [
             'platform' => $data['platform'],
             'order_no' => $orderNo,
-            'bet_order_no' => $betOrderNo,
             'amount' => $amount,
             'status' => $status,
             'is_jackpot' => $isJackpot,
@@ -373,9 +371,9 @@ class GameOperation implements Consumer
 
         // 1. 查找下注记录（带重试机制 + Redis 缓存优先）
         $betRecord = null;
-        if ($betOrderNo) {
+        if ($orderNo) {
             // 使用带重试的查询方法，解决"订单未入库"问题
-            $betRecord = $this->fetchBetRecordWithRetry($betOrderNo, 3, 50000);
+            $betRecord = $this->fetchBetRecordWithRetry($orderNo, 3, 50000);
 
             // 找到后需要加锁（因为后续要更新）
             if ($betRecord) {
@@ -581,25 +579,23 @@ class GameOperation implements Consumer
         $orderNo = $data['order_no'];
         $platformId = $params['platform_id'] ?? 1;
         $amount = (float)($params['amount'] ?? 0);
-        $betOrderNo = $params['bet_order_no'] ?? $orderNo;
 
         $this->log->info("GameOperation: 处理取消", [
             'order_no' => $orderNo,
-            'bet_order_no' => $betOrderNo,
             'amount' => $amount,
         ]);
 
         // 1. 查找下注记录（Redis缓存优先 + 重试机制）
-        $betRecord = $this->fetchBetRecordWithRetry($betOrderNo, 5, 50000);
+        $betRecord = $this->fetchBetRecordWithRetry($orderNo, 5, 50000);
 
         if (!$betRecord) {
-            throw new \Exception("下注记录不存在（已重试5次）: {$betOrderNo}");
+            throw new \Exception("下注记录不存在（已重试5次）: {$orderNo}");
         }
 
         // 加锁查询（准备更新）
         $betRecord = PlayGameRecord::where('id', $betRecord->id)->lockForUpdate()->first();
         if (!$betRecord) {
-            throw new \Exception("下注记录已被删除: {$betOrderNo}");
+            throw new \Exception("下注记录已被删除: {$orderNo}");
         }
 
         // 2. 钱包退款（带锁）

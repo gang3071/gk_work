@@ -295,7 +295,7 @@ class KTGameController
             $this->service->player = \app\model\Player::query()->where('uuid', $params['Username'])->first();
             $player = $this->service->player;
 
-            $orderNo = $params['TransactionId'];
+            $orderNo = $params['MainTxID'];
             $refundAmount = $params['Amount'] ?? 0;
 
             // 获取当前余额
@@ -304,7 +304,6 @@ class KTGameController
             // 准备队列参数
             $queueParams = [
                 'order_no' => $orderNo,
-                'bet_order_no' => $params['BetTransactionId'] ?? $orderNo,
                 'amount' => $refundAmount,
                 'original_data' => $params,
             ];
