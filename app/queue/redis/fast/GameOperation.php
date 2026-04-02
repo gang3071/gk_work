@@ -223,22 +223,17 @@ class GameOperation implements Consumer
         $record->order_no = $orderNo;
         $record->platform_id = $platformId;
         $record->bet = $betAmount;  // 主字段
-        $record->bet_amount = $betAmount;  // 兼容字段
-        $record->valid_bet_amount = $betAmount;
         $record->win = 0;
         $record->diff = 0;
-        $record->game_type = $params['game_type'] ?? '';
         $record->game_code = $params['game_code'] ?? '';
-        $record->game_name = $params['game_name'] ?? '';
         $record->order_time = $params['order_time'] ?? Carbon::now()->toDateTimeString();
         $record->original_data = json_encode($params['original_data'] ?? $params, JSON_UNESCAPED_UNICODE);
-        $record->platform_created_at = Carbon::now()->toDateTimeString();
 
         // 判断是否为特殊类型
-        if ($params['game_type'] === 'gift') {
+        if (($params['game_type'] ?? '') === 'gift') {
             $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;  // 打赏立即结算
             $record->type = defined('PlayGameRecord::TYPE_GIFT') ? PlayGameRecord::TYPE_GIFT : 2;  // TYPE_GIFT
-        } elseif ($params['type'] ?? '' === 'prepay') {
+        } elseif (($params['type'] ?? '') === 'prepay') {
             $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED;
             $record->type = defined('PlayGameRecord::TYPE_PREPAY') ? PlayGameRecord::TYPE_PREPAY : 3;  // TYPE_PREPAY
         } else {
@@ -402,18 +397,14 @@ class GameOperation implements Consumer
             $record->order_no = $orderNo;
             $record->platform_id = $platformId;
             $record->bet = 0;  // Jackpot/Reward/Compensation无下注
-            $record->bet_amount = 0;
             $record->win = $amount;
-            $record->win_amount = $amount;
             $record->diff = $amount;
             $record->game_code = $params['game_code'] ?? '';
-            $record->game_type = $params['game_type'] ?? '';
             $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
             $record->order_time = Carbon::now()->toDateTimeString();
             $record->platform_action_at = $params['play_time'] ?? Carbon::now()->toDateTimeString();
             $record->original_data = json_encode($params['original_data'] ?? $params, JSON_UNESCAPED_UNICODE);
             $record->action_data = json_encode($params['original_data'] ?? $params, JSON_UNESCAPED_UNICODE);
-            $record->platform_created_at = Carbon::now()->toDateTimeString();
             $record->save();
             $recordId = $record->id;
 
@@ -459,15 +450,12 @@ class GameOperation implements Consumer
             $record->order_no = $orderNo;
             $record->platform_id = $platformId;
             $record->bet = 0;
-            $record->bet_amount = 0;
             $record->win = $amount;
-            $record->win_amount = $amount;
             $record->diff = $amount;
             $record->game_code = $params['game_code'] ?? '';
             $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
             $record->order_time = Carbon::now()->toDateTimeString();
             $record->original_data = json_encode($params['original_data'] ?? $params, JSON_UNESCAPED_UNICODE);
-            $record->platform_created_at = Carbon::now()->toDateTimeString();
             $record->platform_action_at = $settleTime ?? Carbon::now()->toDateTimeString();
             $record->save();
             $recordId = $record->id;
@@ -742,7 +730,7 @@ class GameOperation implements Consumer
             'session_id' => $sessionId,
             'amount' => $amount,
         ]);
-
+        /** @var PlayGameRecord $record */
         // 1. 查找原 prepay 记录（使用 SessionId）
         $record = PlayGameRecord::where('order_no', $sessionId)
             ->where('platform_id', $platformId)
