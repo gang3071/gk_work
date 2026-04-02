@@ -125,7 +125,7 @@ class ATGGameController
             $queueParams = [
                 'order_no' => $orderNo,
                 'amount' => $bet,
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_code' => $data['game_code'] ?? '',
                 'order_time' => $data['trade_time'] ?? date('Y-m-d H:i:s'),
                 'original_data' => $data,

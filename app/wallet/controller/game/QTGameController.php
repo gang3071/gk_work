@@ -410,7 +410,7 @@ class QTGameController
                 'bet_id' => $betId,
                 'round_id' => $roundId,
                 'amount' => $amount,
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_code' => $gameId,
                 'txn_type' => $txnType,
                 'bonus_type' => $params['bonusType'] ?? null,
@@ -811,7 +811,7 @@ class QTGameController
                 'bet_id' => $betId,
                 'round_id' => $roundId,
                 'amount' => $amount,
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_code' => $gameId,
                 'is_rollback' => true,
                 'original_data' => $params,

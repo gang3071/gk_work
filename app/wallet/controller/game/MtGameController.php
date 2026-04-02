@@ -129,7 +129,7 @@ class MtGameController
             $queueParams = [
                 'order_no' => $data['bet_sn'],  // MT使用bet_sn
                 'amount' => $data['order_money'],  // MT使用order_money
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_type' => $data['gameType'] ?? '',
                 'game_code' => $data['game_code'],  // MT使用game_code
                 'game_name' => $data['gameName'] ?? '',
@@ -209,7 +209,7 @@ class MtGameController
                 'order_no' => 'CANCEL_' . $data['bet_sn'],  // MT使用bet_sn
                 'bet_order_no' => $data['bet_sn'],  // 原下注订单号
                 'amount' => $data['order_money'],  // MT使用order_money
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'original_data' => $data,
             ];
 
@@ -287,7 +287,7 @@ class MtGameController
                 'amount' => $data['win_money'] ?? 0,  // MT使用win_money
                 'status' => $data['status'] ?? null,  // 状态：2=未中奖, 3=中奖, 4=和局
                 'settle_time' => $data['settle_time'] ?? '',  // 结算时间
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_type' => $data['gameType'] ?? '',
                 'game_code' => $data['game_code'] ?? '',
                 'original_data' => $data,
@@ -377,7 +377,7 @@ class MtGameController
                 'amount' => $data['win_money'] ?? 0,  // MT使用win_money
                 'status' => $data['status'] ?? null,  // 状态
                 'settle_time' => $data['settle_time'] ?? '',  // 结算时间
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'original_data' => $data,
             ];
 
@@ -455,7 +455,7 @@ class MtGameController
             $queueParams = [
                 'order_no' => $data['tip_sn'],  // MT使用tip_sn
                 'amount' => $data['money'] ?? 0,  // MT使用money字段
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_type' => 'gift',
                 'game_code' => $data['game_code'] ?? 'gift',
                 'game_name' => '打赏',

@@ -125,7 +125,7 @@ class RsgGameController
             $queueParams = [
                 'order_no' => $data['SequenNumber'],  // RSG使用SequenNumber
                 'amount' => $data['Amount'],
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_code' => $data['GameId'],
                 'original_data' => $data,
             ];
@@ -199,7 +199,7 @@ class RsgGameController
                 'order_no' => 'CANCEL_' . $data['SequenNumber'],
                 'bet_order_no' => $data['SequenNumber'],
                 'amount' => $data['BetAmount'],  // ⚠️ 注意：cancelBet使用BetAmount
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'original_data' => $data,
             ];
 
@@ -278,7 +278,7 @@ class RsgGameController
                 'play_time' => $data['PlayTime'] ?? '',
                 'is_game_flow_end' => $data['IsGameFlowEnd'] ?? false,
                 'belong_sequen_number' => $data['BelongSequenNumber'] ?? '',
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_code' => $data['GameId'] ?? '',
                 'original_data' => $data,
             ];
@@ -359,7 +359,7 @@ class RsgGameController
                 'amount' => $data['Amount'] ?? 0,
                 'bet_amount' => $data['BetAmount'] ?? 0,
                 'play_time' => $data['PlayTime'] ?? '',
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_code' => $data['GameId'] ?? '',
                 'is_rebet' => true,  // 标记为重新结算
                 'original_data' => $data,
@@ -433,7 +433,7 @@ class RsgGameController
             $queueParams = [
                 'order_no' => $data['SequenNumber'],
                 'amount' => $data['Amount'],  // 中奖金额
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_code' => $data['GameId'] ?? '',
                 'play_time' => $data['PlayTime'] ?? '',
                 'is_jackpot' => true,  // ⚠️ 标记为jackpot类型
@@ -511,7 +511,7 @@ class RsgGameController
             $queueParams = [
                 'order_no' => $data['SessionId'],  // ⚠️ 使用SessionId
                 'amount' => $data['Amount'],
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_code' => $data['GameId'] ?? '',
                 'type' => 'prepay',  // ⚠️ 标记为prepay类型
                 'original_data' => $data,
@@ -595,7 +595,7 @@ class RsgGameController
                 'order_no' => 'REFUND_' . $data['SessionId'],  // 新订单号
                 'session_id' => $data['SessionId'],  // ⚠️ 用于查找原prepay记录
                 'amount' => $data['Amount'],
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_code' => $data['GameId'] ?? '',
                 'type' => 'refund',  // ⚠️ 标记为refund类型
                 'original_data' => $data,

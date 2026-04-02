@@ -175,7 +175,7 @@ class TNineSlotGameController
             $queueParams = [
                 'order_no' => $orderNo,
                 'amount' => $betAmount,
-                'platform_id' => $this->service->platform->id,
+                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
                 'game_code' => $params['gameCode'] ?? '',
                 'original_data' => $params,
             ];
