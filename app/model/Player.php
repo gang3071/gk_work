@@ -107,7 +107,7 @@ class Player extends Model
 
     public function machine_wallet(): HasOne
     {
-        return $this->hasOne(PlayerPlatformCash::class)->where('platform_id', PlayerPlatformCash::PLATFORM_SELF);
+        return $this->hasOne(PlayerPlatformCash::class);
     }
 
     /**

@@ -174,10 +174,7 @@ function machineKeepOutPlayer(): void
                 $beforeGameAmount = $player->machine_wallet->money;
                 if (machineWash($player, $machine, 'leave', 1)) {
                     /** @var PlayerPlatformCash $playerPlatformWallet */
-                    $playerPlatformWallet = PlayerPlatformCash::query()->where([
-                        'player_id' => $player->id,
-                        'platform_id' => PlayerPlatformCash::PLATFORM_SELF,
-                    ])->first();
+                    $playerPlatformWallet = PlayerPlatformCash::query()->where('player_id', $player->id)->first();
                     //寫入踢人log
                     $afterGameAmount = $playerPlatformWallet->money;
                     $wash_point = abs($afterGameAmount - $beforeGameAmount);
@@ -1250,8 +1247,7 @@ function machineWashZero(
             ->orderBy('created_at', 'desc')
             ->first();
         /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = PlayerPlatformCash::query()->where('platform_id',
-            PlayerPlatformCash::PLATFORM_SELF)->where('player_id', $player->id)->lockForUpdate()->first();
+        $machineWallet = PlayerPlatformCash::query()->where('player_id', $player->id)->lockForUpdate()->first();
         $beforeGameAmount = $machineWallet->money;
         if ($money > 0) {
             //api洗分
@@ -1646,9 +1642,7 @@ function nationalPromoterRebate(): void
 function checkMachineCrash(Player $player): array
 {
     // 直接通过玩家ID查询钱包的爆机状态
-    $wallet = PlayerPlatformCash::where('player_id', $player->id)
-        ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
-        ->first();
+    $wallet = PlayerPlatformCash::where('player_id', $player->id)->first();
 
     $currentAmount = $wallet->money ?? 0;
     $isCrashed = $wallet && $wallet->is_crashed == 1;

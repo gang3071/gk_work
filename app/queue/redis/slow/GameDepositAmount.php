@@ -73,8 +73,7 @@ class GameDepositAmount implements Consumer
             try {
                 //玩家加點數
                 /** @var PlayerPlatformCash $machineWallet */
-                $machineWallet = PlayerPlatformCash::query()->where('platform_id',
-                    PlayerPlatformCash::PLATFORM_SELF)->where('player_id', $player->id)->lockForUpdate()->first();
+                $machineWallet = PlayerPlatformCash::query()->where('player_id', $player->id)->lockForUpdate()->first();
                 $balance = $gameService->getBalance(['lang' => $lang]);
                 //驗證通過
                 $playerWalletTransfer = new PlayerWalletTransfer();

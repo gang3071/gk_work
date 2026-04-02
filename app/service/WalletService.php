@@ -100,7 +100,6 @@ class WalletService
             // 使用悲观锁查询钱包
             $wallet = PlayerPlatformCash::query()
                 ->where('player_id', $playerId)
-                ->where('platform_id', $platformId)
                 ->lockForUpdate()
                 ->first();
 
@@ -178,7 +177,6 @@ class WalletService
             // 使用悲观锁查询钱包
             $wallet = PlayerPlatformCash::query()
                 ->where('player_id', $playerId)
-                ->where('platform_id', $platformId)
                 ->lockForUpdate()
                 ->first();
 
@@ -344,7 +342,6 @@ class WalletService
     {
         $balance = PlayerPlatformCash::query()
             ->where('player_id', $playerId)
-            ->where('platform_id', $platformId)
             ->value('money');
 
         return (float)($balance ?? 0);
@@ -398,7 +395,6 @@ class WalletService
             if (!empty($missingPlayerIds)) {
                 $wallets = PlayerPlatformCash::query()
                     ->whereIn('player_id', $missingPlayerIds)
-                    ->where('platform_id', $platformId)
                     ->get(['player_id', 'money']);
 
                 $foundPlayerIds = [];
@@ -432,7 +428,6 @@ class WalletService
             // 降级：直接从数据库查询
             return PlayerPlatformCash::query()
                 ->whereIn('player_id', $playerIds)
-                ->where('platform_id', $platformId)
                 ->pluck('money', 'player_id')
                 ->map(fn($v) => (float)$v)
                 ->toArray();
@@ -459,7 +454,6 @@ class WalletService
             // 从数据库批量查询
             $wallets = PlayerPlatformCash::query()
                 ->whereIn('player_id', $playerIds)
-                ->where('platform_id', $platformId)
                 ->get(['player_id', 'money']);
 
             $foundPlayerIds = [];

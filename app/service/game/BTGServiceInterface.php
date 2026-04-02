@@ -789,7 +789,6 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                     /** @var PlayerPlatformCash $machineWallet */
                     $machineWallet = PlayerPlatformCash::query()
                         ->where('player_id', $player->id)
-                        ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
                         ->lockForUpdate()
                         ->first();
 
@@ -890,7 +889,6 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                     /** @var PlayerPlatformCash $machineWallet */
                     $machineWallet = PlayerPlatformCash::query()
                         ->where('player_id', $player->id)
-                        ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
                         ->lockForUpdate()
                         ->first();
 
@@ -1006,7 +1004,6 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                     /** @var PlayerPlatformCash $machineWallet */
                     $machineWallet = PlayerPlatformCash::query()
                         ->where('player_id', $player->id)
-                        ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
                         ->lockForUpdate()
                         ->first();
 

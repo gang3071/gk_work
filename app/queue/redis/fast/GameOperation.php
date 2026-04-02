@@ -161,12 +161,11 @@ class GameOperation implements Consumer
 
         // 2. 钱包扣款（带锁）
         $wallet = PlayerPlatformCash::where('player_id', $player->id)
-            ->where('department_id', 1)
             ->lockForUpdate()
             ->first();
 
         if (!$wallet) {
-            throw new \Exception("钱包不存在: player_id={$player->id}, department_id=1");
+            throw new \Exception("钱包不存在: player_id={$player->id}");
         }
 
         $beforeBalance = $wallet->money;
@@ -296,7 +295,6 @@ class GameOperation implements Consumer
 
         // 检查设备是否爆机（余额为负）
         $wallet = PlayerPlatformCash::where('player_id', $machine->id)
-            ->where('department_id', 1)
             ->first();
 
         if ($wallet && $wallet->money < 0) {
@@ -354,12 +352,11 @@ class GameOperation implements Consumer
 
         // 2. 钱包加款（带锁）
         $wallet = PlayerPlatformCash::where('player_id', $player->id)
-            ->where('department_id', 1)
             ->lockForUpdate()
             ->first();
 
         if (!$wallet) {
-            throw new \Exception("钱包不存在: player_id={$player->id}, department_id=1");
+            throw new \Exception("钱包不存在: player_id={$player->id}");
         }
 
         $beforeBalance = $wallet->money;
@@ -594,7 +591,6 @@ class GameOperation implements Consumer
 
         // 2. 钱包退款（带锁）
         $wallet = PlayerPlatformCash::where('player_id', $player->id)
-            ->where('department_id', 1)
             ->lockForUpdate()
             ->first();
 
@@ -743,7 +739,6 @@ class GameOperation implements Consumer
 
         // 2. 钱包加款（带锁）
         $wallet = PlayerPlatformCash::where('player_id', $player->id)
-            ->where('department_id', 1)
             ->lockForUpdate()
             ->first();
 
