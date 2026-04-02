@@ -174,9 +174,7 @@ class RsgGameController
                 'estimatedBalance' => $estimatedBalance
             ]);
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => $estimatedBalance
-            ]);
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => (float)$estimatedBalance]);
         } catch (Throwable $e) {
             $this->logger->error('RSG下注异常', [
                 'error' => $e->getMessage(),
