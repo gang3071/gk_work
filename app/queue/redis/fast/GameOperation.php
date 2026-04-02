@@ -445,8 +445,8 @@ class GameOperation implements Consumer
 
         } elseif ($betRecord) {
             // 更新下注记录
-            $betRecord->win = $amount <= $betRecord->bet ? 0 : bcsub($amount, $betRecord->bet, 2);
-            $betRecord->diff = bcsub($amount, $betRecord->bet, 2);
+            $betRecord->win = $amount;  // RSG/MT/其他平台：Amount 就是中奖金额
+            $betRecord->diff = bcsub($amount, $betRecord->bet, 2);  // 净盈亏 = 中奖 - 下注
             $betRecord->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
             $betRecord->platform_action_at = $params['play_time'] ?? $settleTime ?? Carbon::now()->toDateTimeString();
             $betRecord->action_data = json_encode($params['original_data'] ?? $params, JSON_UNESCAPED_UNICODE);
