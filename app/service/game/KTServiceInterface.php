@@ -326,39 +326,55 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
-     * 取消单
+     * 取消投注与结算
      * @param $data
      * @return float|string
      */
     public function cancelBet($data): float|string
     {
+        /** @var Player $player */
+        $player = $this->player;
+
         /** @var PlayGameRecord $record */
         // ✅ 加锁查询，防止并发重复退款
+        // KT平台使用MainTxID + SubTxID作为唯一标识
+        $orderNo = $data['MainTxID'];
         $record = PlayGameRecord::query()
-            ->where('order_no', $data['txn_reverse_id'])
+            ->where('order_no', $orderNo)
             ->lockForUpdate()
             ->first();
 
         if (!$record) {
-            $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-            return \app\service\WalletService::getBalance($this->player->id);
+            $this->error = KTGameController::API_CODE_OTHER_ERROR;
+            $this->log->error('KT cancelBet: 订单不存在', ['order_no' => $orderNo, 'params' => $data]);
+            return \app\service\WalletService::getBalance($player->id);
         }
 
+        // 检查订单是否已经取消
         if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-            $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-            return \app\service\WalletService::getBalance($this->player->id);
+            $this->error = KTGameController::API_CODE_TRANSACTIONID_DUPLICATE;
+            $this->log->warning('KT cancelBet: 订单已取消', ['order_no' => $orderNo]);
+            return \app\service\WalletService::getBalance($player->id);
         }
 
-        //返还用户金钱  修改注单状态
-        $bet = $data['amount'];
+        // 锁定钱包并退款
         /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+
         // 同步退款
-        $machineWallet->money = bcadd($machineWallet->money, $bet, 2);
+        $machineWallet->money = bcadd($machineWallet->money, $record->bet, 2);
         $machineWallet->save();
-        // 异步更新状态
+
+        // 异步更新订单状态为已取消
         $this->asyncCancelBetRecord($record->order_no);
-        return \app\service\WalletService::getBalance($this->player->id);
+
+        $this->log->info('KT cancelBet 成功', [
+            'order_no' => $orderNo,
+            'refund_amount' => $record->bet,
+            'new_balance' => \app\service\WalletService::getBalance($player->id)
+        ]);
+
+        return \app\service\WalletService::getBalance($player->id);
     }
 
     /**

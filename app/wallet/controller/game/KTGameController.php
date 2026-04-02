@@ -189,6 +189,41 @@ class KTGameController
     }
 
     /**
+     * 投注与结算取消
+     * @param Request $request
+     * @return Response
+     */
+    public function cancelBet(Request $request): Response
+    {
+        try {
+            $params = $request->post();
+            $hash = $request->get('Hash');
+
+            $this->logger->info('kt_server 取消投注记录', ['params' => $params, 'get' => $hash]);
+
+            $this->service->verifyToken($params, $hash);
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            $this->service->player = \app\model\Player::query()->where('uuid', $params['Username'])->first();
+            $balance = $this->service->cancelBet($params);
+
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'Balance' => $balance,
+            ]);
+        } catch (Exception $e) {
+            Log::error('KT cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('KT', '取消投注异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_OTHER_ERROR);
+        }
+    }
+
+    /**
      * 打鱼机预扣金额
      * @param Request $request
      * @return Response
