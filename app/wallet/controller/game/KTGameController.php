@@ -135,18 +135,13 @@ class KTGameController
 
             $this->logger->info('kt_server 下注记录', ['params' => $params, 'get' => $hash]);
 
-            // 检查必要参数
-            if (!isset($params['Username']) || !isset($params['TransactionId']) || !isset($params['Amount'])) {
-                return $this->error(self::API_CODE_OTHER_ERROR, '缺少必要参数');
-            }
-
             $this->service->verifyToken($params, $hash);
 
             $this->service->player = Player::query()->where('uuid', $params['Username'])->first();
             $player = $this->service->player;
 
-            $orderNo = $params['TransactionId'];
-            $bet = $params['Amount'];
+            $orderNo = $params['MainTxID'];
+            $bet = $params['Bet'];
             $takeWin = $params['TakeWin'] ?? 0;
 
             // 获取当前余额
