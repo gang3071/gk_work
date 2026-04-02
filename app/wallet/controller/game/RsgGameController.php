@@ -153,6 +153,7 @@ class RsgGameController
             $this->logger->info('RSG下注已入队（快速响应）', [
                 'order_no' => $data['SequenNumber'],
                 'elapsed_ms' => round($elapsed, 2),
+                'estimatedBalance' => $estimatedBalance
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
