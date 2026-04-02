@@ -355,6 +355,7 @@ class GameOperation implements Consumer
         // 1. 查找下注记录
         $betRecord = null;
         if ($betOrderNo) {
+            /** @var PlayGameRecord $betRecord */
             $betRecord = PlayGameRecord::where('order_no', $betOrderNo)->lockForUpdate()->first();
         }
 
@@ -423,7 +424,6 @@ class GameOperation implements Consumer
         } elseif ($betRecord) {
             // 更新下注记录
             $betRecord->win = $amount <= $betRecord->bet ? 0 : bcsub($amount, $betRecord->bet, 2);
-            $betRecord->win_amount = $amount;
             $betRecord->diff = bcsub($amount, $betRecord->bet, 2);
             $betRecord->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
             $betRecord->platform_action_at = $params['play_time'] ?? $settleTime ?? Carbon::now()->toDateTimeString();
