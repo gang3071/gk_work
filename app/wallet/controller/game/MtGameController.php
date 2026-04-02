@@ -46,6 +46,11 @@ class MtGameController
         self::API_CODE_DUPLICATE_SERIAL => '重覆序號',
     ];
 
+    // MT平台状态常量
+    private const BET_STATUS_NOT = 2;  // 未中奖
+    private const BET_STATUS_WIN = 3;  // 中奖
+    private const BET_STATUS_TIE = 4;  // 和局
+
     /** 排除签名验证的接口 */
     protected array $noNeedSign = [];
 
@@ -310,10 +315,9 @@ class MtGameController
             $currentBalance = $player->machine_wallet()->value('money') ?? 0;
             $winMoney = $data['win_money'] ?? 0;
             $status = $data['status'] ?? null;
-            const BET_STATUS_NOT = 2;  // 未中奖
 
             // 只有非"未中奖"状态才预估加款
-            $estimatedBalance = ($status !== BET_STATUS_NOT && $winMoney > 0)
+            $estimatedBalance = ($status !== self::BET_STATUS_NOT && $winMoney > 0)
                 ? bcadd($currentBalance, $winMoney, 2)
                 : $currentBalance;
 
