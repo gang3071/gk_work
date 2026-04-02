@@ -127,7 +127,7 @@ class GameOperation implements Consumer
         $platformId = $params['platform_id'] ?? 1;
         $amount = (float)($params['amount'] ?? 0);
 
-        Log::info("GameOperation: 处理下注", [
+        $this->log->info("GameOperation: 处理下注", [
             'order_no' => $orderNo,
             'amount' => $amount,
         ]);
@@ -159,7 +159,7 @@ class GameOperation implements Consumer
             $record->platform_created_at = Carbon::now()->toDateTimeString();
             $record->save();
 
-            Log::info("GameOperation: BTG免费游戏记录创建成功", [
+            $this->log->info("GameOperation: BTG免费游戏记录创建成功", [
                 'order_no' => $orderNo,
                 'record_id' => $record->id,
             ]);
@@ -182,7 +182,7 @@ class GameOperation implements Consumer
         if ($data['platform'] === 'QT' && $bonusType) {
             // 奖金回合不扣款
             $actualAmount = 0;
-            Log::info("GameOperation: QT 奖金回合，不扣款", [
+            $this->log->info("GameOperation: QT 奖金回合，不扣款", [
                 'order_no' => $orderNo,
                 'bonus_type' => $bonusType,
                 'amount' => $amount,
@@ -195,7 +195,7 @@ class GameOperation implements Consumer
                 $wallet->money = 0;
                 $wallet->save();
 
-                Log::info("GameOperation: RSG prepay 余额不足，扣除所有金额", [
+                $this->log->info("GameOperation: RSG prepay 余额不足，扣除所有金额", [
                     'request_amount' => $amount,
                     'actual_amount' => $actualAmount,
                     'order_no' => $orderNo,
@@ -208,6 +208,7 @@ class GameOperation implements Consumer
         } else {
             // 普通下注：余额不足抛异常
             if ($beforeBalance < $amount) {
+                $this->log->error("余额不足: balance={$beforeBalance}, amount={$amount}");
                 throw new \Exception("余额不足: balance={$beforeBalance}, amount={$amount}");
             }
 
@@ -275,7 +276,7 @@ class GameOperation implements Consumer
         $deliveryRecord->user_name = '';
         $deliveryRecord->save();
 
-        Log::info("GameOperation: 下注处理成功", [
+        $this->log->info("GameOperation: 下注处理成功", [
             'order_no' => $orderNo,
             'record_id' => $record->id,
             'delivery_id' => $deliveryRecord->id,
@@ -333,7 +334,7 @@ class GameOperation implements Consumer
         $isRefund = ($params['type'] ?? '') === 'refund';  // RSG refund
         $sessionId = $params['session_id'] ?? '';  // RSG SessionId
 
-        Log::info("GameOperation: 处理结算", [
+        $this->log->info("GameOperation: 处理结算", [
             'platform' => $data['platform'],
             'order_no' => $orderNo,
             'bet_order_no' => $betOrderNo,
@@ -413,7 +414,7 @@ class GameOperation implements Consumer
             $recordId = $record->id;
 
             $logType = $isJackpot ? 'RSG Jackpot' : ($isReward ? 'BTG Reward' : 'DG Compensation');
-            Log::info("GameOperation: {$logType} 创建成功", [
+            $this->log->info("GameOperation: {$logType} 创建成功", [
                 'order_no' => $orderNo,
                 'amount' => $amount,
                 'record_id' => $recordId,
@@ -436,7 +437,7 @@ class GameOperation implements Consumer
                     $betRecord = PlayGameRecord::where('order_no', $params['belong_sequen_number'])->first();
                     $recordId = $betRecord ? $betRecord->id : $recordId;
 
-                    Log::info("GameOperation: RSG 游戏流程结束，切换到主记录", [
+                    $this->log->info("GameOperation: RSG 游戏流程结束，切换到主记录", [
                         'current_order' => $orderNo,
                         'belong_order' => $params['belong_sequen_number'],
                     ]);
@@ -498,7 +499,7 @@ class GameOperation implements Consumer
             $deliveryRecord->user_name = '';
             $deliveryRecord->save();
 
-            Log::info("GameOperation: 结算处理成功（已加款）", [
+            $this->log->info("GameOperation: 结算处理成功（已加款）", [
                 'order_no' => $orderNo,
                 'record_id' => $recordId,
                 'delivery_id' => $deliveryRecord->id,
@@ -506,7 +507,7 @@ class GameOperation implements Consumer
                 'balance_after' => $wallet->money,
             ]);
         } else {
-            Log::info("GameOperation: 结算处理成功（未中奖，不加款）", [
+            $this->log->info("GameOperation: 结算处理成功（未中奖，不加款）", [
                 'order_no' => $orderNo,
                 'record_id' => $recordId ?? null,
                 'status' => $status,
@@ -521,7 +522,7 @@ class GameOperation implements Consumer
 
             if ($data['platform'] === 'BTG' && $gameType === 'fish') {
                 $shouldSendLottery = false;
-                Log::info("GameOperation: BTG 鱼机游戏跳过彩金队列", [
+                $this->log->info("GameOperation: BTG 鱼机游戏跳过彩金队列", [
                     'order_no' => $orderNo,
                     'game_type' => $gameType,
                 ]);
@@ -534,7 +535,7 @@ class GameOperation implements Consumer
                     'play_game_record_id' => $betRecord->id
                 ]);
 
-                Log::info("GameOperation: {$data['platform']} 彩金队列已发送", [
+                $this->log->info("GameOperation: {$data['platform']} 彩金队列已发送", [
                     'order_no' => $orderNo,
                     'bet' => $betRecord->bet,
                     'record_id' => $betRecord->id,
@@ -558,7 +559,7 @@ class GameOperation implements Consumer
         $amount = (float)($params['amount'] ?? 0);
         $betOrderNo = $params['bet_order_no'] ?? $orderNo;
 
-        Log::info("GameOperation: 处理取消", [
+        $this->log->info("GameOperation: 处理取消", [
             'order_no' => $orderNo,
             'bet_order_no' => $betOrderNo,
             'amount' => $amount,
@@ -578,7 +579,7 @@ class GameOperation implements Consumer
 
             // 如果找不到记录，可能是 bet 队列还没处理完，等待后重试
             if ($i < $maxRetries - 1) {
-                Log::warning("GameOperation: 取消订单时下注记录不存在，重试中", [
+                $this->log->warning("GameOperation: 取消订单时下注记录不存在，重试中", [
                     'bet_order_no' => $betOrderNo,
                     'retry' => $i + 1,
                 ]);
@@ -648,7 +649,7 @@ class GameOperation implements Consumer
         $deliveryRecord->user_name = '';
         $deliveryRecord->save();
 
-        Log::info("GameOperation: 取消处理成功", [
+        $this->log->info("GameOperation: 取消处理成功", [
             'order_no' => $orderNo,
             'record_id' => $betRecord->id,
             'delivery_id' => $deliveryRecord->id,
@@ -671,7 +672,7 @@ class GameOperation implements Consumer
         $platformId = $params['platform_id'] ?? 1;
         $amount = (float)($params['amount'] ?? 0);
 
-        Log::info("GameOperation: 处理退款", [
+        $this->log->info("GameOperation: 处理退款", [
             'order_no' => $orderNo,
             'amount' => $amount,
         ]);
@@ -708,7 +709,7 @@ class GameOperation implements Consumer
         $deliveryRecord->user_name = '';
         $deliveryRecord->save();
 
-        Log::info("GameOperation: 退款处理成功", [
+        $this->log->info("GameOperation: 退款处理成功", [
             'order_no' => $orderNo,
             'delivery_id' => $deliveryRecord->id,
             'balance_after' => $wallet->money,
@@ -729,7 +730,7 @@ class GameOperation implements Consumer
         $params = $data['params'];
         $platformId = $params['platform_id'] ?? 1;
 
-        Log::info("GameOperation: 处理RSG打鱼机退款", [
+        $this->log->info("GameOperation: 处理RSG打鱼机退款", [
             'session_id' => $sessionId,
             'amount' => $amount,
         ]);
@@ -785,7 +786,7 @@ class GameOperation implements Consumer
         $deliveryRecord->user_name = '';
         $deliveryRecord->save();
 
-        Log::info("GameOperation: RSG打鱼机退款处理成功", [
+        $this->log->info("GameOperation: RSG打鱼机退款处理成功", [
             'session_id' => $sessionId,
             'record_id' => $record->id,
             'amount' => $amount,
