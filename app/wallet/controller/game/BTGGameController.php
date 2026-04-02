@@ -210,6 +210,22 @@ class BTGGameController
             switch ($transferType) {
                 case 'start':
                     // 下注扣款
+                    // 立即写入 Redis 预占状态（在入队列之前）
+                    try {
+                        \support\Redis::hMSet("order:pending:{$orderId}", [
+                            'player_id' => $player->id,
+                            'order_no' => $orderId,
+                            'amount' => $amount,
+                            'platform_id' => $this->service->platform->id,
+                            'game_code' => $params['game_code'] ?? '',
+                            'status' => 'pending',
+                            'created_at' => time(),
+                        ]);
+                        \support\Redis::expire("order:pending:{$orderId}", 300);
+                    } catch (\Throwable $e) {
+                        // Redis 失败不影响主流程
+                    }
+
                     $sent = GameQueueService::sendBet('BTG', $player, $queueParams);
                     if ($sent) {
                         // 预估余额：如果 amount=0（免费游戏）则不扣款
@@ -250,6 +266,22 @@ class BTGGameController
                         }
                     } else {
                         // 负数：扣款，使用 bet
+                        // 立即写入 Redis 预占状态（在入队列之前）
+                        try {
+                            \support\Redis::hMSet("order:pending:{$orderId}", [
+                                'player_id' => $player->id,
+                                'order_no' => $orderId,
+                                'amount' => abs($adjustAmount),
+                                'platform_id' => $this->service->platform->id,
+                                'game_code' => $params['game_code'] ?? '',
+                                'status' => 'pending',
+                                'created_at' => time(),
+                            ]);
+                            \support\Redis::expire("order:pending:{$orderId}", 300);
+                        } catch (\Throwable $e) {
+                            // Redis 失败不影响主流程
+                        }
+
                         $sent = GameQueueService::sendBet('BTG', $player, $queueParams);
                         if ($sent) {
                             $deductAmount = abs($adjustAmount);

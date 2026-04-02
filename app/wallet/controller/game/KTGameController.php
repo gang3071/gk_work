@@ -172,6 +172,22 @@ class KTGameController
                 'original_data' => $params,
             ];
 
+            // 立即写入 Redis 预占状态（在入队列之前）
+            try {
+                \support\Redis::hMSet("order:pending:{$orderNo}", [
+                    'player_id' => $player->id,
+                    'order_no' => $orderNo,
+                    'amount' => $bet,
+                    'platform_id' => $this->service->platform->id,
+                    'game_code' => $params['GameCode'] ?? '',
+                    'status' => 'pending',
+                    'created_at' => time(),
+                ]);
+                \support\Redis::expire("order:pending:{$orderNo}", 300);
+            } catch (\Throwable $e) {
+                // Redis 失败不影响主流程
+            }
+
             // 发送下注队列
             $sent = GameQueueService::sendBet('KT', $player, $queueParams);
 

@@ -424,6 +424,22 @@ class QTGameController
             // 根据 txnType 发送到不同队列
             if ($txnType === 'DEBIT') {
                 // 下注扣款
+                // 立即写入 Redis 预占状态（在入队列之前）
+                try {
+                    \support\Redis::hMSet("order:pending:{$txnId}", [
+                        'player_id' => $player->id,
+                        'order_no' => $txnId,
+                        'amount' => $amount,
+                        'platform_id' => $this->service->platform->id,
+                        'game_code' => $gameId,
+                        'status' => 'pending',
+                        'created_at' => time(),
+                    ]);
+                    \support\Redis::expire("order:pending:{$txnId}", 300);
+                } catch (\Throwable $e) {
+                    // Redis 失败不影响主流程
+                }
+
                 $sent = GameQueueService::sendBet('QT', $player, $queueParams);
                 if ($sent) {
                     // 预估余额：扣除下注金额（除非是奖金回合）
