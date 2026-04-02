@@ -410,6 +410,8 @@ class RedisWalletService
         $synced = 0;
         $inconsistent = 0;
 
+        Log::info('对账数据',['wallets'=>$wallets]);
+
         foreach ($wallets as $wallet) {
             $playerId = $wallet['player_id'];
             $platformId = $wallet['platform_id'];
