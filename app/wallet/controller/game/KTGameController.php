@@ -271,6 +271,11 @@ class KTGameController
             $this->service->player = \app\model\Player::query()->where('uuid', $params['Username'])->first();
             $player = $this->service->player;
 
+            // 检查必要参数
+            if (!isset($params['TransactionId'])) {
+                return $this->error(self::API_CODE_OTHER_ERROR, '缺少TransactionId参数');
+            }
+
             $orderNo = $params['TransactionId'];
             $refundAmount = $params['Amount'] ?? 0;
 

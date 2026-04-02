@@ -17,6 +17,17 @@ class TelegramService extends AbstractProcessingHandler
         parent::__construct($level, $bubble);
     }
 
+    /**
+     * 公开方法：发送告警消息
+     *
+     * @param array $record
+     * @return void
+     */
+    public function sendAlert(array $record): void
+    {
+        $this->write($record);
+    }
+
     protected function write(array $record): void
     {
         // 组装消息内容

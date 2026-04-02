@@ -27,7 +27,7 @@ trait TelegramAlertTrait
             }
 
             $telegram = new TelegramService($token, $chatId, Logger::ERROR);
-            $telegram->write([
+            $telegram->sendAlert([
                 'datetime' => new \DateTime(),
                 'level_name' => 'ERROR',
                 'message' => "[{$platform}单一钱包] {$action}",
