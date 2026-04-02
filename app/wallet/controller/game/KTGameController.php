@@ -154,7 +154,7 @@ class KTGameController
             $queueParams = [
                 'order_no' => $orderNo,
                 'amount' => $bet,
-                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
+                'platform_id' => $this->service->platform->id,
                 'game_code' => $params['GameCode'] ?? '',
                 'original_data' => $params,
             ];

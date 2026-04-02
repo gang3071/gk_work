@@ -173,7 +173,7 @@ class SPSDYGameController
             $queueParams = [
                 'order_no' => $orderNo,
                 'amount' => $amount,
-                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
+                'platform_id' => $this->service->platform->id,
                 'original_data' => $params,
             ];
 

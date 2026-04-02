@@ -193,7 +193,7 @@ class BTGGameController
                 'tran_id' => $params['tran_id'],
                 'amount' => $amount,
                 'original_amount' => (float)$params['amount'], // 保留原始金额（可能为负）
-                'platform_id' => 1,  // 钱包的platform_id固定为1（实体机平台）
+                'platform_id' => $this->service->platform->id,
                 'game_code' => $params['game_code'] ?? '',
                 'game_type' => $params['game_type'] ?? '',
                 'transfer_type' => $transferType,
