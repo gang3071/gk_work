@@ -572,10 +572,29 @@ class GameOperation implements Consumer
             'amount' => $amount,
         ]);
 
-        // 1. 查找下注记录
-        $betRecord = PlayGameRecord::where('order_no', $betOrderNo)->lockForUpdate()->first();
+        // 1. 查找下注记录（带重试机制，防止竞态条件）
+        $betRecord = null;
+        $maxRetries = 3;
+        $retryDelay = 100000; // 100ms
+
+        for ($i = 0; $i < $maxRetries; $i++) {
+            $betRecord = PlayGameRecord::where('order_no', $betOrderNo)->lockForUpdate()->first();
+            if ($betRecord) {
+                break;
+            }
+
+            // 如果找不到记录，可能是 bet 队列还没处理完，等待后重试
+            if ($i < $maxRetries - 1) {
+                Log::warning("GameOperation: 取消订单时下注记录不存在，重试中", [
+                    'bet_order_no' => $betOrderNo,
+                    'retry' => $i + 1,
+                ]);
+                usleep($retryDelay);
+            }
+        }
+
         if (!$betRecord) {
-            throw new \Exception("下注记录不存在: {$betOrderNo}");
+            throw new \Exception("下注记录不存在（已重试{$maxRetries}次）: {$betOrderNo}");
         }
 
         // 2. 钱包退款（带锁）

@@ -156,9 +156,8 @@ class RsgGameController
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => max(0, $estimatedBalance)
+                'Balance' => $estimatedBalance
             ]);
-
         } catch (Throwable $e) {
             $this->logger->error('RSG下注异常', [
                 'error' => $e->getMessage(),
@@ -260,6 +259,7 @@ class RsgGameController
             $this->logger->info('RSG结算请求（异步）', ['params' => $data]);
 
             if ($this->service->error) {
+                $this->logger->warning('betResult: 结算队');
                 return $this->error($this->service->error);
             }
 
