@@ -67,6 +67,7 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
     {
         $player = $this->player;
         $bet = $data['Point'];
+        $orderNo = $data['TransferCode'];
 
         $data['TicketData'] = json_decode($data['TicketData'], true);
 
@@ -75,14 +76,17 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
             return $this->player->machine_wallet->money;
         }
 
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-        // ✅ 幂等性检查：防止重复下注（在锁保护下检查，防止TOCTOU竞态条件）
-        if (PlayGameRecord::query()->where('order_no', $data['TransferCode'])->exists()) {
+        // ✅ Redis预检查幂等性（在事务外，避免不必要的数据库锁）
+        $betKey = "spsdy:bet:lock:{$orderNo}";
+        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+        if (!$isLocked) {
+            // 重复订单，直接返回当前余额
             $this->error = SPSDYGameController::API_CODE_DECRYPT_ERROR;
             return $this->player->machine_wallet->money;
         }
+
+        /** @var PlayerPlatformCash $machineWallet */
+        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
         if ($machineWallet->money < $bet) {
             $this->error = SPSDYGameController::API_CODE_INSUFFICIENT_BALANCE;
@@ -100,7 +104,7 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
             playerId: $player->id,
             platformId: $this->platform->id,
             gameCode: '',
-            orderNo: $data['TransferCode'],
+            orderNo: $orderNo,
             bet: $bet,
             originalData: $data,
             orderTime: Carbon::createFromTimestampMs($data['Timestamp'])->toDateTimeString()

@@ -147,6 +147,24 @@ class PlayerPlatformCash extends Model
                         $wallet->is_crashed = $isCrashed;
                         $wallet->save();
                     });
+
+                    // 🚀 优化：清除爆机状态缓存，确保下次检查时使用最新状态
+                    try {
+                        \app\service\game\GameServiceFactory::clearMachineCrashCache($wallet->player_id);
+
+                        \support\Log::info('PlayerPlatformCash: 自动清除爆机缓存', [
+                            'player_id' => $wallet->player_id,
+                            'old_status' => $wasCrashed ? '已爆机' : '未爆机',
+                            'new_status' => $isCrashed ? '已爆机' : '未爆机',
+                            'current_amount' => $currentAmount,
+                            'crash_amount' => $crashAmount,
+                        ]);
+                    } catch (\Exception $e) {
+                        \support\Log::error('PlayerPlatformCash: 清除爆机缓存失败', [
+                            'player_id' => $wallet->player_id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
                 }
 
                 // 从未爆机变为爆机 -> 发送爆机通知

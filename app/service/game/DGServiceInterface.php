@@ -537,9 +537,9 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
      */
     public function bet($data)
     {
-        $return = [];
         $player = $this->player;
         $detail = json_decode($data['detail'], true);
+        $orderNo = $data['ticketId'];
         $bet = abs($data['member']['amount']);
 
         // 检查设备是否爆机
@@ -547,37 +547,81 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             return $player->machine_wallet->money;
         }
 
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-        if ($machineWallet->money < $bet) {
-            $this->error = DGGameController::API_CODE_INSUFFICIENT_BALANCE;
-            return $player->machine_wallet->money;
+        // 🚀 Redis 预检查幂等性（DG可能重复下注，使用累计逻辑）
+        $betKey = "dg:bet:lock:{$orderNo}";
+        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+
+        try {
+            // 🚀 单次事务 + 原子操作
+            $result = \support\Db::transaction(function () use ($orderNo, $bet, $player, $detail, $isLocked) {
+                /** @var PlayerPlatformCash $machineWallet */
+                $machineWallet = PlayerPlatformCash::query()
+                    ->where('player_id', $player->id)
+                    ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($machineWallet->money < $bet) {
+                    throw new \RuntimeException('INSUFFICIENT_BALANCE');
+                }
+
+                $beforeBalance = $machineWallet->money;
+
+                // 🚀 使用原生 SQL 更新余额
+                $newBalance = bcsub($machineWallet->money, $bet, 2);
+                \support\Db::table('player_platform_cash')
+                    ->where('id', $machineWallet->id)
+                    ->update([
+                        'money' => $newBalance,
+                        'updated_at' => Carbon::now()
+                    ]);
+
+                return ['balance' => $beforeBalance, 'new_balance' => $newBalance];
+            });
+
+            // 🚀 事务外异步操作（只在首次下注时创建记录）
+            if ($isLocked) {
+                $this->asyncCreateBetRecord(
+                    playerId: $player->id,
+                    platformId: $this->platform->id,
+                    gameCode: $detail['gameId'],
+                    orderNo: $orderNo,
+                    bet: $bet,
+                    originalData: $data,
+                    orderTime: Carbon::now()->toDateTimeString()
+                );
+            }
+
+            // 立即更新 Redis 缓存
+            \app\service\WalletService::updateCache(
+                $player->id,
+                PlayerPlatformCash::PLATFORM_SELF,
+                $result['new_balance']
+            );
+
+            return [
+                'member' => [
+                    'username' => $data['member']['username'],
+                    'balance' => $result['balance'],
+                    'amount' => $data['member']['amount'],
+                ]
+            ];
+
+        } catch (\RuntimeException $e) {
+            if ($isLocked) {
+                \support\Redis::del($betKey);
+            }
+            if ($e->getMessage() === 'INSUFFICIENT_BALANCE') {
+                $this->error = DGGameController::API_CODE_INSUFFICIENT_BALANCE;
+                return $player->machine_wallet->money;
+            }
+            throw $e;
+        } catch (\Throwable $e) {
+            if ($isLocked) {
+                \support\Redis::del($betKey);
+            }
+            throw $e;
         }
-
-        $beforeGameAmount = $machineWallet->money;
-
-        // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
-        $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-
-        // ⚡ 异步创建/更新下注记录（累计下注场景）
-        // DG单场下注记录使用同一个单号，需要在Consumer中合并处理
-        $this->asyncCreateBetRecord(
-            playerId: $player->id,
-            platformId: $this->platform->id,
-            gameCode: $detail['gameId'],
-            orderNo: $data['ticketId'],
-            bet: $bet,
-            originalData: $data,
-            orderTime: Carbon::now()->toDateTimeString()
-        );
-        $return['member'] = [
-            'username' => $data['member']['username'],
-            'balance' => $beforeGameAmount,
-            'amount' => $data['member']['amount'],
-        ];
-
-        return $return;
     }
 
     /**
@@ -595,56 +639,111 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
      */
     public function betResulet($data)
     {
-        $return = [];
-
         $player = $this->player;
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+        $orderNo = $data['ticketId'];
+        $detail = json_decode($data['detail'], true);
+        $winAmount = $data['member']['amount'];
 
-        //需要循环处理下注订单
-        /** @var PlayGameRecord $record */
-        // ✅ 加锁查询record，防止并发重复派彩
-        $record = PlayGameRecord::query()
-            ->where('order_no', $data['ticketId'])
-            ->lockForUpdate()
-            ->first();
-
-        if (!$record) {
-            $this->error = DGGameController::API_CODE_DECRYPT_ERROR;
+        // 🚀 Redis 预检查幂等性
+        $settleKey = "dg:settle:lock:{$orderNo}";
+        $isLocked = \support\Redis::set($settleKey, 1, ['NX', 'EX' => 10]);
+        if (!$isLocked) {
+            $this->error = DGGameController::API_CODE_DUPLICATE_TRANSACTION;
             return $this->player->machine_wallet->money;
         }
 
-        $detail = json_decode($data['detail'], true);
-        $money = $data['member']['amount'];
-        $beforeGameAmount = $machineWallet->money;
+        try {
+            // 🚀 单次事务 + 合并锁查询
+            $result = \support\Db::transaction(function () use ($orderNo, $winAmount, $player, $detail) {
+                // ✅ 统一锁顺序：wallet → record
+                /** @var PlayerPlatformCash $machineWallet */
+                $machineWallet = PlayerPlatformCash::query()
+                    ->where('player_id', $player->id)
+                    ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                    ->lockForUpdate()
+                    ->first();
 
-        // ✅ 同步增加余额（有金额时，触发 updated 事件，自动更新 Redis 缓存）
-        if ($money > 0) {
-            $machineWallet->money = bcadd($machineWallet->money, $money, 2);
-            $machineWallet->save();
+                /** @var PlayGameRecord $record */
+                $record = PlayGameRecord::query()
+                    ->where('order_no', $orderNo)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$record) {
+                    throw new \RuntimeException('ORDER_NOT_EXIST');
+                }
+
+                if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+                    throw new \RuntimeException('ORDER_SETTLED');
+                }
+
+                $beforeBalance = $machineWallet->money;
+
+                // 🚀 使用原生 SQL 更新余额
+                $newBalance = bcadd($machineWallet->money, $winAmount, 2);
+                if ($winAmount > 0) {
+                    \support\Db::table('player_platform_cash')
+                        ->where('id', $machineWallet->id)
+                        ->update([
+                            'money' => $newBalance,
+                            'updated_at' => Carbon::now()
+                        ]);
+                }
+
+                return [
+                    'before_balance' => $beforeBalance,
+                    'new_balance' => $newBalance,
+                    'record_id' => $record->id,
+                    'bet' => $record->bet
+                ];
+            });
+
+            // 🚀 事务外异步操作
+            $this->asyncUpdateSettleRecord(
+                orderNo: $orderNo,
+                win: $detail['winOrLoss'],
+                diff: $detail['winOrLoss'] - $result['bet']
+            );
+
+            // 彩金记录
+            if ($result['bet'] > 0) {
+                Client::send('game-lottery', [
+                    'player_id' => $player->id,
+                    'bet' => $result['bet'],
+                    'play_game_record_id' => $result['record_id']
+                ]);
+            }
+
+            // 立即更新 Redis 缓存
+            \app\service\WalletService::updateCache(
+                $player->id,
+                PlayerPlatformCash::PLATFORM_SELF,
+                $result['new_balance']
+            );
+
+            return [
+                'member' => [
+                    'username' => $data['member']['username'],
+                    'balance' => $result['before_balance'],
+                    'amount' => $winAmount,
+                ]
+            ];
+
+        } catch (\RuntimeException $e) {
+            \support\Redis::del($settleKey);
+            if ($e->getMessage() === 'ORDER_NOT_EXIST') {
+                $this->error = DGGameController::API_CODE_DECRYPT_ERROR;
+                return $this->player->machine_wallet->money;
+            }
+            if ($e->getMessage() === 'ORDER_SETTLED') {
+                $this->error = DGGameController::API_CODE_DUPLICATE_TRANSACTION;
+                return $this->player->machine_wallet->money;
+            }
+            throw $e;
+        } catch (\Throwable $e) {
+            \support\Redis::del($settleKey);
+            throw $e;
         }
-
-        // ⚡ 异步更新结算记录（不阻塞API响应）
-        $this->asyncUpdateSettleRecord(
-            orderNo: $data['ticketId'],
-            win: $detail['winOrLoss'],
-            diff: $detail['winOrLoss'] - $record->bet
-        );
-
-        //彩金记录
-        Client::send('game-lottery', [
-            'player_id' => $this->player->id,
-            'bet' => $record->bet,
-            'play_game_record_id' => $record->id
-        ]);
-
-        $return['member'] = [
-            'username' => $data['member']['username'],
-            'balance' => $beforeGameAmount,
-            'amount' => $money,
-        ];
-
-        return $return;
     }
 
     /**

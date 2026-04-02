@@ -417,8 +417,17 @@ class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceI
         }
 
         $bet = $data['transaction']['amount'];
-
         $player = $this->player;
+
+        // ✅ Redis预检查幂等性（在事务外，避免不必要的数据库锁）
+        // 注意：RSG真人使用transactionId作为幂等性检查（而非referenceId）
+        $txnId = $data['transaction']['transactionId'];
+        $betKey = "rsglive:bet:lock:{$txnId}";
+        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+        if (!$isLocked) {
+            // 重复订单，直接返回当前余额
+            return $this->error = RsgLiveGameController::API_CODE_TRANSACTIONID_DUPLICATE;
+        }
 
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();

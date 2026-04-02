@@ -284,9 +284,21 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
             return \app\service\WalletService::getBalance($player->id);
         }
 
+        $bet = $data['Bet'];
+        $orderNo = $data['MainTxID'];
+
+        // ✅ Redis预检查幂等性（在事务外，避免不必要的数据库锁）
+        // 注意：KT平台的奖金游戏会累计多次下注到同一订单，使用TxID作为幂等性检查
+        $betKey = "kt:bet:lock:{$data['TxID']}";
+        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+        if (!$isLocked) {
+            // 重复订单，直接返回当前余额
+            $this->error = KTGameController::API_CODE_OTHER_ERROR;
+            return \app\service\WalletService::getBalance($player->id);
+        }
+
         /** @var PlayerPlatformCash $machineWallet */
         $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-        $bet = $data['Bet'];
 
         if ($machineWallet->money < $bet) {
             $this->error = KTGameController::API_CODE_AMOUNT_OVER_BALANCE;
@@ -303,7 +315,7 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
             playerId: $player->id,
             platformId: $this->platform->id,
             gameCode: $data['GameID'],
-            orderNo: $data['MainTxID'],
+            orderNo: $orderNo,
             bet: $bet,
             originalData: $data,
             orderTime: Carbon::createFromTimestamp($data['BetTimestamp'])->toDateTimeString()

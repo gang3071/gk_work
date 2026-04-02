@@ -276,11 +276,13 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
         }
 
         $player = $this->player;
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+        $bet = $data['betAmount'];
+        $orderNo = $data['gameOrderNumber'];
 
-        // ✅ 幂等性检查：防止重复下注（在锁保护下检查，防止TOCTOU竞态条件）
-        if (PlayGameRecord::query()->where('order_no', $data['gameOrderNumber'])->exists()) {
+        // ✅ Redis预检查幂等性（在事务外，避免不必要的数据库锁）
+        $betKey = "tnine_slot:bet:lock:{$orderNo}";
+        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+        if (!$isLocked) {
             // 重复订单，返回当前余额（不重复扣款）
             $currentBalance = \app\service\WalletService::getBalance($this->player->id);
             return [
@@ -289,7 +291,8 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
             ];
         }
 
-        $bet = $data['betAmount'];
+        /** @var PlayerPlatformCash $machineWallet */
+        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
 
         if ($machineWallet->money < $bet) {
             $this->error = TNineSlotGameController::API_CODE_INSUFFICIENT_BALANCE;
@@ -307,7 +310,7 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
             playerId: $player->id,
             platformId: $this->platform->id,
             gameCode: $data['betInfoData']['SlotsFishing']['GameCode'],
-            orderNo: $data['gameOrderNumber'],
+            orderNo: $orderNo,
             bet: $bet,
             originalData: [$data],
             orderTime: Carbon::createFromTimeString($data['betTime'], 'UTC')->setTimezone('Asia/Shanghai')->toDateTimeString()

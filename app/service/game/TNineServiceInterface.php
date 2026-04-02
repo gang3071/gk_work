@@ -10,7 +10,6 @@ use app\model\GameType;
 use app\model\Player;
 use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
-use app\model\PlayGameRecord;
 use app\traits\AsyncGameRecordTrait;
 use app\wallet\controller\game\TNineGameController;
 use Exception;
@@ -299,13 +298,12 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
             return \app\service\WalletService::getBalance($player->id);
         }
 
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-
-        // ✅ 幂等性检查：检查第一个订单是否已存在（批量幂等性保护，在锁保护下检查，防止TOCTOU竞态条件）
+        // ✅ Redis预检查幂等性（批量订单，检查第一个订单）
         if (count($orders) > 0) {
             $firstOrder = $orders[0];
-            if (PlayGameRecord::query()->where('order_no', $firstOrder['OrderNumber'])->exists()) {
+            $betKey = "tnine:bet:lock:{$firstOrder['OrderNumber']}";
+            $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+            if (!$isLocked) {
                 // 整个批次已处理，返回当前余额
                 $balance = \app\service\WalletService::getBalance($player->id);
 
@@ -323,6 +321,9 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
                 return $return;
             }
         }
+
+        /** @var PlayerPlatformCash $machineWallet */
+        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
 
         $allAmount = array_sum(array_column($orders, 'BetAmount'));
 

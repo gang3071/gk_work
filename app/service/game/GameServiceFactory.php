@@ -252,7 +252,7 @@ class GameServiceFactory
     }
 
     /**
-     * 检查设备是否爆机
+     * 检查设备是否爆机（使用 Redis 缓存）
      * 如果设备已爆机，返回true，否则返回false
      *
      * @return bool
@@ -260,21 +260,44 @@ class GameServiceFactory
     protected function checkMachineCrash(): bool
     {
         try {
-            // 只检查实体机平台（platform_id = 1）
+            if (!$this->player || !$this->player->id) {
+                return false;
+            }
+
+            // 🚀 优化 #1: 使用 Redis 缓存爆机状态（1小时过期）
+            $cacheKey = "machine_crash_status:{$this->player->id}";
+            $cached = \support\Redis::get($cacheKey);
+
+            if ($cached !== null && $cached !== false) {
+                return (bool)$cached;
+            }
+
+            // 缓存未命中，从数据库查询
             /** @var PlayerPlatformCash $machineWallet */
-            $machineWallet = $this->player->machine_wallet;
+            $machineWallet = PlayerPlatformCash::query()
+                ->where('player_id', $this->player->id)
+                ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                ->first(['is_crashed', 'platform_id']);
 
             if (!$machineWallet) {
+                // 缓存"未爆机"状态（10分钟）
+                \support\Redis::setex($cacheKey, 600, 0);
                 return false;
             }
 
-            // 检查是否为实体机平台
-            if ($machineWallet->platform_id != PlayerPlatformCash::PLATFORM_SELF) {
-                return false;
+            $isCrashed = (bool)$machineWallet->is_crashed;
+
+            // 🚀 优化 #2: 根据爆机状态设置不同的缓存过期时间
+            if ($isCrashed) {
+                // 爆机状态缓存1小时（爆机后较少变化）
+                \support\Redis::setex($cacheKey, 3600, 1);
+            } else {
+                // 未爆机状态缓存10分钟（可能会变化）
+                \support\Redis::setex($cacheKey, 600, 0);
             }
 
-            // 返回爆机状态
-            return (bool)$machineWallet->is_crashed;
+            return $isCrashed;
+
         } catch (\Exception $e) {
             \support\Log::error('GameServiceFactory: Failed to check machine crash', [
                 'player_id' => $this->player->id ?? null,
@@ -299,7 +322,7 @@ class GameServiceFactory
     }
 
     /**
-     * 在下注前检查设备爆机状态
+     * 在下注前检查设备爆机状态（优化版）
      * 如果设备已爆机，设置错误码并返回true
      * 如果未爆机，返回false，继续正常流程
      *
@@ -307,19 +330,53 @@ class GameServiceFactory
      */
     protected function checkAndHandleMachineCrash(): bool
     {
-        if ($this->checkMachineCrash()) {
+        // 🚀 优化 #1: Redis 预检查（避免不必要的方法调用）
+        if (!$this->player || !$this->player->id) {
+            return false;
+        }
+
+        $isCrashed = $this->checkMachineCrash();
+
+        if ($isCrashed) {
             // 设备已爆机，设置余额不足错误
             $this->error = $this->getInsufficientBalanceError();
 
-            \support\Log::warning('GameServiceFactory: Machine crashed, bet denied', [
-                'player_id' => $this->player->id ?? null,
-                'platform' => $this->platform->code ?? null,
-                'wallet_balance' => \app\service\WalletService::getBalance($this->player->id),
-            ]);
+            // 🚀 优化 #2: 只在需要时记录日志（减少 I/O）
+            // 生产环境可以降低日志级别或异步写入
+            if (config('app.debug', false)) {
+                \support\Log::warning('GameServiceFactory: Machine crashed, bet denied', [
+                    'player_id' => $this->player->id,
+                    'platform' => $this->platform->code ?? null,
+                    // 🚀 优化 #3: 移除重复的余额查询（减少 Redis 查询）
+                    // 爆机状态已经说明余额问题，不需要再查询余额
+                ]);
+            }
 
             return true;
         }
 
         return false;
+    }
+
+    /**
+     * 清除玩家的爆机状态缓存
+     * 在玩家充值或管理员手动修改爆机状态后调用
+     *
+     * @param int $playerId 玩家ID
+     * @return bool
+     */
+    public static function clearMachineCrashCache(int $playerId): bool
+    {
+        try {
+            $cacheKey = "machine_crash_status:{$playerId}";
+            \support\Redis::del($cacheKey);
+            return true;
+        } catch (\Exception $e) {
+            \support\Log::error('GameServiceFactory: Failed to clear crash cache', [
+                'player_id' => $playerId,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
     }
 }

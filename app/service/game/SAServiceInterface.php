@@ -300,14 +300,19 @@ class SAServiceInterface extends GameServiceFactory implements GameServiceInterf
         }
 
         $bet = $data['amount'];
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+        $orderNo = $data['txnid'];
 
-        // ✅ 幂等性检查：防止重复下注（在锁保护下检查，防止TOCTOU竞态条件）
-        if (PlayGameRecord::query()->where('order_no', $data['txnid'])->exists()) {
+        // ✅ Redis预检查幂等性（在事务外，避免不必要的数据库锁）
+        $betKey = "sa:bet:lock:{$orderNo}";
+        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+        if (!$isLocked) {
+            // 重复订单，直接返回当前余额
             $this->error = SAGameController::API_CODE_GENERAL_ERROR;
             return \app\service\WalletService::getBalance($this->player->id);
         }
+
+        /** @var PlayerPlatformCash $machineWallet */
+        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
         if ($machineWallet->money < $bet) {
             $this->error = SAGameController::API_CODE_INSUFFICIENT_BALANCE;
@@ -323,7 +328,7 @@ class SAServiceInterface extends GameServiceFactory implements GameServiceInterf
             playerId: $this->player->id,
             platformId: $this->platform->id,
             gameCode: $data['hostid'],
-            orderNo: $data['txnid'],
+            orderNo: $orderNo,
             bet: $bet,
             originalData: $data,
             orderTime: $data['timestamp']

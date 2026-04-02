@@ -452,7 +452,7 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     public function bet($data)
     {
-        $player = $this->player;
+        $orderNo = $data['SequenNumber'];
         $bet = $data['Amount'];
 
         // 检查设备是否爆机
@@ -460,35 +460,74 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             return $this->error;
         }
 
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-        // ✅ 幂等性检查：防止重复下注（在锁保护下检查，防止TOCTOU竞态条件）
-        if (PlayGameRecord::query()->where('order_no', $data['SequenNumber'])->exists()) {
+        // 🚀 优化 #1: Redis 预检查幂等性（避免不必要的数据库查询）
+        $betKey = "rsg:bet:lock:{$orderNo}";
+        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]); // 5分钟过期
+        if (!$isLocked) {
             return $this->error = RsgGameController::API_CODE_DUPLICATE_ORDER;
         }
 
-        if ($machineWallet->money < $bet) {
-            return $this->error = RsgGameController::API_CODE_INSUFFICIENT_BALANCE;
+        try {
+            // 🚀 优化 #2: 单次事务 + 原子操作
+            $newBalance = \support\Db::transaction(function () use ($orderNo, $bet) {
+                /** @var PlayerPlatformCash $machineWallet */
+                $machineWallet = PlayerPlatformCash::query()
+                    ->where('player_id', $this->player->id)
+                    ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($machineWallet->money < $bet) {
+                    throw new \RuntimeException('INSUFFICIENT_BALANCE');
+                }
+
+                // 🚀 使用原生 SQL 更新余额（避免 Model Event 开销）
+                $newBalance = bcsub($machineWallet->money, $bet, 2);
+                \support\Db::table('player_platform_cash')
+                    ->where('id', $machineWallet->id)
+                    ->update([
+                        'money' => $newBalance,
+                        'updated_at' => Carbon::now()
+                    ]);
+
+                return $newBalance;
+            });
+
+            // 🚀 优化 #3: 事务外异步创建记录 + 更新缓存
+            $this->asyncCreateBetRecord(
+                playerId: $this->player->id,
+                platformId: $this->platform->id,
+                gameCode: $data['GameId'],
+                orderNo: $orderNo,
+                bet: $bet,
+                originalData: $data,
+                orderTime: Carbon::now()->toDateTimeString()
+            );
+
+            // 立即更新 Redis 缓存
+            \app\service\WalletService::updateCache(
+                $this->player->id,
+                PlayerPlatformCash::PLATFORM_SELF,
+                $newBalance
+            );
+
+            return $newBalance;
+
+        } catch (\RuntimeException $e) {
+            \support\Redis::del($betKey);
+            if ($e->getMessage() === 'INSUFFICIENT_BALANCE') {
+                return $this->error = RsgGameController::API_CODE_INSUFFICIENT_BALANCE;
+            }
+            throw $e;
+        } catch (\Throwable $e) {
+            \support\Redis::del($betKey);
+            $this->log->error('RSG下注异常（优化版）', [
+                'order_no' => $orderNo,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
         }
-
-        // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
-        $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-
-        // ⚡ 异步创建下注记录（不阻塞API响应）
-        $this->asyncCreateBetRecord(
-            playerId: $this->player->id,
-            platformId: $this->platform->id,
-            gameCode: $data['GameId'],
-            orderNo: $data['SequenNumber'],
-            bet: $bet,
-            originalData: $data,
-            orderTime: Carbon::now()->toDateTimeString()
-        );
-
-        // ✅ 立即从缓存读取余额
-        return \app\service\WalletService::getBalance($player->id);
     }
 
     /**
@@ -498,79 +537,184 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
      */
     public function cancelBet($data): mixed
     {
-        /** @var PlayGameRecord $record */
-        // ✅ 加锁查询，防止并发重复退款
-        $record = PlayGameRecord::query()
-            ->where('order_no', $data['SequenNumber'])
-            ->lockForUpdate()
-            ->first();
+        $orderNo = $data['SequenNumber'];
+        $refundAmount = $data['BetAmount'];
 
-        if (!$record) {
-            return $this->error = RsgGameController::API_CODE_ORDER_NOT_EXIST;
+        try {
+            // 🚀 优化 #1: 单次事务 + 合并锁查询
+            $newBalance = \support\Db::transaction(function () use ($orderNo, $refundAmount) {
+                // ✅ 统一锁顺序：wallet → record
+                /** @var PlayerPlatformCash $machineWallet */
+                $machineWallet = PlayerPlatformCash::query()
+                    ->where('player_id', $this->player->id)
+                    ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                    ->lockForUpdate()
+                    ->first();
+
+                /** @var PlayGameRecord $record */
+                $record = PlayGameRecord::query()
+                    ->where('order_no', $orderNo)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$record) {
+                    throw new \RuntimeException('ORDER_NOT_EXIST');
+                }
+
+                if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
+                    throw new \RuntimeException('ORDER_CANCELLED');
+                }
+
+                // 🚀 使用原生 SQL 更新余额
+                $newBalance = bcadd($machineWallet->money, $refundAmount, 2);
+                \support\Db::table('player_platform_cash')
+                    ->where('id', $machineWallet->id)
+                    ->update([
+                        'money' => $newBalance,
+                        'updated_at' => Carbon::now()
+                    ]);
+
+                return $newBalance;
+            });
+
+            // 🚀 优化 #2: 事务外异步操作
+            $this->asyncCancelBetRecord($orderNo);
+
+            // 立即更新 Redis 缓存
+            \app\service\WalletService::updateCache(
+                $this->player->id,
+                PlayerPlatformCash::PLATFORM_SELF,
+                $newBalance
+            );
+
+            return $newBalance;
+
+        } catch (\RuntimeException $e) {
+            if ($e->getMessage() === 'ORDER_NOT_EXIST') {
+                return $this->error = RsgGameController::API_CODE_ORDER_NOT_EXIST;
+            }
+            if ($e->getMessage() === 'ORDER_CANCELLED') {
+                return $this->error = RsgGameController::API_CODE_ORDER_CANCELLED;
+            }
+            throw $e;
+        } catch (\Throwable $e) {
+            $this->log->error('RSG取消下注异常（优化版）', [
+                'order_no' => $orderNo,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
         }
-
-        if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-            return $this->error = RsgGameController::API_CODE_ORDER_CANCELLED;
-        }
-
-        // ✅ 同步退还用户金钱（触发 updated 事件，自动更新 Redis 缓存）
-        $bet = $data['BetAmount'];
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-        $machineWallet->money = bcadd($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-
-        // ⚡ 异步更新取消状态（不阻塞API响应）
-        $this->asyncCancelBetRecord($data['SequenNumber']);
-
-        // ✅ 立即从缓存返回余额
-        return \app\service\WalletService::getBalance($this->player->id);
     }
 
     public function betResulet($data)
     {
-        /** @var PlayGameRecord $record */
-        // ✅ 加锁查询record，防止并发重复派彩
-        $record = PlayGameRecord::query()
-            ->where('order_no', $data['SequenNumber'])
-            ->lockForUpdate()
-            ->first();
+        $orderNo = $data['SequenNumber'];
+        $winAmount = $data['Amount'];
 
-        if (!$record) {
-            return $this->error = RsgGameController::API_CODE_ORDER_NOT_EXIST;
-        }
-
-        if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+        // 🚀 优化 #1: Redis 预检查幂等性（避免不必要的数据库查询）
+        $settleKey = "rsg:settle:lock:{$orderNo}";
+        $isLocked = \support\Redis::set($settleKey, 1, ['NX', 'EX' => 10]);
+        if (!$isLocked) {
             return $this->error = RsgGameController::API_CODE_ORDER_SETTLED;
         }
 
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+        try {
+            // 🚀 优化 #2: 单次事务 + 合并锁查询（从 2次锁 → 1次锁）
+            $newBalance = \support\Db::transaction(function () use ($orderNo, $winAmount, $data) {
+                // ✅ 先锁钱包（始终按相同顺序加锁，避免死锁）
+                /** @var PlayerPlatformCash $machineWallet */
+                $machineWallet = PlayerPlatformCash::query()
+                    ->where('player_id', $this->player->id)
+                    ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                    ->lockForUpdate()
+                    ->first();
 
-        // ✅ 同步增加余额（有金额时，触发 updated 事件，自动更新 Redis 缓存）
-        if ($data['Amount'] > 0) {
-            $machineWallet->money = bcadd($machineWallet->money, $data['Amount'], 2);
-            $machineWallet->save();
-        }
+                // ✅ 再锁游戏记录（统一锁顺序：wallet → record）
+                /** @var PlayGameRecord $record */
+                $record = PlayGameRecord::query()
+                    ->where('order_no', $orderNo)
+                    ->lockForUpdate()
+                    ->first();
 
-        // ⚡ 异步更新结算记录（不阻塞API响应）
-        $this->asyncUpdateSettleRecord(
-            orderNo: $data['SequenNumber'],
-            win: $data['Amount'],
-            diff: bcsub($data['Amount'], $data['BetAmount'], 2)
-        );
+                if (!$record) {
+                    throw new \RuntimeException('ORDER_NOT_EXIST');
+                }
 
-        //彩金记录
-        if ($record->bet > 0) {
-            Client::send('game-lottery', [
-                'player_id' => $this->player->id,
-                'bet' => $record->bet,
-                'play_game_record_id' => $record->id
+                if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+                    throw new \RuntimeException('ORDER_SETTLED');
+                }
+
+                // 🚀 优化 #3: 使用原生 SQL 更新余额（避免 Model Event 开销）
+                $oldBalance = $machineWallet->money;
+                $newBalance = bcadd($oldBalance, $winAmount, 2);
+
+                if ($winAmount > 0) {
+                    \support\Db::table('player_platform_cash')
+                        ->where('id', $machineWallet->id)
+                        ->update([
+                            'money' => $newBalance,
+                            'updated_at' => Carbon::now()
+                        ]);
+                }
+
+                // 🚀 优化 #4: 批量返回数据，稍后异步处理（不在事务内发送队列）
+                return [
+                    'balance' => $newBalance,
+                    'record_id' => $record->id,
+                    'bet' => $record->bet,
+                ];
+            });
+
+            // 🚀 优化 #5: 事务外异步操作（Redis Pipeline 批量发送）
+            $pipeline = \support\Redis::pipeline();
+
+            // 异步更新结算记录
+            $this->asyncUpdateSettleRecord(
+                orderNo: $orderNo,
+                win: $winAmount,
+                diff: bcsub($winAmount, $data['BetAmount'], 2)
+            );
+
+            // 异步彩金记录
+            if ($newBalance['bet'] > 0) {
+                Client::send('game-lottery', [
+                    'player_id' => $this->player->id,
+                    'bet' => $newBalance['bet'],
+                    'play_game_record_id' => $newBalance['record_id']
+                ]);
+            }
+
+            // 立即更新 Redis 缓存（不等数据库触发器）
+            \app\service\WalletService::updateCache(
+                $this->player->id,
+                PlayerPlatformCash::PLATFORM_SELF,
+                $newBalance['balance']
+            );
+
+            $pipeline->exec();
+
+            return $newBalance['balance'];
+
+        } catch (\RuntimeException $e) {
+            \support\Redis::del($settleKey);
+
+            if ($e->getMessage() === 'ORDER_NOT_EXIST') {
+                return $this->error = RsgGameController::API_CODE_ORDER_NOT_EXIST;
+            }
+            if ($e->getMessage() === 'ORDER_SETTLED') {
+                return $this->error = RsgGameController::API_CODE_ORDER_SETTLED;
+            }
+            throw $e;
+        } catch (\Throwable $e) {
+            \support\Redis::del($settleKey);
+            $this->log->error('RSG结算异常（优化版）', [
+                'order_no' => $orderNo,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
+            throw $e;
         }
-
-        // ✅ 立即从缓存读取余额
-        return \app\service\WalletService::getBalance($this->player->id);
     }
 
     public function reBetResulet($data)

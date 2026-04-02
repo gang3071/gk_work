@@ -607,19 +607,23 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
     {
         $player = $this->player;
         $bet = $data['amount'];
+        $orderNo = $data['betId'];
 
         // 检查设备是否爆机
         if ($this->checkAndHandleMachineCrash()) {
             return $this->error;
         }
 
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-        // ✅ 幂等性检查：防止重复下注（在锁保护下检查，防止TOCTOU竞态条件）
-        if (PlayGameRecord::query()->where('order_no', $data['betId'])->exists()) {
+        // ✅ Redis预检查幂等性（在事务外，避免不必要的数据库锁）
+        $betKey = "atg:bet:lock:{$orderNo}";
+        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+        if (!$isLocked) {
+            // 重复订单，直接返回当前余额
             return $this->error = ATGGameController::API_CODE_DUPLICATE_ORDER;
         }
+
+        /** @var PlayerPlatformCash $machineWallet */
+        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
 
         if ($machineWallet->money < $bet) {
             return $this->error = ATGGameController::API_CODE_INSUFFICIENT_BALANCE;
@@ -636,7 +640,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             playerId: $this->player->id,
             platformId: $this->platform->id,
             gameCode: $data['gameCode'],
-            orderNo: $data['betId'],
+            orderNo: $orderNo,
             bet: $bet,
             originalData: $data,
             orderTime: Carbon::now()->toDateTimeString()

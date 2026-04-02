@@ -764,51 +764,86 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
 
             $player = $this->player;
+            $orderNo = $params['external_order_id'];
+            $bet = (float)$params['deposit_amount'];
 
             // 检查设备是否爆机
             if ($this->checkAndHandleMachineCrash()) {
                 return \app\service\WalletService::getBalance($player->id);
             }
 
-            $bet = (float)$params['deposit_amount'];
-
-            /** @var PlayerPlatformCash $machineWallet */
-            $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-
-            // 检查余额
-            if ($machineWallet->money < $bet) {
-                $this->error = self::ERROR_CODE_WITHDRAW_FAILED;
-                return $machineWallet->money;
-            }
-
-            // ✅ 幂等性检查：防止重复下注
-            if (PlayGameRecord::query()->where('order_no', $params['external_order_id'])->where('platform_id', $this->platform->id)->exists()) {
+            // 🚀 Redis 预检查幂等性
+            $betKey = "btg:bet:lock:{$orderNo}";
+            $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+            if (!$isLocked) {
                 $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
-                return $machineWallet->money;
+                return [
+                    'balance' => (float)\app\service\WalletService::getBalance($player->id),
+                    'order_id' => $orderNo,
+                ];
             }
 
-            // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
-            $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
-            $machineWallet->save();
+            try {
+                // 🚀 单次事务 + 原子操作
+                $newBalance = \support\Db::transaction(function () use ($orderNo, $bet, $player) {
+                    /** @var PlayerPlatformCash $machineWallet */
+                    $machineWallet = PlayerPlatformCash::query()
+                        ->where('player_id', $player->id)
+                        ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                        ->lockForUpdate()
+                        ->first();
 
-            // ⚡ 异步创建下注记录（不阻塞API响应）
-            $this->asyncCreateBetRecord(
-                playerId: $player->id,
-                platformId: $this->platform->id,
-                gameCode: $params['game_code'] ?? '',
-                orderNo: $params['external_order_id'],
-                bet: $bet,
-                originalData: $params,
-                orderTime: Carbon::now()->toDateTimeString()
-            );
+                    if ($machineWallet->money < $bet) {
+                        throw new \RuntimeException('INSUFFICIENT_BALANCE');
+                    }
 
-            // ✅ 立即从缓存读取余额
-            $balance = \app\service\WalletService::getBalance($player->id);
+                    // 🚀 使用原生 SQL 更新余额（避免 Model Event 开销）
+                    $newBalance = bcsub($machineWallet->money, $bet, 2);
+                    \support\Db::table('player_platform_cash')
+                        ->where('id', $machineWallet->id)
+                        ->update([
+                            'money' => $newBalance,
+                            'updated_at' => Carbon::now()
+                        ]);
 
-            return [
-                'balance' => (float)$balance,
-                'order_id' => $params['external_order_id'], // ✅ 使用外部订单号
-            ];
+                    return $newBalance;
+                });
+
+                // 🚀 事务外异步创建记录 + 更新缓存
+                $this->asyncCreateBetRecord(
+                    playerId: $player->id,
+                    platformId: $this->platform->id,
+                    gameCode: $params['game_code'] ?? '',
+                    orderNo: $orderNo,
+                    bet: $bet,
+                    originalData: $params,
+                    orderTime: Carbon::now()->toDateTimeString()
+                );
+
+                // 立即更新 Redis 缓存
+                \app\service\WalletService::updateCache(
+                    $player->id,
+                    PlayerPlatformCash::PLATFORM_SELF,
+                    $newBalance
+                );
+
+                return [
+                    'balance' => (float)$newBalance,
+                    'order_id' => $orderNo,
+                ];
+
+            } catch (\RuntimeException $e) {
+                \support\Redis::del($betKey);
+                if ($e->getMessage() === 'INSUFFICIENT_BALANCE') {
+                    $this->error = self::ERROR_CODE_WITHDRAW_FAILED;
+                    return \app\service\WalletService::getBalance($player->id);
+                }
+                throw $e;
+            } catch (\Throwable $e) {
+                \support\Redis::del($betKey);
+                throw $e;
+            }
+
         } catch (Exception $e) {
             Log::error('BTG bet error', ['error' => $e->getMessage()]);
             $this->error = self::ERROR_CODE_DEPOSIT_FAILED;
@@ -834,62 +869,109 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
 
             $player = $this->player;
+            $orderNo = $params['external_order_id'];
+            $winAmount = (float)$params['withdraw_amount'];
 
-            /** @var PlayerPlatformCash $machineWallet */
-            $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-
-            // 查找下注记录（加锁防止并发重复派彩）
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()
-                ->where('order_no', $params['external_order_id'])
-                ->where('platform_id', $this->platform->id)
-                ->lockForUpdate()
-                ->first();
-
-            if (!$record) {
-                $this->error = self::ERROR_CODE_TRANSACTION_NOT_FOUND;
-                return $machineWallet->money;
-            }
-
-            // 检查是否已结算
-            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+            // 🚀 Redis 预检查幂等性
+            $settleKey = "btg:settle:lock:{$orderNo}";
+            $isLocked = \support\Redis::set($settleKey, 1, ['NX', 'EX' => 10]);
+            if (!$isLocked) {
                 $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
-                return $machineWallet->money;
+                return [
+                    'balance' => (float)\app\service\WalletService::getBalance($player->id),
+                    'order_id' => $orderNo,
+                ];
             }
 
-            $money = (float)$params['withdraw_amount'];
+            try {
+                // 🚀 单次事务 + 合并锁查询（从 2次锁 → 1次锁）
+                $newBalance = \support\Db::transaction(function () use ($orderNo, $winAmount, $player) {
+                    // ✅ 统一锁顺序：wallet → record
+                    /** @var PlayerPlatformCash $machineWallet */
+                    $machineWallet = PlayerPlatformCash::query()
+                        ->where('player_id', $player->id)
+                        ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                        ->lockForUpdate()
+                        ->first();
 
-            // ✅ 同步增加余额（有金额时，触发 updated 事件，自动更新 Redis 缓存）
-            if ($money > 0) {
-                $machineWallet->money = bcadd($machineWallet->money, $money, 2);
-                $machineWallet->save();
+                    /** @var PlayGameRecord $record */
+                    $record = PlayGameRecord::query()
+                        ->where('order_no', $orderNo)
+                        ->where('platform_id', $this->platform->id)
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (!$record) {
+                        throw new \RuntimeException('ORDER_NOT_EXIST');
+                    }
+
+                    if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+                        throw new \RuntimeException('ORDER_SETTLED');
+                    }
+
+                    // 🚀 使用原生 SQL 更新余额
+                    $newBalance = bcadd($machineWallet->money, $winAmount, 2);
+                    if ($winAmount > 0) {
+                        \support\Db::table('player_platform_cash')
+                            ->where('id', $machineWallet->id)
+                            ->update([
+                                'money' => $newBalance,
+                                'updated_at' => Carbon::now()
+                            ]);
+                    }
+
+                    return [
+                        'balance' => $newBalance,
+                        'record_id' => $record->id,
+                        'bet' => $record->bet,
+                        'game_type' => json_decode($record->original_data, true)['game_type'] ?? ''
+                    ];
+                });
+
+                // 🚀 事务外异步操作
+                $this->asyncUpdateSettleRecord(
+                    orderNo: $orderNo,
+                    win: $winAmount,
+                    diff: $winAmount - $newBalance['bet']
+                );
+
+                // 彩金记录 - 过滤鱼机类型
+                if ($newBalance['game_type'] !== 'fish' && $newBalance['bet'] > 0) {
+                    Client::send('game-lottery', [
+                        'player_id' => $player->id,
+                        'bet' => $newBalance['bet'],
+                        'play_game_record_id' => $newBalance['record_id']
+                    ]);
+                }
+
+                // 立即更新 Redis 缓存
+                \app\service\WalletService::updateCache(
+                    $player->id,
+                    PlayerPlatformCash::PLATFORM_SELF,
+                    $newBalance['balance']
+                );
+
+                return [
+                    'balance' => (float)$newBalance['balance'],
+                    'order_id' => $orderNo,
+                ];
+
+            } catch (\RuntimeException $e) {
+                \support\Redis::del($settleKey);
+                if ($e->getMessage() === 'ORDER_NOT_EXIST') {
+                    $this->error = self::ERROR_CODE_TRANSACTION_NOT_FOUND;
+                    return \app\service\WalletService::getBalance($player->id);
+                }
+                if ($e->getMessage() === 'ORDER_SETTLED') {
+                    $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
+                    return \app\service\WalletService::getBalance($player->id);
+                }
+                throw $e;
+            } catch (\Throwable $e) {
+                \support\Redis::del($settleKey);
+                throw $e;
             }
 
-            // ⚡ 异步更新结算记录（不阻塞API响应）
-            $this->asyncUpdateSettleRecord(
-                orderNo: $params['external_order_id'],
-                win: $money,
-                diff: $money - $record->bet
-            );
-
-            // 彩金记录 - 过滤鱼机类型
-            $originalData = json_decode($record->original_data, true);
-            $gameType = $originalData['game_type'] ?? $params['game_type'] ?? '';
-            if ($gameType !== 'fish') {
-                Client::send('game-lottery', [
-                    'player_id' => $player->id,
-                    'bet' => $record->bet,
-                    'play_game_record_id' => $record->id
-                ]);
-            }
-
-            // ✅ 立即从缓存读取余额
-            $balance = \app\service\WalletService::getBalance($player->id);
-
-            return [
-                'balance' => (float)$balance,
-                'order_id' => $params['external_order_id'], // ✅ 使用外部订单号
-            ];
         } catch (Exception $e) {
             Log::error('BTG betResulet error', ['error' => $e->getMessage()]);
             $this->error = self::ERROR_CODE_WITHDRAW_FAILED;
@@ -915,34 +997,74 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
 
             $player = $this->player;
+            $orderNo = $params['external_order_id'];
 
-            // 查找下注记录（加锁防止并发重复退款）
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()
-                ->where('order_no', $params['external_order_id'])
-                ->where('platform_id', $this->platform->id)
-                ->lockForUpdate()
-                ->first();
+            try {
+                // 🚀 单次事务 + 合并锁查询
+                $newBalance = \support\Db::transaction(function () use ($orderNo, $player) {
+                    // ✅ 统一锁顺序：wallet → record
+                    /** @var PlayerPlatformCash $machineWallet */
+                    $machineWallet = PlayerPlatformCash::query()
+                        ->where('player_id', $player->id)
+                        ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+                        ->lockForUpdate()
+                        ->first();
 
-            if (!$record) {
-                $this->error = self::ERROR_CODE_TRANSACTION_NOT_FOUND;
-                return \app\service\WalletService::getBalance($player->id);
+                    /** @var PlayGameRecord $record */
+                    $record = PlayGameRecord::query()
+                        ->where('order_no', $orderNo)
+                        ->where('platform_id', $this->platform->id)
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (!$record) {
+                        throw new \RuntimeException('ORDER_NOT_EXIST');
+                    }
+
+                    if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
+                        throw new \RuntimeException('ORDER_CANCELLED');
+                    }
+
+                    // 🚀 使用原生 SQL 更新余额
+                    $refundAmount = $record->bet;
+                    $newBalance = bcadd($machineWallet->money, $refundAmount, 2);
+                    \support\Db::table('player_platform_cash')
+                        ->where('id', $machineWallet->id)
+                        ->update([
+                            'money' => $newBalance,
+                            'updated_at' => Carbon::now()
+                        ]);
+
+                    return ['balance' => $newBalance, 'record_id' => $record->id];
+                });
+
+                // 🚀 事务外异步操作
+                $this->asyncCancelBetRecord($orderNo);
+
+                // 立即更新 Redis 缓存
+                \app\service\WalletService::updateCache(
+                    $player->id,
+                    PlayerPlatformCash::PLATFORM_SELF,
+                    $newBalance['balance']
+                );
+
+                return [
+                    'balance' => (float)$newBalance['balance'],
+                    'order_id' => (string)$newBalance['record_id'],
+                ];
+
+            } catch (\RuntimeException $e) {
+                if ($e->getMessage() === 'ORDER_NOT_EXIST') {
+                    $this->error = self::ERROR_CODE_TRANSACTION_NOT_FOUND;
+                    return \app\service\WalletService::getBalance($player->id);
+                }
+                if ($e->getMessage() === 'ORDER_CANCELLED') {
+                    $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
+                    return \app\service\WalletService::getBalance($player->id);
+                }
+                throw $e;
             }
 
-            // 检查是否已取消
-            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-                $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
-                return \app\service\WalletService::getBalance($player->id);
-            }
-
-            // 使用父类方法处理取消下注
-            $bet = (float)$record->bet;
-            $afterBalance = $this->createCancelBetRecord($record, $params, $bet);
-
-            return [
-                'balance' => (float)$afterBalance,
-                'order_id' => (string)$record->id,
-            ];
         } catch (Exception $e) {
             Log::error('BTG cancelBet error', ['error' => $e->getMessage()]);
             $this->error = self::ERROR_CODE_GENERAL_ERROR;
