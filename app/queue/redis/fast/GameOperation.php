@@ -249,6 +249,25 @@ class GameOperation implements Consumer
 
         $record->save();
 
+        // 3.5 写入 Redis 完成缓存 + 清理 pending 状态
+        $this->cacheOrderToRedis($orderNo, [
+            'id' => $record->id,
+            'player_id' => $record->player_id,
+            'order_no' => $orderNo,
+            'bet' => $record->bet,
+            'platform_id' => $platformId,
+            'game_code' => $record->game_code,
+            'settlement_status' => $record->settlement_status,
+            'created_at' => $record->created_at ?? Carbon::now()->toDateTimeString(),
+        ]);
+
+        // 清理 pending 状态（订单已完成）
+        try {
+            \support\Redis::del("order:pending:{$orderNo}");
+        } catch (\Throwable $e) {
+            // 清理失败不影响主流程
+        }
+
         // 4. 创建交易记录（使用实际扣除金额）
         $deliveryRecord = new PlayerDeliveryRecord();
         $deliveryRecord->player_id = $player->id;
@@ -352,11 +371,16 @@ class GameOperation implements Consumer
             return;
         }
 
-        // 1. 查找下注记录
+        // 1. 查找下注记录（带重试机制 + Redis 缓存优先）
         $betRecord = null;
         if ($betOrderNo) {
-            /** @var PlayGameRecord $betRecord */
-            $betRecord = PlayGameRecord::where('order_no', $betOrderNo)->lockForUpdate()->first();
+            // 使用带重试的查询方法，解决"订单未入库"问题
+            $betRecord = $this->fetchBetRecordWithRetry($betOrderNo, 3, 50000);
+
+            // 找到后需要加锁（因为后续要更新）
+            if ($betRecord) {
+                $betRecord = PlayGameRecord::where('id', $betRecord->id)->lockForUpdate()->first();
+            }
         }
 
         // 2. 钱包加款（带锁）
@@ -565,34 +589,15 @@ class GameOperation implements Consumer
             'amount' => $amount,
         ]);
 
-        // 1. 查找下注记录（分两步：先检查存在性，再加锁处理）
-        $maxRetries = 5;
-        $retryDelay = 50000; // 50ms
-        $recordExists = false;
+        // 1. 查找下注记录（Redis缓存优先 + 重试机制）
+        $betRecord = $this->fetchBetRecordWithRetry($betOrderNo, 5, 50000);
 
-        // 第一步：检查记录是否存在（不加锁，快速检查）
-        for ($i = 0; $i < $maxRetries; $i++) {
-            $recordExists = PlayGameRecord::where('order_no', $betOrderNo)->exists();
-            if ($recordExists) {
-                break;
-            }
-
-            // 如果找不到记录，可能是 bet 队列还没处理完，等待后重试
-            if ($i < $maxRetries - 1) {
-                $this->log->warning("GameOperation: 取消订单时下注记录不存在，重试中", [
-                    'bet_order_no' => $betOrderNo,
-                    'retry' => $i + 1,
-                ]);
-                usleep($retryDelay);
-            }
+        if (!$betRecord) {
+            throw new \Exception("下注记录不存在（已重试5次）: {$betOrderNo}");
         }
 
-        if (!$recordExists) {
-            throw new \Exception("下注记录不存在（已重试{$maxRetries}次）: {$betOrderNo}");
-        }
-
-        // 第二步：记录存在，获取锁并查询（这时bet应该已经处理完）
-        $betRecord = PlayGameRecord::where('order_no', $betOrderNo)->lockForUpdate()->first();
+        // 加锁查询（准备更新）
+        $betRecord = PlayGameRecord::where('id', $betRecord->id)->lockForUpdate()->first();
         if (!$betRecord) {
             throw new \Exception("下注记录已被删除: {$betOrderNo}");
         }
@@ -792,5 +797,140 @@ class GameOperation implements Consumer
             'amount' => $amount,
             'balance_after' => $wallet->money,
         ]);
+    }
+
+    /**
+     * 缓存订单到 Redis（用于快速查询）
+     *
+     * @param string $orderNo 订单号
+     * @param array $orderData 订单数据
+     * @param int $ttl 过期时间（秒），默认1小时
+     * @return void
+     */
+    private function cacheOrderToRedis(string $orderNo, array $orderData, int $ttl = 3600): void
+    {
+        try {
+            $cacheKey = "order:cache:{$orderNo}";
+            \support\Redis::hMSet($cacheKey, $orderData);
+            \support\Redis::expire($cacheKey, $ttl);
+
+            Log::debug("GameOperation: 订单已缓存到Redis", [
+                'order_no' => $orderNo,
+                'ttl' => $ttl,
+            ]);
+        } catch (\Throwable $e) {
+            // Redis 缓存失败不影响主流程
+            $this->log->info("GameOperation: Redis缓存失败", [
+                'order_no' => $orderNo,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * 从 Redis 获取订单缓存
+     *
+     * @param string $orderNo 订单号
+     * @return array|null 订单数据或 null
+     */
+    private function fetchOrderFromRedis(string $orderNo): ?array
+    {
+        try {
+            $cacheKey = "order:cache:{$orderNo}";
+            $orderData = \support\Redis::hGetAll($cacheKey);
+
+            if (!empty($orderData)) {
+                $this->log->debug("GameOperation: Redis缓存命中", [
+                    'order_no' => $orderNo,
+                ]);
+                return $orderData;
+            }
+        } catch (\Throwable $e) {
+            $this->log->info("GameOperation: Redis查询失败", [
+                'order_no' => $orderNo,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
+    }
+
+    /**
+     * 带重试机制的订单查询（解决"订单未入库"问题）
+     *
+     * @param string $orderNo 订单号
+     * @param int $maxRetries 最大重试次数
+     * @param int $delayUs 重试延迟（微秒）
+     * @return PlayGameRecord|null
+     */
+    private function fetchBetRecordWithRetry(string $orderNo, int $maxRetries = 3, int $delayUs = 50000): ?PlayGameRecord
+    {
+        // 第零步：检查 Redis pending 状态（控制器层写入的预占）
+        $pendingKey = "order:pending:{$orderNo}";
+        $pendingOrder = null;
+        try {
+            $pendingOrder = \support\Redis::hGetAll($pendingKey);
+        } catch (\Throwable $e) {
+            $this->log->warning("GameOperation: Redis pending查询失败", ['error' => $e->getMessage()]);
+        }
+
+        // 第一步：尝试从 Redis 完成缓存获取（processBet 写入的）
+        $cachedOrder = $this->fetchOrderFromRedis($orderNo);
+        if ($cachedOrder && isset($cachedOrder['id'])) {
+            // Redis 命中，直接从 DB 按 ID 查询（更快）
+            $record = PlayGameRecord::find($cachedOrder['id']);
+            if ($record) {
+                $this->log->info("GameOperation: 通过Redis缓存快速定位订单", [
+                    'order_no' => $orderNo,
+                    'record_id' => $cachedOrder['id'],
+                ]);
+                return $record;
+            }
+        }
+
+        // 第二步：查询 DB + 智能重试机制
+        for ($i = 0; $i < $maxRetries; $i++) {
+            $record = PlayGameRecord::where('order_no', $orderNo)->first();
+
+            if ($record) {
+                if ($i > 0) {
+                    $this->log->info("GameOperation: 订单查询成功（重试后）", [
+                        'order_no' => $orderNo,
+                        'retry_count' => $i,
+                        'elapsed_ms' => $i * ($delayUs / 1000),
+                    ]);
+                }
+                return $record;
+            }
+
+            // 未找到，检查是否应该重试
+            if ($i < $maxRetries - 1) {
+                // 如果 Redis pending 存在，说明订单确实存在，继续重试
+                if (!empty($pendingOrder)) {
+                    $this->log->warning("GameOperation: 订单未入库（pending状态存在），等待重试", [
+                        'order_no' => $orderNo,
+                        'retry' => $i + 1,
+                        'pending_status' => $pendingOrder['status'] ?? 'unknown',
+                    ]);
+                    usleep($delayUs);
+                } else {
+                    // Redis pending 也不存在，可能订单根本不存在，减少重试次数
+                    $this->log->warning("GameOperation: 订单未入库（pending状态也不存在），快速失败", [
+                        'order_no' => $orderNo,
+                        'retry' => $i + 1,
+                    ]);
+                    usleep($delayUs / 2); // 等待时间减半
+                }
+            }
+        }
+
+        // 所有重试都失败
+        $this->log->error("GameOperation: 订单查询失败（所有重试已用尽）", [
+            'order_no' => $orderNo,
+            'max_retries' => $maxRetries,
+            'total_wait_ms' => ($maxRetries - 1) * ($delayUs / 1000),
+        ]);
+
+        return null;
     }
 }

@@ -141,6 +141,22 @@ class DGGameController
                 }
             } else {
                 // type=1:下注 type=3:补单 type=6:小费 → 下注队列
+                // 立即写入 Redis 预占状态（在入队列之前）
+                try {
+                    \support\Redis::hMSet("order:pending:{$orderNo}", [
+                        'player_id' => $player->id,
+                        'order_no' => $orderNo,
+                        'amount' => $amount,
+                        'platform_id' => $this->service->platform->id,
+                        'game_code' => $detail['gameId'] ?? '',
+                        'status' => 'pending',
+                        'created_at' => time(),
+                    ]);
+                    \support\Redis::expire("order:pending:{$orderNo}", 300);
+                } catch (\Throwable $e) {
+                    // Redis 失败不影响主流程
+                }
+
                 $sent = GameQueueService::sendBet('DG', $player, $queueParams);
                 if ($sent) {
                     // 预估：扣款

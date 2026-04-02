@@ -231,6 +231,22 @@ class O8GameController
                     'original_data' => $order,
                 ];
 
+                // 立即写入 Redis 预占状态（在入队列之前）
+                try {
+                    \support\Redis::hMSet("order:pending:{$orderNo}", [
+                        'player_id' => $player->id,
+                        'order_no' => $orderNo,
+                        'amount' => $bet,
+                        'platform_id' => $platformId,
+                        'game_code' => $order['gamecode'],
+                        'status' => 'pending',
+                        'created_at' => time(),
+                    ]);
+                    \support\Redis::expire("order:pending:{$orderNo}", 300);
+                } catch (\Throwable $e) {
+                    // Redis 失败不影响主流程
+                }
+
                 // 发送下注队列
                 $sent = GameQueueService::sendBet('O8', $player, $queueParams);
 

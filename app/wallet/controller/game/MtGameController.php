@@ -137,6 +137,24 @@ class MtGameController
                 'original_data' => $data,
             ];
 
+            // 3.5 立即写入 Redis 预占状态（关键！在入队列之前）
+            $orderNo = $data['bet_sn'];
+            try {
+                \support\Redis::hMSet("order:pending:{$orderNo}", [
+                    'player_id' => $player->id,
+                    'order_no' => $orderNo,
+                    'amount' => $data['order_money'],
+                    'platform_id' => $this->service->platform->id,
+                    'game_code' => $data['game_code'],
+                    'status' => 'pending',
+                    'created_at' => time(),
+                ]);
+                \support\Redis::expire("order:pending:{$orderNo}", 300);
+            } catch (\Throwable $e) {
+                // Redis 失败不影响主流程
+                Log::warning('MT: Redis预占失败');
+            }
+
             // 4. 发送到队列
             $sent = GameQueueService::sendBet('MT', $player, $queueParams);
 

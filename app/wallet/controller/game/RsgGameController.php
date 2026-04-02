@@ -135,6 +135,24 @@ class RsgGameController
                 'original_data' => $data,
             ];
 
+            // 3.5 立即写入 Redis 预占状态（解决"订单未入库"问题）
+            $orderNo = $data['SequenNumber'];
+            try {
+                \support\Redis::hMSet("order:pending:{$orderNo}", [
+                    'player_id' => $player->id,
+                    'order_no' => $orderNo,
+                    'amount' => $data['Amount'],
+                    'platform_id' => $this->service->platform->id,
+                    'game_code' => $data['GameId'],
+                    'status' => 'pending',  // 预占状态
+                    'created_at' => time(),
+                ]);
+                \support\Redis::expire("order:pending:{$orderNo}", 300); // 5分钟过期
+            } catch (\Throwable $e) {
+                // Redis 失败不影响主流程
+                $this->logger->warning('RSG: Redis预占失败', ['error' => $e->getMessage()]);
+            }
+
             // 4. 发送到队列
             $sent = GameQueueService::sendBet('RSG', $player, $queueParams);
 
