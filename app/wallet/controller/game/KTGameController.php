@@ -70,6 +70,10 @@ class KTGameController
                 return $this->error($this->service->error);
             }
 
+            if (!isset($params['Token'])) {
+                return $this->error(self::API_CODE_OTHER_ERROR, '缺少Token参数');
+            }
+
             $this->service->player = Player::query()->where('uuid', $params['Token'])->first();
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
@@ -101,6 +105,10 @@ class KTGameController
                 return $this->error($this->service->error);
             }
 
+            if (!isset($params['Username'])) {
+                return $this->error(self::API_CODE_OTHER_ERROR, '缺少Username参数');
+            }
+
             $this->service->player = Player::query()->where('uuid', $params['Username'])->first();
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
@@ -126,6 +134,11 @@ class KTGameController
             $hash = $request->get('Hash');
 
             $this->logger->info('kt_server 下注记录', ['params' => $params, 'get' => $hash]);
+
+            // 检查必要参数
+            if (!isset($params['Username']) || !isset($params['TransactionId']) || !isset($params['Amount'])) {
+                return $this->error(self::API_CODE_OTHER_ERROR, '缺少必要参数');
+            }
 
             $this->service->verifyToken($params, $hash);
 
@@ -263,6 +276,11 @@ class KTGameController
 
             $this->logger->info('kt_server 取消投注记录', ['params' => $params, 'get' => $hash]);
 
+            // 检查必要参数
+            if (!isset($params['Username']) || !isset($params['TransactionId'])) {
+                return $this->error(self::API_CODE_OTHER_ERROR, '缺少必要参数');
+            }
+
             $this->service->verifyToken($params, $hash);
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -270,11 +288,6 @@ class KTGameController
 
             $this->service->player = \app\model\Player::query()->where('uuid', $params['Username'])->first();
             $player = $this->service->player;
-
-            // 检查必要参数
-            if (!isset($params['TransactionId'])) {
-                return $this->error(self::API_CODE_OTHER_ERROR, '缺少TransactionId参数');
-            }
 
             $orderNo = $params['TransactionId'];
             $refundAmount = $params['Amount'] ?? 0;
