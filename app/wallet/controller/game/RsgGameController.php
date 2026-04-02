@@ -7,6 +7,8 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\GameQueueService;
+use Exception;
+use Monolog\Logger;
 use support\Log;
 use support\Request;
 use support\Response;
@@ -55,8 +57,11 @@ class RsgGameController
 
     private GameServiceInterface|SingleWalletServiceInterface $service;
 
-    private $logger;
+    private null|Logger $logger;
 
+    /**
+     * @throws Exception
+     */
     public function __construct()
     {
         $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_RSG);
@@ -83,7 +88,7 @@ class RsgGameController
             }
 
             $balance = $this->service->balance();
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => (float)$balance]);
         } catch (Throwable $e) {
             $this->logger->error('RSG余额查询异常', [
                 'error' => $e->getMessage(),
@@ -142,7 +147,7 @@ class RsgGameController
                     return $this->error($this->service->error);
                 }
 
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => (float)$balance]);
             }
 
             // 5. 快速返回（返回预估余额）
@@ -214,7 +219,7 @@ class RsgGameController
                     return $this->error($this->service->error);
                 }
 
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => (float)$balance]);
             }
 
             // 5. 快速返回（返回预估余额）
@@ -228,7 +233,7 @@ class RsgGameController
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => $estimatedBalance
+                'Balance' => (float)$estimatedBalance
             ]);
 
         } catch (Throwable $e) {
@@ -294,7 +299,7 @@ class RsgGameController
                     return $this->error($this->service->error);
                 }
 
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => (float)$balance]);
             }
 
             // 5. 快速返回（返回预估余额 - 只有Amount>0才加钱）
@@ -312,7 +317,7 @@ class RsgGameController
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => $estimatedBalance
+                'Balance' => (float)$estimatedBalance
             ]);
 
         } catch (Throwable $e) {
@@ -376,7 +381,7 @@ class RsgGameController
                     return $this->error($this->service->error);
                 }
 
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => (float)$balance]);
             }
 
             // 5. 快速返回
@@ -389,7 +394,7 @@ class RsgGameController
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => $currentBalance
+                'Balance' => (float)$currentBalance
             ]);
 
         } catch (Throwable $e) {
@@ -451,7 +456,7 @@ class RsgGameController
                     return $this->error($this->service->error);
                 }
 
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => $balance]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => (float)$balance]);
             }
 
             // 5. 快速返回（返回预估余额）
@@ -467,7 +472,7 @@ class RsgGameController
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => $estimatedBalance
+                'Balance' => (float)$estimatedBalance
             ]);
 
         } catch (Throwable $e) {
@@ -549,7 +554,7 @@ class RsgGameController
 
             // 返回格式：['Balance' => ..., 'Amount' => ...]
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => max(0, $estimatedBalance),
+                'Balance' => max(0, (float)$estimatedBalance),
                 'Amount' => $actualDeductAmount
             ]);
 
@@ -629,8 +634,8 @@ class RsgGameController
 
             // 返回格式：['Balance' => ..., 'Amount' => ...]
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => $estimatedBalance,
-                'Amount' => $refundAmount
+                'Balance' => (float)$estimatedBalance,
+                'Amount' => (float)$refundAmount
             ]);
 
         } catch (Throwable $e) {
