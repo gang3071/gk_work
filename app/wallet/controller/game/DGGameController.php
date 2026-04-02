@@ -6,6 +6,7 @@ use app\service\game\DGServiceInterface;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\GameQueueService;
 use support\Log;
 use support\Request;
 use support\Response;
@@ -99,16 +100,66 @@ class DGGameController
             }
             $this->service->decrypt($params);
 
-
+            $player = $this->service->player;
             $type = $params['type'];
-            //转账类型(1:下注 2:派彩 3:补单 5:红包 6:小费)
-            if (in_array($type, [2, 5])) {
-                return $this->betResult($params);
-            }
+            $orderNo = $params['ticketId'];
+            $amount = abs($params['member']['amount']);
+            $detail = json_decode($params['detail'], true);
 
-            $return = $this->service->bet($params);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            // 获取当前余额
+            $currentBalance = \app\service\WalletService::getBalance($player->id);
+
+            //转账类型(1:下注 2:派彩 3:补单 5:红包 6:小费)
+            $queueParams = [
+                'order_no' => $orderNo,
+                'amount' => $amount,
+                'type' => $type,
+                'detail' => $detail,
+                'original_data' => $params,
+                'game_code' => $detail['gameId'] ?? '',
+            ];
+
+            // 根据 type 分流到不同队列
+            if (in_array($type, [2, 5])) {
+                // type=2:派彩 type=5:红包 → 派彩队列
+                // 需要查找原始下注记录
+                $queueParams['bet_order_no'] = $orderNo;
+                $sent = GameQueueService::sendSettle('DG', $player, $queueParams);
+                if ($sent) {
+                    // 预估：派彩加钱（winAmount可能为0）
+                    $estimatedBalance = ($amount > 0) ? bcadd($currentBalance, $amount, 2) : $currentBalance;
+                    $return = [
+                        'member' => [
+                            'username' => $params['member']['username'],
+                            'balance' => $currentBalance, // DG 返回操作前余额
+                            'amount' => $params['member']['amount'],
+                        ]
+                    ];
+                } else {
+                    // 队列失败，同步降级
+                    return $this->betResult($params);
+                }
+            } else {
+                // type=1:下注 type=3:补单 type=6:小费 → 下注队列
+                $sent = GameQueueService::sendBet('DG', $player, $queueParams);
+                if ($sent) {
+                    // 预估：扣款
+                    $estimatedBalance = bcsub($currentBalance, $amount, 2);
+                    $estimatedBalance = max(0, $estimatedBalance);
+                    $return = [
+                        'member' => [
+                            'username' => $params['member']['username'],
+                            'balance' => $currentBalance, // DG 返回操作前余额
+                            'amount' => $params['member']['amount'],
+                        ]
+                    ];
+                } else {
+                    // 队列失败，同步降级
+                    $return = $this->service->bet($params);
+                    if ($this->service->error) {
+                        return $this->error($this->service->error);
+                    }
+                }
             }
 
             // 3. 使用常量获取状态码描述
@@ -121,14 +172,14 @@ class DGGameController
     }
 
     /**
-     * 結算
+     * 結算（同步降级备用方法）
      * @param $data
      * @return Response
      */
     public function betResult($data): Response
     {
         try {
-            Log::channel('rsg_server')->info('dg结算记录', ['params' => $data]);
+            Log::channel('dg_server')->info('dg结算记录（同步降级）', ['params' => $data]);
 
             $return = $this->service->betResulet($data);
             if ($this->service->error) {
@@ -161,9 +212,72 @@ class DGGameController
             }
             $this->service->decrypt($params);
 
-            $return = $this->service->inform($params);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            $player = $this->service->player;
+            $type = $params['type'];
+            $orderNo = $params['ticketId'];
+            $amount = abs($params['member']['amount']);
+            $detail = json_decode($params['detail'], true);
+
+            // 获取当前余额
+            $currentBalance = \app\service\WalletService::getBalance($player->id);
+
+            $queueParams = [
+                'order_no' => $orderNo,
+                'amount' => $amount,
+                'type' => $type,
+                'detail' => $detail,
+                'original_data' => $params,
+            ];
+
+            // 根据 type 分流
+            if ($type == 4) {
+                // type=4: 取消投注 → 取消队列
+                $queueParams['bet_order_no'] = $orderNo;
+                $sent = GameQueueService::sendCancel('DG', $player, $queueParams);
+                if ($sent) {
+                    // 预估：退款（需要查询原始下注金额，这里暂时不预估）
+                    $return = [
+                        'member' => [
+                            'username' => $params['member']['username'],
+                            'balance' => $currentBalance,
+                            'amount' => 0, // 需要查询原始记录才知道退款金额
+                        ]
+                    ];
+                } else {
+                    // 队列失败，同步降级
+                    $return = $this->service->inform($params);
+                    if ($this->service->error) {
+                        return $this->error($this->service->error);
+                    }
+                }
+            } elseif ($type == 7) {
+                // type=7: 补偿 → 派彩队列（补偿作为派彩处理）
+                $queueParams['is_compensation'] = true;
+                $sent = GameQueueService::sendSettle('DG', $player, $queueParams);
+                if ($sent) {
+                    // 预估：加钱
+                    $estimatedBalance = bcadd($currentBalance, $amount, 2);
+                    $return = [
+                        'member' => [
+                            'username' => $params['member']['username'],
+                            'balance' => $currentBalance, // DG 返回操作前余额
+                            'amount' => $amount,
+                        ]
+                    ];
+                } else {
+                    // 队列失败，同步降级
+                    $return = $this->service->inform($params);
+                    if ($this->service->error) {
+                        return $this->error($this->service->error);
+                    }
+                }
+            } else {
+                // 未知类型，同步降级
+                Log::channel('dg_server')->warning('DG inform未知类型', ['type' => $type, 'data' => $params]);
+                $return = $this->service->inform($params);
+                if ($this->service->error) {
+                    return $this->error($this->service->error);
+                }
             }
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);

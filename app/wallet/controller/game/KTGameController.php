@@ -7,6 +7,7 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\KTServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\GameQueueService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -129,20 +130,81 @@ class KTGameController
             $this->service->verifyToken($params, $hash);
 
             $this->service->player = Player::query()->where('uuid', $params['Username'])->first();
-            $balance = $this->service->bet($params);
+            $player = $this->service->player;
 
-            //是否结算
-            if ($params['TakeWin'] == 1) {
-                $balance = $this->betResult($params);
+            $orderNo = $params['TransactionId'];
+            $bet = $params['Amount'];
+            $takeWin = $params['TakeWin'] ?? 0;
+
+            // 获取当前余额
+            $currentBalance = \app\service\WalletService::getBalance($player->id);
+
+            // 检查幂等性
+            $betKey = "kt:bet:lock:{$orderNo}";
+            $isDuplicate = !\support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+
+            if ($isDuplicate) {
+                // 重复订单，返回当前余额
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                    'Balance' => $currentBalance,
+                ]);
             }
 
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            // 准备队列参数
+            $queueParams = [
+                'order_no' => $orderNo,
+                'amount' => $bet,
+                'platform_id' => $this->service->platform->id,
+                'game_code' => $params['GameCode'] ?? '',
+                'original_data' => $params,
+            ];
+
+            // 发送下注队列
+            $sent = GameQueueService::sendBet('KT', $player, $queueParams);
+
+            if ($sent) {
+                // 预估余额：扣款
+                $estimatedBalance = bcsub($currentBalance, $bet, 2);
+                $estimatedBalance = max(0, $estimatedBalance);
+
+                // TakeWin=1 表示立即结算
+                if ($takeWin == 1) {
+                    $winAmount = $params['WinAmount'] ?? 0;
+
+                    // 发送结算队列
+                    $settleParams = [
+                        'order_no' => $orderNo . '_settle',
+                        'bet_order_no' => $orderNo,
+                        'amount' => max($winAmount, 0),
+                        'result_amount' => $winAmount,
+                        'original_data' => $params,
+                    ];
+                    GameQueueService::sendSettle('KT', $player, $settleParams);
+
+                    // 预估余额：加上中奖金额
+                    if ($winAmount > 0) {
+                        $estimatedBalance = bcadd($estimatedBalance, $winAmount, 2);
+                    }
+                }
+
+                $return = ['Balance' => $estimatedBalance];
+            } else {
+                // 队列失败，同步降级
+                \support\Redis::del($betKey);
+                $balance = $this->service->bet($params);
+
+                // 是否结算
+                if ($takeWin == 1) {
+                    $balance = $this->betResult($params);
+                }
+
+                if ($this->service->error) {
+                    return $this->error($this->service->error);
+                }
+                $return = ['Balance' => $balance];
             }
-            // 3. 使用常量获取状态码描述
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => $balance,
-            ]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
             Log::error('KT bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('KT', '下注异常', $e, ['params' => $request->post()]);
@@ -207,15 +269,41 @@ class KTGameController
             }
 
             $this->service->player = \app\model\Player::query()->where('uuid', $params['Username'])->first();
-            $balance = $this->service->cancelBet($params);
+            $player = $this->service->player;
 
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            $orderNo = $params['TransactionId'];
+            $refundAmount = $params['Amount'] ?? 0;
+
+            // 获取当前余额
+            $currentBalance = \app\service\WalletService::getBalance($player->id);
+
+            // 准备队列参数
+            $queueParams = [
+                'order_no' => $orderNo,
+                'bet_order_no' => $params['BetTransactionId'] ?? $orderNo,
+                'amount' => $refundAmount,
+                'original_data' => $params,
+            ];
+
+            // 发送取消队列
+            $sent = GameQueueService::sendCancel('KT', $player, $queueParams);
+
+            if ($sent) {
+                // 预估余额：退款
+                $estimatedBalance = bcadd($currentBalance, $refundAmount, 2);
+
+                $return = ['Balance' => $estimatedBalance];
+            } else {
+                // 队列失败，同步降级
+                $balance = $this->service->cancelBet($params);
+
+                if ($this->service->error) {
+                    return $this->error($this->service->error);
+                }
+                $return = ['Balance' => $balance];
             }
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => $balance,
-            ]);
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
             Log::error('KT cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('KT', '取消投注异常', $e, ['params' => $request->post()]);

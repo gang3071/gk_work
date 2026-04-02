@@ -8,6 +8,7 @@ use app\service\game\BTGServiceInterface;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\GameQueueService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -116,6 +117,8 @@ class BTGGameController
      */
     public function transfer(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->post();
             $this->logger->info('BTG转账请求', ['params' => $params]);
@@ -178,34 +181,136 @@ class BTGGameController
                 }
             }
 
-            // 根据 transfer_type 分发处理
-            $result = match ($params['transfer_type']) {
-                'start' => $this->service->transferStart($params, $transDetails),
-                'end' => $this->service->transferEnd($params, $transDetails, $betformDetails),
-                'refund' => $this->service->transferRefund($params, $transDetails),
-                'adjust' => $this->service->transferAdjust($params, $transDetails, $betformDetails),
-                'reward' => $this->service->transferReward($params, $transDetails, $betformDetails),
-            };
+            // ========== 异步队列处理 ==========
+            $amount = abs((float)$params['amount']);
+            $orderId = $transDetails['order_id'] ?? '';
+            $roundId = $transDetails['round_id'] ?? '';
+            $transferType = $params['transfer_type'];
 
-            if ($this->service->error) {
-                $this->logger->error('BTG转账失败', [
-                    'transfer_type' => $params['transfer_type'],
-                    'error' => $this->service->error,
-                    'tran_id' => $params['tran_id']
-                ]);
-                return $this->error($this->service->error);
+            // 构建队列参数
+            $queueParams = [
+                'order_no' => $orderId,
+                'tran_id' => $params['tran_id'],
+                'amount' => $amount,
+                'original_amount' => (float)$params['amount'], // 保留原始金额（可能为负）
+                'platform_id' => $this->service->platform->id,
+                'game_code' => $params['game_code'] ?? '',
+                'game_type' => $params['game_type'] ?? '',
+                'transfer_type' => $transferType,
+                'trans_details' => $transDetails,
+                'betform_details' => $betformDetails,
+                'original_data' => $params,
+            ];
+
+            $sent = false;
+            $estimatedBalance = 0;
+            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
+
+            // 根据 transfer_type 发送到不同队列
+            switch ($transferType) {
+                case 'start':
+                    // 下注扣款
+                    $sent = GameQueueService::sendBet('BTG', $player, $queueParams);
+                    if ($sent) {
+                        // 预估余额：如果 amount=0（免费游戏）则不扣款
+                        $estimatedBalance = ($amount > 0) ? bcsub($currentBalance, $amount, 2) : $currentBalance;
+                        $estimatedBalance = max(0, $estimatedBalance);
+                    }
+                    break;
+
+                case 'end':
+                    // 结算派彩
+                    $queueParams['bet_order_no'] = $orderId;
+                    $sent = GameQueueService::sendSettle('BTG', $player, $queueParams);
+                    if ($sent) {
+                        // 预估余额：加上派彩金额
+                        $estimatedBalance = ($amount > 0) ? bcadd($currentBalance, $amount, 2) : $currentBalance;
+                    }
+                    break;
+
+                case 'refund':
+                    // 退款
+                    $queueParams['bet_order_no'] = $orderId;
+                    $sent = GameQueueService::sendCancel('BTG', $player, $queueParams);
+                    if ($sent) {
+                        // 预估余额：加上退款金额
+                        $estimatedBalance = bcadd($currentBalance, $amount, 2);
+                    }
+                    break;
+
+                case 'adjust':
+                    // 调整金额（可正可负）
+                    $adjustAmount = (float)$params['amount'];
+                    if ($adjustAmount > 0) {
+                        // 正数：加款，使用 settle
+                        $queueParams['bet_order_no'] = $orderId;
+                        $sent = GameQueueService::sendSettle('BTG', $player, $queueParams);
+                        if ($sent) {
+                            $estimatedBalance = bcadd($currentBalance, $adjustAmount, 2);
+                        }
+                    } else {
+                        // 负数：扣款，使用 bet
+                        $sent = GameQueueService::sendBet('BTG', $player, $queueParams);
+                        if ($sent) {
+                            $deductAmount = abs($adjustAmount);
+                            $estimatedBalance = bcsub($currentBalance, $deductAmount, 2);
+                            $estimatedBalance = max(0, $estimatedBalance);
+                        }
+                    }
+                    break;
+
+                case 'reward':
+                    // 额外奖金（无下注）
+                    $queueParams['is_reward'] = true;
+                    $sent = GameQueueService::sendSettle('BTG', $player, $queueParams);
+                    if ($sent) {
+                        // 预估余额：加上奖励金额
+                        $estimatedBalance = bcadd($currentBalance, $amount, 2);
+                    }
+                    break;
             }
 
-            $this->logger->info('BTG转账成功', [
-                'transfer_type' => $params['transfer_type'],
+            // 如果队列发送失败，降级到同步处理
+            if (!$sent) {
+                $this->logger->warning('BTG队列发送失败，降级到同步处理', [
+                    'transfer_type' => $transferType,
+                    'order_id' => $orderId,
+                    'player_id' => $player->id
+                ]);
+
+                $result = match ($transferType) {
+                    'start' => $this->service->transferStart($params, $transDetails),
+                    'end' => $this->service->transferEnd($params, $transDetails, $betformDetails),
+                    'refund' => $this->service->transferRefund($params, $transDetails),
+                    'adjust' => $this->service->transferAdjust($params, $transDetails, $betformDetails),
+                    'reward' => $this->service->transferReward($params, $transDetails, $betformDetails),
+                };
+
+                if ($this->service->error) {
+                    $this->logger->error('BTG转账失败', [
+                        'transfer_type' => $transferType,
+                        'error' => $this->service->error,
+                        'tran_id' => $params['tran_id']
+                    ]);
+                    return $this->error($this->service->error);
+                }
+
+                $estimatedBalance = $result['balance'];
+            }
+
+            $responseTime = round((microtime(true) - $startTime) * 1000, 2);
+            $this->logger->info('BTG转账成功（异步）', [
+                'transfer_type' => $transferType,
                 'username' => $params['username'],
                 'amount' => $params['amount'],
-                'balance' => $result['balance'],
-                'tran_id' => $params['tran_id']
+                'estimated_balance' => $estimatedBalance,
+                'tran_id' => $params['tran_id'],
+                'response_time_ms' => $responseTime,
+                'is_async' => $sent
             ]);
 
             return $this->success([
-                'balance' => number_format($result['balance'], 2, '.', ''),
+                'balance' => number_format($estimatedBalance, 2, '.', ''),
                 'currency' => $systemCurrency,
                 'tran_id' => $params['tran_id'],
             ]);

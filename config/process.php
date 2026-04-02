@@ -15,12 +15,12 @@
 use process\BurstCleaner;
 use process\ChannelSettlement;
 use process\GamePoolSocket;
-use process\LogClear;
 use process\LotteryPoolSocket;
 use process\LotteryRemind;
 use process\NationalPromoterRebate;
 use process\OnlinePlayerSocket;
 use process\ProfitSettlement;
+use process\ReconciliationTask;
 use process\ReverseWater;
 
 return [
@@ -76,6 +76,10 @@ return [
     ],
     'BurstCleaner' => [
         'handler' => BurstCleaner::class
+    ],
+    // Redis 钱包对账任务（每分钟）
+    'ReconciliationTask' => [
+        'handler' => ReconciliationTask::class
     ],
 ];
 

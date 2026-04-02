@@ -6,6 +6,7 @@ namespace app\wallet\controller\game;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\GameQueueService;
 use Exception;
 use SimpleXMLElement;
 use support\Log;
@@ -83,15 +84,64 @@ class SAGameController
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
-            $balance = $this->service->bet($data);
-            $return = [
-                'username' => $data['username'],
-                'currency' => $data['currency'],
-                'amount' => $balance,
-            ];
-            if ($this->service->error) {
-                return $this->error($this->service->error, $return);
+
+            $player = $this->service->player;
+            $orderNo = $data['txnid'];
+            $bet = $data['amount'];
+
+            // 获取当前余额
+            $currentBalance = \app\service\WalletService::getBalance($player->id);
+
+            // 检查幂等性
+            $betKey = "sa:bet:lock:{$orderNo}";
+            $isDuplicate = !\support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+
+            if ($isDuplicate) {
+                // 重复订单，返回当前余额
+                return $this->error(self::API_CODE_GENERAL_ERROR, [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => $currentBalance,
+                ]);
             }
+
+            // 准备队列参数
+            $queueParams = [
+                'order_no' => $orderNo,
+                'amount' => $bet,
+                'platform_id' => $this->service->platform->id,
+                'game_code' => $data['hostid'],
+                'order_time' => $data['timestamp'],
+                'original_data' => $data,
+            ];
+
+            // 发送下注队列
+            $sent = GameQueueService::sendBet('SA', $player, $queueParams);
+
+            if ($sent) {
+                // 预估余额：扣款
+                $estimatedBalance = bcsub($currentBalance, $bet, 2);
+                $estimatedBalance = max(0, $estimatedBalance);
+
+                $return = [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => $estimatedBalance,
+                ];
+            } else {
+                // 队列失败，同步降级
+                \support\Redis::del($betKey);
+                $balance = $this->service->bet($data);
+                $return = [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => $balance,
+                ];
+                if ($this->service->error) {
+                    return $this->error($this->service->error, $return);
+                }
+            }
+
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
             Log::error('SA bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -114,15 +164,47 @@ class SAGameController
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
-            $balance = $this->service->cancelBet($data);
-            $return = [
-                'username' => $data['username'],
-                'currency' => $data['currency'],
-                'amount' => $balance,
+
+            $player = $this->service->player;
+            $orderNo = $data['txn_reverse_id'];
+            $refundAmount = $data['amount'];
+
+            // 获取当前余额
+            $currentBalance = \app\service\WalletService::getBalance($player->id);
+
+            // 准备队列参数
+            $queueParams = [
+                'order_no' => $orderNo,
+                'bet_order_no' => $orderNo,
+                'amount' => $refundAmount,
+                'original_data' => $data,
             ];
-            if ($this->service->error) {
-                return $this->error($this->service->error, $return);
+
+            // 发送取消队列
+            $sent = GameQueueService::sendCancel('SA', $player, $queueParams);
+
+            if ($sent) {
+                // 预估余额：退款
+                $estimatedBalance = bcadd($currentBalance, $refundAmount, 2);
+
+                $return = [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => $estimatedBalance,
+                ];
+            } else {
+                // 队列失败，同步降级
+                $balance = $this->service->cancelBet($data);
+                $return = [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => $balance,
+                ];
+                if ($this->service->error) {
+                    return $this->error($this->service->error, $return);
+                }
             }
+
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
             Log::error('SA cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -145,15 +227,63 @@ class SAGameController
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
-            $balance = $this->service->betResulet($data);
-            $return = [
-                'username' => $data['username'],
-                'currency' => $data['currency'],
-                'amount' => $balance,
-            ];
-            if ($this->service->error) {
-                return $this->error($this->service->error, $return);
+
+            $player = $this->service->player;
+            $totalWinAmount = $data['amount'] ?? 0;
+
+            // 解析批量结算列表
+            $detail = json_decode($data['payoutdetails'], true);
+            $betList = $detail['betlist'] ?? [];
+
+            // 获取当前余额
+            $currentBalance = \app\service\WalletService::getBalance($player->id);
+
+            // 批量发送结算队列
+            $allSent = true;
+            foreach ($betList as $betInfo) {
+                $orderNo = $betInfo['txnid'];
+
+                $queueParams = [
+                    'order_no' => $orderNo,
+                    'bet_order_no' => $orderNo,
+                    'amount' => max($betInfo['resultamount'], 0),
+                    'result_amount' => $betInfo['resultamount'],
+                    'original_data' => $betInfo,
+                ];
+
+                // 发送结算队列
+                $sent = GameQueueService::sendSettle('SA', $player, $queueParams);
+                if (!$sent) {
+                    $allSent = false;
+                    break;
+                }
             }
+
+            if ($allSent) {
+                // 预估余额：加款（如果 totalWinAmount > 0）
+                $estimatedBalance = $currentBalance;
+                if ($totalWinAmount > 0) {
+                    $estimatedBalance = bcadd($currentBalance, $totalWinAmount, 2);
+                }
+
+                $return = [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => $estimatedBalance,
+                ];
+            } else {
+                // 队列失败，同步降级
+                $balance = $this->service->betResulet($data);
+                $return = [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => $balance,
+                ];
+                if ($this->service->error) {
+                    return $this->error($this->service->error, $return);
+                }
+            }
+
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
             Log::error('SA betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);

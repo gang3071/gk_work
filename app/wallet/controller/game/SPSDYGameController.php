@@ -8,6 +8,7 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\game\SPSDYServiceInterface;
+use app\service\GameQueueService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -113,16 +114,88 @@ class SPSDYGameController
         try {
             Log::channel('sps_server')->info('sps下注记录', ['params' => $params]);
             $this->service->player = Player::query()->where('uuid', $params['User'])->first();
-            //判断是下注还是结算加钱
-            if ($params['TType'] == 1) {
-                return $this->betResult($params);
-            }
-            $return = $this->service->bet($params);
+            $player = $this->service->player;
 
-            if ($this->service->error) {
-                return $this->error($this->service->error, $return);
+            $orderNo = $params['OrderId'] ?? '';
+            $ttype = $params['TType'] ?? 0;
+            $amount = $params['Amount'] ?? 0;
+
+            // 获取当前余额
+            $currentBalance = \app\service\WalletService::getBalance($player->id);
+
+            // TType == 1：结算（直接调用 betResult）
+            if ($ttype == 1) {
+                // 准备结算队列参数
+                $settleParams = [
+                    'order_no' => $orderNo . '_settle',
+                    'bet_order_no' => $orderNo,
+                    'amount' => max($amount, 0),
+                    'result_amount' => $amount,
+                    'original_data' => $params,
+                ];
+
+                // 发送结算队列
+                $sent = GameQueueService::sendSettle('SPSDY', $player, $settleParams);
+
+                if ($sent) {
+                    // 预估余额：只加中奖金额
+                    $estimatedBalance = $currentBalance;
+                    if ($amount > 0) {
+                        $estimatedBalance = bcadd($currentBalance, $amount, 2);
+                    }
+
+                    $return = ['User' => $params['User'], 'Balance' => $estimatedBalance, 'TransferId' => $orderNo];
+                } else {
+                    // 队列失败，同步降级
+                    $return = $this->service->betResulet($params);
+                    if ($this->service->error) {
+                        return $this->error($this->service->error);
+                    }
+                }
+
+                return $this->success(self::API_CODE_SUCCESS, $return);
             }
-            // 3. 使用常量获取状态码描述
+
+            // 普通下注：检查幂等性
+            $betKey = "spsdy:bet:lock:{$orderNo}";
+            $isDuplicate = !\support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+
+            if ($isDuplicate) {
+                // 重复订单，返回当前余额
+                return $this->success(self::API_CODE_SUCCESS, [
+                    'User' => $params['User'],
+                    'Balance' => $currentBalance,
+                    'TransferId' => $orderNo,
+                ]);
+            }
+
+            // 准备队列参数
+            $queueParams = [
+                'order_no' => $orderNo,
+                'amount' => $amount,
+                'platform_id' => $this->service->platform->id,
+                'original_data' => $params,
+            ];
+
+            // 发送下注队列
+            $sent = GameQueueService::sendBet('SPSDY', $player, $queueParams);
+
+            if ($sent) {
+                // 预估余额：扣款
+                $estimatedBalance = bcsub($currentBalance, $amount, 2);
+                $estimatedBalance = max(0, $estimatedBalance);
+
+                $return = ['User' => $params['User'], 'Balance' => $estimatedBalance, 'TransferId' => $orderNo];
+            } else {
+                // 队列失败，同步降级
+                \support\Redis::del($betKey);
+                $return = $this->service->bet($params);
+
+                if ($this->service->error) {
+                    return $this->error($this->service->error, $return);
+                }
+            }
+
             return $this->success(self::API_CODE_SUCCESS, $return);
         } catch (Exception $e) {
             Log::error('SPSDY bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -135,18 +208,8 @@ class SPSDYGameController
     {
         try {
             Log::channel('sps_server')->info('sps查詢交易紀錄', ['params' => $params]);
-            $this->service->player = Player::query()->where('uuid', $params['User'])->first();
-            //判断是下注还是结算加钱
-            if ($params['TType'] == 1) {
-                return $this->betResult($params);
-            }
-            $return = $this->service->bet($params);
-
-            if ($this->service->error) {
-                return $this->error($this->service->error, $return);
-            }
-            // 3. 使用常量获取状态码描述
-            return $this->success(self::API_CODE_SUCCESS, $return);
+            // getStatus 与 bet 逻辑相同，直接调用 bet 方法
+            return $this->bet($params);
         } catch (Exception $e) {
             Log::error('SPSDY getStatus failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('SPSDY', '查询状态异常', $e, ['params' => $params]);

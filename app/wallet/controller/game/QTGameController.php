@@ -4,10 +4,11 @@ namespace app\wallet\controller\game;
 
 use app\model\Player;
 use app\model\PlayerDeliveryRecord;
-use app\service\game\QTServiceInterface;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
+use app\service\game\QTServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\GameQueueService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -305,6 +306,8 @@ class QTGameController
      */
     public function transaction(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = json_decode($request->rawBody(), true);
             $this->logger->info('QT交易请求', ['params' => $params]);
@@ -393,43 +396,118 @@ class QTGameController
 
             $this->service->player = $player;
 
-            // 根据交易类型处理
-            $result = match ($params['txnType']) {
-                'DEBIT' => $this->service->debit($params),
-                'CREDIT' => $this->service->credit($params),
-                default => throw new Exception("Invalid transaction type: {$params['txnType']}")
-            };
+            // ========== 异步队列处理 ==========
+            $txnId = $params['txnId'];
+            $amount = (float)$params['amount'];
+            $roundId = $params['roundId'] ?? '';
+            $betId = $params['betId'] ?? '';
+            $gameId = $params['gameId'] ?? '';
 
-            if ($this->service->error) {
-                $this->logger->error('QT交易失败', [
-                    'txnType' => $params['txnType'],
-                    'error' => $this->service->error
-                ]);
+            // 构建队列参数
+            $queueParams = [
+                'order_no' => $txnId,
+                'txn_id' => $txnId,
+                'bet_id' => $betId,
+                'round_id' => $roundId,
+                'amount' => $amount,
+                'platform_id' => $this->service->platform->id,
+                'game_code' => $gameId,
+                'txn_type' => $txnType,
+                'bonus_type' => $params['bonusType'] ?? null,
+                'original_data' => $params,
+            ];
 
-                // 根据交易类型映射错误码
-                if ($params['txnType'] === 'DEBIT') {
-                    // DEBIT专用错误码映射
-                    $errorMap = [
-                        'INSUFFICIENT_BALANCE' => [self::ERROR_INSUFFICIENT_FUNDS, 'Insufficient funds', 400],
-                        'LIMIT_EXCEEDED' => [self::ERROR_LIMIT_EXCEEDED, 'Game limit exceeded', 400],
-                        'INTERNAL_ERROR' => [self::ERROR_UNKNOWN_ERROR, 'Unexpected error', 500],
-                    ];
-                    $errorInfo = $errorMap[$this->service->error] ?? [self::ERROR_REQUEST_DECLINED, 'Transaction failed', 400];
-                } else {
-                    // CREDIT只使用3种错误码：REQUEST_DECLINED, LOGIN_FAILED, UNKNOWN_ERROR
-                    $errorMap = [
-                        'INTERNAL_ERROR' => [self::ERROR_UNKNOWN_ERROR, 'Unexpected error', 500],
-                    ];
-                    $errorInfo = $errorMap[$this->service->error] ?? [self::ERROR_REQUEST_DECLINED, 'Transaction failed', 400];
+            $sent = false;
+            $estimatedBalance = 0;
+            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
+
+            // 根据 txnType 发送到不同队列
+            if ($txnType === 'DEBIT') {
+                // 下注扣款
+                $sent = GameQueueService::sendBet('QT', $player, $queueParams);
+                if ($sent) {
+                    // 预估余额：扣除下注金额（除非是奖金回合）
+                    $bonusType = $params['bonusType'] ?? null;
+                    if (!$bonusType) {
+                        $estimatedBalance = bcsub($currentBalance, $amount, 2);
+                        $estimatedBalance = max(0, $estimatedBalance);
+                    } else {
+                        // 奖金回合不扣款
+                        $estimatedBalance = $currentBalance;
+                    }
                 }
-
-                return $this->errorResponse($errorInfo[0], $errorInfo[1], $errorInfo[2]);
+            } elseif ($txnType === 'CREDIT') {
+                // 结算派彩
+                $queueParams['bet_order_no'] = $betId;
+                $sent = GameQueueService::sendSettle('QT', $player, $queueParams);
+                if ($sent) {
+                    // 预估余额：加上派彩金额
+                    $estimatedBalance = ($amount > 0) ? bcadd($currentBalance, $amount, 2) : $currentBalance;
+                }
             }
 
-            $this->logger->info('QT交易成功', [
-                'txnType' => $params['txnType'],
-                'txnId' => $params['txnId'],
-                'result' => $result
+            // 如果队列发送失败，降级到同步处理
+            if (!$sent) {
+                $this->logger->warning('QT队列发送失败，降级到同步处理', [
+                    'txnType' => $txnType,
+                    'txnId' => $txnId,
+                    'player_id' => $player->id
+                ]);
+
+                $result = match ($txnType) {
+                    'DEBIT' => $this->service->debit($params),
+                    'CREDIT' => $this->service->credit($params),
+                    default => throw new Exception("Invalid transaction type: {$txnType}")
+                };
+
+                if ($this->service->error) {
+                    $this->logger->error('QT交易失败', [
+                        'txnType' => $txnType,
+                        'error' => $this->service->error
+                    ]);
+
+                    // 根据交易类型映射错误码
+                    if ($txnType === 'DEBIT') {
+                        $errorMap = [
+                            'INSUFFICIENT_BALANCE' => [self::ERROR_INSUFFICIENT_FUNDS, 'Insufficient funds', 400],
+                            'LIMIT_EXCEEDED' => [self::ERROR_LIMIT_EXCEEDED, 'Game limit exceeded', 400],
+                            'INTERNAL_ERROR' => [self::ERROR_UNKNOWN_ERROR, 'Unexpected error', 500],
+                        ];
+                        $errorInfo = $errorMap[$this->service->error] ?? [self::ERROR_REQUEST_DECLINED, 'Transaction failed', 400];
+                    } else {
+                        $errorMap = [
+                            'INTERNAL_ERROR' => [self::ERROR_UNKNOWN_ERROR, 'Unexpected error', 500],
+                        ];
+                        $errorInfo = $errorMap[$this->service->error] ?? [self::ERROR_REQUEST_DECLINED, 'Transaction failed', 400];
+                    }
+
+                    return $this->errorResponse($errorInfo[0], $errorInfo[1], $errorInfo[2]);
+                }
+
+                $responseTime = round((microtime(true) - $startTime) * 1000, 2);
+                $this->logger->info('QT交易成功（同步降级）', [
+                    'txnType' => $txnType,
+                    'txnId' => $txnId,
+                    'result' => $result,
+                    'response_time_ms' => $responseTime
+                ]);
+
+                return new Response(201, ['Content-Type' => 'application/json'], json_encode($result));
+            }
+
+            // 构建异步响应
+            $result = [
+                'balance' => round($estimatedBalance, 2),
+                'referenceId' => $txnId // 临时使用txnId，实际referenceId由队列消费者生成
+            ];
+
+            $responseTime = round((microtime(true) - $startTime) * 1000, 2);
+            $this->logger->info('QT交易成功（异步）', [
+                'txnType' => $txnType,
+                'txnId' => $txnId,
+                'estimated_balance' => $estimatedBalance,
+                'response_time_ms' => $responseTime,
+                'is_async' => $sent
             ]);
 
             return new Response(201, ['Content-Type' => 'application/json'], json_encode($result));
@@ -673,6 +751,8 @@ class QTGameController
      */
     public function rollback(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = json_decode($request->rawBody(), true);
             $this->logger->info('QT回滚请求', ['params' => $params]);
@@ -716,24 +796,76 @@ class QTGameController
 
             $this->service->player = $player;
 
-            // 执行回滚
+            // ========== 异步队列处理 ==========
+            $betId = $params['betId'];
+            $txnId = $params['txnId'];
+            $amount = (float)$params['amount'];
+            $roundId = $params['roundId'] ?? '';
+            $gameId = $params['gameId'] ?? '';
+
+            // 构建队列参数
+            $queueParams = [
+                'order_no' => $txnId,
+                'bet_order_no' => $betId,
+                'txn_id' => $txnId,
+                'bet_id' => $betId,
+                'round_id' => $roundId,
+                'amount' => $amount,
+                'platform_id' => $this->service->platform->id,
+                'game_code' => $gameId,
+                'is_rollback' => true,
+                'original_data' => $params,
+            ];
+
+            // 发送到取消队列
+            $sent = GameQueueService::sendCancel('QT', $player, $queueParams);
+            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
+
+            if ($sent) {
+                // 预估余额：加上回滚金额
+                $estimatedBalance = bcadd($currentBalance, $amount, 2);
+
+                $result = [
+                    'balance' => round($estimatedBalance, 2),
+                    'referenceId' => $txnId
+                ];
+
+                $responseTime = round((microtime(true) - $startTime) * 1000, 2);
+                $this->logger->info('QT回滚成功（异步）', [
+                    'betId' => $betId,
+                    'txnId' => $txnId,
+                    'estimated_balance' => $estimatedBalance,
+                    'response_time_ms' => $responseTime,
+                    'is_async' => true
+                ]);
+
+                return new Response(200, ['Content-Type' => 'application/json'], json_encode($result));
+            }
+
+            // 如果队列发送失败，降级到同步处理
+            $this->logger->warning('QT回滚队列发送失败，降级到同步处理', [
+                'betId' => $betId,
+                'txnId' => $txnId,
+                'player_id' => $player->id
+            ]);
+
             $result = $this->service->rollback($params);
 
             if ($this->service->error) {
                 $this->logger->error('QT回滚失败', ['error' => $this->service->error]);
-                // Rollback只使用3种错误码：REQUEST_DECLINED, LOGIN_FAILED, UNKNOWN_ERROR
                 $errorMap = [
                     'INTERNAL_ERROR' => [self::ERROR_UNKNOWN_ERROR, 'Unexpected error', 500],
                 ];
-                // 默认所有其他错误使用REQUEST_DECLINED
                 $errorInfo = $errorMap[$this->service->error] ?? [self::ERROR_REQUEST_DECLINED, 'Rollback failed', 400];
                 return $this->errorResponse($errorInfo[0], $errorInfo[1], $errorInfo[2]);
             }
 
-            $this->logger->info('QT回滚成功', [
-                'betId' => $params['betId'],
-                'txnId' => $params['txnId'],
-                'result' => $result
+            $responseTime = round((microtime(true) - $startTime) * 1000, 2);
+            $this->logger->info('QT回滚成功（同步降级）', [
+                'betId' => $betId,
+                'txnId' => $txnId,
+                'result' => $result,
+                'response_time_ms' => $responseTime
             ]);
 
             return new Response(200, ['Content-Type' => 'application/json'], json_encode($result));
