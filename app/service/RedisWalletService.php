@@ -415,7 +415,7 @@ class RedisWalletService
         foreach ($wallets as $wallet) {
             $playerId = $wallet['player_id'];
             $platformId = $wallet['platform_id'];
-            $dbBalance = $wallet['balance'];
+            $dbBalance = $wallet['money'];
 
             $redisBalance = self::getBalance($playerId, $platformId);
 
