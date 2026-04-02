@@ -7,6 +7,7 @@ use app\model\PlayerDeliveryRecord;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
 use Carbon\Carbon;
+use Exception;
 use support\Db;
 use support\Log;
 use Throwable;
@@ -73,7 +74,7 @@ class GameOperation implements Consumer
             $player = Player::find($playerId);
             if (!$player) {
                 $this->log->error("玩家不存在: {$playerId}");
-                throw new \Exception("玩家不存在: {$playerId}");
+                throw new Exception("玩家不存在: {$playerId}");
             }
 
             // 3. 根据操作类型处理（在事务中完成所有操作）
@@ -82,7 +83,7 @@ class GameOperation implements Consumer
                 'settle' => $this->processSettle($data, $player),
                 'cancel' => $this->processCancel($data, $player),
                 'refund' => $this->processRefund($data, $player),
-                default => throw new \Exception("未知操作类型: {$operation}"),
+                default => throw new Exception("未知操作类型: {$operation}"),
             };
 
             // 4. 提交事务
@@ -148,15 +149,12 @@ class GameOperation implements Consumer
             $record->order_no = $orderNo;
             $record->platform_id = $platformId;
             $record->bet = 0;
-            $record->bet_amount = 0;
             $record->win = 0;
             $record->diff = 0;
             $record->game_code = $params['game_code'] ?? '';
-            $record->game_type = $params['game_type'] ?? '';
             $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED;
             $record->order_time = $params['order_time'] ?? Carbon::now()->toDateTimeString();
             $record->original_data = json_encode($params['original_data'] ?? $params, JSON_UNESCAPED_UNICODE);
-            $record->platform_created_at = Carbon::now()->toDateTimeString();
             $record->save();
 
             $this->log->info("GameOperation: BTG免费游戏记录创建成功", [
@@ -172,7 +170,7 @@ class GameOperation implements Consumer
             ->first();
 
         if (!$wallet) {
-            throw new \Exception("钱包不存在: player_id={$player->id}");
+            throw new Exception("钱包不存在: player_id={$player->id}");
         }
 
         $beforeBalance = $wallet->money;
@@ -209,7 +207,7 @@ class GameOperation implements Consumer
             // 普通下注：余额不足抛异常
             if ($beforeBalance < $amount) {
                 $this->log->error("余额不足: balance={$beforeBalance}, amount={$amount}");
-                throw new \Exception("余额不足: balance={$beforeBalance}, amount={$amount}");
+                throw new Exception("余额不足: balance={$beforeBalance}, amount={$amount}");
             }
 
             $actualAmount = $amount;
@@ -310,7 +308,7 @@ class GameOperation implements Consumer
      * @param Player $player
      * @param int $platformId
      * @return void
-     * @throws \Exception
+     * @throws Exception
      */
     private function checkAndHandleMachineCrash(Player $player, int $platformId)
     {
@@ -325,7 +323,7 @@ class GameOperation implements Consumer
             ->first();
 
         if ($wallet && $wallet->money < 0) {
-            throw new \Exception("设备已爆机，禁止下注");
+            throw new Exception("设备已爆机，禁止下注");
         }
     }
 
@@ -335,8 +333,9 @@ class GameOperation implements Consumer
      * @param array $data 队列数据
      * @param Player $player 玩家对象
      * @return void
+     * @throws Exception
      */
-    private function processSettle(array $data, Player $player)
+    private function processSettle(array $data, Player $player): void
     {
         $params = $data['params'];
         $orderNo = $data['order_no'];
@@ -387,7 +386,7 @@ class GameOperation implements Consumer
             ->first();
 
         if (!$wallet) {
-            throw new \Exception("钱包不存在: player_id={$player->id}");
+            throw new Exception("钱包不存在: player_id={$player->id}");
         }
 
         $beforeBalance = $wallet->money;
@@ -572,8 +571,9 @@ class GameOperation implements Consumer
      * @param array $data 队列数据
      * @param Player $player 玩家对象
      * @return void
+     * @throws Exception
      */
-    private function processCancel(array $data, Player $player)
+    private function processCancel(array $data, Player $player): void
     {
         $params = $data['params'];
         $orderNo = $data['order_no'];
@@ -589,13 +589,13 @@ class GameOperation implements Consumer
         $betRecord = $this->fetchBetRecordWithRetry($orderNo, 5, 50000);
 
         if (!$betRecord) {
-            throw new \Exception("下注记录不存在（已重试5次）: {$orderNo}");
+            throw new Exception("下注记录不存在（已重试5次）: {$orderNo}");
         }
 
         // 加锁查询（准备更新）
         $betRecord = PlayGameRecord::where('id', $betRecord->id)->lockForUpdate()->first();
         if (!$betRecord) {
-            throw new \Exception("下注记录已被删除: {$orderNo}");
+            throw new Exception("下注记录已被删除: {$orderNo}");
         }
 
         // 2. 钱包退款（带锁）
@@ -604,7 +604,7 @@ class GameOperation implements Consumer
             ->first();
 
         if (!$wallet) {
-            throw new \Exception("钱包不存在");
+            throw new Exception("钱包不存在");
         }
 
         $beforeBalance = $wallet->money;
@@ -665,8 +665,9 @@ class GameOperation implements Consumer
      * @param array $data 队列数据
      * @param Player $player 玩家对象
      * @return void
+     * @throws Exception
      */
-    private function processRefund(array $data, Player $player)
+    private function processRefund(array $data, Player $player): void
     {
         $params = $data['params'];
         $orderNo = $data['order_no'];
@@ -685,7 +686,7 @@ class GameOperation implements Consumer
             ->first();
 
         if (!$wallet) {
-            throw new \Exception("钱包不存在");
+            throw new Exception("钱包不存在");
         }
 
         $beforeBalance = $wallet->money;
@@ -725,8 +726,9 @@ class GameOperation implements Consumer
      * @param string $sessionId SessionId
      * @param float $amount 退款金额
      * @return void
+     * @throws Exception
      */
-    private function processRSGRefund(array $data, Player $player, string $sessionId, float $amount)
+    private function processRSGRefund(array $data, Player $player, string $sessionId, float $amount): void
     {
         $params = $data['params'];
         $platformId = $params['platform_id'] ?? 1;
@@ -743,7 +745,7 @@ class GameOperation implements Consumer
             ->first();
 
         if (!$record) {
-            throw new \Exception("找不到原预扣记录: session_id={$sessionId}");
+            throw new Exception("找不到原预扣记录: session_id={$sessionId}");
         }
 
         // 2. 钱包加款（带锁）
@@ -752,7 +754,7 @@ class GameOperation implements Consumer
             ->first();
 
         if (!$wallet) {
-            throw new \Exception("钱包不存在");
+            throw new Exception("钱包不存在");
         }
 
         $beforeBalance = $wallet->money;
