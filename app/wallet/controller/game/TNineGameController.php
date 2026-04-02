@@ -91,9 +91,13 @@ class TNineGameController
             // 1. 批量查询玩家（1 次数据库查询）
             $players = Player::query()->whereIn('uuid', $users)->get()->keyBy('uuid');
 
+            $this->logger->info('t9余额查询记录:players', ['players' => $players]);
+
             // 2. 批量查询余额（使用 WalletService::getBatchBalance）
             $playerIds = $players->pluck('id')->toArray();
             $balances = \app\service\WalletService::getBatchBalance($playerIds);
+
+            $this->logger->info('t9余额查询记录:balances', ['balances' => $balances]);
 
             // 3. 组装返回数据
             $return = [];

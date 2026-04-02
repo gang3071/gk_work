@@ -387,7 +387,7 @@ class WalletService
             $cached = Redis::mget($cacheKeys);
 
             foreach ($playerIds as $index => $playerId) {
-                if (isset($cached[$index]) && $cached[$index] !== null && $cached[$index] !== false) {
+                if (isset($cached[$index]) && $cached[$index] !== false) {
                     $result[$playerId] = (float)$cached[$index];
                 } else {
                     $missingPlayerIds[] = $playerId;
