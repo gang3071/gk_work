@@ -132,7 +132,11 @@ class RsgGameController
 
             // 2.6 幂等性检查（Redis 锁 - 防止重复下注）
             $betKey = "rsg:bet:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+            $isDuplicate = !\support\Redis::setnx($betKey, 1);
+            if (!$isDuplicate) {
+                // 是第一次请求，设置过期时间
+                \support\Redis::expire($betKey, 300);
+            }
 
             if ($isDuplicate) {
                 // 重复订单，返回当前余额（不扣款）
@@ -243,7 +247,11 @@ class RsgGameController
 
             // 2.6 幂等性检查（使用 cancel 专用锁 - 防止重复取消）
             $cancelKey = "rsg:cancel:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::set($cancelKey, 1, ['NX', 'EX' => 300]);
+            $isDuplicate = !\support\Redis::setnx($cancelKey, 1);
+            if (!$isDuplicate) {
+                // 是第一次请求，设置过期时间
+                \support\Redis::expire($cancelKey, 300);
+            }
 
             if ($isDuplicate) {
                 // 重复取消请求，返回当前余额
@@ -339,7 +347,11 @@ class RsgGameController
 
             // 2.6 幂等性检查（使用 settle 专用锁 - 防止重复结算）
             $settleKey = "rsg:settle:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::set($settleKey, 1, ['NX', 'EX' => 300]);
+            $isDuplicate = !\support\Redis::setnx($settleKey, 1);
+            if (!$isDuplicate) {
+                // 是第一次请求，设置过期时间
+                \support\Redis::expire($settleKey, 300);
+            }
 
             if ($isDuplicate) {
                 // 重复结算请求，返回当前余额
@@ -443,7 +455,11 @@ class RsgGameController
 
             // 2.6 幂等性检查（使用 rebet 专用锁 - 防止重复重新结算）
             $rebetKey = "rsg:rebet:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::set($rebetKey, 1, ['NX', 'EX' => 300]);
+            $isDuplicate = !\support\Redis::setnx($rebetKey, 1);
+            if (!$isDuplicate) {
+                // 是第一次请求，设置过期时间
+                \support\Redis::expire($rebetKey, 300);
+            }
 
             if ($isDuplicate) {
                 // 重复重新结算请求，返回当前余额
@@ -540,7 +556,11 @@ class RsgGameController
 
             // 2.6 幂等性检查（使用 jackpot 专用锁 - 防止重复中奖）
             $jackpotKey = "rsg:jackpot:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::set($jackpotKey, 1, ['NX', 'EX' => 300]);
+            $isDuplicate = !\support\Redis::setnx($jackpotKey, 1);
+            if (!$isDuplicate) {
+                // 是第一次请求，设置过期时间
+                \support\Redis::expire($jackpotKey, 300);
+            }
 
             if ($isDuplicate) {
                 // 重复 Jackpot 请求，返回当前余额
