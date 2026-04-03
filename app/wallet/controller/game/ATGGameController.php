@@ -107,7 +107,7 @@ class ATGGameController
 
             $player = $this->service->player;
             $orderNo = $data['betId'];
-            $bet = $data['bet'];
+            $bet = $data['amount'];
 
             // 获取当前余额
             $currentBalance = \app\service\WalletService::getBalance($player->id);
@@ -129,7 +129,7 @@ class ATGGameController
                 'order_no' => $orderNo,
                 'amount' => $bet,
                 'platform_id' => $this->service->platform->id,
-                'game_code' => $data['game_code'] ?? '',
+                'game_code' => $data['gameCode'] ?? '',
                 'order_time' => $data['trade_time'] ?? date('Y-m-d H:i:s'),
                 'original_data' => $data,
             ];
@@ -141,7 +141,7 @@ class ATGGameController
                     'order_no' => $orderNo,
                     'amount' => $bet,
                     'platform_id' => $this->service->platform->id,
-                    'game_code' => $data['game_code'] ?? '',
+                    'game_code' => $data['gameCode'] ?? '',
                     'status' => 'pending',
                     'created_at' => time(),
                 ]);
@@ -255,7 +255,7 @@ class ATGGameController
 
             $player = $this->service->player;
             $orderNo = $data['betId'];
-            $refundAmount = $data['bet'] ?? 0;
+            $refundAmount = $data['amount'] ?? 0;
 
             // 获取当前余额
             $currentBalance = \app\service\WalletService::getBalance($player->id);
