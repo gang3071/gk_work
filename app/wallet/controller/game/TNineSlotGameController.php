@@ -135,6 +135,8 @@ class TNineSlotGameController
                     'bet_order_no' => $orderNo,
                     'amount' => max($winAmount, 0),
                     'result_amount' => $winAmount,
+                    'bet_amount' => $betAmount,  // ← 原始下注金额（用于计算win）
+                    'bet_kind' => $betKind,      // ← 下注类型（用于判断免费游戏）
                     'platform_id' => $this->service->platform->id,
                     'game_code' => $params['gameCode'] ?? '',
                     'original_data' => $params,
@@ -215,6 +217,8 @@ class TNineSlotGameController
                     'bet_order_no' => $orderNo,
                     'amount' => max($winAmount, 0),
                     'result_amount' => $winAmount,
+                    'bet_amount' => $betAmount,  // ← 原始下注金额（用于计算win）
+                    'bet_kind' => $betKind,      // ← 下注类型（普通游戏）
                     'platform_id' => $this->service->platform->id,
                     'game_code' => $params['gameCode'] ?? '',
                     'original_data' => $params,

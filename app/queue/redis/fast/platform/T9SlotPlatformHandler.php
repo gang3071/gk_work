@@ -81,12 +81,16 @@ class T9SlotPlatformHandler extends BasePlatformHandler
         $platformId = $params['platform_id'] ?? 1;
         $amount = (float)($params['amount'] ?? 0);  // max(winlose, 0)
         $resultAmount = (float)($params['result_amount'] ?? $amount);  // 净盈亏（可为负数）
+        $betAmount = (float)($params['bet_amount'] ?? 0);  // 原始下注金额
+        $betKind = (int)($params['bet_kind'] ?? 0);  // 下注类型（3=免费游戏）
 
         $this->log->info("T9SLOT: 处理结算", [
             'order_no' => $orderNo,
             'bet_order_no' => $betOrderNo,
             'amount' => $amount,
             'result_amount' => $resultAmount,
+            'bet_amount' => $betAmount,
+            'bet_kind' => $betKind,
         ]);
 
         // 1. 查找下注记录
@@ -108,10 +112,34 @@ class T9SlotPlatformHandler extends BasePlatformHandler
         // 3. 更新或创建游戏记录
         if ($betRecord) {
             // T9SLOT特殊逻辑：
-            // - win = bet + winlose  派彩总额
-            // - diff = winlose  净盈亏（可能为负数）
-            $betRecord->win = bcadd($betRecord->bet, $resultAmount, 2);  // ← 关键：bet + 净盈亏
-            $betRecord->diff = $resultAmount;  // ← 关键：直接使用净盈亏，不计算！
+            // - win = betAmount + winlose（派彩总额，不能为负）
+            // - diff = winlose（净盈亏，可能为负数）
+
+            if ($betKind == 3) {
+                // 免费游戏：累加到同一个订单（类似旧版逻辑）
+                $betRecord->win = bcadd($betRecord->win, $resultAmount, 2);  // ← 累加净盈亏
+                $betRecord->win = max(0, $betRecord->win);  // ← 确保非负
+                $betRecord->diff = bcadd($betRecord->diff, $resultAmount, 2);  // ← 累加diff
+
+                // 累加original_data
+                $originalData = json_decode($betRecord->original_data, true) ?? [];
+                $originalData[] = $params['original_data'] ?? $params;
+                $betRecord->original_data = json_encode($originalData, JSON_UNESCAPED_UNICODE);
+
+                $this->log->info("T9SLOT: 免费游戏累加", [
+                    'order_no' => $betOrderNo,
+                    'old_win' => $betRecord->win - $resultAmount,
+                    'add_winlose' => $resultAmount,
+                    'new_win' => $betRecord->win,
+                ]);
+            } else {
+                // 普通游戏：使用betAmount计算win
+                $actualBetAmount = $betAmount > 0 ? $betAmount : $betRecord->bet;
+                $winAmount = bcadd($actualBetAmount, $resultAmount, 2);
+                $betRecord->win = max(0, $winAmount);  // ← 关键：win不能为负数
+                $betRecord->diff = $resultAmount;  // ← 关键：直接使用净盈亏
+            }
+
             $betRecord->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
 
             // T9SLOT使用settleTime作为结算时间
@@ -130,6 +158,12 @@ class T9SlotPlatformHandler extends BasePlatformHandler
             // 免费游戏（betKind=3）或未找到下注记录：创建新记录
             $originalData = $params['original_data'] ?? $params;
 
+            $this->log->warning("T9SLOT: 未找到下注记录，创建新结算记录", [
+                'bet_order_no' => $betOrderNo,
+                'bet_kind' => $betKind,
+                'bet_amount' => $betAmount,
+            ]);
+
             $record = new PlayGameRecord();
             $record->player_id = $player->id;
             $record->parent_player_id = $player->recommend_id ?? 0;
@@ -138,9 +172,10 @@ class T9SlotPlatformHandler extends BasePlatformHandler
             $record->department_id = $player->department_id ?? 0;
             $record->order_no = $betOrderNo;
             $record->platform_id = $platformId;
-            $record->bet = 0;  // 免费游戏
-            $record->win = max($resultAmount, 0);  // 免费游戏的win = 中奖金额
-            $record->diff = $resultAmount;  // ← 关键：使用净盈亏
+            $record->bet = $betAmount;  // ← 使用原始betAmount
+            // win = betAmount + winlose（不能为负）
+            $record->win = max(0, bcadd($betAmount, $resultAmount, 2));
+            $record->diff = $resultAmount;  // ← 净盈亏
             $record->game_code = $params['game_code'] ?? '';
             $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
 
