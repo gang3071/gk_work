@@ -159,6 +159,7 @@ class RsgPlatformHandler extends BasePlatformHandler
         $orderNo = $data['order_no'];
         $platformId = $params['platform_id'] ?? 1;
         $amount = (float)($params['amount'] ?? 0);
+        $betAmount = (float)($params['bet_amount'] ?? 0);  // ← 原始下注金额
 
         $isJackpot = $params['is_jackpot'] ?? false;
         $isRefund = ($params['type'] ?? '') === 'refund';
@@ -167,6 +168,7 @@ class RsgPlatformHandler extends BasePlatformHandler
         $this->log->info("RSG: 处理结算", [
             'order_no' => $orderNo,
             'amount' => $amount,
+            'bet_amount' => $betAmount,
             'is_jackpot' => $isJackpot,
             'is_refund' => $isRefund,
         ]);
@@ -224,8 +226,10 @@ class RsgPlatformHandler extends BasePlatformHandler
 
         } elseif ($betRecord) {
             // 更新下注记录
+            // ✅ 使用原始请求的BetAmount计算diff（而非数据库的bet）
+            $actualBetAmount = $betAmount > 0 ? $betAmount : $betRecord->bet;
             $betRecord->win = $amount;
-            $betRecord->diff = bcsub($amount, $betRecord->bet, 2);
+            $betRecord->diff = bcsub($amount, $actualBetAmount, 2);  // ← 关键修复
             $betRecord->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
             $betRecord->platform_action_at = $params['play_time'] ?? Carbon::now()->toDateTimeString();
             $betRecord->action_data = json_encode($params['original_data'] ?? $params, JSON_UNESCAPED_UNICODE);
