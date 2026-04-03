@@ -44,6 +44,28 @@ class RsgPlatformHandler extends BasePlatformHandler
             'is_prepay' => $isPrepay,
         ]);
 
+        // ✅ 0. 时序检测：检查是否已有 settle 记录（先到达）
+        // 优化：先查 Redis，避免无谓的数据库查询
+        $settleOrderNo = $orderNo . '_settle';
+        $settlePendingKey = "order:settle_pending:{$orderNo}";
+
+        // 只有 settle 处理时会设置这个标记
+        $existingSettle = null;
+        if (\support\Redis::exists($settlePendingKey)) {
+            // 有标记，说明 settle 先到达，查数据库
+            $existingSettle = PlayGameRecord::where('order_no', $settleOrderNo)
+                ->where('platform_id', $platformId)
+                ->lockForUpdate()
+                ->first();
+        }
+
+        if ($existingSettle) {
+            // 时序倒置：settle 先到达，现在补充 bet 信息并合并记录
+            \support\Redis::del($settlePendingKey);  // 清理标记
+            $this->mergeSettleRecordWithBet($existingSettle, $data, $player, $orderNo, $platformId, $amount, $isPrepay, $params);
+            return;
+        }
+
         // 1. 爆机检查
         if ($this->needsMachineCrashCheck()) {
             $this->checkMachineCrash($player, $platformId);
@@ -189,10 +211,24 @@ class RsgPlatformHandler extends BasePlatformHandler
             return;
         }
 
-        // 1. 查找下注记录
+        // 1. 查找下注记录（✅ 优化：快速重试，避免长时间等待）
         $betRecord = null;
         if ($orderNo) {
-            $betRecord = $this->fetchBetRecord($orderNo, 3, 50000);
+            // 优先从 Redis 缓存获取（<1ms）
+            $betRecord = $this->fetchBetRecord($orderNo, 5, 20000);  // 5次重试，间隔20ms = 最多100ms
+
+            if (!$betRecord && !$isJackpot && !$isRefund) {
+                // 仍未找到，检查 pending 状态
+                $pendingKey = "order:pending:{$orderNo}";
+                if (\support\Redis::exists($pendingKey)) {
+                    $this->log->info("RSG: bet 还在处理中，短暂等待", [
+                        'order_no' => $orderNo,
+                    ]);
+                    usleep(50000);  // 等50ms（而非200ms）
+                    $betRecord = $this->fetchBetRecord($orderNo, 1, 0);
+                }
+            }
+
             if ($betRecord) {
                 $betRecord = PlayGameRecord::where('id', $betRecord->id)->lockForUpdate()->first();
             }
@@ -286,6 +322,10 @@ class RsgPlatformHandler extends BasePlatformHandler
             $record->platform_action_at = Carbon::now()->toDateTimeString();
             $record->save();
             $recordId = $record->id;
+
+            // ✅ 设置 Redis 标记（通知后续 bet 请求这是时序倒置）
+            $settlePendingKey = "order:settle_pending:{$orderNo}";
+            \support\Redis::setex($settlePendingKey, 300, 1);  // 5分钟过期
         }
 
         // 4. 创建交易记录（只在有加钱时）
@@ -394,6 +434,139 @@ class RsgPlatformHandler extends BasePlatformHandler
         $this->log->info("RSG: 打鱼机退款处理成功", [
             'session_id' => $sessionId,
             'record_id' => $record->id,
+        ]);
+    }
+
+    /**
+     * 合并 settle 记录（时序倒置处理）
+     * 当 bet 请求晚于 settle 到达时，将 settle 记录更新为完整记录
+     */
+    private function mergeSettleRecordWithBet(
+        PlayGameRecord $settleRecord,
+        array          $data,
+        Player         $player,
+        string         $orderNo,
+        int            $platformId,
+        float          $amount,
+        bool           $isPrepay,
+        array          $params
+    ): void
+    {
+        $this->log->warning("RSG: 时序倒置，合并 settle 记录", [
+            'order_no' => $orderNo,
+            'settle_order_no' => $settleRecord->order_no,
+            'record_id' => $settleRecord->id,
+        ]);
+
+        // 1. 钱包扣款
+        $wallet = PlayerPlatformCash::where('player_id', $player->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (!$wallet) {
+            throw new Exception("钱包不存在: player_id={$player->id}");
+        }
+
+        $beforeBalance = $wallet->money;
+        $actualAmount = $amount;
+
+        // prepay 特殊处理
+        if ($isPrepay) {
+            if ($beforeBalance < $amount) {
+                $actualAmount = $beforeBalance;
+                $wallet->money = 0;
+                $this->log->info("RSG prepay 余额不足（时序修正）", [
+                    'request_amount' => $amount,
+                    'actual_amount' => $actualAmount,
+                    'order_no' => $orderNo,
+                ]);
+            } else {
+                $wallet->money = bcsub($wallet->money, $amount, 2);
+            }
+        } else {
+            // 普通下注：爆机检查 + 余额检查
+            if ($this->needsMachineCrashCheck()) {
+                $this->checkMachineCrash($player, $platformId);
+            }
+            if ($beforeBalance < $amount) {
+                throw new Exception("余额不足: balance={$beforeBalance}, amount={$amount}");
+            }
+            $wallet->money = bcsub($wallet->money, $amount, 2);
+        }
+        $wallet->save();
+
+        // 2. 更新 settle 记录
+        $settleRecord->order_no = $orderNo;  // ✅ 去掉 _settle 后缀
+        $settleRecord->bet = $actualAmount;
+        $settleRecord->diff = bcsub($settleRecord->win, $actualAmount, 2);  // ✅ 重新计算 diff
+        $settleRecord->order_time = $params['order_time'] ?? Carbon::now()->toDateTimeString();
+
+        // 合并 original_data
+        $originalData = json_decode($settleRecord->original_data, true) ?? [];
+        $originalData['bet_info'] = $params['original_data'] ?? $params;
+        $settleRecord->original_data = json_encode($originalData, JSON_UNESCAPED_UNICODE);
+
+        if ($isPrepay) {
+            $settleRecord->type = defined('PlayGameRecord::TYPE_PREPAY') ? PlayGameRecord::TYPE_PREPAY : 3;
+        }
+
+        $settleRecord->save();
+
+        // 3. 更新 Redis 缓存
+        $this->cacheOrderToRedis($orderNo, [
+            'id' => $settleRecord->id,
+            'player_id' => $settleRecord->player_id,
+            'order_no' => $orderNo,
+            'bet' => $settleRecord->bet,
+            'platform_id' => $platformId,
+            'game_code' => $settleRecord->game_code,
+            'settlement_status' => $settleRecord->settlement_status,
+            'created_at' => $settleRecord->created_at ?? Carbon::now()->toDateTimeString(),
+        ]);
+        $this->clearPendingStatus($orderNo);
+
+        // 4. 创建交易记录（下注）
+        $deliveryRecord = new PlayerDeliveryRecord();
+        $deliveryRecord->player_id = $player->id;
+        $deliveryRecord->department_id = $player->department_id ?? 0;
+        $deliveryRecord->target = $settleRecord->getTable();
+        $deliveryRecord->target_id = $settleRecord->id;
+        $deliveryRecord->platform_id = $platformId;
+        $deliveryRecord->amount = $actualAmount;
+        $deliveryRecord->amount_before = $beforeBalance;
+        $deliveryRecord->amount_after = $wallet->money;
+        $deliveryRecord->tradeno = $orderNo;
+        $deliveryRecord->user_id = 0;
+        $deliveryRecord->user_name = '';
+
+        if ($isPrepay) {
+            $deliveryRecord->type = defined('PlayerDeliveryRecord::TYPE_PREPAY') ? PlayerDeliveryRecord::TYPE_PREPAY : PlayerDeliveryRecord::TYPE_BET;
+            $deliveryRecord->source = 'player_prepay';
+            $deliveryRecord->remark = 'RSG预付（时序修正）';
+        } else {
+            $deliveryRecord->type = PlayerDeliveryRecord::TYPE_BET;
+            $deliveryRecord->source = 'player_bet';
+            $deliveryRecord->remark = 'RSG下注（时序修正）';
+        }
+
+        $deliveryRecord->save();
+
+        // 5. 更新余额缓存
+        try {
+            \app\service\WalletService::updateCache($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF, (float)$wallet->money);
+        } catch (\Throwable $e) {
+            $this->log->warning("RSG: 时序修正后缓存更新失败", [
+                'order_no' => $orderNo,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        $this->log->info("RSG: 时序倒置修正完成", [
+            'order_no' => $orderNo,
+            'record_id' => $settleRecord->id,
+            'bet' => $actualAmount,
+            'win' => $settleRecord->win,
+            'diff' => $settleRecord->diff,
         ]);
     }
 }

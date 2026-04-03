@@ -63,8 +63,17 @@ class GameOperation implements Consumer
         Db::beginTransaction();
 
         try {
-            // 1. 幂等性检查（数据库）
-            $exists = PlayGameRecord::where('order_no', $orderNo)->exists();
+            // 1. 幂等性检查（✅ 优化：Redis缓存 + LIMIT 1）
+            $cacheKey = "order:cache:{$orderNo}";
+            $cachedOrder = \support\Redis::hGetAll($cacheKey);
+            $exists = !empty($cachedOrder);
+
+            if (!$exists) {
+                // Redis 没有，查数据库（使用 LIMIT 1 代替 exists()）
+                $record = PlayGameRecord::where('order_no', $orderNo)->first(['id', 'platform_id']);
+                $exists = !is_null($record);
+            }
+
             if ($exists && $operation === 'bet') {
                 // 下注操作：订单已存在，检查是否支持累计下注
                 $handler = PlatformHandlerFactory::create($platform, $this->log);
