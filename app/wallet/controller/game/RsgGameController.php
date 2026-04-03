@@ -409,6 +409,8 @@ class RsgGameController
                 'order_no' => $orderNo,
                 'amount' => $winAmount,
                 'elapsed_ms' => round($elapsed, 2),
+                'estimatedBalance' => $estimatedBalance,
+                'beforeBalance' => $currentBalance
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [

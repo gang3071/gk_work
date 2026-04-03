@@ -226,10 +226,8 @@ class RsgPlatformHandler extends BasePlatformHandler
 
         } elseif ($betRecord) {
             // 更新下注记录
-            // ✅ 使用原始请求的BetAmount计算diff（而非数据库的bet）
-            $actualBetAmount = $betAmount > 0 ? $betAmount : $betRecord->bet;
             $betRecord->win = $amount;
-            $betRecord->diff = bcsub($amount, $actualBetAmount, 2);  // ← 关键修复
+            $betRecord->diff = bcsub($amount, $betAmount, 2);  // ← 关键修复
             $betRecord->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
             $betRecord->platform_action_at = $params['play_time'] ?? Carbon::now()->toDateTimeString();
             $betRecord->action_data = json_encode($params['original_data'] ?? $params, JSON_UNESCAPED_UNICODE);
