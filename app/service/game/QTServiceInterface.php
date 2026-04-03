@@ -453,24 +453,6 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 return ['balance' => round((float)$machineWallet->money, 2)];
             }
 
-            // 创建游戏记录
-            $insert = [
-                'player_id' => $this->player->id,
-                'parent_player_id' => $this->player->recommend_id ?? 0,
-                'agent_player_id' => $this->player->recommend_promoter->recommend_id ?? 0,
-                'player_uuid' => $this->player->uuid,
-                'platform_id' => $this->platform->id,
-                'game_code' => $params['game_code'] ?? '',
-                'department_id' => $this->player->department_id,
-                'bet' => $amount,
-                'win' => 0,
-                'diff' => -$amount,
-                'order_no' => $orderId,
-                'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
-                'order_time' => Carbon::now()->toDateTimeString(),
-                'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-            ];
-
             // ✅ 同步扣款（触发缓存更新）
             $machineWallet->money = bcsub($machineWallet->money, $amount, 2);
             $machineWallet->save();

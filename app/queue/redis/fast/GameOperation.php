@@ -20,10 +20,8 @@ use Webman\RedisQueue\Consumer;
  */
 class GameOperation implements Consumer
 {
-    public $queue = 'game-operation';
-    public $connection = 'default';
-    public $maxAttempts = 3;
-
+    public string $queue = 'game-operation';
+    public string $connection = 'default';
     // MT平台状态常量
     private const BET_STATUS_NOT = 2;  // 未中奖
     private const BET_STATUS_WIN = 3;  // 中奖
@@ -43,7 +41,7 @@ class GameOperation implements Consumer
      * @return void
      * @throws Throwable
      */
-    public function consume($data)
+    public function consume($data): void
     {
         $platform = $data['platform'] ?? 'unknown';
         $operation = $data['operation'] ?? 'unknown';
@@ -120,8 +118,9 @@ class GameOperation implements Consumer
      * @param array $data 队列数据
      * @param Player $player 玩家对象
      * @return void
+     * @throws Exception
      */
-    private function processBet(array $data, Player $player)
+    private function processBet(array $data, Player $player): void
     {
         $params = $data['params'];
         $orderNo = $data['order_no'];
@@ -312,18 +311,34 @@ class GameOperation implements Consumer
      */
     private function checkAndHandleMachineCrash(Player $player, int $platformId)
     {
-        // 获取玩家所在设备
-        $machine = $player->machine;
-        if (!$machine) {
-            return;
-        }
+        try {
+            // 获取玩家的机台钱包
+            $machineWallet = $player->machine_wallet;
 
-        // 检查设备是否爆机（余额为负）
-        $wallet = PlayerPlatformCash::where('player_id', $machine->id)
-            ->first();
+            if (!$machineWallet) {
+                return;
+            }
 
-        if ($wallet && $wallet->money < 0) {
-            throw new Exception("设备已爆机，禁止下注");
+            // 只检查实体机平台（platform_id = 1）
+            if ($machineWallet->platform_id != PlayerPlatformCash::PLATFORM_SELF) {
+                return;
+            }
+
+            // 检查 is_crashed 字段
+            if ((bool)$machineWallet->is_crashed) {
+                throw new Exception("玩家钱包已爆机，禁止下注");
+            }
+
+        } catch (Exception $e) {
+            $this->log->error("GameOperation: 爆机检查失败", [
+                'player_id' => $player->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            // 如果是爆机异常，重新抛出
+            if (strpos($e->getMessage(), '爆机') !== false) {
+                throw $e;
+            }
         }
     }
 

@@ -349,16 +349,13 @@ class GameBetRecord implements Consumer
 
             // 2. 记录到失败队列（可选：用于人工处理）
             $this->logToFailureQueue($package);
-
-            // 3. 记录到数据库（可选：用于统计和分析）
-            $this->logToDatabase($exception, $package);
         }
     }
 
     /**
      * 发送严重告警（Telegram）
      */
-    private function sendCriticalAlert(\Throwable $exception, array $package)
+    private function sendCriticalAlert(\Throwable $exception, array $package): void
     {
         try {
             $token = config('plugin.webman.push.app.telegram_bot_token')
@@ -465,34 +462,10 @@ class GameBetRecord implements Consumer
     }
 
     /**
-     * 记录到数据库（用于统计和分析）
-     */
-    private function logToDatabase(\Throwable $exception, array $package)
-    {
-        try {
-            // 可选：创建 queue_failures 表记录失败详情
-            // 用于后续分析失败原因和趋势
-
-            /*
-            DB::table('queue_failures')->insert([
-                'queue' => $package['queue'],
-                'message_id' => $package['id'],
-                'payload' => json_encode($package['data']),
-                'exception' => get_class($exception),
-                'exception_message' => $exception->getMessage(),
-                'failed_at' => now(),
-            ]);
-            */
-        } catch (\Throwable $e) {
-            Log::error('记录失败数据库失败', ['error' => $e->getMessage()]);
-        }
-    }
-
-    /**
      * 触发彩金检查
      * 在结算成功后，发送到彩金队列进行抽奖检查
      */
-    private function triggerLotteryCheck(PlayGameRecord $record, $log)
+    private function triggerLotteryCheck(PlayGameRecord $record, $log): void
     {
         try {
             // 过滤条件检查
