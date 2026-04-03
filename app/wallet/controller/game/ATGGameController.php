@@ -106,7 +106,7 @@ class ATGGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['trade_no'];
+            $orderNo = $data['betId'];
             $bet = $data['bet'];
 
             // 获取当前余额
@@ -194,7 +194,7 @@ class ATGGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['trade_no'];
+            $orderNo = $data['betId'];
             $winAmount = $data['win'] ?? 0;
 
             // 获取当前余额
@@ -254,7 +254,7 @@ class ATGGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['trade_no'];
+            $orderNo = $data['betId'];
             $refundAmount = $data['bet'] ?? 0;
 
             // 获取当前余额
