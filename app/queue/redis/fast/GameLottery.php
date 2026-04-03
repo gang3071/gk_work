@@ -224,22 +224,4 @@ class GameLottery implements Consumer
             Log::error('记录失败队列失败', ['error' => $e->getMessage()]);
         }
     }
-
-    /**
-     * 获取头像URL
-     * @param $avatar
-     * @return string
-     */
-    private function getAvatarUrl($avatar): string
-    {
-        if (!$avatar) {
-            return '';
-        }
-
-        if (is_numeric($avatar)) {
-            return config('def_avatar.' . $avatar, '');
-        }
-
-        return $avatar;
-    }
 }
