@@ -352,14 +352,18 @@ abstract class BasePlatformHandler implements PlatformHandlerInterface
     {
         $params = $data['params'];
         $orderNo = $data['order_no'];
+        $betOrderNo = $data['bet_order_no'] ?? $orderNo;  // ← 原始下注订单号
         $platformId = $params['platform_id'] ?? 1;
 
-        $this->log->info("处理取消", ['order_no' => $orderNo]);
+        $this->log->info("处理取消", [
+            'order_no' => $orderNo,
+            'bet_order_no' => $betOrderNo,
+        ]);
 
-        // 1. 查找下注记录
-        $betRecord = $this->fetchBetRecord($orderNo, 5, 50000);
+        // 1. 查找下注记录（使用bet_order_no查找原始记录）
+        $betRecord = $this->fetchBetRecord($betOrderNo, 5, 50000);
         if (!$betRecord) {
-            throw new Exception("下注记录不存在: {$orderNo}");
+            throw new Exception("下注记录不存在: {$betOrderNo}");
         }
 
         // 加锁
