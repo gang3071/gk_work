@@ -27,6 +27,7 @@ class PlatformHandlerFactory
             'O8' => new O8PlatformHandler($log),
             'QT' => new QtPlatformHandler($log),
             'SP' => new SpPlatformHandler($log),
+            'T9SLOT' => new T9SlotPlatformHandler($log),
             // 其他平台使用默认处理器
             default => new DefaultPlatformHandler($log, strtoupper($platformCode)),
         };
@@ -48,11 +49,11 @@ class PlatformHandlerFactory
             'O8',
             'QT',
             'SP',
+            'T9SLOT',
             // 使用默认处理器
             'SA',
             'ATG',
             'KT',
-            'T9SLOT',
             'RSGLIVE',
             'SPSDY',
             'JDB',

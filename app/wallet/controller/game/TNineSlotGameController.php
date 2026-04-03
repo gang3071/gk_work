@@ -122,7 +122,7 @@ class TNineSlotGameController
             $orderNo = $params['betId'] ?? $params['roundId'] ?? '';
             $betKind = $params['betKind'] ?? 0;
             $betAmount = $params['betAmount'] ?? 0;
-            $winAmount = $params['winAmount'] ?? 0;
+            $winAmount = $params['winlose'] ?? $params['payoutAmount'] ?? 0;  // T9平台使用winlose/payoutAmount表示净盈亏
 
             // 获取当前余额
             $currentBalance = \app\service\WalletService::getBalance($player->id);
@@ -135,6 +135,8 @@ class TNineSlotGameController
                     'bet_order_no' => $orderNo,
                     'amount' => max($winAmount, 0),
                     'result_amount' => $winAmount,
+                    'platform_id' => $this->service->platform->id,
+                    'game_code' => $params['gameCode'] ?? '',
                     'original_data' => $params,
                 ];
 
@@ -213,6 +215,8 @@ class TNineSlotGameController
                     'bet_order_no' => $orderNo,
                     'amount' => max($winAmount, 0),
                     'result_amount' => $winAmount,
+                    'platform_id' => $this->service->platform->id,
+                    'game_code' => $params['gameCode'] ?? '',
                     'original_data' => $params,
                 ];
                 GameQueueService::sendSettle('T9SLOT', $player, $settleParams);
