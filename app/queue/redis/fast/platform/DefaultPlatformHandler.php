@@ -153,18 +153,20 @@ class DefaultPlatformHandler extends BasePlatformHandler
     {
         $params = $data['params'];
         $orderNo = $data['order_no'];
+        $betOrderNo = $data['bet_order_no'] ?? $orderNo;  // 下注订单号（用于查找原始记录）
         $platformId = $params['platform_id'] ?? 1;
         $amount = (float)($params['amount'] ?? 0);
 
         $this->log->info("{$this->platformCode}: 处理结算", [
             'order_no' => $orderNo,
+            'bet_order_no' => $betOrderNo,
             'amount' => $amount,
         ]);
 
-        // 1. 查找下注记录
+        // 1. 查找下注记录（使用bet_order_no查找）
         $betRecord = null;
-        if ($orderNo) {
-            $betRecord = $this->fetchBetRecord($orderNo, 3, 50000);
+        if ($betOrderNo) {
+            $betRecord = $this->fetchBetRecord($betOrderNo, 3, 50000);
             if ($betRecord) {
                 $betRecord = PlayGameRecord::where('id', $betRecord->id)->lockForUpdate()->first();
             }

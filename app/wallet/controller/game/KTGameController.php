@@ -196,11 +196,12 @@ class KTGameController
 
                 // TakeWin=1 表示立即结算
                 if ($takeWin == 1) {
-                    $winAmount = $params['Win'] ?? 0;  // ← 修复：使用Win而不是WinAmount
+                    $winAmount = $params['Win'] ?? 0;
 
                     // 发送结算队列
                     $settleParams = [
-                        'order_no' => $orderNo,  // ← 修复：不增加_settle后缀
+                        'order_no' => $orderNo . '_settle',  // ← 结算订单号（唯一）
+                        'bet_order_no' => $orderNo,          // ← 下注订单号（用于查找）
                         'amount' => max($winAmount, 0),
                         'platform_id' => $this->service->platform->id,
                         'original_data' => $params,
