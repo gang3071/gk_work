@@ -203,7 +203,10 @@ class O8GameController
 
                 // 检查幂等性
                 $betKey = "o8:bet:lock:{$orderNo}";
-                $isDuplicate = !\support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+                $isDuplicate = !\support\Redis::setnx($betKey, 1);
+                if (!$isDuplicate) {
+                    \support\Redis::expire($betKey, 300);
+                }
 
                 if ($isDuplicate) {
                     // 重复订单，返回当前余额
@@ -316,7 +319,10 @@ class O8GameController
 
                 // 检查幂等性
                 $settleKey = "o8:settle:lock:{$orderNo}";
-                $isDuplicate = !\support\Redis::set($settleKey, 1, ['NX', 'EX' => 300]);
+                $isDuplicate = !\support\Redis::setnx($settleKey, 1);
+                if (!$isDuplicate) {
+                    \support\Redis::expire($settleKey, 300);
+                }
 
                 if ($isDuplicate) {
                     // 已结算，返回当前余额

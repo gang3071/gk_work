@@ -94,7 +94,10 @@ class SAGameController
 
             // 检查幂等性
             $betKey = "sa:bet:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
+            $isDuplicate = !\support\Redis::setnx($betKey, 1);
+            if (!$isDuplicate) {
+                \support\Redis::expire($betKey, 300);
+            }
 
             if ($isDuplicate) {
                 // 重复订单，返回当前余额
