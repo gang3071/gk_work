@@ -119,7 +119,7 @@ class TNineSlotGameController
             $this->service->player = Player::query()->where('uuid', $userId)->first();
             $player = $this->service->player;
 
-            $orderNo = $params['betId'] ?? $params['roundId'] ?? '';
+            $orderNo = $params['gameOrderNumber'];
             $betKind = $params['betKind'] ?? 0;
             $betAmount = $params['betAmount'] ?? 0;
             $winAmount = $params['winlose'] ?? $params['payoutAmount'] ?? 0;  // T9平台使用winlose/payoutAmount表示净盈亏
@@ -152,7 +152,7 @@ class TNineSlotGameController
                         $estimatedBalance = bcadd($currentBalance, $winAmount, 2);
                     }
 
-                    $return = ['balance' => $estimatedBalance];
+                    $return = ['afterBalance' => $estimatedBalance,'beforeBalance'=>$currentBalance];
                 } else {
                     // 队列失败，同步降级
                     $return = $this->service->betResulet($params);
@@ -230,7 +230,7 @@ class TNineSlotGameController
                     $estimatedBalance = bcadd($estimatedBalance, $winAmount, 2);
                 }
 
-                $return = ['balance' => $estimatedBalance];
+                $return = ['afterBalance' => $estimatedBalance,'beforeBalance'=>$currentBalance];
             } else {
                 // 队列失败，同步降级
                 \support\Redis::del($betKey);
@@ -314,7 +314,7 @@ class TNineSlotGameController
                 // 预估余额：退款
                 $estimatedBalance = bcadd($currentBalance, $refundAmount, 2);
 
-                $return = ['balance' => $estimatedBalance];
+                $return = ['afterBalance' => $estimatedBalance,'beforeBalance'=>$currentBalance];
             } else {
                 // 队列失败，同步降级
                 $return = $this->service->cancelBet($params);
