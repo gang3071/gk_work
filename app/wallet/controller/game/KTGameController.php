@@ -196,14 +196,13 @@ class KTGameController
 
                 // TakeWin=1 表示立即结算
                 if ($takeWin == 1) {
-                    $winAmount = $params['WinAmount'] ?? 0;
+                    $winAmount = $params['Win'] ?? 0;  // ← 修复：使用Win而不是WinAmount
 
                     // 发送结算队列
                     $settleParams = [
-                        'order_no' => $orderNo . '_settle',
-                        'bet_order_no' => $orderNo,
+                        'order_no' => $orderNo,  // ← 修复：不增加_settle后缀
                         'amount' => max($winAmount, 0),
-                        'result_amount' => $winAmount,
+                        'platform_id' => $this->service->platform->id,
                         'original_data' => $params,
                     ];
                     GameQueueService::sendSettle('KT', $player, $settleParams);
