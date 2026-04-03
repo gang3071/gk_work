@@ -147,6 +147,16 @@ class RsgPlatformHandler extends BasePlatformHandler
 
         $deliveryRecord->save();
 
+        // 6. 强制更新缓存（确保缓存与数据库一致 - 双重保险）
+        try {
+            \app\service\WalletService::updateCache($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF,(float)$wallet->money);
+        } catch (\Throwable $e) {
+            $this->log->warning("RSG: 下注后缓存更新失败", [
+                'order_no' => $orderNo,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         $this->log->info("RSG: 下注处理成功", [
             'order_no' => $orderNo,
             'record_id' => $record->id,
@@ -297,6 +307,20 @@ class RsgPlatformHandler extends BasePlatformHandler
             $this->sendLotteryQueue($player, $betRecord);
         }
 
+        // 6. 强制更新缓存（确保缓存与数据库一致 - 双重保险）
+        try {
+            // 重新读取最新余额并更新缓存
+            $latestWallet = \app\model\PlayerPlatformCash::where('player_id', $player->id)->first();
+            if ($latestWallet) {
+                \app\service\WalletService::updateCache($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF,(float)$latestWallet->money);
+            }
+        } catch (\Throwable $e) {
+            $this->log->warning("RSG: 结算后缓存更新失败", [
+                'order_no' => $orderNo,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         $this->log->info("RSG: 结算处理成功", [
             'order_no' => $orderNo,
             'record_id' => $recordId ?? null,
@@ -352,6 +376,20 @@ class RsgPlatformHandler extends BasePlatformHandler
         $deliveryRecord->user_id = 0;
         $deliveryRecord->user_name = '';
         $deliveryRecord->save();
+
+        // 5. 强制更新缓存（确保缓存与数据库一致 - 双重保险）
+        try {
+            // 重新读取最新余额并更新缓存
+            $latestWallet = \app\model\PlayerPlatformCash::where('player_id', $player->id)->first();
+            if ($latestWallet) {
+                \app\service\WalletService::updateCache($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF,(float)$latestWallet->money);
+            }
+        } catch (\Throwable $e) {
+            $this->log->warning("RSG: 退款后缓存更新失败", [
+                'session_id' => $sessionId,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         $this->log->info("RSG: 打鱼机退款处理成功", [
             'session_id' => $sessionId,

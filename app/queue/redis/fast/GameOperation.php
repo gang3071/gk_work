@@ -103,6 +103,9 @@ class GameOperation implements Consumer
             // 回滚事务
             Db::rollBack();
 
+            // 清除缓存，避免脏数据（Controller 已更新预估值，但实际操作失败）
+            $this->clearPlayerCache($playerId);
+
             $elapsed = (microtime(true) - $startTime) * 1000;
             $this->log->error("GameOperation: 处理失败", [
                 'platform' => $platform,
@@ -141,5 +144,29 @@ class GameOperation implements Consumer
             'refund' => $handler->processRefund($data, $player),
             default => throw new Exception("未知操作类型: {$operation}"),
         };
+    }
+
+    /**
+     * 清除玩家余额缓存
+     * 在队列处理失败时调用，避免缓存脏数据
+     *
+     * @param int $playerId 玩家ID
+     * @return void
+     */
+    private function clearPlayerCache(int $playerId): void
+    {
+        try {
+            \app\service\WalletService::clearCache($playerId, \app\model\PlayerPlatformCash::PLATFORM_SELF);
+            $this->log->warning("GameOperation: 处理失败，已清除余额缓存", [
+                'player_id' => $playerId,
+                'reason' => '避免脏数据（Controller已更新预估值但队列失败）',
+            ]);
+        } catch (\Throwable $e) {
+            // 清除缓存失败不影响主流程（队列会重试）
+            $this->log->error("GameOperation: 清除缓存失败", [
+                'player_id' => $playerId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }

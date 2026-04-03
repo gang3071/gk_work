@@ -127,8 +127,18 @@ class RsgGameController
             }
 
             // 2.5 获取当前余额（使用缓存模式）
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = \app\service\WalletService::getBalance($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF);
             $orderNo = $data['SequenNumber'];
+
+            // 2.5.5 预检查余额是否充足（快速失败，避免无效入队）
+            if ($currentBalance < $data['Amount']) {
+                $this->logger->warning('RSG: 余额不足（预检查）', [
+                    'order_no' => $orderNo,
+                    'balance' => $currentBalance,
+                    'amount' => $data['Amount'],
+                ]);
+                return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+            }
 
             // 2.6 幂等性检查（Redis 锁 - 防止重复下注）
             $betKey = "rsg:bet:lock:{$orderNo}";
@@ -197,6 +207,9 @@ class RsgGameController
             $estimatedBalance = bcsub($currentBalance, $data['Amount'], 2);
             $estimatedBalance = max(0, $estimatedBalance); // 确保不为负数
 
+            // 5.5 立即更新缓存为预估余额（解决时序问题：避免结算请求获取到旧余额）
+            \app\service\WalletService::updateCache($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF, $estimatedBalance);
+
             $elapsed = (microtime(true) - $startTime) * 1000;
             $this->logger->info('RSG下注已入队（快速响应）', [
                 'username' => $data['UserId'],
@@ -244,7 +257,7 @@ class RsgGameController
             }
 
             // 2.5 获取当前余额（使用缓存模式）
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = \app\service\WalletService::getBalance($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF);
             $orderNo = $data['SequenNumber'];
 
             // 2.6 幂等性检查（使用 cancel 专用锁 - 防止重复取消）
@@ -296,6 +309,9 @@ class RsgGameController
             // 5. 快速返回（返回预估余额）
             $estimatedBalance = bcadd($currentBalance, $data['BetAmount'], 2);
 
+            // 5.5 立即更新缓存为预估余额（解决时序问题）
+            \app\service\WalletService::updateCache($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF, $estimatedBalance);
+
             $elapsed = (microtime(true) - $startTime) * 1000;
             $this->logger->info('RSG取消下注已入队（快速响应）', [
                 'order_no' => $orderNo,
@@ -344,7 +360,7 @@ class RsgGameController
             }
 
             // 2.5 获取当前余额（使用缓存模式）
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = \app\service\WalletService::getBalance($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF);
             $orderNo = $data['SequenNumber'];
 
             // 2.6 幂等性检查（使用 settle 专用锁 - 防止重复结算）
@@ -404,6 +420,11 @@ class RsgGameController
                 ? bcadd($currentBalance, $winAmount, 2)
                 : $currentBalance;
 
+            // 5.5 立即更新缓存为预估余额（解决时序问题）
+            if ($winAmount > 0) {
+                \app\service\WalletService::updateCache($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF, $estimatedBalance);
+            }
+
             $elapsed = (microtime(true) - $startTime) * 1000;
             $this->logger->info('RSG结算已入队（快速响应）', [
                 'order_no' => $orderNo,
@@ -454,7 +475,7 @@ class RsgGameController
             }
 
             // 2.5 获取当前余额（使用缓存模式）
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = \app\service\WalletService::getBalance($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF);
             $orderNo = $data['SequenNumber'];
 
             // 2.6 幂等性检查（使用 rebet 专用锁 - 防止重复重新结算）
@@ -555,7 +576,7 @@ class RsgGameController
             }
 
             // 2.5 获取当前余额（使用缓存模式）
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = \app\service\WalletService::getBalance($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF);
             $orderNo = $data['SequenNumber'];
 
             // 2.6 幂等性检查（使用 jackpot 专用锁 - 防止重复中奖）
@@ -609,6 +630,9 @@ class RsgGameController
             // 5. 快速返回（返回预估余额）
             $jackpotAmount = $data['Amount'] ?? 0;
             $estimatedBalance = bcadd($currentBalance, $jackpotAmount, 2);
+
+            // 5.5 立即更新缓存为预估余额（解决时序问题）
+            \app\service\WalletService::updateCache($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF, $estimatedBalance);
 
             $elapsed = (microtime(true) - $startTime) * 1000;
             $this->logger->info('RSG Jackpot已入队（快速响应）', [
@@ -683,12 +707,15 @@ class RsgGameController
             }
 
             // 5. 快速返回（返回预估余额 - prepay特殊逻辑）
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = \app\service\WalletService::getBalance($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF);
             $requestAmount = $data['Amount'] ?? 0;
 
             // ⚠️ prepay特殊：余额不足时扣除所有金额
             $actualDeductAmount = min($currentBalance, $requestAmount);
             $estimatedBalance = bcsub($currentBalance, $actualDeductAmount, 2);
+
+            // 5.5 立即更新缓存为预估余额（解决时序问题）
+            \app\service\WalletService::updateCache($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF, max(0, $estimatedBalance));
 
             $elapsed = (microtime(true) - $startTime) * 1000;
             $this->logger->info('RSG打鱼机预扣已入队（快速响应）', [
@@ -767,9 +794,12 @@ class RsgGameController
             }
 
             // 5. 快速返回（返回预估余额）
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = \app\service\WalletService::getBalance($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF);
             $refundAmount = $data['Amount'] ?? 0;
             $estimatedBalance = bcadd($currentBalance, $refundAmount, 2);
+
+            // 5.5 立即更新缓存为预估余额（解决时序问题）
+            \app\service\WalletService::updateCache($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF, $estimatedBalance);
 
             $elapsed = (microtime(true) - $startTime) * 1000;
             $this->logger->info('RSG打鱼机退款已入队（快速响应）', [
