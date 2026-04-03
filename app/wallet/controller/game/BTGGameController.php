@@ -9,6 +9,7 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\GameQueueService;
+use app\service\WalletService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -204,7 +205,7 @@ class BTGGameController
 
             $sent = false;
             $estimatedBalance = 0;
-            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
+            $currentBalance = WalletService::getBalance($player->id);
 
             // 根据 transfer_type 发送到不同队列
             switch ($transferType) {
