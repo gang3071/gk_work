@@ -170,9 +170,11 @@ class ATGGameController
                 $return = $balance;
             }
 
+            $this->log->info('atg bet response',['return'=>$return]);
+
             return $this->success($return);
         } catch (Exception $e) {
-            Log::error('ATG bet failed', ['error' => $e->getMessage()]);
+            $this->log->error('ATG bet failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '下注异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_FAIL);
         }
@@ -230,9 +232,10 @@ class ATGGameController
                 $return = $balance;
             }
 
+            $this->log->info('atg betresult response',['return'=>$return]);
             return $this->success($return);
         } catch (Exception $e) {
-            Log::error('ATG betResult failed', ['error' => $e->getMessage()]);
+            $this->log->error('ATG betResult failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '结算异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_FAIL);
         }
