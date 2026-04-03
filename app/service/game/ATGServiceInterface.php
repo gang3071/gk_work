@@ -74,10 +74,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             $limitConfig = $this->getLimitRedConfig();
 
             if (!$limitConfig) {
-                $this->log->error('❌ ATG未配置限红组', [
-                    'player_id' => $player->id,
-                    'store_admin_id' => $player->store_admin_id,
-                ]);
                 throw new GameException('游戏平台未配置');
             }
 
@@ -91,11 +87,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
 
             if (!empty($missingFields)) {
-                $this->log->error('❌ ATG限红组配置不完整', [
-                    'player_id' => $player->id,
-                    'missing_fields' => implode(', ', $missingFields),
-                    'config' => $limitConfig,
-                ]);
                 throw new GameException('游戏平台配置不完整: 缺少 ' . implode(', ', $missingFields));
             }
 
@@ -106,12 +97,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'key' => $limitConfig['key'],
             ];
 
-            $this->log->info('✅ ATG使用数据库配置', [
-                'player_id' => $player->id,
-                'store_admin_id' => $player->store_admin_id,
-                'operator' => $limitConfig['operator'],
-                'providerId' => $this->config['providerId'],
-            ]);
         } else {
             // player=null时（控制器初始化或公共API调用），使用配置文件作为fallback
             // decrypt方法会在解密成功后从数据库重新获取配置
@@ -195,10 +180,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $operator = $this->config['operator'] ?? null;
 
         if (empty($operator)) {
-            $this->log->error('❌ ATG检查玩家失败：营运账号为空', [
-                'player_id' => $this->player->id,
-                'config' => $this->config,
-            ]);
             throw new GameException('游戏平台配置错误');
         }
 
@@ -214,14 +195,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             return true;
         }
 
-        // 未注册，调用ATG API注册玩家
-        $this->log->info('🆕 ATG玩家在营运账号下首次注册', [
-            'player_id' => $this->player->id,
-            'player_uuid' => $this->player->uuid,
-            'operator' => $operator,
-            'store_admin_id' => $this->player->store_admin_id,
-        ]);
-
         $this->createPlayer();
 
         // 记录玩家在当前营运账号下的注册信息
@@ -233,12 +206,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $playerGamePlatform->player_name = $this->player->name;
         $playerGamePlatform->player_code = $this->player->uuid;
         $playerGamePlatform->save();
-
-        $this->log->info('✅ ATG玩家注册成功', [
-            'player_id' => $this->player->id,
-            'operator' => $operator,
-            'record_id' => $playerGamePlatform->id,
-        ]);
 
         return true;
     }
@@ -293,13 +260,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         // 记录实际使用的营运账号（仅在获取token时记录，避免日志过多）
         $trace = debug_backtrace();
         $test = $trace[1]['function'];
-        if (empty($token) && $test !== 'doCurl') {
-            $this->log->info('🔑 ATG获取Token', [
-                'method' => $test,
-                'operator' => $config['operator'],
-                'api_domain' => $config['api_domain'],
-            ]);
-        }
+
         if (empty($token)) {
             $tokenResponse = Http::timeout(7)
                 ->withHeaders([
@@ -495,21 +456,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
     public function gameLogin(Game $game, string $lang = 'zh-CN')
     {
         $this->checkPlayer();
-
-        // 记录进入游戏时的配置参数
-        $this->log->info('🎮 ATG玩家进入游戏', [
-            'player_id' => $this->player->id,
-            'player_uuid' => $this->player->uuid,
-            'store_admin_id' => $this->player->store_admin_id,
-            'game_code' => $game->game_extend->code,
-            'game_name' => $game->name,
-            'config' => [
-                'operator' => $this->config['operator'],
-                'providerId' => $this->config['providerId'],
-                'api_domain' => $this->config['api_domain'],
-            ],
-        ]);
-
         $params = [
             'key' => $this->getGameKey($game->game_extend->code),
             'type' => 'mobile',
@@ -917,22 +863,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             'providerId' => $playerLimitConfig['providerId'],
             'key' => $playerLimitConfig['key'],
         ];
-
-        // 验证解密使用的配置是否与玩家限红组匹配
-        if ($usedConfig['operator'] !== $playerLimitConfig['operator']) {
-            $this->log->warning('⚠️ ATG解密配置与玩家限红组不匹配', [
-                'player_id' => $player->id,
-                'store_admin_id' => $player->store_admin_id,
-                'decrypt_operator' => $usedConfig['operator'],
-                'expected_operator' => $playerLimitConfig['operator'],
-            ]);
-        } else {
-            $this->log->info('✅ ATG应用玩家数据库配置', [
-                'player_id' => $player->id,
-                'store_admin_id' => $player->store_admin_id,
-                'operator' => $playerLimitConfig['operator'],
-            ]);
-        }
 
         $this->apiDomain = $this->config['api_domain'];
         $this->providerId = $this->config['providerId'];

@@ -198,7 +198,7 @@ class ATGGameController
 
             $player = $this->service->player;
             $orderNo = $data['betId'];
-            $winAmount = $data['win'] ?? 0;
+            $winAmount = $data['amount'] ?? 0;
 
             // 获取当前余额
             $currentBalance = WalletService::getBalance($player->id);
