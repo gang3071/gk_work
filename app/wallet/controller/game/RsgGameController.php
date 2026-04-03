@@ -199,9 +199,11 @@ class RsgGameController
 
             $elapsed = (microtime(true) - $startTime) * 1000;
             $this->logger->info('RSG下注已入队（快速响应）', [
+                'username' => $data['UserId'],
                 'order_no' => $data['SequenNumber'],
                 'elapsed_ms' => round($elapsed, 2),
-                'estimatedBalance' => $estimatedBalance
+                'estimatedBalance' => $estimatedBalance,
+                'beforeBalance' => $currentBalance
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => (float)$estimatedBalance]);
