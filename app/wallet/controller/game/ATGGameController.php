@@ -6,6 +6,7 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\GameQueueService;
+use app\service\WalletService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -110,7 +111,7 @@ class ATGGameController
             $bet = $data['amount'];
 
             // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = WalletService::getBalance($player->id);
 
             // 检查幂等性
             $betKey = "atg:bet:lock:{$orderNo}";
@@ -121,7 +122,7 @@ class ATGGameController
 
             if ($isDuplicate) {
                 // 重复订单，返回当前余额
-                return $this->success(['balance' => $currentBalance]);
+                return $this->error(self::API_CODE_DUPLICATE_ORDER);
             }
 
             // 准备队列参数
@@ -158,7 +159,7 @@ class ATGGameController
                 $estimatedBalance = bcsub($currentBalance, $bet, 2);
                 $estimatedBalance = max(0, $estimatedBalance);
 
-                $return = ['balance' => $estimatedBalance];
+                $return = ['balanceOld' => $currentBalance, 'balance' => $estimatedBalance];
             } else {
                 // 队列失败，同步降级
                 \support\Redis::del($betKey);
@@ -198,7 +199,7 @@ class ATGGameController
             $winAmount = $data['win'] ?? 0;
 
             // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = WalletService::getBalance($player->id);
 
             // 准备队列参数
             $queueParams = [
@@ -219,7 +220,7 @@ class ATGGameController
                     $estimatedBalance = bcadd($currentBalance, $winAmount, 2);
                 }
 
-                $return = ['balance' => $estimatedBalance];
+                $return = ['balanceOld' => $currentBalance, 'balance' => $estimatedBalance];
             } else {
                 // 队列失败，同步降级
                 $balance = $this->service->betResulet($data);
@@ -258,7 +259,7 @@ class ATGGameController
             $refundAmount = $data['amount'] ?? 0;
 
             // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = WalletService::getBalance($player->id);
 
             // 准备队列参数
             $queueParams = [
@@ -275,7 +276,7 @@ class ATGGameController
                 // 预估余额：退款
                 $estimatedBalance = bcadd($currentBalance, $refundAmount, 2);
 
-                $return = ['balance' => $estimatedBalance];
+                $return = ['balanceOld' => $currentBalance, 'balance' => $estimatedBalance];
             } else {
                 // 队列失败，同步降级
                 $balance = $this->service->refund($data);
