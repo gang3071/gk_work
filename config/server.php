@@ -19,10 +19,10 @@ return [
     'name' => 'webman',
     // 🚀 性能优化: 8核服务器，1核1进程，避免上下文切换
     // N2-standard-8: 8 vCPU (独占物理核心) = 8 进程
-    'count' => 8,
+    'count' => 32,
     'user' => '',
     'group' => '',
-    'reusePort' => false,
+    'reusePort' => true,
     'event_loop' => '',
     // 给长耗时请求留出更多退场时间
     'stop_timeout' => 10,

@@ -49,20 +49,6 @@ return [
                 \PDO::ATTR_EMULATE_PREPARES => false,             // 使用原生预处理（更快）
                 \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC, // 默认关联数组
             ],
-        ],
-
-        // ❌ MongoDB 已禁用（仅用于实体机台日志，非核心功能）
-        // 如需启用，取消注释以下配置并安装: composer require jenssegers/mongodb
-        // 'mongodb' => [
-        //     'driver' => 'mongodb',
-        //     'host' => env('MONGODB_HOST', '127.0.0.1'),
-        //     'port' => env('MONGODB_PORT', 27017),
-        //     'database' => env('MONGODB_DATABASE', 'luck3'),
-        //     'username' => env('MONGODB_USERNAME', null),
-        //     'password' => env('MONGODB_PASSWORD', null),
-        //     'options' => [
-        //         'database' => env('MONGODB_AUTH_DATABASE', 'admin'),
-        //     ],
-        // ],
+        ]
     ]
 ];

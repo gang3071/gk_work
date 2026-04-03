@@ -10,7 +10,7 @@ return [
     // 只要队列不积压，进程越少，系统整体IO抖动越小
     'redis_consumer_fast' => [
         'handler' => Webman\RedisQueue\Process\Consumer::class,
-        'count' => 4, // 4个进程（从12降低，避免抢占API资源）
+        'count' => 8, // 4个进程（从12降低，避免抢占API资源）
         'constructor' => [
             'consumer_dir' => app_path() . '/queue/redis/fast'
         ]
