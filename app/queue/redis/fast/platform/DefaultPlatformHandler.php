@@ -189,14 +189,22 @@ class DefaultPlatformHandler extends BasePlatformHandler
             $betRecord->save();
             $recordId = $betRecord->id;
         } else {
-            // 创建新记录
+            // 创建新记录（未找到下注记录）
+            // ⚠️ 使用后缀避免和可能存在的bet记录冲突
+            $settleOrderNo = $orderNo . '_settle';
+
+            $this->log->warning("{$this->platformCode}: 未找到下注记录，创建新结算记录", [
+                'bet_order_no' => $betOrderNo,
+                'settle_order_no' => $settleOrderNo,
+            ]);
+
             $record = new PlayGameRecord();
             $record->player_id = $player->id;
             $record->parent_player_id = $player->recommend_id ?? 0;
             $record->agent_player_id = $player->recommend_promoter->recommend_id ?? 0;
             $record->player_uuid = $player->uuid;
             $record->department_id = $player->department_id ?? 0;
-            $record->order_no = $orderNo;
+            $record->order_no = $settleOrderNo;  // ← 使用带后缀的订单号
             $record->platform_id = $platformId;
             $record->bet = 0;
             $record->win = $amount;
