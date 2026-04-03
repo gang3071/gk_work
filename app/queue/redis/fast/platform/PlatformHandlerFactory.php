@@ -26,6 +26,7 @@ class PlatformHandlerFactory
             'BTG' => new BtgPlatformHandler($log),
             'O8' => new O8PlatformHandler($log),
             'QT' => new QtPlatformHandler($log),
+            'SP' => new SpPlatformHandler($log),
             // 其他平台使用默认处理器
             default => new DefaultPlatformHandler($log, strtoupper($platformCode)),
         };
@@ -46,9 +47,9 @@ class PlatformHandlerFactory
             'BTG',
             'O8',
             'QT',
+            'SP',
             // 使用默认处理器
             'SA',
-            'SP',
             'ATG',
             'KT',
             'T9SLOT',

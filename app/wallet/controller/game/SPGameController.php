@@ -266,6 +266,7 @@ class SPGameController
                     'bet_order_no' => $orderNo,
                     'amount' => max($betInfo['resultamount'], 0),
                     'result_amount' => $betInfo['resultamount'],
+                    'platform_id' => $this->service->platform->id,
                     'original_data' => $betInfo,
                 ];
 
