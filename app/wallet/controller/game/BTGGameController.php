@@ -8,12 +8,11 @@ use app\service\game\BTGServiceInterface;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
-use app\service\GameQueueService;
-use app\service\WalletService;
 use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
+use Throwable;
 
 /**
  * BTG单一钱包
@@ -115,6 +114,7 @@ class BTGGameController
      * 处理所有类型的金额变动：下注、结算、退款、调整、奖励
      * @param Request $request
      * @return Response
+     * @throws Throwable
      */
     public function transfer(Request $request): Response
     {
@@ -182,168 +182,165 @@ class BTGGameController
                 }
             }
 
-            // ========== 异步队列处理 ==========
+            // ========== Redis 缓存处理 ==========
             $amount = abs((float)$params['amount']);
             $orderId = $transDetails['order_id'] ?? '';
             $roundId = $transDetails['round_id'] ?? '';
             $transferType = $params['transfer_type'];
 
-            // 构建队列参数
-            $queueParams = [
-                'order_no' => $orderId,
-                'tran_id' => $params['tran_id'],
-                'amount' => $amount,
-                'original_amount' => (float)$params['amount'], // 保留原始金额（可能为负）
-                'platform_id' => $this->service->platform->id,
-                'game_code' => $params['game_code'] ?? '',
-                'game_type' => $params['game_type'] ?? '',
-                'transfer_type' => $transferType,
-                'trans_details' => $transDetails,
-                'betform_details' => $betformDetails,
-                'original_data' => $params,
-            ];
-
-            $sent = false;
-            $estimatedBalance = 0;
-            $currentBalance = WalletService::getBalance($player->id);
-
-            // 根据 transfer_type 发送到不同队列
-            switch ($transferType) {
-                case 'start':
-                    // 下注扣款
-                    // 立即写入 Redis 预占状态（在入队列之前）
-                    try {
-                        \support\Redis::hMSet("order:pending:{$orderId}", [
-                            'player_id' => $player->id,
-                            'order_no' => $orderId,
-                            'amount' => $amount,
-                            'platform_id' => $this->service->platform->id,
-                            'game_code' => $params['game_code'] ?? '',
-                            'status' => 'pending',
-                            'created_at' => time(),
-                        ]);
-                        \support\Redis::expire("order:pending:{$orderId}", 300);
-                    } catch (\Throwable $e) {
-                        // Redis 失败不影响主流程
-                    }
-
-                    $sent = GameQueueService::sendBet('BTG', $player, $queueParams);
-                    if ($sent) {
-                        // 预估余额：如果 amount=0（免费游戏）则不扣款
-                        $estimatedBalance = ($amount > 0) ? bcsub($currentBalance, $amount, 2) : $currentBalance;
-                        $estimatedBalance = max(0, $estimatedBalance);
-                    }
-                    break;
-
-                case 'end':
-                    // 结算派彩
-                    $queueParams['bet_order_no'] = $orderId;
-                    $sent = GameQueueService::sendSettle('BTG', $player, $queueParams);
-                    if ($sent) {
-                        // 预估余额：加上派彩金额
-                        $estimatedBalance = ($amount > 0) ? bcadd($currentBalance, $amount, 2) : $currentBalance;
-                    }
-                    break;
-
-                case 'refund':
-                    // 退款
-                    $queueParams['bet_order_no'] = $orderId;
-                    $sent = GameQueueService::sendCancel('BTG', $player, $queueParams);
-                    if ($sent) {
-                        // 预估余额：加上退款金额
-                        $estimatedBalance = bcadd($currentBalance, $amount, 2);
-                    }
-                    break;
-
-                case 'adjust':
-                    // 调整金额（可正可负）
-                    $adjustAmount = (float)$params['amount'];
-                    if ($adjustAmount > 0) {
-                        // 正数：加款，使用 settle
-                        $queueParams['bet_order_no'] = $orderId;
-                        $sent = GameQueueService::sendSettle('BTG', $player, $queueParams);
-                        if ($sent) {
-                            $estimatedBalance = bcadd($currentBalance, $adjustAmount, 2);
-                        }
-                    } else {
-                        // 负数：扣款，使用 bet
-                        // 立即写入 Redis 预占状态（在入队列之前）
-                        try {
-                            \support\Redis::hMSet("order:pending:{$orderId}", [
-                                'player_id' => $player->id,
-                                'order_no' => $orderId,
-                                'amount' => abs($adjustAmount),
-                                'platform_id' => $this->service->platform->id,
-                                'game_code' => $params['game_code'] ?? '',
-                                'status' => 'pending',
-                                'created_at' => time(),
-                            ]);
-                            \support\Redis::expire("order:pending:{$orderId}", 300);
-                        } catch (\Throwable $e) {
-                            // Redis 失败不影响主流程
-                        }
-
-                        $sent = GameQueueService::sendBet('BTG', $player, $queueParams);
-                        if ($sent) {
-                            $deductAmount = abs($adjustAmount);
-                            $estimatedBalance = bcsub($currentBalance, $deductAmount, 2);
-                            $estimatedBalance = max(0, $estimatedBalance);
-                        }
-                    }
-                    break;
-
-                case 'reward':
-                    // 额外奖金（无下注）
-                    $queueParams['is_reward'] = true;
-                    $sent = GameQueueService::sendSettle('BTG', $player, $queueParams);
-                    if ($sent) {
-                        // 预估余额：加上奖励金额
-                        $estimatedBalance = bcadd($currentBalance, $amount, 2);
-                    }
-                    break;
+            // 幂等性检查（使用 tran_id）
+            $lockKey = "order:btg:lock:{$params['tran_id']}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复请求
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                return $this->success([
+                    'balance' => number_format($balance, 2, '.', ''),
+                    'currency' => $systemCurrency,
+                    'tran_id' => $params['tran_id'],
+                ]);
             }
 
-            // 如果队列发送失败，降级到同步处理
-            if (!$sent) {
-                $this->logger->warning('BTG队列发送失败，降级到同步处理', [
-                    'transfer_type' => $transferType,
-                    'order_id' => $orderId,
-                    'player_id' => $player->id
-                ]);
+            try {
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                $newBalance = $currentBalance;
 
-                $result = match ($transferType) {
-                    'start' => $this->service->transferStart($params, $transDetails),
-                    'end' => $this->service->transferEnd($params, $transDetails, $betformDetails),
-                    'refund' => $this->service->transferRefund($params, $transDetails),
-                    'adjust' => $this->service->transferAdjust($params, $transDetails, $betformDetails),
-                    'reward' => $this->service->transferReward($params, $transDetails, $betformDetails),
-                };
+                // 根据 transfer_type 处理
+                switch ($transferType) {
+                    case 'start':
+                        // 余额预检查
+                        if ($currentBalance < $amount) {
+                            \support\Redis::del($lockKey);
+                            return $this->error(BTGServiceInterface::ERROR_CODE_INSUFFICIENT_BALANCE);
+                        }
+                        // 写 Redis 缓存
+                        \app\service\GameRecordCacheService::saveBet('BTG', [
+                            'order_no' => $orderId,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $amount,
+                            'game_code' => $params['game_code'] ?? '',
+                            'game_type' => $params['game_type'] ?? '',
+                            'bet_type' => 'bet',
+                            'original_data' => $params,
+                        ]);
 
-                if ($this->service->error) {
-                    $this->logger->error('BTG转账失败', [
-                        'transfer_type' => $transferType,
-                        'error' => $this->service->error,
-                        'tran_id' => $params['tran_id']
-                    ]);
-                    return $this->error($this->service->error);
+                        $newBalance = ($amount > 0) ? bcsub($currentBalance, $amount, 2) : $currentBalance;
+                        $newBalance = max(0, $newBalance);
+                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                        break;
+                    case 'end':
+                        // 结算派彩
+                        \app\service\GameRecordCacheService::saveSettle('BTG', [
+                            'order_no' => $orderId,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $amount,
+                            'diff' => $amount,
+                            'settle_type' => 'settle',
+                            'original_data' => $params,
+                        ]);
+
+                        if ($amount > 0) {
+                            $newBalance = bcadd($currentBalance, $amount, 2);
+                            \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                        }
+                        break;
+
+                    case 'refund':
+                        // 退款
+                        \app\service\GameRecordCacheService::saveSettle('BTG', [
+                            'order_no' => $orderId,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $amount,
+                            'diff' => $amount,
+                            'settle_type' => 'refund',
+                            'original_data' => $params,
+                        ]);
+
+                        $newBalance = bcadd($currentBalance, $amount, 2);
+                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                        break;
+
+                    case 'adjust':
+                        // 调整金额（可正可负）
+                        $adjustAmount = (float)$params['amount'];
+
+                        if ($adjustAmount > 0) {
+                            // 正数：加款
+                            \app\service\GameRecordCacheService::saveSettle('BTG', [
+                                'order_no' => $orderId,
+                                'player_id' => $player->id,
+                                'platform_id' => $this->service->platform->id,
+                                'amount' => $adjustAmount,
+                                'diff' => $adjustAmount,
+                                'settle_type' => 'adjust',
+                                'original_data' => $params,
+                            ]);
+
+                            $newBalance = bcadd($currentBalance, $adjustAmount, 2);
+                            \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+                        } else {
+                            // 负数：扣款
+                            $deductAmount = abs($adjustAmount);
+
+                            if ($currentBalance < $deductAmount) {
+                                \support\Redis::del($lockKey);
+                                return $this->error(BTGServiceInterface::ERROR_CODE_INSUFFICIENT_BALANCE);
+                            }
+
+                            \app\service\GameRecordCacheService::saveBet('BTG', [
+                                'order_no' => $orderId,
+                                'player_id' => $player->id,
+                                'platform_id' => $this->service->platform->id,
+                                'amount' => $deductAmount,
+                                'game_code' => $params['game_code'] ?? '',
+                                'game_type' => $params['game_type'] ?? '',
+                                'bet_type' => 'adjust',
+                                'original_data' => $params,
+                            ]);
+
+                            $newBalance = bcsub($currentBalance, $deductAmount, 2);
+                            \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                        }
+                        break;
+
+                    case 'reward':
+                        // 额外奖金（无下注）
+                        \app\service\GameRecordCacheService::saveSettle('BTG', [
+                            'order_no' => $orderId,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $amount,
+                            'diff' => $amount,
+                            'settle_type' => 'reward',
+                            'original_data' => $params,
+                        ]);
+
+                        $newBalance = bcadd($currentBalance, $amount, 2);
+                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                        break;
                 }
 
-                $estimatedBalance = $result['balance'];
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
             }
 
             $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-            $this->logger->info('BTG转账成功（异步）', [
+            $this->logger->info('BTG转账成功（Redis缓存）', [
                 'transfer_type' => $transferType,
                 'username' => $params['username'],
                 'amount' => $params['amount'],
-                'estimated_balance' => $estimatedBalance,
+                'balance' => $newBalance,
                 'tran_id' => $params['tran_id'],
                 'response_time_ms' => $responseTime,
-                'is_async' => $sent
             ]);
 
             return $this->success([
-                'balance' => number_format($estimatedBalance, 2, '.', ''),
+                'balance' => number_format($newBalance, 2, '.', ''),
                 'currency' => $systemCurrency,
                 'tran_id' => $params['tran_id'],
             ]);

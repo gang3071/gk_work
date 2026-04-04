@@ -15,6 +15,7 @@
 use process\BurstCleaner;
 use process\ChannelSettlement;
 use process\GamePoolSocket;
+use process\GameRecordSyncWorker;
 use process\LotteryPoolSocket;
 use process\LotteryRemind;
 use process\NationalPromoterRebate;
@@ -50,6 +51,11 @@ return [
     // Redis 钱包对账任务（每分钟）
     'ReconciliationTask' => [
         'handler' => ReconciliationTask::class
+    ],
+    // ✅ 游戏记录同步进程（Redis → MySQL 批量同步）
+    'GameRecordSyncWorker' => [
+        'handler' => GameRecordSyncWorker::class,
+        'count' => 2,  // 2个进程（可根据负载调整）
     ],
 ];
 

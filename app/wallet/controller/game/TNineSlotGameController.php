@@ -8,7 +8,6 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\game\TNineSlotServiceInterface;
-use app\service\GameQueueService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -100,19 +99,19 @@ class TNineSlotGameController
     }
 
     /**
-     * 下注
+     * 下注（Redis 缓存版）
      * @param Request $request
      * @return Response
      * @throws Exception
      */
     public function bet(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->post();
 
-            //下注 结算一起处理
-            //免费次数合并到一个订单
-            $this->logger->info('t9电子下注记录', ['params' => $params]);
+            $this->logger->info('t9电子下注记录（Redis缓存）', ['params' => $params]);
 
             $user = $params['gameAccount'];
             $userId = explode('_', $user)[0];
@@ -122,128 +121,105 @@ class TNineSlotGameController
             $orderNo = $params['gameOrderNumber'];
             $betKind = $params['betKind'] ?? 0;
             $betAmount = $params['betAmount'] ?? 0;
-            $winAmount = $params['winlose'] ?? $params['payoutAmount'] ?? 0;  // T9平台使用winlose/payoutAmount表示净盈亏
+            $winAmount = $params['winlose'] ?? $params['payoutAmount'] ?? 0;
 
-            // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-            // betKind == 3：免费游戏，直接结算，不扣款
-            if ($betKind == 3) {
-                // 准备结算队列参数
-                $settleParams = [
-                    'order_no' => $orderNo . '_settle',
-                    'bet_order_no' => $orderNo,
-                    'amount' => max($winAmount, 0),
-                    'result_amount' => $winAmount,
-                    'bet_amount' => $betAmount,  // ← 原始下注金额（用于计算win）
-                    'bet_kind' => $betKind,      // ← 下注类型（用于判断免费游戏）
-                    'platform_id' => $this->service->platform->id,
-                    'game_code' => $params['gameCode'] ?? '',
-                    'original_data' => $params,
-                ];
-
-                // 发送结算队列
-                $sent = GameQueueService::sendSettle('T9SLOT', $player, $settleParams);
-
-                if ($sent) {
-                    // 预估余额：免费游戏，只加中奖金额
-                    $estimatedBalance = $currentBalance;
-                    if ($winAmount > 0) {
-                        $estimatedBalance = bcadd($currentBalance, $winAmount, 2);
-                    }
-
-                    $return = ['afterBalance' => $estimatedBalance,'beforeBalance'=>$currentBalance];
-                } else {
-                    // 队列失败，同步降级
-                    $return = $this->service->betResulet($params);
-                    if ($this->service->error) {
-                        return $this->error($this->service->error);
-                    }
-                }
-
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
-            }
-
-            // 普通下注：检查幂等性
-            $betKey = "t9slot:bet:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::setnx($betKey, 1);
-            if (!$isDuplicate) {
-                \support\Redis::expire($betKey, 300);
-            }
-
-            if ($isDuplicate) {
-                // 重复订单，返回当前余额
+            // 幂等性检查
+            $lockKey = "order:bet:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复订单
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'balance' => $currentBalance,
+                    'afterBalance' => $balance,
+                    'beforeBalance' => $balance,
                 ]);
             }
 
-            // 准备下注队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'amount' => $betAmount,
-                'platform_id' => $this->service->platform->id,
-                'game_code' => $params['gameCode'] ?? '',
-                'original_data' => $params,
-            ];
-
-            // 立即写入 Redis 预占状态（在入队列之前）
             try {
-                \support\Redis::hMSet("order:pending:{$orderNo}", [
-                    'player_id' => $player->id,
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // betKind == 3：免费游戏，直接结算，不扣款
+                if ($betKind == 3) {
+                    // 写入结算记录（免费游戏）
+                    \app\service\GameRecordCacheService::saveSettle('T9SLOT', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => max($winAmount, 0),
+                        'diff' => $winAmount,
+                        'original_data' => $params,
+                    ]);
+
+                    // 更新余额缓存（只加中奖金额）
+                    $newBalance = $currentBalance;
+                    if ($winAmount > 0) {
+                        $newBalance = bcadd($currentBalance, $winAmount, 2);
+                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                    }
+
+                    $elapsed = (microtime(true) - $startTime) * 1000;
+                    $this->logger->info('t9电子免费游戏成功（Redis缓存）', [
+                        'order_no' => $orderNo,
+                        'elapsed_ms' => round($elapsed, 2),
+                    ]);
+
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                        'afterBalance' => $newBalance,
+                        'beforeBalance' => $currentBalance,
+                    ]);
+                }
+
+                // 普通下注：余额预检查
+                if ($currentBalance < $betAmount) {
+                    \support\Redis::del($lockKey);
+                    return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+                }
+
+                // 写入下注记录
+                \app\service\GameRecordCacheService::saveBet('T9SLOT', [
                     'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
                     'amount' => $betAmount,
-                    'platform_id' => $this->service->platform->id,
-                    'game_code' => $params['gameCode'] ?? '',
-                    'status' => 'pending',
-                    'created_at' => time(),
-                ]);
-                \support\Redis::expire("order:pending:{$orderNo}", 300);
-            } catch (\Throwable $e) {
-                // Redis 失败不影响主流程
-            }
-
-            // 发送下注队列
-            $sent = GameQueueService::sendBet('T9SLOT', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：扣款
-                $estimatedBalance = bcsub($currentBalance, $betAmount, 2);
-                $estimatedBalance = max(0, $estimatedBalance);
-
-                // 立即发送结算队列（T9Slot 总是下注后立即结算）
-                $settleParams = [
-                    'order_no' => $orderNo . '_settle',
-                    'bet_order_no' => $orderNo,
-                    'amount' => max($winAmount, 0),
-                    'result_amount' => $winAmount,
-                    'bet_amount' => $betAmount,  // ← 原始下注金额（用于计算win）
-                    'bet_kind' => $betKind,      // ← 下注类型（普通游戏）
-                    'platform_id' => $this->service->platform->id,
                     'game_code' => $params['gameCode'] ?? '',
                     'original_data' => $params,
-                ];
-                GameQueueService::sendSettle('T9SLOT', $player, $settleParams);
+                ]);
 
-                // 预估余额：加上中奖金额
+                // 更新余额缓存（扣款）
+                $newBalance = bcsub($currentBalance, $betAmount, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+                // T9Slot 总是下注后立即结算
+                \app\service\GameRecordCacheService::saveSettle('T9SLOT', [
+                    'order_no' => $orderNo . '_settle',
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => max($winAmount, 0),
+                    'diff' => $winAmount,
+                    'original_data' => $params,
+                ]);
+
+                // 更新余额缓存（加上中奖金额）
                 if ($winAmount > 0) {
-                    $estimatedBalance = bcadd($estimatedBalance, $winAmount, 2);
+                    $newBalance = bcadd($newBalance, $winAmount, 2);
+                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
                 }
 
-                $return = ['afterBalance' => $estimatedBalance,'beforeBalance'=>$currentBalance];
-            } else {
-                // 队列失败，同步降级
-                \support\Redis::del($betKey);
-                $return = $this->service->bet($params);
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-
-                // 同步模式下也需要立即结算
-                $this->betResult($params);
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
             }
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            $this->logger->info('t9电子下注成功（Redis缓存）', [
+                'order_no' => $orderNo,
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'afterBalance' => $newBalance,
+                'beforeBalance' => $currentBalance,
+            ]);
         } catch (Exception $e) {
             Log::error('TNineSlot bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('TNINE_SLOT', '下注异常', $e, ['params' => $request->post()]);
@@ -276,17 +252,19 @@ class TNineSlotGameController
 
 
     /**
-     * 取消下注
+     * 取消下注（Redis 缓存版）
      * @param Request $request
      * @return Response
      * @throws Exception
      */
     public function cancelBet(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->post();
 
-            $this->logger->info('t9电子取消下注', ['params' => $params]);
+            $this->logger->info('t9电子取消下注（Redis缓存）', ['params' => $params]);
 
             $user = $params['gameAccount'];
             $userId = explode('_', $user)[0];
@@ -296,34 +274,49 @@ class TNineSlotGameController
             $orderNo = $params['betId'] ?? $params['roundId'] ?? '';
             $refundAmount = $params['betAmount'] ?? 0;
 
-            // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo . '_cancel',
-                'bet_order_no' => $orderNo,
-                'amount' => $refundAmount,
-                'original_data' => $params,
-            ];
-
-            // 发送取消队列
-            $sent = GameQueueService::sendCancel('T9SLOT', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：退款
-                $estimatedBalance = bcadd($currentBalance, $refundAmount, 2);
-
-                $return = ['afterBalance' => $estimatedBalance,'beforeBalance'=>$currentBalance];
-            } else {
-                // 队列失败，同步降级
-                $return = $this->service->cancelBet($params);
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
+            // 幂等性检查
+            $lockKey = "order:cancel:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复取消
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                    'afterBalance' => $balance,
+                    'beforeBalance' => $balance,
+                ]);
             }
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            try {
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // 写入取消记录
+                \app\service\GameRecordCacheService::saveCancel('T9SLOT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'cancel_type' => 'cancel',
+                    'original_data' => $params,
+                ]);
+
+                // 更新余额缓存（退款）
+                $newBalance = bcadd($currentBalance, $refundAmount, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
+
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            $this->logger->info('t9电子取消下注成功（Redis缓存）', [
+                'order_no' => $orderNo,
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'afterBalance' => $newBalance,
+                'beforeBalance' => $currentBalance,
+            ]);
         } catch (Exception $e) {
             Log::error('TNineSlot cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('TNINE_SLOT', '取消下注异常', $e, ['params' => $request->post()]);

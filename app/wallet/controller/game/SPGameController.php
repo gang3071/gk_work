@@ -6,7 +6,6 @@ namespace app\wallet\controller\game;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
-use app\service\GameQueueService;
 use Exception;
 use SimpleXMLElement;
 use support\Log;
@@ -69,17 +68,19 @@ class SPGameController
     }
 
     /**
-     * 下注
+     * 下注（Redis 缓存版）
      * @param Request $request
      * @return Response
      * @throws Exception
      */
     public function bet(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->rawBody();
             $data = $this->service->decrypt($params);
-            Log::channel('sp_server')->info('sp下注记录', ['params' => $data]);
+            Log::channel('sp_server')->info('SP下注请求（Redis缓存）', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -88,79 +89,62 @@ class SPGameController
             $orderNo = $data['txnid'];
             $bet = $data['amount'];
 
-            // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-            // 检查幂等性
-            $betKey = "sp:bet:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::setnx($betKey, 1);
-            if (!$isDuplicate) {
-                \support\Redis::expire($betKey, 300);
-            }
-
-            if ($isDuplicate) {
-                // 重复订单，返回当前余额
+            // 幂等性检查
+            $lockKey = "order:bet:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复订单
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
                 return $this->error(self::API_CODE_GENERAL_ERROR, [
                     'username' => $data['username'],
                     'currency' => $data['currency'],
-                    'amount' => $currentBalance,
+                    'amount' => (float)$balance,
                 ]);
             }
 
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'amount' => $bet,
-                'platform_id' => $this->service->platform->id,
-                'game_code' => $data['gamecode'] ?? '',
-                'order_time' => $data['timestamp'],
-                'original_data' => $data,
-            ];
-
-            // 立即写入 Redis 预占状态（在入队列之前）
             try {
-                \support\Redis::hMSet("order:pending:{$orderNo}", [
-                    'player_id' => $player->id,
-                    'order_no' => $orderNo,
-                    'amount' => $bet,
-                    'platform_id' => $this->service->platform->id,
-                    'game_code' => $data['gamecode'] ?? '',
-                    'status' => 'pending',
-                    'created_at' => time(),
-                ]);
-                \support\Redis::expire("order:pending:{$orderNo}", 300);
-            } catch (\Throwable $e) {
-                // Redis 失败不影响主流程
-            }
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
-            // 发送下注队列
-            $sent = GameQueueService::sendBet('SP', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：扣款
-                $estimatedBalance = bcsub($currentBalance, $bet, 2);
-                $estimatedBalance = max(0, $estimatedBalance);
-
-                $return = [
-                    'username' => $data['username'],
-                    'currency' => $data['currency'],
-                    'amount' => $estimatedBalance,
-                ];
-            } else {
-                // 队列失败，同步降级
-                \support\Redis::del($betKey);
-                $balance = $this->service->bet($data);
-                $return = [
-                    'username' => $data['username'],
-                    'currency' => $data['currency'],
-                    'amount' => $balance,
-                ];
-                if ($this->service->error) {
-                    return $this->error($this->service->error, $return);
+                // 余额预检查
+                if ($currentBalance < $bet) {
+                    \support\Redis::del($lockKey);
+                    return $this->error(self::API_CODE_INSUFFICIENT_BALANCE, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => (float)$currentBalance,
+                    ]);
                 }
+
+                // 写入 Redis 缓存
+                \app\service\GameRecordCacheService::saveBet('SP', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $bet,
+                    'game_code' => $data['gamecode'] ?? '',
+                    'original_data' => $data,
+                ]);
+
+                // 更新余额缓存
+                $newBalance = bcsub($currentBalance, $bet, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
             }
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            Log::channel('sp_server')->info('SP下注成功（Redis缓存）', [
+                'order_no' => $orderNo,
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'username' => $data['username'],
+                'currency' => $data['currency'],
+                'amount' => (float)$newBalance,
+            ]);
         } catch (Exception $e) {
             Log::error('SP bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('SP', '下注异常', $e, ['params' => $request->rawBody()]);
@@ -169,16 +153,18 @@ class SPGameController
     }
 
     /**
-     * 取消下注
+     * 取消下注（Redis 缓存版）
      * @param Request $request
      * @return Response
      */
     public function cancelBet(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->rawBody();
             $data = $this->service->decrypt($params);
-            Log::channel('sp_server')->info('sp取消下注', ['params' => $data]);
+            Log::channel('sp_server')->info('SP取消下注请求（Redis缓存）', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -187,43 +173,50 @@ class SPGameController
             $orderNo = $data['txn_reverse_id'];
             $refundAmount = $data['amount'];
 
-            // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'bet_order_no' => $orderNo,
-                'amount' => $refundAmount,
-                'original_data' => $data,
-            ];
-
-            // 发送取消队列
-            $sent = GameQueueService::sendCancel('SP', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：退款
-                $estimatedBalance = bcadd($currentBalance, $refundAmount, 2);
-
-                $return = [
+            // 幂等性检查
+            $lockKey = "order:cancel:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                     'username' => $data['username'],
                     'currency' => $data['currency'],
-                    'amount' => $estimatedBalance,
-                ];
-            } else {
-                // 队列失败，同步降级
-                $balance = $this->service->cancelBet($data);
-                $return = [
-                    'username' => $data['username'],
-                    'currency' => $data['currency'],
-                    'amount' => $balance,
-                ];
-                if ($this->service->error) {
-                    return $this->error($this->service->error, $return);
-                }
+                    'amount' => (float)$balance,
+                ]);
             }
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            try {
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // 写入取消记录
+                \app\service\GameRecordCacheService::saveCancel('SP', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'cancel_type' => 'refund',
+                    'original_data' => $data,
+                ]);
+
+                // 更新余额缓存
+                $newBalance = bcadd($currentBalance, $refundAmount, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
+
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            Log::channel('sp_server')->info('SP取消下注成功（Redis缓存）', [
+                'order_no' => $orderNo,
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'username' => $data['username'],
+                'currency' => $data['currency'],
+                'amount' => (float)$newBalance,
+            ]);
         } catch (Exception $e) {
             Log::error('SP cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('SP', '取消下注异常', $e, ['params' => $request->rawBody()]);
@@ -232,16 +225,18 @@ class SPGameController
     }
 
     /**
-     * 結算
+     * 結算（Redis 缓存版 - 批量处理）
      * @param Request $request
      * @return Response
      */
     public function betResult(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->rawBody();
             $data = $this->service->decrypt($params);
-            Log::channel('sp_server')->info('sp结算下注', ['params' => $data]);
+            Log::channel('sp_server')->info('SP结算请求（Redis缓存）', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -254,56 +249,58 @@ class SPGameController
             $betList = $detail['betlist'] ?? [];
 
             // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
+            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+            $newBalance = $currentBalance;
 
-            // 批量发送结算队列
-            $allSent = true;
+            // 批量处理结算
             foreach ($betList as $betInfo) {
                 $orderNo = $betInfo['txnid'];
 
-                $queueParams = [
-                    'order_no' => $orderNo,
-                    'bet_order_no' => $orderNo,
-                    'amount' => max($betInfo['resultamount'], 0),
-                    'result_amount' => $betInfo['resultamount'],
-                    'platform_id' => $this->service->platform->id,
-                    'original_data' => $betInfo,
-                ];
+                // 每个订单幂等性检查
+                $lockKey = "order:settle:lock:{$orderNo}";
+                if (\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
 
-                // 发送结算队列
-                $sent = GameQueueService::sendSettle('SP', $player, $queueParams);
-                if (!$sent) {
-                    $allSent = false;
-                    break;
+                    try {
+                        $resultAmount = max($betInfo['resultamount'], 0);
+
+                        // 写入结算记录
+                        \app\service\GameRecordCacheService::saveSettle('SP', [
+                            'order_no' => $orderNo,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $resultAmount,
+                            'diff' => $betInfo['resultamount'], // 保留原始值（可能为负）
+                            'original_data' => $betInfo,
+                        ]);
+
+                        // 累加派彩金额
+                        if ($resultAmount > 0) {
+                            $newBalance = bcadd($newBalance, $resultAmount, 2);
+                        }
+
+                    } catch (\Throwable $e) {
+                        \support\Redis::del($lockKey);
+                        throw $e;
+                    }
                 }
             }
 
-            if ($allSent) {
-                // 预估余额：加款（如果 totalWinAmount > 0）
-                $estimatedBalance = $currentBalance;
-                if ($totalWinAmount > 0) {
-                    $estimatedBalance = bcadd($currentBalance, $totalWinAmount, 2);
-                }
-
-                $return = [
-                    'username' => $data['username'],
-                    'currency' => $data['currency'],
-                    'amount' => $estimatedBalance,
-                ];
-            } else {
-                // 队列失败，同步降级
-                $balance = $this->service->betResulet($data);
-                $return = [
-                    'username' => $data['username'],
-                    'currency' => $data['currency'],
-                    'amount' => $balance,
-                ];
-                if ($this->service->error) {
-                    return $this->error($this->service->error, $return);
-                }
+            // 更新余额缓存（只更新一次）
+            if ($newBalance != $currentBalance) {
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
             }
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            Log::channel('sp_server')->info('SP结算成功（Redis缓存）', [
+                'count' => count($betList),
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'username' => $data['username'],
+                'currency' => $data['currency'],
+                'amount' => (float)$newBalance,
+            ]);
         } catch (Exception $e) {
             Log::error('SP betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('SP', '结算异常', $e, ['params' => $request->rawBody()]);

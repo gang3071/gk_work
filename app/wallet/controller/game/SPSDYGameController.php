@@ -8,7 +8,6 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\game\SPSDYServiceInterface;
-use app\service\GameQueueService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -104,15 +103,17 @@ class SPSDYGameController
     }
 
     /**
-     * 下注
-     * @param Request $request
+     * 下注（Redis 缓存版）
+     * @param $params
      * @return Response
-     * @throws Exception
+     * @throws \Throwable
      */
     public function bet($params): Response
     {
+        $startTime = microtime(true);
+
         try {
-            Log::channel('sps_server')->info('sps下注记录', ['params' => $params]);
+            Log::channel('sps_server')->info('sps下注记录（Redis缓存）', ['params' => $params]);
             $this->service->player = Player::query()->where('uuid', $params['User'])->first();
             $player = $this->service->player;
 
@@ -120,86 +121,110 @@ class SPSDYGameController
             $ttype = $params['TType'] ?? 0;
             $amount = $params['Amount'] ?? 0;
 
-            // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-            // TType == 1：结算（直接调用 betResult）
+            // TType == 1：结算
             if ($ttype == 1) {
-                // 准备结算队列参数
-                $settleParams = [
-                    'order_no' => $orderNo . '_settle',
-                    'bet_order_no' => $orderNo,
-                    'amount' => max($amount, 0),
-                    'result_amount' => $amount,
-                    'original_data' => $params,
-                ];
-
-                // 发送结算队列
-                $sent = GameQueueService::sendSettle('SPSDY', $player, $settleParams);
-
-                if ($sent) {
-                    // 预估余额：只加中奖金额
-                    $estimatedBalance = $currentBalance;
-                    if ($amount > 0) {
-                        $estimatedBalance = bcadd($currentBalance, $amount, 2);
-                    }
-
-                    $return = ['User' => $params['User'], 'Balance' => $estimatedBalance, 'TransferId' => $orderNo];
-                } else {
-                    // 队列失败，同步降级
-                    $return = $this->service->betResulet($params);
-                    if ($this->service->error) {
-                        return $this->error($this->service->error);
-                    }
+                // 幂等性检查
+                $lockKey = "order:settle:lock:{$orderNo}";
+                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                    // 重复结算
+                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                    return $this->success(self::API_CODE_SUCCESS, [
+                        'User' => $params['User'],
+                        'Balance' => $balance,
+                        'TransferId' => $orderNo,
+                    ]);
                 }
 
-                return $this->success(self::API_CODE_SUCCESS, $return);
-            }
+                try {
+                    // 获取当前余额
+                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
-            // 普通下注：检查幂等性
-            $betKey = "spsdy:bet:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::setnx($betKey, 1);
-            if (!$isDuplicate) {
-                \support\Redis::expire($betKey, 300);
-            }
+                    // 写入结算记录
+                    \app\service\GameRecordCacheService::saveSettle('SPSDY', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => max($amount, 0),
+                        'diff' => $amount,
+                        'original_data' => $params,
+                    ]);
 
-            if ($isDuplicate) {
-                // 重复订单，返回当前余额
+                    // 更新余额缓存（加上中奖金额）
+                    $newBalance = $currentBalance;
+                    if ($amount > 0) {
+                        $newBalance = bcadd($currentBalance, $amount, 2);
+                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                    }
+
+                } catch (\Throwable $e) {
+                    \support\Redis::del($lockKey);
+                    throw $e;
+                }
+
+                $elapsed = (microtime(true) - $startTime) * 1000;
+                Log::channel('sps_server')->info('sps结算成功（Redis缓存）', [
+                    'order_no' => $orderNo,
+                    'elapsed_ms' => round($elapsed, 2),
+                ]);
+
                 return $this->success(self::API_CODE_SUCCESS, [
                     'User' => $params['User'],
-                    'Balance' => $currentBalance,
+                    'Balance' => $newBalance,
                     'TransferId' => $orderNo,
                 ]);
             }
 
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'amount' => $amount,
-                'platform_id' => $this->service->platform->id,
-                'original_data' => $params,
-            ];
-
-            // 发送下注队列
-            $sent = GameQueueService::sendBet('SPSDY', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：扣款
-                $estimatedBalance = bcsub($currentBalance, $amount, 2);
-                $estimatedBalance = max(0, $estimatedBalance);
-
-                $return = ['User' => $params['User'], 'Balance' => $estimatedBalance, 'TransferId' => $orderNo];
-            } else {
-                // 队列失败，同步降级
-                \support\Redis::del($betKey);
-                $return = $this->service->bet($params);
-
-                if ($this->service->error) {
-                    return $this->error($this->service->error, $return);
-                }
+            // 普通下注：幂等性检查
+            $lockKey = "order:bet:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复订单
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                return $this->success(self::API_CODE_SUCCESS, [
+                    'User' => $params['User'],
+                    'Balance' => $balance,
+                    'TransferId' => $orderNo,
+                ]);
             }
 
-            return $this->success(self::API_CODE_SUCCESS, $return);
+            try {
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // 余额预检查
+                if ($currentBalance < $amount) {
+                    \support\Redis::del($lockKey);
+                    return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+                }
+
+                // 写入下注记录
+                \app\service\GameRecordCacheService::saveBet('SPSDY', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $amount,
+                    'original_data' => $params,
+                ]);
+
+                // 更新余额缓存（扣款）
+                $newBalance = bcsub($currentBalance, $amount, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
+
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            Log::channel('sps_server')->info('sps下注成功（Redis缓存）', [
+                'order_no' => $orderNo,
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(self::API_CODE_SUCCESS, [
+                'User' => $params['User'],
+                'Balance' => $newBalance,
+                'TransferId' => $orderNo,
+            ]);
         } catch (Exception $e) {
             Log::error('SPSDY bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('SPSDY', '下注异常', $e, ['params' => $params]);

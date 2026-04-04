@@ -6,7 +6,6 @@ use app\model\Player;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
-use app\service\GameQueueService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -99,7 +98,7 @@ class MtGameController
     }
 
     /**
-     * 下注（异步队列版）
+     * 下注（Redis 缓存版）
      * @param Request $request
      * @return Response
      * @throws Exception
@@ -113,7 +112,7 @@ class MtGameController
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['msg']);
-            Log::channel('mt_server')->info('MT下注请求（异步）', ['params' => $data]);
+            Log::channel('mt_server')->info('MT下注请求（Redis缓存）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -125,63 +124,57 @@ class MtGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            // 3. 准备队列参数
-            $queueParams = [
-                'order_no' => $data['bet_sn'],  // MT使用bet_sn
-                'amount' => $data['order_money'],  // MT使用order_money
-                'platform_id' => $this->service->platform->id,
-                'game_type' => $data['gameType'] ?? '',
-                'game_code' => $data['game_code'],  // MT使用game_code
-                'game_name' => $data['gameName'] ?? '',
-                'order_time' => $data['order_time'] ?? '',  // 订单时间
-                'original_data' => $data,
-            ];
-
-            // 3.5 立即写入 Redis 预占状态（关键！在入队列之前）
             $orderNo = $data['bet_sn'];
+
+            // 3. 幂等性检查（Redis 原子锁）
+            $lockKey = "order:bet:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复请求，返回缓存余额
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                Log::channel('mt_server')->info('MT下注重复请求', ['order_no' => $orderNo]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$balance]);
+            }
+
+            // 4. 获取当前余额
+            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+            // 5. 余额预检查
+            if ($currentBalance < $data['order_money']) {
+                \support\Redis::del($lockKey);
+                return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+            }
+
+            // 6. 写入 Redis 缓存（<0.5ms）
             try {
-                \support\Redis::hMSet("order:pending:{$orderNo}", [
-                    'player_id' => $player->id,
+                \app\service\GameRecordCacheService::saveBet('MT', [
                     'order_no' => $orderNo,
-                    'amount' => $data['order_money'],
+                    'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
+                    'amount' => $data['order_money'],
                     'game_code' => $data['game_code'],
-                    'status' => 'pending',
-                    'created_at' => time(),
+                    'game_type' => $data['gameType'] ?? '',
+                    'game_name' => $data['gameName'] ?? '',
+                    'original_data' => $data,
                 ]);
-                \support\Redis::expire("order:pending:{$orderNo}", 300);
+
+                // 7. 更新余额缓存（<0.2ms）
+                $newBalance = bcsub($currentBalance, $data['order_money'], 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
             } catch (\Throwable $e) {
-                // Redis 失败不影响主流程
-                Log::warning('MT: Redis预占失败');
+                \support\Redis::del($lockKey);
+                throw $e;
             }
 
-            // 4. 发送到队列
-            $sent = GameQueueService::sendBet('MT', $player, $queueParams);
-
-            if (!$sent) {
-                // 队列发送失败，降级到同步处理
-                Log::warning('MT: 队列发送失败，降级到同步模式');
-                $balance = $this->service->bet($data);
-
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
-            }
-
-            // 5. 快速返回（返回预估余额）
-            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
-            $estimatedBalance = bcsub($currentBalance, $data['order_money'], 2);
-
+            // 8. 立即返回（总耗时 <1ms）
             $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('mt_server')->info('MT下注已入队（快速响应）', [
-                'order_no' => $data['bet_sn'],
+            Log::channel('mt_server')->info('MT下注成功（Redis缓存）', [
+                'order_no' => $orderNo,
                 'elapsed_ms' => round($elapsed, 2),
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'balance' => max(0, $estimatedBalance)  // 预估余额
+                'balance' => (float)$newBalance
             ]);
 
         } catch (Exception $e) {
@@ -197,7 +190,7 @@ class MtGameController
     }
 
     /**
-     * 取消下注（异步队列版）
+     * 取消下注（Redis 缓存版）
      * @param Request $request
      * @return Response
      */
@@ -210,7 +203,7 @@ class MtGameController
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['msg']);
-            Log::channel('mt_server')->info('MT取消下注请求（异步）', ['params' => $data]);
+            Log::channel('mt_server')->info('MT取消下注请求（Redis缓存）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -222,42 +215,46 @@ class MtGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            // 3. 准备队列参数
-            $queueParams = [
-                'order_no' => 'CANCEL_' . $data['bet_sn'],  // MT使用bet_sn
-                'bet_order_no' => $data['bet_sn'],  // 原下注订单号
-                'amount' => $data['order_money'],  // MT使用order_money
-                'platform_id' => $this->service->platform->id,
-                'original_data' => $data,
-            ];
+            $orderNo = $data['bet_sn'];
 
-            // 4. 发送到队列
-            $sent = GameQueueService::sendCancel('MT', $player, $queueParams);
-
-            if (!$sent) {
-                // 降级到同步处理
-                Log::warning('MT: 取消队列发送失败，降级到同步模式');
-                $balance = $this->service->cancelBet($data);
-
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => $balance]);
+            // 3. 幂等性检查
+            $lockKey = "order:cancel:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$balance]);
             }
 
-            // 5. 快速返回（返回预估余额）
-            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
-            $estimatedBalance = bcadd($currentBalance, $data['order_money'], 2);
+            // 4. 获取当前余额
+            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
+            // 5. 写入取消记录
+            try {
+                \app\service\GameRecordCacheService::saveCancel('MT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'cancel_type' => 'cancel',
+                    'original_data' => $data,
+                ]);
+
+                // 6. 更新余额缓存（退回下注金额）
+                $newBalance = bcadd($currentBalance, $data['order_money'], 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
+
+            // 7. 立即返回
             $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('mt_server')->info('MT取消下注已入队（快速响应）', [
-                'order_no' => $data['bet_sn'],
+            Log::channel('mt_server')->info('MT取消下注成功（Redis缓存）', [
+                'order_no' => $orderNo,
                 'elapsed_ms' => round($elapsed, 2),
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'balance' => $estimatedBalance  // 预估余额
+                'balance' => (float)$newBalance
             ]);
 
         } catch (Exception $e) {
@@ -273,7 +270,7 @@ class MtGameController
     }
 
     /**
-     * 結算（异步队列版）
+     * 結算（Redis 缓存版）
      * @param Request $request
      * @return Response
      */
@@ -286,7 +283,7 @@ class MtGameController
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['msg']);
-            Log::channel('mt_server')->info('MT结算请求（异步）', ['params' => $data]);
+            Log::channel('mt_server')->info('MT结算请求（Redis缓存）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -298,56 +295,57 @@ class MtGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            // 3. 准备队列参数
-            $queueParams = [
-                'order_no' => $data['bet_sn'],  // 结算使用bet_sn
-                'bet_order_no' => $data['bet_sn'],  // MT平台结算和下注使用相同的bet_sn
-                'amount' => $data['win_money'] ?? 0,  // MT使用win_money
-                'status' => $data['status'] ?? null,  // 状态：2=未中奖, 3=中奖, 4=和局
-                'settle_time' => $data['settle_time'] ?? '',  // 结算时间
-                'platform_id' => $this->service->platform->id,
-                'game_type' => $data['gameType'] ?? '',
-                'game_code' => $data['game_code'] ?? '',
-                'original_data' => $data,
-            ];
+            $orderNo = $data['bet_sn'];
 
-            // 4. 发送到队列
-            $sent = GameQueueService::sendSettle('MT', $player, $queueParams);
-
-            if (!$sent) {
-                // 降级到同步处理
-                Log::warning('MT: 结算队列发送失败，降级到同步模式');
-                $balance = $this->service->betResulet($data);
-
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-
+            // 3. 幂等性检查
+            $lockKey = "order:settle:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复请求
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'bet_sn' => $data['bet_sn'],
-                    'balance' => $balance
+                    'bet_sn' => $orderNo,
+                    'balance' => (float)$balance
                 ]);
             }
 
-            // 5. 快速返回（返回预估余额）
-            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
+            // 4. 获取当前余额
+            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
             $winMoney = $data['win_money'] ?? 0;
             $status = $data['status'] ?? null;
 
-            // 只有非"未中奖"状态才预估加款
-            $estimatedBalance = ($status !== self::BET_STATUS_NOT && $winMoney > 0)
-                ? bcadd($currentBalance, $winMoney, 2)
-                : $currentBalance;
+            // 5. 写入 Redis 缓存
+            try {
+                \app\service\GameRecordCacheService::saveSettle('MT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $winMoney,
+                    'diff' => $winMoney,  // MT的win_money就是输赢金额
+                    'original_data' => $data,
+                ]);
 
+                // 6. 更新余额缓存（只在有派彩时）
+                $newBalance = $currentBalance;
+                if ($status !== self::BET_STATUS_NOT && $winMoney > 0) {
+                    $newBalance = bcadd($currentBalance, $winMoney, 2);
+                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                }
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
+
+            // 7. 立即返回（<1ms）
             $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('mt_server')->info('MT结算已入队（快速响应）', [
-                'bet_sn' => $data['bet_sn'],
+            Log::channel('mt_server')->info('MT结算成功（Redis缓存）', [
+                'bet_sn' => $orderNo,
                 'elapsed_ms' => round($elapsed, 2),
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'bet_sn' => $data['bet_sn'],
-                'balance' => $estimatedBalance  // 预估余额
+                'bet_sn' => $orderNo,
+                'balance' => (float)$newBalance
             ]);
 
         } catch (Exception $e) {
@@ -363,7 +361,7 @@ class MtGameController
     }
 
     /**
-     * 重新結算（异步队列版）
+     * 重新結算（Redis 缓存版）
      * @param Request $request
      * @return Response
      */
@@ -376,7 +374,7 @@ class MtGameController
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['msg']);
-            Log::channel('mt_server')->info('MT重新结算请求（异步）', ['params' => $data]);
+            Log::channel('mt_server')->info('MT重新结算请求（Redis缓存）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -388,47 +386,57 @@ class MtGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            // 3. 准备队列参数
-            $queueParams = [
-                'order_no' => $data['bet_sn'],
-                'bet_order_no' => $data['bet_sn'],  // MT平台使用相同的bet_sn
-                'amount' => $data['win_money'] ?? 0,  // MT使用win_money
-                'status' => $data['status'] ?? null,  // 状态
-                'settle_time' => $data['settle_time'] ?? '',  // 结算时间
-                'platform_id' => $this->service->platform->id,
-                'original_data' => $data,
-            ];
+            $orderNo = $data['bet_sn'];
 
-            // 4. 发送到队列
-            $sent = GameQueueService::sendSettle('MT', $player, $queueParams);
-
-            if (!$sent) {
-                // 降级到同步处理
-                Log::warning('MT: 重新结算队列发送失败，降级到同步模式');
-                $balance = $this->service->reBetResulet($data);
-
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-
+            // 3. 幂等性检查
+            $lockKey = "order:settle:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复请求
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'bet_sn' => $data['bet_sn'],
-                    'balance' => $balance
+                    'bet_sn' => $orderNo,
+                    'balance' => (float)$balance
                 ]);
             }
 
-            // 5. 快速返回
-            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
+            try {
+                // 4. 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                $winMoney = $data['win_money'] ?? 0;
+                $status = $data['status'] ?? null;
+
+                // 5. 写入重新结算记录
+                \app\service\GameRecordCacheService::saveSettle('MT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $winMoney,
+                    'diff' => $winMoney,  // MT的win_money就是输赢金额
+                    'settle_type' => 'adjust',  // 重新结算标记为调整
+                    'original_data' => $data,
+                ]);
+
+                // 6. 更新余额缓存（只在有派彩时）
+                $newBalance = $currentBalance;
+                if ($status !== self::BET_STATUS_NOT && $winMoney > 0) {
+                    $newBalance = bcadd($currentBalance, $winMoney, 2);
+                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                }
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
 
             $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('mt_server')->info('MT重新结算已入队（快速响应）', [
-                'bet_sn' => $data['bet_sn'],
+            Log::channel('mt_server')->info('MT重新结算成功（Redis缓存）', [
+                'bet_sn' => $orderNo,
                 'elapsed_ms' => round($elapsed, 2),
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'bet_sn' => $data['bet_sn'],
-                'balance' => $currentBalance
+                'bet_sn' => $orderNo,
+                'balance' => (float)$newBalance
             ]);
 
         } catch (Exception $e) {
@@ -444,7 +452,7 @@ class MtGameController
     }
 
     /**
-     * 送礼/打赏（异步队列版）
+     * 送礼/打赏（Redis 缓存版）
      * @param Request $request
      * @return Response
      */
@@ -457,7 +465,7 @@ class MtGameController
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['msg']);
-            Log::channel('mt_server')->info('MT打赏请求（异步）', ['params' => $data]);
+            Log::channel('mt_server')->info('MT打赏请求（Redis缓存）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -469,49 +477,60 @@ class MtGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            // 3. 准备队列参数（打赏是扣款操作，使用bet队列）
-            $queueParams = [
-                'order_no' => $data['tip_sn'],  // MT使用tip_sn
-                'amount' => $data['money'] ?? 0,  // MT使用money字段
-                'platform_id' => $this->service->platform->id,
-                'game_type' => 'gift',
-                'game_code' => $data['game_code'] ?? 'gift',
-                'game_name' => '打赏',
-                'order_time' => $data['tran_time'] ?? '',  // MT使用tran_time
-                'original_data' => $data,
-            ];
+            $orderNo = $data['tip_sn'];  // MT使用tip_sn
+            $giftAmount = $data['money'] ?? 0;
 
-            // 4. 发送到队列（打赏是扣款，使用sendBet）
-            $sent = GameQueueService::sendBet('MT', $player, $queueParams);
-
-            if (!$sent) {
-                // 降级到同步处理
-                Log::warning('MT: 打赏队列发送失败，降级到同步模式');
-                $balance = $this->service->gift($data);
-
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-
+            // 3. 幂等性检查
+            $lockKey = "order:bet:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复请求
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'balance' => $balance
+                    'balance' => (float)$balance
                 ]);
             }
 
-            // 5. 快速返回（返回预估余额，打赏是扣款）
-            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
-            $giftAmount = $data['money'] ?? 0;
-            $estimatedBalance = bcsub($currentBalance, $giftAmount, 2);
+            try {
+                // 4. 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // 5. 余额预检查
+                if ($currentBalance < $giftAmount) {
+                    \support\Redis::del($lockKey);
+                    return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+                }
+
+                // 6. 写入打赏记录（打赏是扣款操作）
+                \app\service\GameRecordCacheService::saveBet('MT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $giftAmount,
+                    'game_code' => $data['game_code'] ?? 'gift',
+                    'game_type' => 'gift',
+                    'game_name' => '打赏',
+                    'bet_type' => 'gift',  // 标记为gift类型
+                    'original_data' => $data,
+                ]);
+
+                // 7. 更新余额缓存（扣款）
+                $newBalance = bcsub($currentBalance, $giftAmount, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
 
             $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('mt_server')->info('MT打赏已入队（快速响应）', [
-                'tip_sn' => $data['tip_sn'],
+            Log::channel('mt_server')->info('MT打赏成功（Redis缓存）', [
+                'tip_sn' => $orderNo,
                 'amount' => $giftAmount,
                 'elapsed_ms' => round($elapsed, 2),
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'balance' => max(0, $estimatedBalance)  // 预估余额（扣款后）
+                'balance' => (float)$newBalance
             ]);
 
         } catch (Exception $e) {
@@ -542,13 +561,6 @@ class MtGameController
             'timestamp' => time(),
             'data' => $data,
         ];
-
-        // return new Response(
-        //     $httpCode,
-        //     ['Content-Type' => 'text/plain'],
-        //     json_encode($responseData, JSON_UNESCAPED_UNICODE)
-        // );
-
 
         return new Response(
             $httpCode,

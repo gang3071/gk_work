@@ -5,12 +5,11 @@ namespace app\wallet\controller\game;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
-use app\service\GameQueueService;
-use app\service\WalletService;
 use Exception;
 use support\Log;
 use support\Request;
 use support\Response;
+use Throwable;
 
 /**
  * ATG电子平台
@@ -91,17 +90,17 @@ class ATGGameController
     }
 
     /**
-     * 下注
+     * 下注（Redis 缓存版）
      * @param Request $request
      * @return Response
-     * @throws Exception
+     * @throws Exception|Throwable
      */
     public function bet(Request $request): Response
     {
         try {
             $params = $request->post();
             $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-            $this->log->info('atg下注记录', ['params' => $data]);
+            $this->log->info('atg下注记录（Redis缓存）', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -110,69 +109,46 @@ class ATGGameController
             $orderNo = $data['betId'];
             $bet = $data['amount'];
 
-            // 获取当前余额
-            $currentBalance = WalletService::getBalance($player->id);
-
-            // 检查幂等性
-            $betKey = "atg:bet:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::setnx($betKey, 1);
-            if (!$isDuplicate) {
-                \support\Redis::expire($betKey, 300);
-            }
-
-            if ($isDuplicate) {
-                // 重复订单，返回当前余额
+            // 幂等性检查
+            $lockKey = "order:bet:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复订单
                 return $this->error(self::API_CODE_DUPLICATE_ORDER);
             }
 
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'amount' => $bet,
-                'platform_id' => $this->service->platform->id,
-                'game_code' => $data['gameCode'] ?? '',
-                'order_time' => $data['trade_time'] ?? date('Y-m-d H:i:s'),
-                'original_data' => $data,
-            ];
-
-            // 立即写入 Redis 预占状态（在入队列之前）
             try {
-                \support\Redis::hMSet("order:pending:{$orderNo}", [
-                    'player_id' => $player->id,
-                    'order_no' => $orderNo,
-                    'amount' => $bet,
-                    'platform_id' => $this->service->platform->id,
-                    'game_code' => $data['gameCode'] ?? '',
-                    'status' => 'pending',
-                    'created_at' => time(),
-                ]);
-                \support\Redis::expire("order:pending:{$orderNo}", 300);
-            } catch (\Throwable $e) {
-                // Redis 失败不影响主流程
-            }
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
-            // 发送下注队列
-            $sent = GameQueueService::sendBet('ATG', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：扣款
-                $estimatedBalance = bcsub($currentBalance, $bet, 2);
-                $estimatedBalance = max(0, $estimatedBalance);
-
-                $return = ['balanceOld' => $currentBalance, 'balance' => $estimatedBalance];
-            } else {
-                // 队列失败，同步降级
-                \support\Redis::del($betKey);
-                $balance = $this->service->bet($data);
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
+                // 余额预检查
+                if ($currentBalance < $bet) {
+                    \support\Redis::del($lockKey);
+                    return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
                 }
-                $return = $balance;
+
+                // 写入下注记录
+                \app\service\GameRecordCacheService::saveBet('ATG', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $bet,
+                    'game_code' => $data['gameCode'] ?? '',
+                    'original_data' => $data,
+                ]);
+
+                // 更新余额缓存（扣款）
+                $newBalance = bcsub($currentBalance, $bet, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
             }
 
-            $this->log->info('atg bet response',['return'=>$return]);
-
-            return $this->success($return);
+            $this->log->info('atg下注成功（Redis缓存）', [
+                'order_no' => $orderNo,
+            ]);
+            return $this->success(['balanceOld' => $currentBalance, 'balance' => $newBalance]);
         } catch (Exception $e) {
             $this->log->error('ATG bet failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '下注异常', $e, ['params' => $request->post()]);
@@ -181,15 +157,16 @@ class ATGGameController
     }
 
     /**
-     * 結算
+     * 結算（Redis 缓存版）
      * @param Request $request
      * @return Response
+     * @throws Throwable
      */
     public function betResult(Request $request): Response
     {
         try {
             $params = $request->post();
-            $this->log->info('atg结算请求', array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
+            $this->log->info('atg结算请求（Redis缓存）', array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
             $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
             $this->log->info('atg结算记录', ['params' => $data]);
             if ($this->service->error) {
@@ -200,40 +177,45 @@ class ATGGameController
             $orderNo = $data['betId'];
             $winAmount = $data['amount'] ?? 0;
 
-            // 获取当前余额
-            $currentBalance = WalletService::getBalance($player->id);
-
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'bet_order_no' => $data['bet_trade_no'] ?? $orderNo,
-                'amount' => max($winAmount, 0),
-                'result_amount' => $winAmount,
-                'original_data' => $data,
-            ];
-
-            // 发送结算队列
-            $sent = GameQueueService::sendSettle('ATG', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：加款（如果有中奖）
-                $estimatedBalance = $currentBalance;
-                if ($winAmount > 0) {
-                    $estimatedBalance = bcadd($currentBalance, $winAmount, 2);
-                }
-
-                $return = ['balanceOld' => $currentBalance, 'balance' => $estimatedBalance];
-            } else {
-                // 队列失败，同步降级
-                $balance = $this->service->betResulet($data);
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-                $return = $balance;
+            // 幂等性检查
+            $lockKey = "order:settle:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复结算
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                return $this->success(['balanceOld' => $balance, 'balance' => $balance]);
             }
 
-            $this->log->info('atg betresult response',['return'=>$return]);
-            return $this->success($return);
+            try {
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // 写入结算记录
+                \app\service\GameRecordCacheService::saveSettle('ATG', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => max($winAmount, 0),
+                    'diff' => $winAmount,
+                    'original_data' => $data,
+                ]);
+
+                // 更新余额缓存（加上中奖金额）
+                $newBalance = $currentBalance;
+                if ($winAmount > 0) {
+                    $newBalance = bcadd($currentBalance, $winAmount, 2);
+                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                }
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
+
+            $this->log->info('atg结算成功（Redis缓存）', [
+                'order_no' => $orderNo,
+            ]);
+
+            return $this->success(['balanceOld' => $currentBalance, 'balance' => $newBalance]);
         } catch (Exception $e) {
             $this->log->error('ATG betResult failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '结算异常', $e, ['params' => $request->post()]);
@@ -243,16 +225,18 @@ class ATGGameController
 
 
     /**
-     * 退款
+     * 退款（Redis 缓存版）
      * @param Request $request
      * @return Response
      */
     public function refund(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->post();
             $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-            $this->log->info('atg退款记录', ['params' => $data]);
+            $this->log->info('atg退款记录（Redis缓存）', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -261,35 +245,43 @@ class ATGGameController
             $orderNo = $data['betId'];
             $refundAmount = $data['amount'] ?? 0;
 
-            // 获取当前余额
-            $currentBalance = WalletService::getBalance($player->id);
-
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'bet_order_no' => $data['bet_trade_no'] ?? $orderNo,
-                'amount' => $refundAmount,
-                'original_data' => $data,
-            ];
-
-            // 发送取消队列
-            $sent = GameQueueService::sendCancel('ATG', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：退款
-                $estimatedBalance = bcadd($currentBalance, $refundAmount, 2);
-
-                $return = ['balanceOld' => $currentBalance, 'balance' => $estimatedBalance];
-            } else {
-                // 队列失败，同步降级
-                $balance = $this->service->refund($data);
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-                $return = $balance;
+            // 幂等性检查
+            $lockKey = "order:cancel:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复退款
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                return $this->success(['balanceOld' => $balance, 'balance' => $balance]);
             }
 
-            return $this->success($return);
+            try {
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // 写入退款记录
+                \app\service\GameRecordCacheService::saveCancel('ATG', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'cancel_type' => 'refund',
+                    'original_data' => $data,
+                ]);
+
+                // 更新余额缓存（退款）
+                $newBalance = bcadd($currentBalance, $refundAmount, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
+
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            $this->log->info('atg退款成功（Redis缓存）', [
+                'order_no' => $orderNo,
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(['balanceOld' => $currentBalance, 'balance' => $newBalance]);
         } catch (Exception $e) {
             Log::error('ATG refund failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '退款异常', $e, ['params' => $request->post()]);

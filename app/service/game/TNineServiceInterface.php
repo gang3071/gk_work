@@ -295,17 +295,17 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
 
         // 检查设备是否爆机
         if ($this->checkAndHandleMachineCrash()) {
-            return \app\service\WalletService::getBalance($player->id);
+            return \app\service\GameRecordCacheService::getCachedBalance($player->id);
         }
 
-        // ✅ Redis预检查幂等性（批量订单，检查第一个订单）
+        // Redis 缓存处理（批量订单，检查第一个订单）
         if (count($orders) > 0) {
             $firstOrder = $orders[0];
-            $betKey = "tnine:bet:lock:{$firstOrder['OrderNumber']}";
-            $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
-            if (!$isLocked) {
+            $lockKey = "order:bet:lock:{$firstOrder['OrderNumber']}";
+
+            if (!\support\Redis::set($lockKey, 1, 'EX', 300, 'NX')) {
                 // 整个批次已处理，返回当前余额
-                $balance = \app\service\WalletService::getBalance($player->id);
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
                 // 返回所有订单号（避免游戏平台报错）
                 foreach ($orders as $order) {
@@ -322,71 +322,101 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
             }
         }
 
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
+        try {
+            // 获取当前余额
+            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
-        $allAmount = array_sum(array_column($orders, 'BetAmount'));
+            $allAmount = array_sum(array_column($orders, 'BetAmount'));
 
-        if ($machineWallet->money < $allAmount) {
-            $this->error = TNineGameController::API_CODE_INSUFFICIENT_BALANCE;
-            return \app\service\WalletService::getBalance($player->id);
+            // 余额预检查
+            if ($currentBalance < $allAmount) {
+                if (count($orders) > 0) {
+                    \support\Redis::del("order:bet:lock:{$orders[0]['OrderNumber']}");
+                }
+                $this->error = TNineGameController::API_CODE_INSUFFICIENT_BALANCE;
+                return $currentBalance;
+            }
+
+            // 写入批量下注记录
+            foreach ($orders as $order) {
+                $bet = $order['BetAmount'];
+
+                \app\service\GameRecordCacheService::saveBet('TNINE', [
+                    'order_no' => $order['OrderNumber'],
+                    'player_id' => $player->id,
+                    'platform_id' => $this->platform->id,
+                    'amount' => $bet,
+                    'game_code' => $data['GameType'],
+                    'original_data' => $order,
+                ]);
+
+                $return['OrderList'][] = [
+                    'OrderNumber' => $order['OrderNumber'],
+                    'MerchantOrderNumber' => $order['OrderNumber'],
+                ];
+            }
+
+            // 更新余额缓存（扣减总金额）
+            $newBalance = bcsub($currentBalance, $allAmount, 2);
+            \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+        } catch (\Throwable $e) {
+            if (count($orders) > 0) {
+                \support\Redis::del("order:bet:lock:{$orders[0]['OrderNumber']}");
+            }
+            throw $e;
         }
 
-        // ✅ 同步扣减总金额（触发 updated 事件，自动更新 Redis 缓存）
-        $machineWallet->money = bcsub($machineWallet->money, $allAmount, 2);
-        $machineWallet->save();
-
-        // ⚡ 异步创建下注记录（不阻塞API响应）
-        foreach ($orders as $order) {
-            $bet = $order['BetAmount'];
-
-            $this->asyncCreateBetRecord(
-                playerId: $player->id,
-                platformId: $this->platform->id,
-                gameCode: $data['GameType'],
-                orderNo: $order['OrderNumber'],
-                bet: $bet,
-                originalData: $order,
-                orderTime: $order['BetTime']
-            );
-
-            $return['OrderList'][] = [
-                'OrderNumber' => $order['OrderNumber'],
-                'MerchantOrderNumber' => $order['OrderNumber'], // ✅ 使用外部订单号
-            ];
-        }
-
-        // ✅ 立即从缓存读取余额
-        $balance = \app\service\WalletService::getBalance($player->id);
-        $return['Balance'] = $balance;
+        $return['Balance'] = $newBalance;
         $return['SyncTime'] = date('Y-m-d H:i:s');
 
         return $return;
     }
 
     /**
-     * 取消单（异步优化版）
+     * 取消单（Redis 缓存版）
      * @param $data
      * @return float|string
      */
     public function cancelBet($data): float|string
     {
-        // ✅ 同步退还用户金钱（触发 updated 事件，自动更新 Redis 缓存）
+        $orderNo = $data['txn_reverse_id'];
         $bet = $data['amount'];
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-        $machineWallet->money = bcadd($machineWallet->money, $bet, 2);
-        $machineWallet->save();
 
-        // ⚡ 异步更新取消状态（不阻塞API响应）
-        $this->asyncCancelBetRecord($data['txn_reverse_id']);
+        // 幂等性检查
+        $lockKey = "order:cancel:lock:{$orderNo}";
+        if (!\support\Redis::set($lockKey, 1, 'EX', 300, 'NX')) {
+            // 重复取消
+            return \app\service\GameRecordCacheService::getCachedBalance($this->player->id);
+        }
 
-        // ✅ 立即从缓存返回余额
-        return \app\service\WalletService::getBalance($this->player->id);
+        try {
+            // 获取当前余额
+            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($this->player->id);
+
+            // 写入取消记录
+            \app\service\GameRecordCacheService::saveCancel('TNINE', [
+                'order_no' => $orderNo,
+                'player_id' => $this->player->id,
+                'platform_id' => $this->platform->id,
+                'cancel_type' => 'cancel',
+                'original_data' => $data,
+            ]);
+
+            // 更新余额缓存（退款）
+            $newBalance = bcadd($currentBalance, $bet, 2);
+            \app\service\GameRecordCacheService::updateCachedBalance($this->player->id, (float)$newBalance);
+
+        } catch (\Throwable $e) {
+            \support\Redis::del($lockKey);
+            throw $e;
+        }
+
+        return $newBalance;
     }
 
     /**
-     * 结算
+     * 结算（Redis 缓存版）
      * @param $data
      * @return mixed
      */
@@ -396,33 +426,52 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
         /** @var Player $player */
         $player = Player::query()->where('uuid', $data['MemberAccount'])->first();
 
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-
+        $orderNo = $data['OrderNumber'];
         $money = $data['GameAmount'];
         $winAmount = $data['WinAmount'];
 
-        // ✅ 同步增加余额（有中奖金额时，触发 updated 事件，自动更新 Redis 缓存）
-        if ($winAmount > 0) {
-            $machineWallet->money = bcadd($machineWallet->money, $money, 2);
-            $machineWallet->save();
+        // 幂等性检查
+        $lockKey = "order:settle:lock:{$orderNo}";
+        if (!\support\Redis::set($lockKey, 1, 'EX', 300, 'NX')) {
+            // 重复结算
+            $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+            return [
+                'MerchantOrderNumber' => $orderNo,
+                'SyncTime' => date('Y-m-d H:i:s'),
+                'Balance' => $balance,
+            ];
         }
 
-        // ⚡ 异步更新结算记录（不阻塞API响应）
-        // 彩金记录会在Consumer中处理
-        $this->asyncUpdateSettleRecord(
-            orderNo: $data['OrderNumber'],
-            win: $money,
-            diff: $winAmount
-        );
+        try {
+            // 获取当前余额
+            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
-        // ✅ 立即从缓存读取余额
-        $balance = \app\service\WalletService::getBalance($player->id);
+            // 写入结算记录
+            \app\service\GameRecordCacheService::saveSettle('TNINE', [
+                'order_no' => $orderNo,
+                'player_id' => $player->id,
+                'platform_id' => $this->platform->id,
+                'amount' => max($money, 0),
+                'diff' => $winAmount,
+                'original_data' => $data,
+            ]);
+
+            // 更新余额缓存（加上中奖金额）
+            $newBalance = $currentBalance;
+            if ($winAmount > 0) {
+                $newBalance = bcadd($currentBalance, $money, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+            }
+
+        } catch (\Throwable $e) {
+            \support\Redis::del($lockKey);
+            throw $e;
+        }
 
         $return = [
-            'MerchantOrderNumber' => $data['OrderNumber'], // ✅ 使用外部订单号
+            'MerchantOrderNumber' => $orderNo,
             'SyncTime' => date('Y-m-d H:i:s'),
-            'Balance' => $balance,
+            'Balance' => $newBalance,
         ];
 
         return $return;

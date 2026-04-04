@@ -8,7 +8,6 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\QTServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
-use app\service\GameQueueService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -396,134 +395,139 @@ class QTGameController
 
             $this->service->player = $player;
 
-            // ========== 异步队列处理 ==========
+            // ========== Redis 缓存处理 ==========
             $txnId = $params['txnId'];
             $amount = (float)$params['amount'];
             $roundId = $params['roundId'] ?? '';
             $betId = $params['betId'] ?? '';
             $gameId = $params['gameId'] ?? '';
+            $bonusType = $params['bonusType'] ?? null;
 
-            // 构建队列参数
-            $queueParams = [
-                'order_no' => $txnId,
-                'txn_id' => $txnId,
-                'bet_id' => $betId,
-                'round_id' => $roundId,
-                'amount' => $amount,
-                'platform_id' => $this->service->platform->id,
-                'game_code' => $gameId,
-                'txn_type' => $txnType,
-                'bonus_type' => $params['bonusType'] ?? null,
-                'original_data' => $params,
-            ];
-
-            $sent = false;
-            $estimatedBalance = 0;
-            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
-
-            // 根据 txnType 发送到不同队列
+            // 根据 txnType 处理不同操作
             if ($txnType === 'DEBIT') {
-                // 下注扣款
-                // 立即写入 Redis 预占状态（在入队列之前）
-                try {
-                    \support\Redis::hMSet("order:pending:{$txnId}", [
-                        'player_id' => $player->id,
-                        'order_no' => $txnId,
-                        'amount' => $amount,
-                        'platform_id' => $this->service->platform->id,
-                        'game_code' => $gameId,
-                        'status' => 'pending',
-                        'created_at' => time(),
-                    ]);
-                    \support\Redis::expire("order:pending:{$txnId}", 300);
-                } catch (\Throwable $e) {
-                    // Redis 失败不影响主流程
-                }
+                // 下注扣款 - 幂等性检查
+                $lockKey = "order:bet:lock:{$txnId}";
+                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                    // 重复订单
+                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                    $result = [
+                        'balance' => round($balance, 2),
+                        'referenceId' => $txnId
+                    ];
 
-                $sent = GameQueueService::sendBet('QT', $player, $queueParams);
-                if ($sent) {
-                    // 预估余额：扣除下注金额（除非是奖金回合）
-                    $bonusType = $params['bonusType'] ?? null;
-                    if (!$bonusType) {
-                        $estimatedBalance = bcsub($currentBalance, $amount, 2);
-                        $estimatedBalance = max(0, $estimatedBalance);
-                    } else {
-                        // 奖金回合不扣款
-                        $estimatedBalance = $currentBalance;
-                    }
-                }
-            } elseif ($txnType === 'CREDIT') {
-                // 结算派彩
-                $queueParams['bet_order_no'] = $betId;
-                $sent = GameQueueService::sendSettle('QT', $player, $queueParams);
-                if ($sent) {
-                    // 预估余额：加上派彩金额
-                    $estimatedBalance = ($amount > 0) ? bcadd($currentBalance, $amount, 2) : $currentBalance;
-                }
-            }
-
-            // 如果队列发送失败，降级到同步处理
-            if (!$sent) {
-                $this->logger->warning('QT队列发送失败，降级到同步处理', [
-                    'txnType' => $txnType,
-                    'txnId' => $txnId,
-                    'player_id' => $player->id
-                ]);
-
-                $result = match ($txnType) {
-                    'DEBIT' => $this->service->debit($params),
-                    'CREDIT' => $this->service->credit($params),
-                    default => throw new Exception("Invalid transaction type: {$txnType}")
-                };
-
-                if ($this->service->error) {
-                    $this->logger->error('QT交易失败', [
+                    $responseTime = round((microtime(true) - $startTime) * 1000, 2);
+                    $this->logger->info('QT交易成功（重复订单）', [
                         'txnType' => $txnType,
-                        'error' => $this->service->error
+                        'txnId' => $txnId,
+                        'balance' => $balance,
+                        'response_time_ms' => $responseTime
                     ]);
 
-                    // 根据交易类型映射错误码
-                    if ($txnType === 'DEBIT') {
-                        $errorMap = [
-                            'INSUFFICIENT_BALANCE' => [self::ERROR_INSUFFICIENT_FUNDS, 'Insufficient funds', 400],
-                            'LIMIT_EXCEEDED' => [self::ERROR_LIMIT_EXCEEDED, 'Game limit exceeded', 400],
-                            'INTERNAL_ERROR' => [self::ERROR_UNKNOWN_ERROR, 'Unexpected error', 500],
-                        ];
-                        $errorInfo = $errorMap[$this->service->error] ?? [self::ERROR_REQUEST_DECLINED, 'Transaction failed', 400];
-                    } else {
-                        $errorMap = [
-                            'INTERNAL_ERROR' => [self::ERROR_UNKNOWN_ERROR, 'Unexpected error', 500],
-                        ];
-                        $errorInfo = $errorMap[$this->service->error] ?? [self::ERROR_REQUEST_DECLINED, 'Transaction failed', 400];
-                    }
-
-                    return $this->errorResponse($errorInfo[0], $errorInfo[1], $errorInfo[2]);
+                    return new Response(201, ['Content-Type' => 'application/json'], json_encode($result));
                 }
 
-                $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-                $this->logger->info('QT交易成功（同步降级）', [
-                    'txnType' => $txnType,
-                    'txnId' => $txnId,
-                    'result' => $result,
-                    'response_time_ms' => $responseTime
-                ]);
+                try {
+                    // 获取当前余额
+                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
-                return new Response(201, ['Content-Type' => 'application/json'], json_encode($result));
+                    // 余额预检查（除非是奖金回合）
+                    if (!$bonusType && $currentBalance < $amount) {
+                        \support\Redis::del($lockKey);
+                        return $this->errorResponse(self::ERROR_INSUFFICIENT_FUNDS, 'Insufficient funds', 400);
+                    }
+
+                    // 写入下注记录
+                    \app\service\GameRecordCacheService::saveBet('QT', [
+                        'order_no' => $txnId,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $amount,
+                        'game_code' => $gameId,
+                        'bet_type' => $bonusType ? 'bonus' : 'bet',
+                        'original_data' => $params,
+                    ]);
+
+                    // 更新余额缓存（奖金回合不扣款）
+                    if (!$bonusType) {
+                        $newBalance = bcsub($currentBalance, $amount, 2);
+                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                    } else {
+                        $newBalance = $currentBalance;
+                    }
+
+                } catch (\Throwable $e) {
+                    \support\Redis::del($lockKey);
+                    throw $e;
+                }
+
+                $result = [
+                    'balance' => round($newBalance, 2),
+                    'referenceId' => $txnId
+                ];
+
+            } elseif ($txnType === 'CREDIT') {
+                // 结算派彩 - 幂等性检查
+                $lockKey = "order:settle:lock:{$txnId}";
+                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                    // 重复结算
+                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                    $result = [
+                        'balance' => round($balance, 2),
+                        'referenceId' => $txnId
+                    ];
+
+                    $responseTime = round((microtime(true) - $startTime) * 1000, 2);
+                    $this->logger->info('QT交易成功（重复结算）', [
+                        'txnType' => $txnType,
+                        'txnId' => $txnId,
+                        'balance' => $balance,
+                        'response_time_ms' => $responseTime
+                    ]);
+
+                    return new Response(201, ['Content-Type' => 'application/json'], json_encode($result));
+                }
+
+                try {
+                    // 获取当前余额
+                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                    // 写入结算记录
+                    \app\service\GameRecordCacheService::saveSettle('QT', [
+                        'order_no' => $txnId,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => max($amount, 0),
+                        'diff' => $amount,
+                        'original_data' => $params,
+                    ]);
+
+                    // 更新余额缓存（加上派彩金额）
+                    $newBalance = $currentBalance;
+                    if ($amount > 0) {
+                        $newBalance = bcadd($currentBalance, $amount, 2);
+                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                    }
+
+                } catch (\Throwable $e) {
+                    \support\Redis::del($lockKey);
+                    throw $e;
+                }
+
+                $result = [
+                    'balance' => round($newBalance, 2),
+                    'referenceId' => $txnId
+                ];
+
+            } else {
+                throw new Exception("Invalid transaction type: {$txnType}");
             }
-
-            // 构建异步响应
-            $result = [
-                'balance' => round($estimatedBalance, 2),
-                'referenceId' => $txnId // 临时使用txnId，实际referenceId由队列消费者生成
-            ];
 
             $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-            $this->logger->info('QT交易成功（异步）', [
+            $this->logger->info('QT交易成功（Redis缓存）', [
                 'txnType' => $txnType,
                 'txnId' => $txnId,
-                'estimated_balance' => $estimatedBalance,
-                'response_time_ms' => $responseTime,
-                'is_async' => $sent
+                'balance' => $result['balance'],
+                'response_time_ms' => $responseTime
             ]);
 
             return new Response(201, ['Content-Type' => 'application/json'], json_encode($result));
@@ -812,75 +816,66 @@ class QTGameController
 
             $this->service->player = $player;
 
-            // ========== 异步队列处理 ==========
+            // ========== Redis 缓存处理 ==========
             $betId = $params['betId'];
             $txnId = $params['txnId'];
             $amount = (float)$params['amount'];
             $roundId = $params['roundId'] ?? '';
             $gameId = $params['gameId'] ?? '';
 
-            // 构建队列参数
-            $queueParams = [
-                'order_no' => $txnId,
-                'bet_order_no' => $betId,
-                'txn_id' => $txnId,
-                'bet_id' => $betId,
-                'round_id' => $roundId,
-                'amount' => $amount,
-                'platform_id' => $this->service->platform->id,
-                'game_code' => $gameId,
-                'is_rollback' => true,
-                'original_data' => $params,
-            ];
-
-            // 发送到取消队列
-            $sent = GameQueueService::sendCancel('QT', $player, $queueParams);
-            $currentBalance = $player->machine_wallet()->value('money') ?? 0;
-
-            if ($sent) {
-                // 预估余额：加上回滚金额
-                $estimatedBalance = bcadd($currentBalance, $amount, 2);
-
+            // 回滚 - 幂等性检查
+            $lockKey = "order:cancel:lock:{$txnId}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复回滚
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
                 $result = [
-                    'balance' => round($estimatedBalance, 2),
+                    'balance' => round($balance, 2),
                     'referenceId' => $txnId
                 ];
 
                 $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-                $this->logger->info('QT回滚成功（异步）', [
+                $this->logger->info('QT回滚成功（重复订单）', [
                     'betId' => $betId,
                     'txnId' => $txnId,
-                    'estimated_balance' => $estimatedBalance,
-                    'response_time_ms' => $responseTime,
-                    'is_async' => true
+                    'balance' => $balance,
+                    'response_time_ms' => $responseTime
                 ]);
 
                 return new Response(200, ['Content-Type' => 'application/json'], json_encode($result));
             }
 
-            // 如果队列发送失败，降级到同步处理
-            $this->logger->warning('QT回滚队列发送失败，降级到同步处理', [
-                'betId' => $betId,
-                'txnId' => $txnId,
-                'player_id' => $player->id
-            ]);
+            try {
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
-            $result = $this->service->rollback($params);
+                // 写入回滚记录
+                \app\service\GameRecordCacheService::saveCancel('QT', [
+                    'order_no' => $txnId,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'cancel_type' => 'rollback',
+                    'original_data' => $params,
+                ]);
 
-            if ($this->service->error) {
-                $this->logger->error('QT回滚失败', ['error' => $this->service->error]);
-                $errorMap = [
-                    'INTERNAL_ERROR' => [self::ERROR_UNKNOWN_ERROR, 'Unexpected error', 500],
-                ];
-                $errorInfo = $errorMap[$this->service->error] ?? [self::ERROR_REQUEST_DECLINED, 'Rollback failed', 400];
-                return $this->errorResponse($errorInfo[0], $errorInfo[1], $errorInfo[2]);
+                // 更新余额缓存（回滚退款）
+                $newBalance = bcadd($currentBalance, $amount, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
             }
 
+            $result = [
+                'balance' => round($newBalance, 2),
+                'referenceId' => $txnId
+            ];
+
             $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-            $this->logger->info('QT回滚成功（同步降级）', [
+            $this->logger->info('QT回滚成功（Redis缓存）', [
                 'betId' => $betId,
                 'txnId' => $txnId,
-                'result' => $result,
+                'balance' => $newBalance,
                 'response_time_ms' => $responseTime
             ]);
 

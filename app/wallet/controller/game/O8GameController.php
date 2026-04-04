@@ -8,8 +8,6 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\O8ServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
-use app\service\GameQueueService;
-use Carbon\Carbon;
 use Exception;
 use Firebase\JWT\JWT;
 use support\Log;
@@ -187,7 +185,7 @@ class O8GameController
             $orders = $params['transactions'];
             $return = ['transactions' => []];
 
-            // 批量处理每个订单
+            // 批量处理每个订单（Redis 缓存版）
             foreach ($orders as $order) {
                 /** @var Player $player */
                 $player = Player::query()->where('uuid', $order['userid'])->first();
@@ -198,81 +196,61 @@ class O8GameController
                 $orderNo = $order['externalroundid'];
                 $bet = $order['amt'];
 
-                // 获取当前余额
-                $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-                // 检查幂等性
-                $betKey = "o8:bet:lock:{$orderNo}";
-                $isDuplicate = !\support\Redis::setnx($betKey, 1);
-                if (!$isDuplicate) {
-                    \support\Redis::expire($betKey, 300);
-                }
-
-                if ($isDuplicate) {
-                    // 重复订单，返回当前余额
+                // 幂等性检查
+                $lockKey = "order:bet:lock:{$orderNo}";
+                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                    // 重复订单
+                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
                     $return['transactions'][] = [
                         'txid' => $orderNo,
                         'ptxid' => $order['ptxid'],
-                        'bal' => $currentBalance,
+                        'bal' => (float)$balance,
                         'cur' => 'TWD',
                         'dup' => true
                     ];
                     continue;
                 }
 
-                // 准备队列参数
-                $platformId = GameExtend::query()
-                    ->where('code', $order['gamecode'])
-                    ->value('platform_id') ?? $this->service->platform->id;
-
-                $queueParams = [
-                    'order_no' => $orderNo,
-                    'amount' => $bet,
-                    'platform_id' => $platformId,
-                    'game_code' => $order['gamecode'],
-                    'order_time' => Carbon::createFromTimestamp($order['timestamp'])->toDateTimeString(),
-                    'original_data' => $order,
-                ];
-
-                // 立即写入 Redis 预占状态（在入队列之前）
                 try {
-                    \support\Redis::hMSet("order:pending:{$orderNo}", [
-                        'player_id' => $player->id,
+                    // 获取当前余额
+                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                    // 余额预检查
+                    if ($currentBalance < $bet) {
+                        \support\Redis::del($lockKey);
+                        return $this->error(self::API_CODE_AMOUNT_OVER_BALANCE);
+                    }
+
+                    // 查询平台ID
+                    $platformId = GameExtend::query()
+                        ->where('code', $order['gamecode'])
+                        ->value('platform_id') ?? $this->service->platform->id;
+
+                    // 写入 Redis 缓存
+                    \app\service\GameRecordCacheService::saveBet('O8', [
                         'order_no' => $orderNo,
-                        'amount' => $bet,
+                        'player_id' => $player->id,
                         'platform_id' => $platformId,
+                        'amount' => $bet,
                         'game_code' => $order['gamecode'],
-                        'status' => 'pending',
-                        'created_at' => time(),
+                        'original_data' => $order,
                     ]);
-                    \support\Redis::expire("order:pending:{$orderNo}", 300);
-                } catch (\Throwable $e) {
-                    // Redis 失败不影响主流程
-                }
 
-                // 发送下注队列
-                $sent = GameQueueService::sendBet('O8', $player, $queueParams);
-
-                if ($sent) {
-                    // 预估余额：扣款
-                    $estimatedBalance = bcsub($currentBalance, $bet, 2);
-                    $estimatedBalance = max(0, $estimatedBalance);
+                    // 更新余额缓存
+                    $newBalance = bcsub($currentBalance, $bet, 2);
+                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
 
                     $return['transactions'][] = [
                         'txid' => $orderNo,
                         'ptxid' => $order['ptxid'],
-                        'bal' => $estimatedBalance,
+                        'bal' => (float)$newBalance,
                         'cur' => 'TWD',
                         'dup' => false
                     ];
-                } else {
-                    // 队列失败，同步降级
-                    \support\Redis::del($betKey);
-                    $syncReturn = $this->service->bet($params);
-                    if ($this->service->error) {
-                        return $this->error($this->service->error);
-                    }
-                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $syncReturn);
+
+                } catch (\Throwable $e) {
+                    \support\Redis::del($lockKey);
+                    throw $e;
                 }
             }
 
@@ -314,61 +292,53 @@ class O8GameController
                 $winAmount = $order['turnover'] - $order['ggr'];
                 $txtype = $order['txtype'];
 
-                // 获取当前余额
-                $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-                // 检查幂等性
-                $settleKey = "o8:settle:lock:{$orderNo}";
-                $isDuplicate = !\support\Redis::setnx($settleKey, 1);
-                if (!$isDuplicate) {
-                    \support\Redis::expire($settleKey, 300);
-                }
-
-                if ($isDuplicate) {
-                    // 已结算，返回当前余额
+                // 幂等性检查
+                $lockKey = "order:settle:lock:{$orderNo}";
+                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                    // 已结算，返回缓存余额
+                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
                     $return['transactions'][] = [
                         'txid' => $orderNo,
                         'ptxid' => $order['ptxid'],
-                        'bal' => $currentBalance,
+                        'bal' => (float)$balance,
                         'cur' => 'TWD',
                         'dup' => true
                     ];
                     continue;
                 }
 
-                // 准备队列参数
-                $queueParams = [
-                    'order_no' => $orderNo,
-                    'bet_order_no' => $orderNo,
-                    'amount' => $winAmount,
-                    'txtype' => $txtype,
-                    'turnover' => $order['turnover'],
-                    'ggr' => $order['ggr'],
-                    'original_data' => $order,
-                ];
+                try {
+                    // 获取当前余额
+                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                    $newBalance = $currentBalance;
 
-                // 发送结算队列
-                $sent = GameQueueService::sendSettle('O8', $player, $queueParams);
+                    // 写入结算记录
+                    \app\service\GameRecordCacheService::saveSettle('O8', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $winAmount,
+                        'diff' => $winAmount,
+                        'original_data' => $order,
+                    ]);
 
-                if ($sent) {
-                    // 预估余额：txtype=510 且 winAmount>0 才加钱
-                    $estimatedBalance = $currentBalance;
+                    // txtype=510 且 winAmount>0 才加钱
                     if ($txtype == 510 && $winAmount > 0) {
-                        $estimatedBalance = bcadd($currentBalance, $winAmount, 2);
+                        $newBalance = bcadd($currentBalance, $winAmount, 2);
+                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
                     }
 
                     $return['transactions'][] = [
                         'txid' => $orderNo,
                         'ptxid' => $order['ptxid'],
-                        'bal' => $estimatedBalance,
+                        'bal' => (float)$newBalance,
                         'cur' => 'TWD',
                         'dup' => false
                     ];
-                } else {
-                    // 队列失败，同步降级
-                    \support\Redis::del($settleKey);
-                    $syncReturn = $this->service->betResulet($params);
-                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $syncReturn);
+
+                } catch (\Throwable $e) {
+                    \support\Redis::del($lockKey);
+                    throw $e;
                 }
             }
 

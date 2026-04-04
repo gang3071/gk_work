@@ -7,7 +7,6 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\KTServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
-use app\service\GameQueueService;
 use Exception;
 use support\Log;
 use support\Redis;
@@ -123,18 +122,20 @@ class KTGameController
     }
 
     /**
-     * 下注
+     * 下注（Redis 缓存版）
      * @param Request $request
      * @return Response
      * @throws Exception
      */
     public function bet(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->post();
             $hash = $request->get('Hash');
 
-            $this->logger->info('kt_server 下注记录', ['params' => $params, 'get' => $hash]);
+            $this->logger->info('KT下注请求（Redis缓存）', ['params' => $params, 'get' => $hash]);
 
             $this->service->verifyToken($params, $hash);
 
@@ -145,93 +146,76 @@ class KTGameController
             $bet = $params['Bet'];
             $takeWin = $params['TakeWin'] ?? 0;
 
-            // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-            // 检查幂等性
-            $betKey = "kt:bet:lock:$orderNo";
-            // NX: 仅当键不存在时设置，EX: 过期时间(秒)
-            // 返回 true 表示设置成功(首次)，false 表示键已存在(重复)
-            $isFirstTime = Redis::set($betKey, 1, 'EX', 300, 'NX');
-
-            if (!$isFirstTime) {
-                // 重复订单，返回当前余额
+            // 幂等性检查
+            $lockKey = "order:bet:lock:{$orderNo}";
+            if (!Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复订单
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => $currentBalance,
+                    'Balance' => (float)$balance,
                 ]);
             }
 
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'amount' => $bet,
-                'platform_id' => $this->service->platform->id,
-                'game_code' => $params['GameCode'] ?? '',
-                'original_data' => $params,
-            ];
-
-            // 立即写入 Redis 预占状态（在入队列之前）
             try {
-                Redis::hMSet("order:pending:{$orderNo}", [
-                    'player_id' => $player->id,
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // 余额预检查
+                if ($currentBalance < $bet) {
+                    Redis::del($lockKey);
+                    return $this->error(self::API_CODE_AMOUNT_OVER_BALANCE);
+                }
+
+                // 写入下注记录
+                \app\service\GameRecordCacheService::saveBet('KT', [
                     'order_no' => $orderNo,
-                    'amount' => $bet,
+                    'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
+                    'amount' => $bet,
                     'game_code' => $params['GameCode'] ?? '',
-                    'status' => 'pending',
-                    'created_at' => time(),
+                    'original_data' => $params,
                 ]);
-                Redis::expire("order:pending:{$orderNo}", 300);
-            } catch (\Throwable $e) {
-                // Redis 失败不影响主流程
-            }
 
-            // 发送下注队列
-            $sent = GameQueueService::sendBet('KT', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：扣款
-                $estimatedBalance = bcsub($currentBalance, $bet, 2);
-                $estimatedBalance = max(0, $estimatedBalance);
+                // 更新余额缓存（扣款）
+                $newBalance = bcsub($currentBalance, $bet, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
 
                 // TakeWin=1 表示立即结算
                 if ($takeWin == 1) {
                     $winAmount = $params['Win'] ?? 0;
 
-                    // 发送结算队列
-                    $settleParams = [
-                        'order_no' => $orderNo . '_settle',  // ← 结算订单号（唯一）
-                        'bet_order_no' => $orderNo,          // ← 下注订单号（用于查找）
-                        'amount' => max($winAmount, 0),
+                    // 写入结算记录
+                    \app\service\GameRecordCacheService::saveSettle('KT', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
+                        'amount' => $winAmount,
+                        'diff' => $winAmount,
                         'original_data' => $params,
-                    ];
-                    GameQueueService::sendSettle('KT', $player, $settleParams);
+                    ]);
 
-                    // 预估余额：加上中奖金额
+                    // 更新余额缓存（加上中奖金额）
                     if ($winAmount > 0) {
-                        $estimatedBalance = bcadd($estimatedBalance, $winAmount, 2);
+                        $newBalance = bcadd($newBalance, $winAmount, 2);
+                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
                     }
                 }
 
-                $return = ['Balance' => $estimatedBalance];
-            } else {
-                // 队列失败，同步降级
-                Redis::del($betKey);
-                $balance = $this->service->bet($params);
-
-                // 是否结算
-                if ($takeWin == 1) {
-                    $balance = $this->betResult($params);
-                }
-
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-                $return = ['Balance' => $balance];
+            } catch (\Throwable $e) {
+                Redis::del($lockKey);
+                throw $e;
             }
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            $this->logger->info('KT下注成功（Redis缓存）', [
+                'order_no' => $orderNo,
+                'take_win' => $takeWin,
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'Balance' => (float)$newBalance
+            ]);
         } catch (Exception $e) {
             Log::error('KT bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('KT', '下注异常', $e, ['params' => $request->post()]);
@@ -278,17 +262,19 @@ class KTGameController
     }
 
     /**
-     * 投注与结算取消
+     * 投注与结算取消（Redis 缓存版）
      * @param Request $request
      * @return Response
      */
     public function cancelBet(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->post();
             $hash = $request->get('Hash');
 
-            $this->logger->info('kt_server 取消投注记录', ['params' => $params, 'get' => $hash]);
+            $this->logger->info('KT取消投注请求（Redis缓存）', ['params' => $params, 'get' => $hash]);
 
             $this->service->verifyToken($params, $hash);
             if ($this->service->error) {
@@ -301,35 +287,46 @@ class KTGameController
             $orderNo = $params['MainTxID'];
             $refundAmount = $params['Amount'] ?? 0;
 
-            // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'amount' => $refundAmount,
-                'original_data' => $params,
-            ];
-
-            // 发送取消队列
-            $sent = GameQueueService::sendCancel('KT', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：退款
-                $estimatedBalance = bcadd($currentBalance, $refundAmount, 2);
-
-                $return = ['Balance' => $estimatedBalance];
-            } else {
-                // 队列失败，同步降级
-                $balance = $this->service->cancelBet($params);
-
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-                $return = ['Balance' => $balance];
+            // 幂等性检查
+            $lockKey = "order:cancel:lock:{$orderNo}";
+            if (!Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                    'Balance' => (float)$balance
+                ]);
             }
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            try {
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // 写入取消记录
+                \app\service\GameRecordCacheService::saveCancel('KT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'cancel_type' => 'cancel',
+                    'original_data' => $params,
+                ]);
+
+                // 更新余额缓存（退款）
+                $newBalance = bcadd($currentBalance, $refundAmount, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                Redis::del($lockKey);
+                throw $e;
+            }
+
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            $this->logger->info('KT取消投注成功（Redis缓存）', [
+                'order_no' => $orderNo,
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'Balance' => (float)$newBalance
+            ]);
         } catch (Exception $e) {
             Log::error('KT cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('KT', '取消投注异常', $e, ['params' => $request->post()]);

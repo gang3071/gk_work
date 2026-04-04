@@ -7,7 +7,6 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\RSGLiveServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
-use app\service\GameQueueService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -167,19 +166,21 @@ class RsgLiveGameController
     }
 
     /**
-     * 下注
+     * 下注（Redis 缓存版）
      * @param Request $request
      * @return Response
      * @throws Exception
      */
     public function bet(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->post();
             $token = request()->header('authorization');
-            $this->logger->info('rsg_live下注记录', ['params' => $params, 'token' => $token]);
+            $this->logger->info('rsg_live下注记录（Redis缓存）', ['params' => $params, 'token' => $token]);
             $data = $this->service->decrypt($token);
-            $this->logger->info('rsg_live下注记录', ['params' => $data]);
+            $this->logger->info('rsg_live下注数据', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -189,71 +190,64 @@ class RsgLiveGameController
             $orderNo = $params['transaction']['id'] ?? '';
             $betAmount = $params['transaction']['amount'] ?? 0;
 
-            // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-            // 检查幂等性
-            $betKey = "rsglive:bet:lock:{$orderNo}";
-            $isDuplicate = !\support\Redis::setnx($betKey, 1);
-            if (!$isDuplicate) {
-                \support\Redis::expire($betKey, 300);
-            }
-
-            if ($isDuplicate) {
-                // 重复订单，返回当前余额
+            // 幂等性检查
+            $lockKey = "order:bet:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复订单
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'transaction' => [
-                        'id' => $orderNo,
-                        'balance' => $currentBalance,
-                    ],
-                    'requestId' => $params['requestId'],
-                    'account' => $data['memberaccount'],
-                ]);
-            }
-
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'amount' => $betAmount,
-                'platform_id' => $this->service->platform->id,
-                'game_code' => $params['transaction']['gameCode'] ?? '',
-                'original_data' => $params,
-            ];
-
-            // 发送下注队列
-            $sent = GameQueueService::sendBet('RSGLIVE', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：扣款
-                $estimatedBalance = bcsub($currentBalance, $betAmount, 2);
-                $estimatedBalance = max(0, $estimatedBalance);
-
-                $return = [
-                    'transaction' => [
-                        'id' => $orderNo,
-                        'balance' => $estimatedBalance,
-                    ],
-                    'requestId' => $params['requestId'],
-                    'account' => $data['memberaccount'],
-                ];
-            } else {
-                // 队列失败，同步降级
-                \support\Redis::del($betKey);
-                $balance = $this->service->bet($params);
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-                $return = [
                     'transaction' => [
                         'id' => $orderNo,
                         'balance' => $balance,
                     ],
                     'requestId' => $params['requestId'],
                     'account' => $data['memberaccount'],
-                ];
+                ]);
             }
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            try {
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // 余额预检查
+                if ($currentBalance < $betAmount) {
+                    \support\Redis::del($lockKey);
+                    return $this->error(self::API_CODE_AMOUNT_OVER_BALANCE);
+                }
+
+                // 写入下注记录
+                \app\service\GameRecordCacheService::saveBet('RSGLIVE', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $betAmount,
+                    'game_code' => $params['transaction']['gameCode'] ?? '',
+                    'original_data' => $params,
+                ]);
+
+                // 更新余额缓存（扣款）
+                $newBalance = bcsub($currentBalance, $betAmount, 2);
+                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
+
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            $this->logger->info('rsg_live下注成功（Redis缓存）', [
+                'order_no' => $orderNo,
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'transaction' => [
+                    'id' => $orderNo,
+                    'balance' => $newBalance,
+                ],
+                'requestId' => $params['requestId'],
+                'account' => $data['memberaccount'],
+            ]);
         } catch (Exception $e) {
             Log::error('RSGLive bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('RSG_LIVE', '下注异常', $e, ['params' => $request->post()]);
@@ -262,18 +256,20 @@ class RsgLiveGameController
     }
 
     /**
-     * 結算
+     * 結算（Redis 缓存版）
      * @param Request $request
      * @return Response
      */
     public function betResult(Request $request): Response
     {
+        $startTime = microtime(true);
+
         try {
             $params = $request->post();
             $token = request()->header('authorization');
-            $this->logger->info('rsg_live结算记录', ['params' => $params, 'token' => $token]);
+            $this->logger->info('rsg_live结算记录（Redis缓存）', ['params' => $params, 'token' => $token]);
             $data = $this->service->decrypt($token);
-            $this->logger->info('rsg_live结算记录', ['params' => $data]);
+            $this->logger->info('rsg_live结算数据', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -282,53 +278,61 @@ class RsgLiveGameController
             $orderNo = $params['transaction']['id'] ?? '';
             $winAmount = $params['transaction']['winAmount'] ?? 0;
 
-            // 获取当前余额
-            $currentBalance = \app\service\WalletService::getBalance($player->id);
-
-            // 准备队列参数
-            $queueParams = [
-                'order_no' => $orderNo,
-                'bet_order_no' => $params['transaction']['betId'] ?? $orderNo,
-                'amount' => max($winAmount, 0),
-                'result_amount' => $winAmount,
-                'original_data' => $params,
-            ];
-
-            // 发送结算队列
-            $sent = GameQueueService::sendSettle('RSGLIVE', $player, $queueParams);
-
-            if ($sent) {
-                // 预估余额：加款（如果有中奖）
-                $estimatedBalance = $currentBalance;
-                if ($winAmount > 0) {
-                    $estimatedBalance = bcadd($currentBalance, $winAmount, 2);
-                }
-
-                $return = [
-                    'transaction' => [
-                        'id' => $orderNo,
-                        'balance' => $estimatedBalance,
-                    ],
-                    'requestId' => $params['requestId'],
-                    'account' => $data['memberaccount'],
-                ];
-            } else {
-                // 队列失败，同步降级
-                $balance = $this->service->betResulet($params);
-                if ($this->service->error) {
-                    return $this->error($this->service->error);
-                }
-                $return = [
+            // 幂等性检查
+            $lockKey = "order:settle:lock:{$orderNo}";
+            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // 重复结算
+                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                     'transaction' => [
                         'id' => $orderNo,
                         'balance' => $balance,
                     ],
                     'requestId' => $params['requestId'],
                     'account' => $data['memberaccount'],
-                ];
+                ]);
             }
 
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+            try {
+                // 获取当前余额
+                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
+                // 写入结算记录
+                \app\service\GameRecordCacheService::saveSettle('RSGLIVE', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => max($winAmount, 0),
+                    'diff' => $winAmount,
+                    'original_data' => $params,
+                ]);
+
+                // 更新余额缓存（加上中奖金额）
+                $newBalance = $currentBalance;
+                if ($winAmount > 0) {
+                    $newBalance = bcadd($currentBalance, $winAmount, 2);
+                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                }
+
+            } catch (\Throwable $e) {
+                \support\Redis::del($lockKey);
+                throw $e;
+            }
+
+            $elapsed = (microtime(true) - $startTime) * 1000;
+            $this->logger->info('rsg_live结算成功（Redis缓存）', [
+                'order_no' => $orderNo,
+                'elapsed_ms' => round($elapsed, 2),
+            ]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'transaction' => [
+                    'id' => $orderNo,
+                    'balance' => $newBalance,
+                ],
+                'requestId' => $params['requestId'],
+                'account' => $data['memberaccount'],
+            ]);
         } catch (Exception $e) {
             Log::error('RSGLive betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('RSG_LIVE', '结算异常', $e, ['params' => $request->post()]);
