@@ -155,19 +155,75 @@ class GameRecordCacheService
      * @param int $limit 每次获取数量
      * @return array
      */
+    /**
+     * 获取待同步记录（原子性，多进程安全）
+     *
+     * 使用 Lua 脚本原子性地：
+     * 1. 读取记录
+     * 2. 标记为 'processing' 状态
+     * 3. 设置处理超时（防止进程崩溃导致记录永久锁定）
+     *
+     * @param int $limit 最大获取数量
+     * @return array
+     */
     public static function getPendingSyncRecords(int $limit = 100): array
     {
-        // 从同步队列获取最旧的记录
-        $keys = Redis::zRange(self::PREFIX_SYNC_QUEUE, 0, $limit - 1);
+        $queueKey = self::PREFIX_SYNC_QUEUE;
+        $processTimeout = 60; // 处理超时时间（秒）
+        $currentTime = time();
+
+        // Lua 脚本：原子性地获取并标记记录
+        $luaScript = <<<'LUA'
+local queue_key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local current_time = tonumber(ARGV[2])
+local timeout = tonumber(ARGV[3])
+
+-- 获取队列中的前 N 条记录
+local keys = redis.call('ZRANGE', queue_key, 0, limit - 1)
+local result = {}
+
+for i, key in ipairs(keys) do
+    -- 读取记录数据
+    local data = redis.call('HGETALL', key)
+
+    if #data > 0 then
+        -- 转换为表
+        local record = {}
+        for j = 1, #data, 2 do
+            record[data[j]] = data[j + 1]
+        end
+
+        local status = record['status'] or ''
+        local processing_time = tonumber(record['processing_time']) or 0
+
+        -- 只处理 pending 状态，或处理超时的记录
+        if status == 'pending' or (status == 'processing' and current_time - processing_time > timeout) then
+            -- 标记为处理中
+            redis.call('HSET', key, 'status', 'processing')
+            redis.call('HSET', key, 'processing_time', current_time)
+
+            -- 返回记录key
+            table.insert(result, key)
+        end
+    end
+end
+
+return result
+LUA;
+
+        // 执行 Lua 脚本
+        $keys = Redis::eval($luaScript, 1, $queueKey, $limit, $currentTime, $processTimeout);
 
         if (empty($keys)) {
             return [];
         }
 
+        // 读取完整记录数据
         $records = [];
         foreach ($keys as $key) {
             $data = Redis::hGetAll($key);
-            if (!empty($data) && $data['status'] === 'pending') {
+            if (!empty($data)) {
                 $data['redis_key'] = $key;
                 $records[] = $data;
             }
@@ -196,7 +252,7 @@ class GameRecordCacheService
      */
     public static function markAsFailed(string $redisKey, string $error): void
     {
-        $retryCount = (int)Redis::hGet($redisKey, 'retry_count') ?? 0;
+        $retryCount = (int)(Redis::hGet($redisKey, 'retry_count') ?: 0);
 
         Redis::hMSet($redisKey, [
             'status' => 'failed',
@@ -205,7 +261,7 @@ class GameRecordCacheService
             'failed_at' => date('Y-m-d H:i:s'),
         ]);
 
-        // 如果重试次数 < 3，重新加入队列（延迟10秒）
+        // 如果重试次数 < 3，重置为 pending 状态，重新加入队列（延迟10秒）
         if ($retryCount < 3) {
             Redis::zAdd(self::PREFIX_SYNC_QUEUE, time() + 10, $redisKey);
         } else {
