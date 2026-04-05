@@ -209,7 +209,7 @@ class BTGGameController
                         'order_no' => ['required', 'string'],
                         'amount' => ['required', 'numeric', 'min:0'],
                         'platform_id' => ['required', 'integer'],
-                        'game_code' => ['string'],
+                        'game_code' => ['scalar'],
                         'transaction_type' => ['required', 'string'],
                     ], 'atomicBet');
 
@@ -250,7 +250,7 @@ class BTGGameController
                         'amount' => ['required', 'numeric', 'min:0'],
                         'diff' => ['required', 'numeric'],
                         'platform_id' => ['required', 'integer'],
-                        'game_code' => ['string'],
+                        'game_code' => ['scalar'],
                         'transaction_type' => ['required', 'string'],
                     ], 'atomicSettle');
 
@@ -314,7 +314,7 @@ class BTGGameController
                             'amount' => ['required', 'numeric', 'min:0'],
                             'diff' => ['required', 'numeric'],
                             'platform_id' => ['required', 'integer'],
-                            'game_code' => ['string'],
+                            'game_code' => ['scalar'],
                             'transaction_type' => ['required', 'string'],
                         ], 'atomicSettle');
 
@@ -343,7 +343,7 @@ class BTGGameController
                             'order_no' => ['required', 'string'],
                             'amount' => ['required', 'numeric', 'min:0'],
                             'platform_id' => ['required', 'integer'],
-                            'game_code' => ['string'],
+                            'game_code' => ['scalar'],
                             'transaction_type' => ['required', 'string'],
                         ], 'atomicBet');
 
@@ -385,7 +385,7 @@ class BTGGameController
                         'amount' => ['required', 'numeric', 'min:0'],
                         'diff' => ['required', 'numeric'],
                         'platform_id' => ['required', 'integer'],
-                        'game_code' => ['string'],
+                        'game_code' => ['scalar'],
                         'transaction_type' => ['required', 'string'],
                     ], 'atomicSettle');
 

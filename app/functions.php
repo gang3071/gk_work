@@ -1886,6 +1886,7 @@ function logLuaScriptCall(string $operation, string $platform, int $playerId, ar
  *
  * 支持的规则：
  * - required: 必需字段，不能为 null
+ * - scalar: 必须是标量类型（string/int/float/bool）
  * - numeric: 必须是数字（int/float/numeric string）
  * - integer: 必须是整数
  * - string: 必须是字符串
@@ -1897,7 +1898,7 @@ function logLuaScriptCall(string $operation, string $platform, int $playerId, ar
  *     'order_no' => ['required', 'string'],
  *     'amount' => ['required', 'numeric', 'min:0'],
  *     'platform_id' => ['required', 'integer'],
- *     'game_code' => ['string'],  // 可选字段
+ *     'game_code' => ['scalar'],  // 可选字段，允许字符串或整数
  * ], 'atomicBet');
  */
 function validateLuaScriptParams(array $params, array $rules, string $operation = 'Lua script'): void
@@ -1918,6 +1919,13 @@ function validateLuaScriptParams(array $params, array $rules, string $operation 
         // 如果值为空且不是 required，跳过其他验证
         if ($value === null || $value === '') {
             continue;
+        }
+
+        // 检查 scalar (字符串、整数、浮点数、布尔值)
+        if (in_array('scalar', $fieldRules) && !is_scalar($value)) {
+            throw new InvalidArgumentException(
+                sprintf('[%s] 参数验证失败: %s 必须是标量类型(string/int/float/bool)，实际类型: %s', $operation, $field, gettype($value))
+            );
         }
 
         // 检查 string
