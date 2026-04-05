@@ -446,17 +446,75 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         return RsgGameController::API_CODE_INSUFFICIENT_BALANCE;
     }
 
-
-
-
-    public function reBetResulet($data)
+    /**
+     * 查询余额
+     * @return mixed
+     * @deprecated 已迁移到 Redis Lua 原子脚本，此方法不再使用
+     */
+    public function balance()
     {
-        // TODO: Implement reBetResulet() method.
+        // RSG 使用单一钱包，余额统一管理，不需要此方法
+        return 0;
     }
 
+    /**
+     * 下注
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicBet，此方法不再使用
+     */
+    public function bet($data)
+    {
+        // 已迁移到 RsgGameController 中使用 RedisLuaScripts::atomicBet
+        throw new \RuntimeException('bet() 方法已废弃，请使用 RedisLuaScripts::atomicBet');
+    }
+
+    /**
+     * 取消下注
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicCancel，此方法不再使用
+     */
+    public function cancelBet($data)
+    {
+        // 已迁移到 RsgGameController 中使用 RedisLuaScripts::atomicCancel
+        throw new \RuntimeException('cancelBet() 方法已废弃，请使用 RedisLuaScripts::atomicCancel');
+    }
+
+    /**
+     * 结算
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicSettle，此方法不再使用
+     */
+    public function betResulet($data)
+    {
+        // 已迁移到 RsgGameController 中使用 RedisLuaScripts::atomicSettle
+        throw new \RuntimeException('betResulet() 方法已废弃，请使用 RedisLuaScripts::atomicSettle');
+    }
+
+    /**
+     * 重新结算
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicSettle，此方法不再使用
+     */
+    public function reBetResulet($data)
+    {
+        // 已迁移到 RsgGameController 中使用 RedisLuaScripts::atomicSettle
+        throw new \RuntimeException('reBetResulet() 方法已废弃，请使用 RedisLuaScripts::atomicSettle');
+    }
+
+    /**
+     * 送礼
+     * @deprecated RSG 平台不支持送礼功能
+     * @param $data
+     * @return mixed
+     */
     public function gift($data)
     {
-        // TODO: Implement gift() method.
+        // RSG 平台不支持送礼功能
+        throw new \RuntimeException('RSG 平台不支持 gift() 功能');
     }
 
 
