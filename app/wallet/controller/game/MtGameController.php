@@ -124,7 +124,7 @@ class MtGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['bet_sn'];
+            $orderNo = (string)($data['bet_sn'] ?? '');
 
             // 3. Lua 原子下注
             $luaParams = [
@@ -204,7 +204,7 @@ class MtGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['bet_sn'];
+            $orderNo = (string)($data['bet_sn'] ?? '');
 
             // 3. Lua 原子取消
             $luaParams = [
@@ -276,7 +276,7 @@ class MtGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['bet_sn'];
+            $orderNo = (string)($data['bet_sn'] ?? '');
             $winMoney = $data['win_money'] ?? 0;
             $status = $data['status'] ?? null;
 
@@ -356,7 +356,7 @@ class MtGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['bet_sn'];
+            $orderNo = (string)($data['bet_sn'] ?? '');
             $winMoney = $data['win_money'] ?? 0;
 
             // 3. Lua 原子重新结算
@@ -435,7 +435,7 @@ class MtGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['tip_sn'];  // MT使用tip_sn
+            $orderNo = (string)($data['tip_sn'] ?? '');  // MT使用tip_sn
             $giftAmount = $data['money'] ?? 0;
 
             // 3. Lua 原子打赏（打赏是扣款操作，使用bet）

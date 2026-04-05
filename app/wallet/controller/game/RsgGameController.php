@@ -126,7 +126,7 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['SequenNumber'];
+            $orderNo = (string)($data['SequenNumber'] ?? '');
 
             // ========== 核心：Lua 原子下注（1次调用完成所有操作）==========
             $luaParams = [
@@ -227,7 +227,7 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['SequenNumber'];
+            $orderNo = (string)($data['SequenNumber'] ?? '');
             $refundAmount = $data['BetAmount'] ?? 0;
 
             // ========== 核心：Lua 原子取消 ==========
@@ -312,7 +312,7 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['SequenNumber'];
+            $orderNo = (string)($data['SequenNumber'] ?? '');
             $winAmount = $data['Amount'] ?? 0;
 
             // ========== 核心：Lua 原子结算 ==========
@@ -403,7 +403,7 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['SequenNumber'];
+            $orderNo = (string)($data['SequenNumber'] ?? '');
             $winAmount = ($data['Amount'] ?? 0) - ($data['BetAmount'] ?? 0);
 
             // ========== 核心：Lua 原子重新结算 ==========
@@ -482,7 +482,7 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['SequenNumber'];
+            $orderNo = (string)($data['SequenNumber'] ?? '');
             $jackpotAmount = $data['Amount'] ?? 0;
 
             // ========== 核心：Lua 原子 Jackpot ==========
@@ -561,7 +561,7 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['SessionId'];  // prepay使用SessionId作为订单号
+            $orderNo = (string)($data['SessionId'] ?? '');  // prepay使用SessionId作为订单号
             $requestAmount = $data['Amount'] ?? 0;
 
             // ========== 核心：Lua 原子预扣 ==========
@@ -691,7 +691,7 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = $data['SessionId'];
+            $orderNo = (string)($data['SessionId'] ?? '');
             $refundAmount = $data['Amount'] ?? 0;
 
             // ========== 核心：Lua 原子退款 ==========

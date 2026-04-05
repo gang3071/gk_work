@@ -109,7 +109,7 @@ class ATGGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['betId'];
+            $orderNo = (string)($data['betId'] ?? '');
             $bet = $data['amount'];
 
             // ========== 核心：Lua 原子下注 ==========
@@ -187,7 +187,7 @@ class ATGGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['betId'];
+            $orderNo = (string)($data['betId'] ?? '');
             $winAmount = $data['amount'] ?? 0;
 
             // 从 Redis 获取下注金额以计算正确的 diff（win - bet）
@@ -266,7 +266,7 @@ class ATGGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['betId'];
+            $orderNo = (string)($data['betId'] ?? '');
             $refundAmount = $data['amount'] ?? 0;
 
             // ========== 核心：Lua 原子退款 ==========

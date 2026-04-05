@@ -260,7 +260,7 @@ class KTGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['MainTxID'];
+            $orderNo = (string)($data['MainTxID'] ?? '');
             $winAmount = $data['Win'] ?? 0;
 
             // 从 Redis 获取下注金额以计算正确的 diff（win - bet）
@@ -426,7 +426,7 @@ class KTGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['MainTxID'] ?? $data['TxID'] ?? '';
+            $orderNo = (string)($data['MainTxID'] ?? $data['TxID'] ?? '');
             $refundAmount = $data['Amount'] ?? 0;
 
             // Lua 原子退款

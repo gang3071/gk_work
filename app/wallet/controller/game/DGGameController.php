@@ -103,7 +103,7 @@ class DGGameController
 
             $player = $this->service->player;
             $type = $params['type'];
-            $orderNo = $params['ticketId'];
+            $orderNo = (string)($params['ticketId'] ?? '');
             $amount = abs($params['member']['amount']);
             $detail = json_decode($params['detail'], true);
 
@@ -245,7 +245,7 @@ class DGGameController
 
             $player = $this->service->player;
             $type = $params['type'];
-            $orderNo = $params['ticketId'];
+            $orderNo = (string)($params['ticketId'] ?? '');
             $amount = abs($params['member']['amount']);
             $detail = json_decode($params['detail'], true);
 

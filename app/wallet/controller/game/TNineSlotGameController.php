@@ -118,7 +118,7 @@ class TNineSlotGameController
             $this->service->player = Player::query()->where('uuid', $userId)->first();
             $player = $this->service->player;
 
-            $orderNo = $params['gameOrderNumber'];
+            $orderNo = (string)($params['gameOrderNumber'] ?? '');
             $betKind = $params['betKind'] ?? 0;
             $betAmount = $params['betAmount'] ?? 0;
             $winAmount = $params['winlose'] ?? $params['payoutAmount'] ?? 0;
@@ -290,7 +290,7 @@ class TNineSlotGameController
             $this->service->player = Player::query()->where('uuid', $userId)->first();
             $player = $this->service->player;
 
-            $orderNo = $params['betId'] ?? $params['roundId'] ?? '';
+            $orderNo = (string)($params['betId'] ?? $params['roundId'] ?? '');
             $refundAmount = $params['betAmount'] ?? 0;
 
             // Lua 原子取消

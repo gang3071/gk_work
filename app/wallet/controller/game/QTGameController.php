@@ -396,7 +396,7 @@ class QTGameController
             $this->service->player = $player;
 
             // ========== Lua 原子操作处理 ==========
-            $txnId = $params['txnId'];
+            $txnId = (string)($params['txnId'] ?? '');
             $amount = (float)$params['amount'];
             $gameId = $params['gameId'] ?? '';
             $bonusType = $params['bonusType'] ?? null;
@@ -659,7 +659,7 @@ class QTGameController
 
             $this->service->player = $player;
 
-            $txnId = $params['txnId'];
+            $txnId = (string)($params['txnId'] ?? '');
             $amount = (float)$params['amount'];
             $rewardType = $params['rewardType'];
             $rewardTitle = $params['rewardTitle'];
@@ -796,7 +796,7 @@ class QTGameController
             $this->service->player = $player;
 
             // ========== Lua 原子操作处理 ==========
-            $txnId = $params['txnId'];
+            $txnId = (string)($params['txnId'] ?? '');
             $amount = (float)$params['amount'];
 
             // 回滚（Lua 原子操作）

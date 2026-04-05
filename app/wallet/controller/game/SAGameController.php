@@ -87,7 +87,7 @@ class SAGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['txnid'];
+            $orderNo = (string)($data['txnid'] ?? '');
             $bet = $data['amount'];
 
             // Lua 原子下注
@@ -162,7 +162,7 @@ class SAGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['txn_reverse_id'];
+            $orderNo = (string)($data['txn_reverse_id'] ?? '');
             $refundAmount = $data['amount'];
 
             // Lua 原子取消

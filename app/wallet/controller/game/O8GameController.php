@@ -399,7 +399,7 @@ class O8GameController
             }
 
             $player = $this->service->player;
-            $orderNo = $data['externalroundid'] ?? $data['TxID'] ?? '';
+            $orderNo = (string)($data['externalroundid'] ?? $data['TxID'] ?? '');
             $refundAmount = $data['amt'] ?? $data['Amount'] ?? 0;
 
             // Lua 原子退款

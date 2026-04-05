@@ -158,7 +158,7 @@ class TNineGameController
 
             // 批量处理每个订单（每个订单一次 Lua 原子操作）
             foreach ($orders as $order) {
-                $orderNo = $order['OrderNumber'];
+                $orderNo = (string)($order['OrderNumber'] ?? '');
                 $bet = $order['BetAmount'];
 
                 // Lua 原子下注
@@ -239,7 +239,7 @@ class TNineGameController
                 return $this->error(self::API_CODE_ERROR);
             }
 
-            $orderNo = $params['OrderNumber'];
+            $orderNo = (string)($params['OrderNumber'] ?? '');
             $money = $params['GameAmount'] ?? 0;  // 派彩金额
             $winAmount = $params['WinAmount'] ?? 0;  // 净输赢
 
