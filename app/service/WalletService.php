@@ -339,8 +339,10 @@ class WalletService
      */
     private static function getBalanceFromDB(int $playerId, int $platformId): float
     {
+        // ✅ 修复：添加 platform_id 条件，与 gk_api 和 gk_admin 保持一致
         $balance = PlayerPlatformCash::query()
             ->where('player_id', $playerId)
+            ->where('platform_id', $platformId)
             ->value('money');
 
         return (float)($balance ?? 0);
