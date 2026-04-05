@@ -264,25 +264,64 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
     }
 
 
+    /**
+     * 下注
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicBet，此方法不再使用
+     */
+    public function bet($data): mixed
+    {
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicBet
+        throw new \RuntimeException('bet() 方法已废弃，请使用 RedisLuaScripts::atomicBet');
+    }
 
+    /**
+     * 取消下注
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicCancel，此方法不再使用
+     */
+    public function cancelBet($data): mixed
+    {
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicCancel
+        throw new \RuntimeException('cancelBet() 方法已废弃，请使用 RedisLuaScripts::atomicCancel');
+    }
+
+    /**
+     * 结算
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicSettle，此方法不再使用
+     */
+    public function betResulet($data): mixed
+    {
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicSettle
+        throw new \RuntimeException('betResulet() 方法已废弃，请使用 RedisLuaScripts::atomicSettle');
+    }
 
     /**
      * 重新结算
+     * @param $data
      * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicSettle，此方法不再使用
      */
-    public function reBetResulet($data)
+    public function reBetResulet($data): mixed
     {
-        return '';
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicSettle
+        throw new \RuntimeException('reBetResulet() 方法已废弃，请使用 RedisLuaScripts::atomicSettle');
     }
 
     /**
      * 送礼
      * @param $data
-     * @return array|int
+     * @return mixed
+     *@deprecated 平台不支持送礼功能
      */
-    public function gift($data): array|int
+    public function gift($data): mixed
     {
-        return '';
+        // 平台不支持送礼功能
+        throw new \RuntimeException('平台不支持 gift() 功能');
     }
 
 

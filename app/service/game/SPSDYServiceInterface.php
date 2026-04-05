@@ -59,25 +59,87 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
     }
 
 
-    public function cancelBet($data)
+    /**
+     * 查询余额
+     * @return mixed
+     * @deprecated 已迁移到 Redis Lua 原子脚本，此方法不再使用
+     */
+    public function balance(): mixed
     {
-        // TODO: Implement cancelBet() method.
+        // 使用单一钱包，余额统一管理
+        return \app\service\WalletService::getBalance($this->player->id);
     }
 
-
-    public function reBetResulet($data)
+    /**
+     * 下注
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicBet，此方法不再使用
+     */
+    public function bet($data): mixed
     {
-        // TODO: Implement reBetResulet() method.
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicBet
+        throw new \RuntimeException('bet() 方法已废弃，请使用 RedisLuaScripts::atomicBet');
     }
 
-    public function gift($data)
+    /**
+     * 取消下注
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicCancel，此方法不再使用
+     */
+    public function cancelBet($data): mixed
     {
-        // TODO: Implement gift() method.
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicCancel
+        throw new \RuntimeException('cancelBet() 方法已废弃，请使用 RedisLuaScripts::atomicCancel');
     }
 
-    public function decrypt($data)
+    /**
+     * 结算
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicSettle，此方法不再使用
+     */
+    public function betResulet($data): mixed
     {
-        // TODO: Implement decrypt() method.
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicSettle
+        throw new \RuntimeException('betResulet() 方法已废弃，请使用 RedisLuaScripts::atomicSettle');
+    }
+
+    /**
+     * 重新结算
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicSettle，此方法不再使用
+     */
+    public function reBetResulet($data): mixed
+    {
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicSettle
+        throw new \RuntimeException('reBetResulet() 方法已废弃，请使用 RedisLuaScripts::atomicSettle');
+    }
+
+    /**
+     * 送礼
+     * @deprecated 平台不支持送礼功能
+     * @param $data
+     * @return mixed
+     */
+    public function gift($data): mixed
+    {
+        // 平台不支持送礼功能
+        throw new \RuntimeException('平台不支持 gift() 功能');
+    }
+
+    /**
+     * 解密数据
+     * @deprecated 平台不需要解密
+     * @param $data
+     * @return mixed
+     */
+    public function decrypt($data): mixed
+    {
+        // 平台不需要解密
+        return [];
     }
 
     private $apiDomain;

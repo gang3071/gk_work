@@ -262,12 +262,74 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
-     * 重新结算
+     * 查询余额
      * @return mixed
+     * @deprecated 已迁移到 Redis Lua 原子脚本，此方法不再使用
      */
-    public function reBetResulet($data)
+    public function balance(): mixed
     {
-        return '';
+        // 使用单一钱包，余额统一管理
+        return \app\service\WalletService::getBalance($this->player->id);
+    }
+
+    /**
+     * 下注
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicBet，此方法不再使用
+     */
+    public function bet($data): mixed
+    {
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicBet
+        throw new \RuntimeException('bet() 方法已废弃，请使用 RedisLuaScripts::atomicBet');
+    }
+
+    /**
+     * 取消下注
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicCancel，此方法不再使用
+     */
+    public function cancelBet($data): mixed
+    {
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicCancel
+        throw new \RuntimeException('cancelBet() 方法已废弃，请使用 RedisLuaScripts::atomicCancel');
+    }
+
+    /**
+     * 结算
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicSettle，此方法不再使用
+     */
+    public function betResulet($data): mixed
+    {
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicSettle
+        throw new \RuntimeException('betResulet() 方法已废弃，请使用 RedisLuaScripts::atomicSettle');
+    }
+
+    /**
+     * 重新结算
+     * @param $data
+     * @return mixed
+     * @deprecated 已迁移到 RedisLuaScripts::atomicSettle，此方法不再使用
+     */
+    public function reBetResulet($data): mixed
+    {
+        // 已迁移到 Controller 中使用 RedisLuaScripts::atomicSettle
+        throw new \RuntimeException('reBetResulet() 方法已废弃，请使用 RedisLuaScripts::atomicSettle');
+    }
+
+    /**
+     * 送礼
+     * @param $data
+     * @return mixed
+     * @deprecated 平台不支持送礼功能
+     */
+    public function gift($data): mixed
+    {
+        // 平台不支持送礼功能
+        throw new \RuntimeException('平台不支持 gift() 功能');
     }
 
 
