@@ -216,40 +216,13 @@ class BTGGameController
 
                     // 审计日志
                     logLuaScriptCall('bet', 'BTG', $player->id, $luaParams);
-                    // 游戏交互日志
-                    logGameInteraction('BTG', 'adjust_credit', $data, [
-                        'ok' => $result['ok'],
-                        'balance' => $result['balance'],
-                    ]);
 
                     // 游戏交互日志
-                    logGameInteraction('BTG', 'adjust_debit', $data, [
+                    logGameInteraction('BTG', 'transfer_debit', $params, [
                         'ok' => $result['ok'],
                         'balance' => $result['balance'],
-                    ]);
-
-                    // 游戏交互日志
-                    logGameInteraction('BTG', 'reward', $data, [
-                        'ok' => $result['ok'],
-                        'balance' => $result['balance'],
-                    ]);
-
-                    // 游戏交互日志
-                    logGameInteraction('BTG', 'transfer_cancel', $data, [
-                        'ok' => $result['ok'],
-                        'balance' => $result['balance'],
-                    ]);
-
-                    // 游戏交互日志
-                    logGameInteraction('BTG', 'transfer_credit', $data, [
-                        'ok' => $result['ok'],
-                        'balance' => $result['balance'],
-                    ]);
-
-                    // 游戏交互日志
-                    logGameInteraction('BTG', 'transfer_debit', $data, [
-                        'ok' => $result['ok'],
-                        'balance' => $result['balance'],
+                        'order_id' => $orderId,
+                        'transfer_type' => 'start',
                     ]);
 
 
@@ -293,6 +266,14 @@ class BTGGameController
                     // 审计日志
                     logLuaScriptCall('settle', 'BTG', $player->id, $luaParams);
 
+                    // 游戏交互日志
+                    logGameInteraction('BTG', 'transfer_credit', $params, [
+                        'ok' => $result['ok'],
+                        'balance' => $result['balance'],
+                        'order_id' => $orderId,
+                        'transfer_type' => 'end',
+                    ]);
+
                     if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                         $this->logger->info('BTG结算重复请求（Lua检测）', ['order_no' => $orderId]);
                     }
@@ -320,6 +301,14 @@ class BTGGameController
 
                     // 审计日志
                     logLuaScriptCall('cancel', 'BTG', $player->id, $luaParams);
+
+                    // 游戏交互日志
+                    logGameInteraction('BTG', 'transfer_cancel', $params, [
+                        'ok' => $result['ok'],
+                        'balance' => $result['balance'],
+                        'order_id' => $orderId,
+                        'transfer_type' => 'refund',
+                    ]);
 
                     if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                         $this->logger->info('BTG退款重复请求（Lua检测）', ['order_no' => $orderId]);
@@ -356,6 +345,15 @@ class BTGGameController
                         // 审计日志
                         logLuaScriptCall('settle', 'BTG', $player->id, $luaParams);
 
+                        // 游戏交互日志
+                        logGameInteraction('BTG', 'adjust_credit', $params, [
+                            'ok' => $result['ok'],
+                            'balance' => $result['balance'],
+                            'order_id' => $orderId,
+                            'transfer_type' => 'adjust',
+                            'adjust_amount' => $adjustAmount,
+                        ]);
+
                         if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                             $this->logger->info('BTG调整（加款）重复请求（Lua检测）', ['order_no' => $orderId]);
                         }
@@ -383,6 +381,15 @@ class BTGGameController
 
                         // 审计日志
                         logLuaScriptCall('bet', 'BTG', $player->id, $luaParams);
+
+                        // 游戏交互日志
+                        logGameInteraction('BTG', 'adjust_debit', $params, [
+                            'ok' => $result['ok'],
+                            'balance' => $result['balance'],
+                            'order_id' => $orderId,
+                            'transfer_type' => 'adjust',
+                            'adjust_amount' => $adjustAmount,
+                        ]);
 
                         if ($result['ok'] === 0) {
                             if ($result['error'] === 'duplicate_order') {
@@ -425,6 +432,14 @@ class BTGGameController
                     // 审计日志
                     logLuaScriptCall('settle', 'BTG', $player->id, $luaParams);
 
+                    // 游戏交互日志
+                    logGameInteraction('BTG', 'reward', $params, [
+                        'ok' => $result['ok'],
+                        'balance' => $result['balance'],
+                        'order_id' => $orderId,
+                        'transfer_type' => 'reward',
+                    ]);
+
                     if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                         $this->logger->info('BTG奖金重复请求（Lua检测）', ['order_no' => $orderId]);
                     }
@@ -445,6 +460,12 @@ class BTGGameController
                 'tran_id' => $params['tran_id'],
             ]);
         } catch (Exception $e) {
+            // 游戏交互日志
+            logGameInteraction('BTG', 'transfer', $params ?? [], [
+                'error' => $e->getMessage(),
+                'ok' => 0,
+            ]);
+
             $this->logger->error('BTG转账异常', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()

@@ -148,24 +148,14 @@ class TNineSlotGameController
 
                 // 审计日志
                 logLuaScriptCall('settle', 'T9SLOT', $player->id, $luaParams);
-                // 游戏交互日志
-                logGameInteraction('T9SLOT', 'cancel', $data, [
-                    'ok' => $result['ok'],
-                    'balance' => $result['balance'],
-                ]);
 
                 // 游戏交互日志
-                logGameInteraction('T9SLOT', 'bet', $data, [
+                logGameInteraction('T9SLOT', 'settle', $params, [
                     'ok' => $result['ok'],
                     'balance' => $result['balance'],
+                    'order_no' => $orderNo,
+                    'win_amount' => $winAmount,
                 ]);
-
-                // 游戏交互日志
-                logGameInteraction('T9SLOT', 'settle', $data, [
-                    'ok' => $result['ok'],
-                    'balance' => $result['balance'],
-                ]);
-
 
                 if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                     $this->logger->info('TNineSlot免费游戏重复请求（Lua检测）', ['order_no' => $orderNo]);
@@ -204,6 +194,13 @@ class TNineSlotGameController
 
             // 审计日志
             logLuaScriptCall('bet', 'T9SLOT', $player->id, $luaParams);
+
+            // 游戏交互日志
+            logGameInteraction('T9SLOT', 'bet', $params, [
+                'ok' => $betResult['ok'],
+                'balance' => $betResult['balance'],
+                'order_no' => $orderNo,
+            ]);
 
             if ($betResult['ok'] === 0) {
                 if ($betResult['error'] === 'duplicate_order') {
@@ -245,6 +242,14 @@ class TNineSlotGameController
             // 审计日志
             logLuaScriptCall('settle', 'T9SLOT', $player->id, $settleLuaParams);
 
+            // 游戏交互日志
+            logGameInteraction('T9SLOT', 'settle', $params, [
+                'ok' => $settleResult['ok'],
+                'balance' => $settleResult['balance'],
+                'order_no' => $settleOrderNo,
+                'win_amount' => $winAmount,
+            ]);
+
             if ($settleResult['ok'] === 1) {
                 $afterBalance = $settleResult['balance'];
             } elseif ($settleResult['error'] === 'duplicate_order') {
@@ -259,6 +264,12 @@ class TNineSlotGameController
                 'beforeBalance' => (float)$beforeBalance,
             ]);
         } catch (Exception $e) {
+            // 游戏交互日志
+            logGameInteraction('T9SLOT', 'bet', $params ?? [], [
+                'error' => $e->getMessage(),
+                'ok' => 0,
+            ]);
+
             Log::error('TNineSlot bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('TNINE_SLOT', '下注异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_ERROR);

@@ -11,7 +11,6 @@ use app\service\game\SingleWalletServiceInterface;
 use app\service\RedisLuaScripts;
 use Exception;
 use support\Log;
-use support\Redis;
 use support\Request;
 use support\Response;
 
@@ -213,16 +212,12 @@ class RsgLiveGameController
 
             // 审计日志
             logLuaScriptCall('bet', 'RSGLIVE', $player->id, $luaParams);
-            // 游戏交互日志
-            logGameInteraction('RSGLIVE', 'settle', $data, [
-                'ok' => $result['ok'],
-                'balance' => $result['balance'],
-            ]);
 
             // 游戏交互日志
-            logGameInteraction('RSGLIVE', 'bet', $data, [
+            logGameInteraction('RSGLIVE', 'bet', $params, [
                 'ok' => $result['ok'],
                 'balance' => $result['balance'],
+                'order_no' => $orderNo,
             ]);
 
 

@@ -183,16 +183,12 @@ class TNineGameController
 
                 // 审计日志
                 logLuaScriptCall('bet', 'TNINE', $player->id, $luaParams);
-                // 游戏交互日志
-                logGameInteraction('TNINE', 'settle', $data, [
-                    'ok' => $result['ok'],
-                    'balance' => $result['balance'],
-                ]);
 
                 // 游戏交互日志
-                logGameInteraction('TNINE', 'bet', $data, [
+                logGameInteraction('TNINE', 'bet', $params, [
                     'ok' => $result['ok'],
                     'balance' => $result['balance'],
+                    'order_no' => $orderNo,
                 ]);
 
 

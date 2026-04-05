@@ -111,22 +111,12 @@ class SPGameController
 
             // 审计日志
             logLuaScriptCall('bet', 'SP', $player->id, $luaParams);
-            // 游戏交互日志
-            logGameInteraction('SP', 'settle', $data, [
-                'ok' => $result['ok'],
-                'balance' => $result['balance'],
-            ]);
-
-            // 游戏交互日志
-            logGameInteraction('SP', 'cancel', $data, [
-                'ok' => $result['ok'],
-                'balance' => $result['balance'],
-            ]);
 
             // 游戏交互日志
             logGameInteraction('SP', 'bet', $data, [
                 'ok' => $result['ok'],
                 'balance' => $result['balance'],
+                'order_no' => $orderNo,
             ]);
 
 
