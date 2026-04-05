@@ -98,10 +98,14 @@ class PlayerRechargeRecord extends Model
     /**
      * 获取器 - 标签id
      * @param $value
-     * @return false|string[]
+     * @return array
      */
     public function getPlayerTagAttribute($value)
     {
+        // PHP 8.1+ 兼容：explode() 不接受 null
+        if ($value === null || $value === '') {
+            return [];
+        }
         return array_filter(explode(',', $value));
     }
 
