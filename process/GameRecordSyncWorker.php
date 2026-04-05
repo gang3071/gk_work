@@ -159,13 +159,32 @@ class GameRecordSyncWorker
             // 5. 批量触发彩金检查
             $this->batchTriggerLottery($toInsert, $toUpdate, $existingRecords);
 
-            // 6. 批量标记已同步
+            // 6. 批量标记已同步（需要重新查询以获取新插入记录的ID）
+            if (!empty($toInsert)) {
+                // 重新查询新插入的记录以获取ID
+                $insertedOrderNos = array_column($toInsert, 'order_no');
+                $newlyInserted = PlayGameRecord::query()
+                    ->whereIn('order_no', $insertedOrderNos)
+                    ->get()
+                    ->keyBy('order_no');
+
+                // 合并到 $existingRecords
+                foreach ($newlyInserted as $orderNo => $record) {
+                    $existingRecords[$orderNo] = $record;
+                }
+            }
+
             foreach ($records as $record) {
                 $orderNo = $record['order_no'];
                 $recordId = $existingRecords[$orderNo]->id ?? null;
 
                 if ($recordId) {
                     GameRecordCacheService::markAsSynced($record['redis_key'], $recordId);
+                } else {
+                    $this->log->warning("无法标记为已同步，记录未找到", [
+                        'order_no' => $orderNo,
+                        'redis_key' => $record['redis_key'],
+                    ]);
                 }
             }
 
@@ -431,9 +450,18 @@ class GameRecordSyncWorker
 
         // 2. 过滤BTG鱼机游戏
         $originalData = json_decode($data['original_data'] ?? '{}', true);
-        if (is_array($originalData) && count($originalData) > 0) {
-            $firstData = $originalData[0];
-            $gameType = $firstData['game_type'] ?? '';
+        if (is_array($originalData)) {
+            // 处理关联数组和索引数组两种情况
+            $gameType = null;
+
+            // 索引数组：[{...}, {...}]
+            if (isset($originalData[0]) && is_array($originalData[0])) {
+                $gameType = $originalData[0]['game_type'] ?? null;
+            } // 关联数组：{game_type: "fish", ...}
+            elseif (isset($originalData['game_type'])) {
+                $gameType = $originalData['game_type'];
+            }
+
             if ($gameType === 'fish') {
                 return false;
             }
@@ -692,9 +720,18 @@ class GameRecordSyncWorker
 
         // 3. 过滤BTG鱼机游戏
         $originalData = json_decode($record->original_data, true);
-        if (is_array($originalData) && count($originalData) > 0) {
-            $firstData = $originalData[0];
-            $gameType = $firstData['game_type'] ?? '';
+        if (is_array($originalData)) {
+            // 处理关联数组和索引数组两种情况
+            $gameType = null;
+
+            // 索引数组：[{...}, {...}]
+            if (isset($originalData[0]) && is_array($originalData[0])) {
+                $gameType = $originalData[0]['game_type'] ?? null;
+            } // 关联数组：{game_type: "fish", ...}
+            elseif (isset($originalData['game_type'])) {
+                $gameType = $originalData['game_type'];
+            }
+
             if ($gameType === 'fish') {
                 return false; // BTG鱼机游戏不参与彩金
             }
