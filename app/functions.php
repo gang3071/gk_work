@@ -2002,3 +2002,193 @@ function logGameInteraction(string $platform, string $action, array $request, $r
         // 记录失败不影响主业务
     }
 }
+
+/**
+ * 获取平台ID（带内存缓存）
+ *
+ * @param string $platform 平台代码
+ * @return int|null 平台ID
+ */
+function getPlatformIdByCode(string $platform): ?int
+{
+    static $cache = [];
+
+    if (!isset($cache[$platform])) {
+        $cache[$platform] = \app\model\GamePlatform::query()
+            ->where('code', $platform)
+            ->value('id');
+    }
+
+    return $cache[$platform];
+}
+
+/**
+ * 获取下注金额（带数据库降级）
+ *
+ * 优先从 Redis 获取下注记录，如果失败则从数据库查询
+ * 用于解决 Redis 记录过期或不可用时的 diff 计算问题
+ *
+ * @param string $platform 平台代码 (KT, ATG, DG等)
+ * @param string $orderNo 订单号
+ * @param int|null $playerId 玩家ID（可选，用于数据库查询优化）
+ * @param int|null $platformId 平台ID（可选，传入后避免子查询）
+ * @return float 下注金额，如果未找到返回 0
+ */
+function getBetAmountWithFallback(string $platform, string $orderNo, ?int $playerId = null, ?int $platformId = null): float
+{
+    $startTime = microtime(true);
+    $betAmount = 0;
+    $source = 'none';
+
+    try {
+        // 1️⃣ 优先从 Redis 获取
+        $betRecordKey = "game:record:bet:{$platform}:{$orderNo}";
+        $betRecord = \support\Redis::hGetAll($betRecordKey);
+
+        if (!empty($betRecord) && isset($betRecord['amount'])) {
+            $betAmount = (float)$betRecord['amount'];
+            $source = 'redis';
+        } else {
+            // 2️⃣ Redis 未命中，从数据库降级查询
+            $query = \app\model\PlayGameRecord::query()
+                ->where('order_no', $orderNo);
+
+            // ✅ 性能优化：优先使用传入的 platform_id，避免子查询
+            if ($platformId !== null) {
+                $query->where('platform_id', $platformId);
+            } else {
+                // 降级：使用缓存的 platform_id
+                $cachedPlatformId = getPlatformIdByCode($platform);
+                if ($cachedPlatformId) {
+                    $query->where('platform_id', $cachedPlatformId);
+                } else {
+                    // 最后降级：子查询（性能最差）
+                    $query->where('platform_id', function ($subQuery) use ($platform) {
+                        $subQuery->select('id')
+                            ->from('game_platform')
+                            ->where('code', $platform)
+                            ->limit(1);
+                    });
+                }
+            }
+
+            // 如果提供了玩家ID，添加条件优化查询
+            if ($playerId !== null) {
+                $query->where('player_id', $playerId);
+            }
+
+            $dbRecord = $query->first(['bet']);
+
+            if ($dbRecord) {
+                $betAmount = (float)$dbRecord->bet;
+                $source = 'database';
+
+                // 🚨 记录降级告警
+                \support\Log::warning('[降级] Redis bet记录缺失，已从数据库查询', [
+                    'platform' => $platform,
+                    'order_no' => $orderNo,
+                    'player_id' => $playerId,
+                    'bet_amount' => $betAmount,
+                    'query_time_ms' => round((microtime(true) - $startTime) * 1000, 2),
+                ]);
+            } else {
+                // 3️⃣ 数据库也没有，记录严重告警
+                \support\Log::error('[严重] bet记录完全缺失（Redis + DB）', [
+                    'platform' => $platform,
+                    'order_no' => $orderNo,
+                    'player_id' => $playerId,
+                ]);
+            }
+        }
+
+        // 📊 性能日志（仅在慢查询时记录）
+        $duration = (microtime(true) - $startTime) * 1000;
+        if ($duration > 50) {
+            \support\Log::info('[性能] getBetAmountWithFallback 慢查询', [
+                'platform' => $platform,
+                'order_no' => $orderNo,
+                'source' => $source,
+                'bet_amount' => $betAmount,
+                'duration_ms' => round($duration, 2),
+            ]);
+        }
+
+        return $betAmount;
+
+    } catch (\Throwable $e) {
+        // 异常时返回 0 并记录错误
+        \support\Log::error('[异常] getBetAmountWithFallback 查询失败', [
+            'platform' => $platform,
+            'order_no' => $orderNo,
+            'player_id' => $playerId,
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString(),
+        ]);
+
+        return 0;
+    }
+}
+
+/**
+ * 验证退款金额是否合理（带数据库降级）
+ *
+ * 检查退款金额是否超过原下注金额，防止数据异常或恶意请求
+ *
+ * @param string $platform 平台代码
+ * @param string $orderNo 订单号
+ * @param float $refundAmount 退款金额
+ * @param int|null $playerId 玩家ID（可选）
+ * @param int|null $platformId 平台ID（可选，传入后避免子查询）
+ * @return array ['valid' => bool, 'bet_amount' => float, 'message' => string]
+ */
+function validateRefundAmount(string $platform, string $orderNo, float $refundAmount, ?int $playerId = null, ?int $platformId = null): array
+{
+    try {
+        // 获取原下注金额（带降级）
+        $betAmount = getBetAmountWithFallback($platform, $orderNo, $playerId, $platformId);
+
+        // 验证退款金额
+        if ($refundAmount > $betAmount) {
+            \support\Log::warning('[退款验证] 退款金额超过下注金额', [
+                'platform' => $platform,
+                'order_no' => $orderNo,
+                'player_id' => $playerId,
+                'refund_amount' => $refundAmount,
+                'bet_amount' => $betAmount,
+                'excess' => $refundAmount - $betAmount,
+            ]);
+
+            return [
+                'valid' => false,
+                'bet_amount' => $betAmount,
+                'message' => sprintf(
+                    '退款金额(%.2f)超过原下注金额(%.2f)',
+                    $refundAmount,
+                    $betAmount
+                ),
+            ];
+        }
+
+        // 验证通过
+        return [
+            'valid' => true,
+            'bet_amount' => $betAmount,
+            'message' => 'ok',
+        ];
+
+    } catch (\Throwable $e) {
+        \support\Log::error('[退款验证] 验证失败', [
+            'platform' => $platform,
+            'order_no' => $orderNo,
+            'refund_amount' => $refundAmount,
+            'error' => $e->getMessage(),
+        ]);
+
+        // 异常时保守处理：允许退款（避免影响正常业务）
+        return [
+            'valid' => true,
+            'bet_amount' => 0,
+            'message' => 'validation_error',
+        ];
+    }
+}
