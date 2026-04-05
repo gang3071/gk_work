@@ -1867,3 +1867,102 @@ function logLuaScriptCall(string $operation, string $platform, int $playerId, ar
         $logData
     );
 }
+
+/**
+ * 验证 Lua 脚本参数
+ *
+ * 用于在调用 RedisLuaScripts 的 atomicBet/atomicSettle/atomicCancel 前验证参数
+ *
+ * @param array $params 要验证的参数数组
+ * @param array $rules 验证规则
+ * @param string $operation 操作名称（用于错误消息）
+ * @throws InvalidArgumentException 参数验证失败时抛出
+ *
+ * 规则格式：
+ * [
+ *     'field_name' => ['required', 'numeric', 'min:0'],
+ *     'field_name2' => ['string'],
+ * ]
+ *
+ * 支持的规则：
+ * - required: 必需字段，不能为 null
+ * - numeric: 必须是数字（int/float/numeric string）
+ * - integer: 必须是整数
+ * - string: 必须是字符串
+ * - min:n: 最小值（仅用于数字）
+ * - max:n: 最大值（仅用于数字）
+ *
+ * 示例：
+ * validateLuaScriptParams($data, [
+ *     'order_no' => ['required', 'string'],
+ *     'amount' => ['required', 'numeric', 'min:0'],
+ *     'platform_id' => ['required', 'integer'],
+ *     'game_code' => ['string'],  // 可选字段
+ * ], 'atomicBet');
+ */
+function validateLuaScriptParams(array $params, array $rules, string $operation = 'Lua script'): void
+{
+    foreach ($rules as $field => $fieldRules) {
+        $fieldRules = is_array($fieldRules) ? $fieldRules : [$fieldRules];
+        $value = $params[$field] ?? null;
+
+        // 检查 required
+        if (in_array('required', $fieldRules)) {
+            if ($value === null || $value === '') {
+                throw new InvalidArgumentException(
+                    sprintf('[%s] 参数验证失败: %s 是必需的', $operation, $field)
+                );
+            }
+        }
+
+        // 如果值为空且不是 required，跳过其他验证
+        if ($value === null || $value === '') {
+            continue;
+        }
+
+        // 检查 string
+        if (in_array('string', $fieldRules) && !is_string($value)) {
+            throw new InvalidArgumentException(
+                sprintf('[%s] 参数验证失败: %s 必须是字符串，实际类型: %s', $operation, $field, gettype($value))
+            );
+        }
+
+        // 检查 numeric
+        if (in_array('numeric', $fieldRules) && !is_numeric($value)) {
+            throw new InvalidArgumentException(
+                sprintf('[%s] 参数验证失败: %s 必须是数字，实际值: %s', $operation, $field, var_export($value, true))
+            );
+        }
+
+        // 检查 integer
+        if (in_array('integer', $fieldRules) && !is_int($value) && !(is_numeric($value) && (int)$value == $value)) {
+            throw new InvalidArgumentException(
+                sprintf('[%s] 参数验证失败: %s 必须是整数，实际值: %s', $operation, $field, var_export($value, true))
+            );
+        }
+
+        // 检查 min
+        foreach ($fieldRules as $rule) {
+            if (strpos($rule, 'min:') === 0) {
+                $min = (float)substr($rule, 4);
+                if (is_numeric($value) && (float)$value < $min) {
+                    throw new InvalidArgumentException(
+                        sprintf('[%s] 参数验证失败: %s 必须 >= %s，实际值: %s', $operation, $field, $min, $value)
+                    );
+                }
+            }
+        }
+
+        // 检查 max
+        foreach ($fieldRules as $rule) {
+            if (strpos($rule, 'max:') === 0) {
+                $max = (float)substr($rule, 4);
+                if (is_numeric($value) && (float)$value > $max) {
+                    throw new InvalidArgumentException(
+                        sprintf('[%s] 参数验证失败: %s 必须 <= %s，实际值: %s', $operation, $field, $max, $value)
+                    );
+                }
+            }
+        }
+    }
+}
