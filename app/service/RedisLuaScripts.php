@@ -323,7 +323,25 @@ LUA;
         // 执行 Lua 脚本
         $result = Redis::eval(self::LUA_ATOMIC_BET, count($keys), ...array_merge($keys, $argv));
 
-        return json_decode($result, true);
+        // 检查 Redis 返回值
+        if ($result === null || $result === false) {
+            throw new \RuntimeException(
+                sprintf('[atomicBet] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s',
+                    $playerId, $platform, $orderNo)
+            );
+        }
+
+        // 解码 JSON
+        $decoded = json_decode($result, true);
+        if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+            throw new \RuntimeException(
+                sprintf('[atomicBet] Redis Lua 脚本返回值解码失败: %s. 原始返回: %s',
+                    json_last_error_msg(),
+                    is_string($result) ? substr($result, 0, 200) : var_export($result, true))
+            );
+        }
+
+        return $decoded ?? [];
     }
 
     /**
@@ -393,7 +411,25 @@ LUA;
 
         $result = Redis::eval(self::LUA_ATOMIC_SETTLE, count($keys), ...array_merge($keys, $argv));
 
-        return json_decode($result, true);
+        // 检查 Redis 返回值
+        if ($result === null || $result === false) {
+            throw new \RuntimeException(
+                sprintf('[atomicSettle] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s',
+                    $playerId, $platform, $orderNo)
+            );
+        }
+
+        // 解码 JSON
+        $decoded = json_decode($result, true);
+        if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+            throw new \RuntimeException(
+                sprintf('[atomicSettle] Redis Lua 脚本返回值解码失败: %s. 原始返回: %s',
+                    json_last_error_msg(),
+                    is_string($result) ? substr($result, 0, 200) : var_export($result, true))
+            );
+        }
+
+        return $decoded ?? [];
     }
 
     /**
@@ -443,7 +479,25 @@ LUA;
 
         $result = Redis::eval(self::LUA_ATOMIC_CANCEL, count($keys), ...array_merge($keys, $argv));
 
-        return json_decode($result, true);
+        // 检查 Redis 返回值
+        if ($result === null || $result === false) {
+            throw new \RuntimeException(
+                sprintf('[atomicCancel] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s',
+                    $playerId, $platform, $orderNo)
+            );
+        }
+
+        // 解码 JSON
+        $decoded = json_decode($result, true);
+        if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+            throw new \RuntimeException(
+                sprintf('[atomicCancel] Redis Lua 脚本返回值解码失败: %s. 原始返回: %s',
+                    json_last_error_msg(),
+                    is_string($result) ? substr($result, 0, 200) : var_export($result, true))
+            );
+        }
+
+        return $decoded ?? [];
     }
 
     /**
