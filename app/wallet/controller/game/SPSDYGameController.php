@@ -134,6 +134,13 @@ class SPSDYGameController
                     'original_data' => $params,
                 ]);
 
+                // 游戏交互日志
+                logGameInteraction('SPSDY', 'settle', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                    'order_no' => $orderNo,
+                ]);
+
                 if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                     Log::channel('sps_server')->info('SPSDY结算重复请求（Lua检测）', ['order_no' => $orderNo]);
                 }
@@ -154,6 +161,13 @@ class SPSDYGameController
                 'amount' => $amount,
                 'transaction_type' => TransactionType::BET,
                 'original_data' => $params,
+            ]);
+
+            // 游戏交互日志
+            logGameInteraction('SPSDY', 'bet', $params, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+                'order_no' => $orderNo,
             ]);
 
             // 处理下注结果

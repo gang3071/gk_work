@@ -112,6 +112,24 @@ class SAGameController
 
             // 审计日志
             logLuaScriptCall('bet', 'SA', $player->id, $luaParams);
+            // 游戏交互日志
+            logGameInteraction('SA', 'settle', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+            ]);
+
+            // 游戏交互日志
+            logGameInteraction('SA', 'cancel', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+            ]);
+
+            // 游戏交互日志
+            logGameInteraction('SA', 'bet', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+            ]);
+
 
             // 处理结果
             if ($result['ok'] === 0) {

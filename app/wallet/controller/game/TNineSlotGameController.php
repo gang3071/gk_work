@@ -148,6 +148,24 @@ class TNineSlotGameController
 
                 // 审计日志
                 logLuaScriptCall('settle', 'T9SLOT', $player->id, $luaParams);
+                // 游戏交互日志
+                logGameInteraction('T9SLOT', 'cancel', $data, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                ]);
+
+                // 游戏交互日志
+                logGameInteraction('T9SLOT', 'bet', $data, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                ]);
+
+                // 游戏交互日志
+                logGameInteraction('T9SLOT', 'settle', $data, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                ]);
+
 
                 if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                     $this->logger->info('TNineSlot免费游戏重复请求（Lua检测）', ['order_no' => $orderNo]);

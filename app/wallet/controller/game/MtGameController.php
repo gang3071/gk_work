@@ -151,6 +151,13 @@ class MtGameController
             // 审计日志
             logLuaScriptCall('bet', 'MT', $player->id, $luaParams);
 
+            // 游戏交互日志
+            logGameInteraction('MT', 'bet', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+                'order_no' => $orderNo,
+            ]);
+
             // 4. 处理结果
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
@@ -168,6 +175,12 @@ class MtGameController
             ]);
 
         } catch (Exception $e) {
+            // 游戏交互日志
+            logGameInteraction('MT', 'bet', $data ?? [], [
+                'error' => $e->getMessage(),
+                'ok' => 0,
+            ]);
+
             Log::error('MT bet failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -227,6 +240,14 @@ class MtGameController
             // 审计日志
             logLuaScriptCall('cancel', 'MT', $player->id, $luaParams);
 
+            // 游戏交互日志
+            logGameInteraction('MT', 'cancel', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+                'order_no' => $orderNo,
+                'refund_amount' => $data['order_money'],
+            ]);
+
             // 4. 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 Log::channel('mt_server')->info('MT取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);
@@ -240,6 +261,12 @@ class MtGameController
             ]);
 
         } catch (Exception $e) {
+            // 游戏交互日志
+            logGameInteraction('MT', 'cancel', $data ?? [], [
+                'error' => $e->getMessage(),
+                'ok' => 0,
+            ]);
+
             Log::error('MT cancelBet failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -303,6 +330,14 @@ class MtGameController
             // 审计日志
             logLuaScriptCall('settle', 'MT', $player->id, $luaParams);
 
+            // 游戏交互日志
+            logGameInteraction('MT', 'settle', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+                'order_no' => $orderNo,
+                'win_amount' => $winMoney,
+            ]);
+
             // 4. 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 Log::channel('mt_server')->info('MT结算重复请求（Lua检测）', ['bet_sn' => $orderNo]);
@@ -320,6 +355,12 @@ class MtGameController
             ]);
 
         } catch (Exception $e) {
+            // 游戏交互日志
+            logGameInteraction('MT', 'settle', $data ?? [], [
+                'error' => $e->getMessage(),
+                'ok' => 0,
+            ]);
+
             Log::error('MT betResult failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),

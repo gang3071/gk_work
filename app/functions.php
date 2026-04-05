@@ -1974,3 +1974,31 @@ function validateLuaScriptParams(array $params, array $rules, string $operation 
         }
     }
 }
+
+/**
+ * 记录游戏平台交互日志
+ *
+ * @param string $platform 平台代码 (RSG, MT, BTG等)
+ * @param string $action 操作类型 (bet, settle, cancel等)
+ * @param array $request 请求数据
+ * @param mixed $response 响应数据
+ * @return void
+ */
+function logGameInteraction(string $platform, string $action, array $request, $response = null): void
+{
+    try {
+        $logger = \support\Log::channel('game_interaction_log');
+
+        $message = sprintf(
+            '[%s-%s] Request: %s | Response: %s',
+            strtoupper($platform),
+            strtoupper($action),
+            json_encode($request, JSON_UNESCAPED_UNICODE),
+            json_encode($response, JSON_UNESCAPED_UNICODE)
+        );
+
+        $logger->info($message);
+    } catch (\Throwable $e) {
+        // 记录失败不影响主业务
+    }
+}

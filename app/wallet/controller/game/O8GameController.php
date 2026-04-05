@@ -229,6 +229,24 @@ class O8GameController
 
                 // 审计日志
                 logLuaScriptCall('bet', 'O8', $player->id, $luaParams);
+                // 游戏交互日志
+                logGameInteraction('O8', 'refund', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                ]);
+
+                // 游戏交互日志
+                logGameInteraction('O8', 'settle', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                ]);
+
+                // 游戏交互日志
+                logGameInteraction('O8', 'bet', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                ]);
+
 
                 if ($result['ok'] === 0) {
                     if ($result['error'] === 'duplicate_order') {

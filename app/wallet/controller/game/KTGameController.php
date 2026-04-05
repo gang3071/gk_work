@@ -169,6 +169,13 @@ class KTGameController
             // 审计日志
             logLuaScriptCall('bet', 'KT', $player->id, $luaParams);
 
+            // 游戏交互日志
+            logGameInteraction('KT', 'bet', $params, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+                'order_no' => $orderNo,
+            ]);
+
             // 处理下注结果
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
@@ -237,6 +244,12 @@ class KTGameController
                 'Balance' => (float)$finalBalance
             ]);
         } catch (Exception $e) {
+            // 游戏交互日志
+            logGameInteraction('KT', 'bet', $params ?? [], [
+                'error' => $e->getMessage(),
+                'ok' => 0,
+            ]);
+
             Log::error('KT bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('KT', '下注异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_OTHER_ERROR);
@@ -294,6 +307,14 @@ class KTGameController
             // 审计日志
             logLuaScriptCall('settle', 'KT', $player->id, $luaParams);
 
+            // 游戏交互日志
+            logGameInteraction('KT', 'settle', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+                'order_no' => $orderNo,
+                'win_amount' => $winAmount,
+            ]);
+
             // 处理返回结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
                 $this->logger->info('KT延迟结算重复请求（Lua检测）', ['order_no' => $orderNo]);
@@ -306,6 +327,12 @@ class KTGameController
             ]);
 
         } catch (Exception $e) {
+            // 游戏交互日志
+            logGameInteraction('KT', 'settle', $data ?? [], [
+                'error' => $e->getMessage(),
+                'ok' => 0,
+            ]);
+
             Log::error('KT betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('KT', '延迟结算异常', $e, ['params' => $params]);
             return $this->error(self::API_CODE_OTHER_ERROR);

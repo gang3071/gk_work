@@ -216,6 +216,42 @@ class BTGGameController
 
                     // 审计日志
                     logLuaScriptCall('bet', 'BTG', $player->id, $luaParams);
+                    // 游戏交互日志
+                    logGameInteraction('BTG', 'adjust_credit', $data, [
+                        'ok' => $result['ok'],
+                        'balance' => $result['balance'],
+                    ]);
+
+                    // 游戏交互日志
+                    logGameInteraction('BTG', 'adjust_debit', $data, [
+                        'ok' => $result['ok'],
+                        'balance' => $result['balance'],
+                    ]);
+
+                    // 游戏交互日志
+                    logGameInteraction('BTG', 'reward', $data, [
+                        'ok' => $result['ok'],
+                        'balance' => $result['balance'],
+                    ]);
+
+                    // 游戏交互日志
+                    logGameInteraction('BTG', 'transfer_cancel', $data, [
+                        'ok' => $result['ok'],
+                        'balance' => $result['balance'],
+                    ]);
+
+                    // 游戏交互日志
+                    logGameInteraction('BTG', 'transfer_credit', $data, [
+                        'ok' => $result['ok'],
+                        'balance' => $result['balance'],
+                    ]);
+
+                    // 游戏交互日志
+                    logGameInteraction('BTG', 'transfer_debit', $data, [
+                        'ok' => $result['ok'],
+                        'balance' => $result['balance'],
+                    ]);
+
 
                     if ($result['ok'] === 0) {
                         if ($result['error'] === 'duplicate_order') {

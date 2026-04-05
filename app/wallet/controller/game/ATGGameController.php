@@ -134,6 +134,24 @@ class ATGGameController
 
             // 审计日志
             logLuaScriptCall('bet', 'ATG', $player->id, $luaParams);
+            // 游戏交互日志
+            logGameInteraction('ATG', 'cancel', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+            ]);
+
+            // 游戏交互日志
+            logGameInteraction('ATG', 'settle', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+            ]);
+
+            // 游戏交互日志
+            logGameInteraction('ATG', 'bet', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+            ]);
+
 
             // 处理返回结果
             if ($result['ok'] === 0) {

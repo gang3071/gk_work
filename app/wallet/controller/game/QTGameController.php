@@ -455,6 +455,13 @@ class QTGameController
                     logLuaScriptCall('bet', 'QT', $player->id, $luaParams);
                 }
 
+                // 游戏交互日志
+                logGameInteraction('QT', 'debit', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                    'txnId' => $txnId,
+                ]);
+
                 if ($result['ok'] === 0) {
                     if ($result['error'] === 'duplicate_order') {
                         $this->logger->info('QT下注重复请求（Lua检测）', ['txnId' => $txnId]);
@@ -492,6 +499,14 @@ class QTGameController
                 // 审计日志
                 logLuaScriptCall('settle', 'QT', $player->id, $luaParams);
 
+                // 游戏交互日志
+                logGameInteraction('QT', 'credit', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                    'txnId' => $txnId,
+                    'amount' => $amount,
+                ]);
+
                 if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                     $this->logger->info('QT结算重复请求（Lua检测）', ['txnId' => $txnId]);
                 }
@@ -511,6 +526,12 @@ class QTGameController
                 'referenceId' => $txnId
             ]));
         } catch (Exception $e) {
+            // 游戏交互日志
+            logGameInteraction('QT', $txnType ?? 'transaction', $params ?? [], [
+                'error' => $e->getMessage(),
+                'ok' => 0,
+            ]);
+
             $this->logger->error('QT交易异常', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()

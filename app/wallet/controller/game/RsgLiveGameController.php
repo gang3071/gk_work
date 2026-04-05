@@ -213,6 +213,18 @@ class RsgLiveGameController
 
             // 审计日志
             logLuaScriptCall('bet', 'RSGLIVE', $player->id, $luaParams);
+            // 游戏交互日志
+            logGameInteraction('RSGLIVE', 'settle', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+            ]);
+
+            // 游戏交互日志
+            logGameInteraction('RSGLIVE', 'bet', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+            ]);
+
 
             // 处理下注结果
             if ($result['ok'] === 0) {

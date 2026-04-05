@@ -136,6 +136,24 @@ class DGGameController
 
                 // 审计日志
                 logLuaScriptCall('settle', 'DG', $player->id, $luaParams);
+                // 游戏交互日志
+                logGameInteraction('DG', 'cancel', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                ]);
+
+                // 游戏交互日志
+                logGameInteraction('DG', 'bet', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                ]);
+
+                // 游戏交互日志
+                logGameInteraction('DG', 'settle', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                ]);
+
 
                 if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                     Log::channel('dg_server')->info('DG结算重复请求（Lua检测）', ['order_no' => $orderNo, 'type' => $type]);
