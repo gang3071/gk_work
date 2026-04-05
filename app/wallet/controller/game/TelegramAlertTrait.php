@@ -3,7 +3,6 @@
 namespace app\wallet\controller\game;
 
 use app\service\TelegramService;
-use Exception;
 use Monolog\Logger;
 use support\Log;
 
@@ -16,7 +15,7 @@ trait TelegramAlertTrait
     /**
      * 发送 Telegram 告警通知
      */
-    private function sendTelegramAlert(string $platform, string $action, Exception $e, array $context = []): void
+    private function sendTelegramAlert(string $platform, string $action, \Throwable $e, array $context = []): void
     {
         try {
             $token = env('TELEGRAM_BOT_TOKEN');
