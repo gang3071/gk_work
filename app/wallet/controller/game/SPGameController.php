@@ -238,7 +238,7 @@ class SPGameController
 
             // 批量处理结算（每个订单一次 Lua 原子操作）
             foreach ($betList as $betInfo) {
-                $orderNo = $betInfo['txnid'];
+                $orderNo = (string)($betInfo['txnid'] ?? '');
                 $resultAmount = max($betInfo['resultamount'], 0);
 
                 // Lua 原子结算
