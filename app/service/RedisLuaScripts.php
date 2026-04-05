@@ -172,9 +172,15 @@ else
     -- bet 不存在，创建独立 settle 记录
     local settleData = cjson.decode(ARGV[10])
 
+    -- 智能处理订单号：如果已包含 _settle，不再追加
+    local finalOrderNo = settleData.order_no
+    if not string.find(finalOrderNo, '_settle$') then
+        finalOrderNo = finalOrderNo .. '_settle'
+    end
+
     redis.call('HMSET', KEYS[6],
         'platform', settleData.platform,
-        'order_no', settleData.order_no .. '_settle',
+        'order_no', finalOrderNo,
         'player_id', ARGV[8],
         'platform_id', ARGV[9],
         'amount', 0,
