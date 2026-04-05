@@ -2,12 +2,14 @@
 
 namespace app\wallet\controller\game;
 
+use app\Constants\TransactionType;
 use app\model\Player;
 use app\model\PlayGameRecord;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\game\TNineSlotServiceInterface;
+use app\service\RedisLuaScripts;
 use Exception;
 use support\Log;
 use support\Request;
@@ -99,19 +101,17 @@ class TNineSlotGameController
     }
 
     /**
-     * 下注（Redis 缓存版）
+     * 下注（Lua原子操作）
      * @param Request $request
      * @return Response
      * @throws Exception
      */
     public function bet(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
-            $this->logger->info('t9电子下注记录（Redis缓存）', ['params' => $params]);
+            $this->logger->info('t9电子下注请求（Lua原子）', ['params' => $params]);
 
             $user = $params['gameAccount'];
             $userId = explode('_', $user)[0];
@@ -123,102 +123,123 @@ class TNineSlotGameController
             $betAmount = $params['betAmount'] ?? 0;
             $winAmount = $params['winlose'] ?? $params['payoutAmount'] ?? 0;
 
-            // 幂等性检查
-            $lockKey = "order:bet:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复订单
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'afterBalance' => $balance,
-                    'beforeBalance' => $balance,
-                ]);
-            }
-
-            try {
-                // 获取当前余额
-                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-
-                // betKind == 3：免费游戏，直接结算，不扣款
-                if ($betKind == 3) {
-                    // 写入结算记录（免费游戏）
-                    \app\service\GameRecordCacheService::saveSettle('T9SLOT', [
-                        'order_no' => $orderNo,
-                        'player_id' => $player->id,
-                        'platform_id' => $this->service->platform->id,
-                        'amount' => max($winAmount, 0),
-                        'diff' => $winAmount,
-                        'original_data' => $params,
-                    ]);
-
-                    // 更新余额缓存（只加中奖金额）
-                    $newBalance = $currentBalance;
-                    if ($winAmount > 0) {
-                        $newBalance = bcadd($currentBalance, $winAmount, 2);
-                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                    }
-
-                    $elapsed = (microtime(true) - $startTime) * 1000;
-                    $this->logger->info('t9电子免费游戏成功（Redis缓存）', [
-                        'order_no' => $orderNo,
-                        'elapsed_ms' => round($elapsed, 2),
-                    ]);
-
-                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'afterBalance' => $newBalance,
-                        'beforeBalance' => $currentBalance,
-                    ]);
-                }
-
-                // 普通下注：余额预检查
-                if ($currentBalance < $betAmount) {
-                    \support\Redis::del($lockKey);
-                    return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
-                }
-
-                // 写入下注记录
-                \app\service\GameRecordCacheService::saveBet('T9SLOT', [
+            // betKind == 3：免费游戏，只结算不扣款（Lua 原子操作）
+            if ($betKind == 3) {
+                // Lua 原子结算（免费游戏）
+                $luaParams = [
                     'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $betAmount,
-                    'game_code' => $params['gameCode'] ?? '',
-                    'original_data' => $params,
-                ]);
-
-                // 更新余额缓存（扣款）
-                $newBalance = bcsub($currentBalance, $betAmount, 2);
-                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-                // T9Slot 总是下注后立即结算
-                \app\service\GameRecordCacheService::saveSettle('T9SLOT', [
-                    'order_no' => $orderNo . '_settle',
-                    'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($winAmount, 0),
                     'diff' => $winAmount,
+                    'transaction_type' => TransactionType::SETTLE_FREEGAME,
                     'original_data' => $params,
-                ]);
+                ];
 
-                // 更新余额缓存（加上中奖金额）
-                if ($winAmount > 0) {
-                    $newBalance = bcadd($newBalance, $winAmount, 2);
-                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'amount' => ['required', 'numeric'],
+                    'diff' => ['required', 'numeric'],
+                    'platform_id' => ['required', 'integer'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicSettle');
+
+                $result = RedisLuaScripts::atomicSettle($player->id, 'T9SLOT', $luaParams);
+
+                // 审计日志
+                logLuaScriptCall('settle', 'T9SLOT', $player->id, $luaParams);
+
+                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                    $this->logger->info('TNineSlot免费游戏重复请求（Lua检测）', ['order_no' => $orderNo]);
                 }
 
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
+                $afterBalance = $result['balance'];
+                $beforeBalance = $afterBalance - $winAmount;
+
+                $this->logger->info('t9电子免费游戏成功（Lua原子）', ['order_no' => $orderNo]);
+
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                    'afterBalance' => (float)$afterBalance,
+                    'beforeBalance' => (float)$beforeBalance,
+                ]);
             }
 
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            $this->logger->info('t9电子下注成功（Redis缓存）', [
+            // 普通下注：Lua 原子下注（扣款）
+            $luaParams = [
                 'order_no' => $orderNo,
-                'elapsed_ms' => round($elapsed, 2),
-            ]);
+                'platform_id' => $this->service->platform->id,
+                'amount' => $betAmount,
+                'game_code' => $params['gameCode'] ?? '',
+                'transaction_type' => TransactionType::BET,
+                'original_data' => $params,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'game_code' => ['string'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicBet');
+
+            $betResult = RedisLuaScripts::atomicBet($player->id, 'T9SLOT', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('bet', 'T9SLOT', $player->id, $luaParams);
+
+            if ($betResult['ok'] === 0) {
+                if ($betResult['error'] === 'duplicate_order') {
+                    $this->logger->info('TNineSlot下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                        'afterBalance' => (float)$betResult['balance'],
+                        'beforeBalance' => (float)$betResult['balance'],
+                    ]);
+                } elseif ($betResult['error'] === 'insufficient_balance') {
+                    return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+                }
+            }
+
+            $beforeBalance = $betResult['balance'] + $betAmount;
+            $afterBalance = $betResult['balance'];
+
+            // T9Slot 总是下注后立即结算（Lua 原子操作）
+            $settleOrderNo = $orderNo . '_settle';
+            $settleLuaParams = [
+                'order_no' => $settleOrderNo,
+                'platform_id' => $this->service->platform->id,
+                'amount' => max($winAmount, 0),
+                'diff' => $winAmount,
+                'transaction_type' => TransactionType::SETTLE,
+                'original_data' => $params,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($settleLuaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric'],
+                'diff' => ['required', 'numeric'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicSettle');
+
+            $settleResult = RedisLuaScripts::atomicSettle($player->id, 'T9SLOT', $settleLuaParams);
+
+            // 审计日志
+            logLuaScriptCall('settle', 'T9SLOT', $player->id, $settleLuaParams);
+
+            if ($settleResult['ok'] === 1) {
+                $afterBalance = $settleResult['balance'];
+            } elseif ($settleResult['error'] === 'duplicate_order') {
+                $this->logger->info('TNineSlot立即结算重复请求（Lua检测）', ['order_no' => $settleOrderNo]);
+                $afterBalance = $settleResult['balance'];
+            }
+
+            $this->logger->info('t9电子下注成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'afterBalance' => $newBalance,
-                'beforeBalance' => $currentBalance,
+                'afterBalance' => (float)$afterBalance,
+                'beforeBalance' => (float)$beforeBalance,
             ]);
         } catch (Exception $e) {
             Log::error('TNineSlot bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -252,19 +273,17 @@ class TNineSlotGameController
 
 
     /**
-     * 取消下注（Redis 缓存版）
+     * 取消下注（Lua原子操作）
      * @param Request $request
      * @return Response
      * @throws Exception
      */
     public function cancelBet(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
-            $this->logger->info('t9电子取消下注（Redis缓存）', ['params' => $params]);
+            $this->logger->info('t9电子取消下注请求（Lua原子）', ['params' => $params]);
 
             $user = $params['gameAccount'];
             $userId = explode('_', $user)[0];
@@ -274,48 +293,40 @@ class TNineSlotGameController
             $orderNo = $params['betId'] ?? $params['roundId'] ?? '';
             $refundAmount = $params['betAmount'] ?? 0;
 
-            // 幂等性检查
-            $lockKey = "order:cancel:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复取消
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'afterBalance' => $balance,
-                    'beforeBalance' => $balance,
-                ]);
-            }
-
-            try {
-                // 获取当前余额
-                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-
-                // 写入取消记录
-                \app\service\GameRecordCacheService::saveCancel('T9SLOT', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'cancel_type' => 'cancel',
-                    'original_data' => $params,
-                ]);
-
-                // 更新余额缓存（退款）
-                $newBalance = bcadd($currentBalance, $refundAmount, 2);
-                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
-            }
-
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            $this->logger->info('t9电子取消下注成功（Redis缓存）', [
+            // Lua 原子取消
+            $luaParams = [
                 'order_no' => $orderNo,
-                'elapsed_ms' => round($elapsed, 2),
-            ]);
+                'platform_id' => $this->service->platform->id,
+                'refund_amount' => $refundAmount,
+                'transaction_type' => TransactionType::CANCEL,
+                'original_data' => $params,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'refund_amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicCancel');
+
+            $result = RedisLuaScripts::atomicCancel($player->id, 'T9SLOT', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('cancel', 'T9SLOT', $player->id, $luaParams);
+
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                $this->logger->info('TNineSlot取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+            }
+
+            $beforeBalance = $result['balance'] - $refundAmount;
+            $afterBalance = $result['balance'];
+
+            $this->logger->info('t9电子取消下注成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'afterBalance' => $newBalance,
-                'beforeBalance' => $currentBalance,
+                'afterBalance' => (float)$afterBalance,
+                'beforeBalance' => (float)$beforeBalance,
             ]);
         } catch (Exception $e) {
             Log::error('TNineSlot cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);

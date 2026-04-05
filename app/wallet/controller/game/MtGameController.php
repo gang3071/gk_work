@@ -2,10 +2,12 @@
 
 namespace app\wallet\controller\game;
 
+use app\Constants\TransactionType;
 use app\model\Player;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\RedisLuaScripts;
 use Exception;
 use support\Log;
 use support\Request;
@@ -98,21 +100,19 @@ class MtGameController
     }
 
     /**
-     * 下注（Redis 缓存版）
+     * 下注（Lua原子操作）
      * @param Request $request
      * @return Response
      * @throws Exception
      */
     public function bet(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['msg']);
-            Log::channel('mt_server')->info('MT下注请求（Redis缓存）', ['params' => $data]);
+            Log::channel('mt_server')->info('MT下注请求（Lua原子）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -126,55 +126,46 @@ class MtGameController
 
             $orderNo = $data['bet_sn'];
 
-            // 3. 幂等性检查（Redis 原子锁）
-            $lockKey = "order:bet:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复请求，返回缓存余额
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                Log::channel('mt_server')->info('MT下注重复请求', ['order_no' => $orderNo]);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$balance]);
-            }
-
-            // 4. 获取当前余额
-            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-
-            // 5. 余额预检查
-            if ($currentBalance < $data['order_money']) {
-                \support\Redis::del($lockKey);
-                return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
-            }
-
-            // 6. 写入 Redis 缓存（<0.5ms）
-            try {
-                \app\service\GameRecordCacheService::saveBet('MT', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $data['order_money'],
-                    'game_code' => $data['game_code'],
-                    'game_type' => $data['gameType'] ?? '',
-                    'game_name' => $data['gameName'] ?? '',
-                    'original_data' => $data,
-                ]);
-
-                // 7. 更新余额缓存（<0.2ms）
-                $newBalance = bcsub($currentBalance, $data['order_money'], 2);
-                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
-            }
-
-            // 8. 立即返回（总耗时 <1ms）
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('mt_server')->info('MT下注成功（Redis缓存）', [
+            // 3. Lua 原子下注
+            $luaParams = [
                 'order_no' => $orderNo,
-                'elapsed_ms' => round($elapsed, 2),
-            ]);
+                'platform_id' => $this->service->platform->id,
+                'amount' => $data['order_money'],
+                'game_code' => $data['game_code'],
+                'game_type' => $data['gameType'] ?? '',
+                'game_name' => $data['gameName'] ?? '',
+                'transaction_type' => TransactionType::BET,
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'game_code' => ['string'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicBet');
+
+            $result = RedisLuaScripts::atomicBet($player->id, 'MT', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('bet', 'MT', $player->id, $luaParams);
+
+            // 4. 处理结果
+            if ($result['ok'] === 0) {
+                if ($result['error'] === 'duplicate_order') {
+                    Log::channel('mt_server')->info('MT下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$result['balance']]);
+                } elseif ($result['error'] === 'insufficient_balance') {
+                    return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+                }
+            }
+
+            Log::channel('mt_server')->info('MT下注成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'balance' => (float)$newBalance
+                'balance' => (float)$result['balance']
             ]);
 
         } catch (Exception $e) {
@@ -190,20 +181,18 @@ class MtGameController
     }
 
     /**
-     * 取消下注（Redis 缓存版）
+     * 取消下注（Lua原子操作）
      * @param Request $request
      * @return Response
      */
     public function cancelBet(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['msg']);
-            Log::channel('mt_server')->info('MT取消下注请求（Redis缓存）', ['params' => $data]);
+            Log::channel('mt_server')->info('MT取消下注请求（Lua原子）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -217,44 +206,38 @@ class MtGameController
 
             $orderNo = $data['bet_sn'];
 
-            // 3. 幂等性检查
-            $lockKey = "order:cancel:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$balance]);
-            }
-
-            // 4. 获取当前余额
-            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-
-            // 5. 写入取消记录
-            try {
-                \app\service\GameRecordCacheService::saveCancel('MT', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'cancel_type' => 'cancel',
-                    'original_data' => $data,
-                ]);
-
-                // 6. 更新余额缓存（退回下注金额）
-                $newBalance = bcadd($currentBalance, $data['order_money'], 2);
-                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
-            }
-
-            // 7. 立即返回
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('mt_server')->info('MT取消下注成功（Redis缓存）', [
+            // 3. Lua 原子取消
+            $luaParams = [
                 'order_no' => $orderNo,
-                'elapsed_ms' => round($elapsed, 2),
-            ]);
+                'platform_id' => $this->service->platform->id,
+                'refund_amount' => $data['order_money'],
+                'transaction_type' => TransactionType::CANCEL,
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'refund_amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicCancel');
+
+            $result = RedisLuaScripts::atomicCancel($player->id, 'MT', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('cancel', 'MT', $player->id, $luaParams);
+
+            // 4. 处理结果
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                Log::channel('mt_server')->info('MT取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$result['balance']]);
+            }
+
+            Log::channel('mt_server')->info('MT取消下注成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'balance' => (float)$newBalance
+                'balance' => (float)$result['balance']
             ]);
 
         } catch (Exception $e) {
@@ -270,20 +253,18 @@ class MtGameController
     }
 
     /**
-     * 結算（Redis 缓存版）
+     * 結算（Lua原子操作）
      * @param Request $request
      * @return Response
      */
     public function betResult(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['msg']);
-            Log::channel('mt_server')->info('MT结算请求（Redis缓存）', ['params' => $data]);
+            Log::channel('mt_server')->info('MT结算请求（Lua原子）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -296,56 +277,47 @@ class MtGameController
             }
 
             $orderNo = $data['bet_sn'];
-
-            // 3. 幂等性检查
-            $lockKey = "order:settle:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复请求
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'bet_sn' => $orderNo,
-                    'balance' => (float)$balance
-                ]);
-            }
-
-            // 4. 获取当前余额
-            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
             $winMoney = $data['win_money'] ?? 0;
             $status = $data['status'] ?? null;
 
-            // 5. 写入 Redis 缓存
-            try {
-                \app\service\GameRecordCacheService::saveSettle('MT', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $winMoney,
-                    'diff' => $winMoney,  // MT的win_money就是输赢金额
-                    'original_data' => $data,
+            // 3. Lua 原子结算
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'amount' => $winMoney,
+                'diff' => $winMoney,  // MT的win_money就是输赢金额
+                'transaction_type' => TransactionType::SETTLE,
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric'],
+                'diff' => ['required', 'numeric'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicSettle');
+
+            $result = RedisLuaScripts::atomicSettle($player->id, 'MT', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('settle', 'MT', $player->id, $luaParams);
+
+            // 4. 处理结果
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                Log::channel('mt_server')->info('MT结算重复请求（Lua检测）', ['bet_sn' => $orderNo]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                    'bet_sn' => $orderNo,
+                    'balance' => (float)$result['balance']
                 ]);
-
-                // 6. 更新余额缓存（只在有派彩时）
-                $newBalance = $currentBalance;
-                if ($status !== self::BET_STATUS_NOT && $winMoney > 0) {
-                    $newBalance = bcadd($currentBalance, $winMoney, 2);
-                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                }
-
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
             }
 
-            // 7. 立即返回（<1ms）
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('mt_server')->info('MT结算成功（Redis缓存）', [
-                'bet_sn' => $orderNo,
-                'elapsed_ms' => round($elapsed, 2),
-            ]);
+            Log::channel('mt_server')->info('MT结算成功（Lua原子）', ['bet_sn' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'bet_sn' => $orderNo,
-                'balance' => (float)$newBalance
+                'balance' => (float)$result['balance']
             ]);
 
         } catch (Exception $e) {
@@ -361,20 +333,18 @@ class MtGameController
     }
 
     /**
-     * 重新結算（Redis 缓存版）
+     * 重新結算（Lua原子操作）
      * @param Request $request
      * @return Response
      */
     public function reBetResult(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['msg']);
-            Log::channel('mt_server')->info('MT重新结算请求（Redis缓存）', ['params' => $data]);
+            Log::channel('mt_server')->info('MT重新结算请求（Lua原子）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -387,56 +357,46 @@ class MtGameController
             }
 
             $orderNo = $data['bet_sn'];
+            $winMoney = $data['win_money'] ?? 0;
 
-            // 3. 幂等性检查
-            $lockKey = "order:settle:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复请求
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+            // 3. Lua 原子重新结算
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'amount' => $winMoney,
+                'diff' => $winMoney,  // MT的win_money就是输赢金额
+                'transaction_type' => TransactionType::SETTLE_ADJUST,  // 重新结算标记为调整
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric'],
+                'diff' => ['required', 'numeric'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicSettle');
+
+            $result = RedisLuaScripts::atomicSettle($player->id, 'MT', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('settle', 'MT', $player->id, $luaParams);
+
+            // 4. 处理结果
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                Log::channel('mt_server')->info('MT重新结算重复请求（Lua检测）', ['bet_sn' => $orderNo]);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                     'bet_sn' => $orderNo,
-                    'balance' => (float)$balance
+                    'balance' => (float)$result['balance']
                 ]);
             }
 
-            try {
-                // 4. 获取当前余额
-                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                $winMoney = $data['win_money'] ?? 0;
-                $status = $data['status'] ?? null;
-
-                // 5. 写入重新结算记录
-                \app\service\GameRecordCacheService::saveSettle('MT', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $winMoney,
-                    'diff' => $winMoney,  // MT的win_money就是输赢金额
-                    'settle_type' => 'adjust',  // 重新结算标记为调整
-                    'original_data' => $data,
-                ]);
-
-                // 6. 更新余额缓存（只在有派彩时）
-                $newBalance = $currentBalance;
-                if ($status !== self::BET_STATUS_NOT && $winMoney > 0) {
-                    $newBalance = bcadd($currentBalance, $winMoney, 2);
-                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                }
-
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
-            }
-
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('mt_server')->info('MT重新结算成功（Redis缓存）', [
-                'bet_sn' => $orderNo,
-                'elapsed_ms' => round($elapsed, 2),
-            ]);
+            Log::channel('mt_server')->info('MT重新结算成功（Lua原子）', ['bet_sn' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'bet_sn' => $orderNo,
-                'balance' => (float)$newBalance
+                'balance' => (float)$result['balance']
             ]);
 
         } catch (Exception $e) {
@@ -452,20 +412,18 @@ class MtGameController
     }
 
     /**
-     * 送礼/打赏（Redis 缓存版）
+     * 送礼/打赏（Lua原子操作）
      * @param Request $request
      * @return Response
      */
     public function gift(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['msg']);
-            Log::channel('mt_server')->info('MT打赏请求（Redis缓存）', ['params' => $data]);
+            Log::channel('mt_server')->info('MT打赏请求（Lua原子）', ['params' => $data]);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -480,57 +438,49 @@ class MtGameController
             $orderNo = $data['tip_sn'];  // MT使用tip_sn
             $giftAmount = $data['money'] ?? 0;
 
-            // 3. 幂等性检查
-            $lockKey = "order:bet:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复请求
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'balance' => (float)$balance
-                ]);
-            }
+            // 3. Lua 原子打赏（打赏是扣款操作，使用bet）
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'amount' => $giftAmount,
+                'game_code' => $data['game_code'] ?? 'gift',
+                'game_type' => 'gift',
+                'game_name' => '打赏',
+                'transaction_type' => TransactionType::BET_GIFT,  // 标记为gift类型
+                'original_data' => $data,
+            ];
 
-            try {
-                // 4. 获取当前余额
-                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'game_code' => ['string'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicBet');
 
-                // 5. 余额预检查
-                if ($currentBalance < $giftAmount) {
-                    \support\Redis::del($lockKey);
+            $result = RedisLuaScripts::atomicBet($player->id, 'MT', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('bet', 'MT', $player->id, $luaParams);
+
+            // 4. 处理结果
+            if ($result['ok'] === 0) {
+                if ($result['error'] === 'duplicate_order') {
+                    Log::channel('mt_server')->info('MT打赏重复请求（Lua检测）', ['tip_sn' => $orderNo]);
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$result['balance']]);
+                } elseif ($result['error'] === 'insufficient_balance') {
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
                 }
-
-                // 6. 写入打赏记录（打赏是扣款操作）
-                \app\service\GameRecordCacheService::saveBet('MT', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $giftAmount,
-                    'game_code' => $data['game_code'] ?? 'gift',
-                    'game_type' => 'gift',
-                    'game_name' => '打赏',
-                    'bet_type' => 'gift',  // 标记为gift类型
-                    'original_data' => $data,
-                ]);
-
-                // 7. 更新余额缓存（扣款）
-                $newBalance = bcsub($currentBalance, $giftAmount, 2);
-                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
             }
 
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('mt_server')->info('MT打赏成功（Redis缓存）', [
+            Log::channel('mt_server')->info('MT打赏成功（Lua原子）', [
                 'tip_sn' => $orderNo,
                 'amount' => $giftAmount,
-                'elapsed_ms' => round($elapsed, 2),
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'balance' => (float)$newBalance
+                'balance' => (float)$result['balance']
             ]);
 
         } catch (Exception $e) {

@@ -66,7 +66,9 @@ class PlayerPlatformCash extends Model
                 return;
             }
 
-            // ✅ 同步更新 Redis 缓存（先于 try 块，确保缓存同步失败会被捕获）
+            // ✅ 同步更新 Redis 缓存（统一使用 wallet:balance:{player_id}）
+            // 说明：现在三个项目（gk_work/gk_api/gk_admin）都使用统一的缓存键
+            // 与 Lua 原子脚本保持一致，确保缓存同步
             $cacheUpdated = false;
             try {
                 $cacheUpdated = \app\service\WalletService::updateCache(

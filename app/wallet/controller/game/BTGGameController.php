@@ -2,12 +2,14 @@
 
 namespace app\wallet\controller\game;
 
+use app\Constants\TransactionType;
 use app\model\Player;
 use app\model\PlayGameRecord;
 use app\service\game\BTGServiceInterface;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\RedisLuaScripts;
 use Exception;
 use support\Log;
 use support\Request;
@@ -110,7 +112,7 @@ class BTGGameController
     }
 
     /**
-     * 转账 - transfer
+     * 转账（Lua原子操作）- transfer
      * 处理所有类型的金额变动：下注、结算、退款、调整、奖励
      * @param Request $request
      * @return Response
@@ -118,11 +120,9 @@ class BTGGameController
      */
     public function transfer(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
-            $this->logger->info('BTG转账请求', ['params' => $params]);
+            $this->logger->info('BTG转账请求（Lua原子）', ['params' => $params]);
 
             $systemCurrency = config('app.currency', 'TWD');
 
@@ -174,6 +174,8 @@ class BTGGameController
             }
 
             // 解析 betform_details（如果存在）
+            // 注意：虽然 Lua 脚本不需要单独的 $betformDetails 参数，
+            // 但仍需验证 JSON 格式，确保数据合法性
             $betformDetails = [];
             if (isset($params['betform_details'])) {
                 $betformDetails = $this->parseJsonParam($params['betform_details'], 'betform_details', 'BTG转账');
@@ -182,165 +184,232 @@ class BTGGameController
                 }
             }
 
-            // ========== Redis 缓存处理 ==========
+            // ========== Lua 原子操作处理 ==========
             $amount = abs((float)$params['amount']);
             $orderId = $transDetails['order_id'] ?? '';
-            $roundId = $transDetails['round_id'] ?? '';
             $transferType = $params['transfer_type'];
 
-            // 幂等性检查（使用 tran_id）
-            $lockKey = "order:btg:lock:{$params['tran_id']}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复请求
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                return $this->success([
-                    'balance' => number_format($balance, 2, '.', ''),
-                    'currency' => $systemCurrency,
-                    'tran_id' => $params['tran_id'],
-                ]);
-            }
+            $result = null;
 
-            try {
-                // 获取当前余额
-                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                $newBalance = $currentBalance;
+            // 根据 transfer_type 执行 Lua 原子操作
+            switch ($transferType) {
+                case 'start':
+                    // 下注（扣款）
+                    $luaParams = [
+                        'order_no' => $orderId,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $amount,
+                        'game_code' => $params['game_code'] ?? '',
+                        'transaction_type' => TransactionType::BET,
+                        'original_data' => $params,
+                    ];
 
-                // 根据 transfer_type 处理
-                switch ($transferType) {
-                    case 'start':
-                        // 余额预检查
-                        if ($currentBalance < $amount) {
-                            \support\Redis::del($lockKey);
+                    // 参数验证
+                    validateLuaScriptParams($luaParams, [
+                        'order_no' => ['required', 'string'],
+                        'amount' => ['required', 'numeric', 'min:0'],
+                        'platform_id' => ['required', 'integer'],
+                        'game_code' => ['string'],
+                        'transaction_type' => ['required', 'string'],
+                    ], 'atomicBet');
+
+                    $result = RedisLuaScripts::atomicBet($player->id, 'BTG', $luaParams);
+
+                    // 审计日志
+                    logLuaScriptCall('bet', 'BTG', $player->id, $luaParams);
+
+                    if ($result['ok'] === 0) {
+                        if ($result['error'] === 'duplicate_order') {
+                            $this->logger->info('BTG下注重复请求（Lua检测）', ['order_no' => $orderId]);
+                            return $this->success([
+                                'balance' => number_format($result['balance'], 2, '.', ''),
+                                'currency' => $systemCurrency,
+                                'tran_id' => $params['tran_id'],
+                            ]);
+                        } elseif ($result['error'] === 'insufficient_balance') {
                             return $this->error(BTGServiceInterface::ERROR_CODE_INSUFFICIENT_BALANCE);
                         }
-                        // 写 Redis 缓存
-                        \app\service\GameRecordCacheService::saveBet('BTG', [
-                            'order_no' => $orderId,
-                            'player_id' => $player->id,
-                            'platform_id' => $this->service->platform->id,
-                            'amount' => $amount,
-                            'game_code' => $params['game_code'] ?? '',
-                            'game_type' => $params['game_type'] ?? '',
-                            'bet_type' => 'bet',
-                            'original_data' => $params,
-                        ]);
+                    }
+                    break;
 
-                        $newBalance = ($amount > 0) ? bcsub($currentBalance, $amount, 2) : $currentBalance;
-                        $newBalance = max(0, $newBalance);
-                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                        break;
-                    case 'end':
-                        // 结算派彩
-                        \app\service\GameRecordCacheService::saveSettle('BTG', [
-                            'order_no' => $orderId,
-                            'player_id' => $player->id,
-                            'platform_id' => $this->service->platform->id,
-                            'amount' => $amount,
-                            'diff' => $amount,
-                            'settle_type' => 'settle',
-                            'original_data' => $params,
-                        ]);
+                case 'end':
+                    // 结算派彩
+                    $luaParams = [
+                        'order_no' => $orderId,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $amount,
+                        'diff' => $amount,
+                        'game_code' => $params['game_code'] ?? '',  // ✅ 添加 game_code
+                        'transaction_type' => TransactionType::SETTLE,
+                        'original_data' => $params,
+                    ];
 
-                        if ($amount > 0) {
-                            $newBalance = bcadd($currentBalance, $amount, 2);
-                            \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                    // 参数验证
+                    validateLuaScriptParams($luaParams, [
+                        'order_no' => ['required', 'string'],
+                        'amount' => ['required', 'numeric', 'min:0'],
+                        'diff' => ['required', 'numeric'],
+                        'platform_id' => ['required', 'integer'],
+                        'game_code' => ['string'],
+                        'transaction_type' => ['required', 'string'],
+                    ], 'atomicSettle');
+
+                    $result = RedisLuaScripts::atomicSettle($player->id, 'BTG', $luaParams);
+
+                    // 审计日志
+                    logLuaScriptCall('settle', 'BTG', $player->id, $luaParams);
+
+                    if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                        $this->logger->info('BTG结算重复请求（Lua检测）', ['order_no' => $orderId]);
+                    }
+                    break;
+
+                case 'refund':
+                    // 退款（取消下注）
+                    $luaParams = [
+                        'order_no' => $orderId,
+                        'platform_id' => $this->service->platform->id,
+                        'refund_amount' => $amount,  // ✅ 修复：使用 refund_amount
+                        'transaction_type' => TransactionType::CANCEL_REFUND,
+                        'original_data' => $params,
+                    ];
+
+                    // 参数验证
+                    validateLuaScriptParams($luaParams, [
+                        'order_no' => ['required', 'string'],
+                        'refund_amount' => ['required', 'numeric', 'min:0'],
+                        'platform_id' => ['required', 'integer'],
+                        'transaction_type' => ['required', 'string'],
+                    ], 'atomicCancel');
+
+                    $result = RedisLuaScripts::atomicCancel($player->id, 'BTG', $luaParams);
+
+                    // 审计日志
+                    logLuaScriptCall('cancel', 'BTG', $player->id, $luaParams);
+
+                    if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                        $this->logger->info('BTG退款重复请求（Lua检测）', ['order_no' => $orderId]);
+                    }
+                    break;
+
+                case 'adjust':
+                    // 调整金额（可正可负）
+                    $adjustAmount = (float)$params['amount'];
+
+                    if ($adjustAmount > 0) {
+                        // 正数：加款（结算）
+                        $luaParams = [
+                            'order_no' => $orderId,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $adjustAmount,
+                            'diff' => $adjustAmount,
+                            'game_code' => $params['game_code'] ?? '',  // ✅ 添加 game_code
+                            'transaction_type' => TransactionType::SETTLE_ADJUST,
+                            'original_data' => $params,
+                        ];
+
+                        // 参数验证
+                        validateLuaScriptParams($luaParams, [
+                            'order_no' => ['required', 'string'],
+                            'amount' => ['required', 'numeric', 'min:0'],
+                            'diff' => ['required', 'numeric'],
+                            'platform_id' => ['required', 'integer'],
+                            'game_code' => ['string'],
+                            'transaction_type' => ['required', 'string'],
+                        ], 'atomicSettle');
+
+                        $result = RedisLuaScripts::atomicSettle($player->id, 'BTG', $luaParams);
+
+                        // 审计日志
+                        logLuaScriptCall('settle', 'BTG', $player->id, $luaParams);
+
+                        if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                            $this->logger->info('BTG调整（加款）重复请求（Lua检测）', ['order_no' => $orderId]);
                         }
-                        break;
-
-                    case 'refund':
-                        // 退款
-                        \app\service\GameRecordCacheService::saveSettle('BTG', [
+                    } else {
+                        // 负数：扣款（下注）
+                        $deductAmount = abs($adjustAmount);
+                        $luaParams = [
                             'order_no' => $orderId,
-                            'player_id' => $player->id,
                             'platform_id' => $this->service->platform->id,
-                            'amount' => $amount,
-                            'diff' => $amount,
-                            'settle_type' => 'refund',
+                            'amount' => $deductAmount,
+                            'game_code' => $params['game_code'] ?? '',
+                            'transaction_type' => TransactionType::BET_ADJUST,
                             'original_data' => $params,
-                        ]);
+                        ];
 
-                        $newBalance = bcadd($currentBalance, $amount, 2);
-                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                        break;
+                        // 参数验证
+                        validateLuaScriptParams($luaParams, [
+                            'order_no' => ['required', 'string'],
+                            'amount' => ['required', 'numeric', 'min:0'],
+                            'platform_id' => ['required', 'integer'],
+                            'game_code' => ['string'],
+                            'transaction_type' => ['required', 'string'],
+                        ], 'atomicBet');
 
-                    case 'adjust':
-                        // 调整金额（可正可负）
-                        $adjustAmount = (float)$params['amount'];
+                        $result = RedisLuaScripts::atomicBet($player->id, 'BTG', $luaParams);
 
-                        if ($adjustAmount > 0) {
-                            // 正数：加款
-                            \app\service\GameRecordCacheService::saveSettle('BTG', [
-                                'order_no' => $orderId,
-                                'player_id' => $player->id,
-                                'platform_id' => $this->service->platform->id,
-                                'amount' => $adjustAmount,
-                                'diff' => $adjustAmount,
-                                'settle_type' => 'adjust',
-                                'original_data' => $params,
-                            ]);
+                        // 审计日志
+                        logLuaScriptCall('bet', 'BTG', $player->id, $luaParams);
 
-                            $newBalance = bcadd($currentBalance, $adjustAmount, 2);
-                            \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-                        } else {
-                            // 负数：扣款
-                            $deductAmount = abs($adjustAmount);
-
-                            if ($currentBalance < $deductAmount) {
-                                \support\Redis::del($lockKey);
+                        if ($result['ok'] === 0) {
+                            if ($result['error'] === 'duplicate_order') {
+                                $this->logger->info('BTG调整（扣款）重复请求（Lua检测）', ['order_no' => $orderId]);
+                                return $this->success([
+                                    'balance' => number_format($result['balance'], 2, '.', ''),
+                                    'currency' => $systemCurrency,
+                                    'tran_id' => $params['tran_id'],
+                                ]);
+                            } elseif ($result['error'] === 'insufficient_balance') {
                                 return $this->error(BTGServiceInterface::ERROR_CODE_INSUFFICIENT_BALANCE);
                             }
-
-                            \app\service\GameRecordCacheService::saveBet('BTG', [
-                                'order_no' => $orderId,
-                                'player_id' => $player->id,
-                                'platform_id' => $this->service->platform->id,
-                                'amount' => $deductAmount,
-                                'game_code' => $params['game_code'] ?? '',
-                                'game_type' => $params['game_type'] ?? '',
-                                'bet_type' => 'adjust',
-                                'original_data' => $params,
-                            ]);
-
-                            $newBalance = bcsub($currentBalance, $deductAmount, 2);
-                            \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
                         }
-                        break;
+                    }
+                    break;
 
-                    case 'reward':
-                        // 额外奖金（无下注）
-                        \app\service\GameRecordCacheService::saveSettle('BTG', [
-                            'order_no' => $orderId,
-                            'player_id' => $player->id,
-                            'platform_id' => $this->service->platform->id,
-                            'amount' => $amount,
-                            'diff' => $amount,
-                            'settle_type' => 'reward',
-                            'original_data' => $params,
-                        ]);
+                case 'reward':
+                    // 额外奖金（无下注）
+                    $luaParams = [
+                        'order_no' => $orderId,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $amount,
+                        'diff' => $amount,
+                        'game_code' => $params['game_code'] ?? '',  // ✅ 添加 game_code
+                        'transaction_type' => TransactionType::SETTLE_REWARD,
+                        'original_data' => $params,
+                    ];
 
-                        $newBalance = bcadd($currentBalance, $amount, 2);
-                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                        break;
-                }
+                    // 参数验证
+                    validateLuaScriptParams($luaParams, [
+                        'order_no' => ['required', 'string'],
+                        'amount' => ['required', 'numeric', 'min:0'],
+                        'diff' => ['required', 'numeric'],
+                        'platform_id' => ['required', 'integer'],
+                        'game_code' => ['string'],
+                        'transaction_type' => ['required', 'string'],
+                    ], 'atomicSettle');
 
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
+                    $result = RedisLuaScripts::atomicSettle($player->id, 'BTG', $luaParams);
+
+                    // 审计日志
+                    logLuaScriptCall('settle', 'BTG', $player->id, $luaParams);
+
+                    if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                        $this->logger->info('BTG奖金重复请求（Lua检测）', ['order_no' => $orderId]);
+                    }
+                    break;
             }
 
-            $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-            $this->logger->info('BTG转账成功（Redis缓存）', [
+            $this->logger->info('BTG转账成功（Lua原子）', [
                 'transfer_type' => $transferType,
                 'username' => $params['username'],
                 'amount' => $params['amount'],
-                'balance' => $newBalance,
+                'balance' => $result['balance'],
                 'tran_id' => $params['tran_id'],
-                'response_time_ms' => $responseTime,
             ]);
 
             return $this->success([
-                'balance' => number_format($newBalance, 2, '.', ''),
+                'balance' => number_format($result['balance'], 2, '.', ''),
                 'currency' => $systemCurrency,
                 'tran_id' => $params['tran_id'],
             ]);
@@ -451,27 +520,61 @@ class BTGGameController
      * @param string $tranId 交易ID
      * @return Response|null 如果是重复请求返回错误响应，否则返回null
      */
+    /**
+     * 检查幂等性（使用 Redis，避免数据库查询）
+     *
+     * @param string $tranId BTG 事务ID
+     * @return Response|null 重复返回错误响应，否则返回 null
+     */
     private function checkIdempotency(string $tranId): ?Response
     {
-        $existingRecord = PlayGameRecord::query()
-            ->where('platform_id', $this->service->platform->id)
-            ->where(function ($query) use ($tranId) {
-                $query->where("original_data->tran_id", $tranId)
-                      ->orWhere("action_data->tran_id", $tranId);
-            })
-            ->first();
+        // 使用 Redis 检查订单锁（与 Lua 原子脚本保持一致）
+        $lockKey = "btg:order:lock:{$tranId}";
 
-        if (!$existingRecord) {
+        try {
+            // 检查 Redis 中是否已存在此订单锁
+            $exists = \support\Redis::exists($lockKey);
+
+            if ($exists) {
+                // 重复的 tran_id，返回 5107
+                $this->logger->warning('BTG请求失败：重复的tran_id（Redis检测）', [
+                    'tran_id' => $tranId,
+                    'lock_key' => $lockKey,
+                ]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_DUPLICATE_TRAN_ID);
+            }
+
+            // 设置订单锁（5分钟过期）
+            \support\Redis::setex($lockKey, 300, 1);
+
+            return null; // 不重复
+
+        } catch (\Throwable $e) {
+            // Redis 异常时降级到数据库查询（兜底方案）
+            $this->logger->warning('BTG幂等性检查：Redis异常，降级到数据库', [
+                'tran_id' => $tranId,
+                'error' => $e->getMessage(),
+            ]);
+
+            $existingRecord = PlayGameRecord::query()
+                ->where('platform_id', $this->service->platform->id)
+                ->where(function ($query) use ($tranId) {
+                    $query->where("original_data->tran_id", $tranId)
+                        ->orWhere("action_data->tran_id", $tranId);
+                })
+                ->first();
+
+            if ($existingRecord) {
+                $this->logger->error('BTG请求失败：重复的tran_id（数据库检测）', [
+                    'tran_id' => $tranId,
+                    'existing_record_id' => $existingRecord->id,
+                    'settlement_status' => $existingRecord->settlement_status
+                ]);
+                return $this->error(BTGServiceInterface::ERROR_CODE_DUPLICATE_TRAN_ID);
+            }
+
             return null;
         }
-
-        // 重复的 tran_id，不管订单状态如何，都返回 5107
-        $this->logger->error('BTG请求失败：重复的tran_id', [
-            'tran_id' => $tranId,
-            'existing_record_id' => $existingRecord->id,
-            'settlement_status' => $existingRecord->settlement_status
-        ]);
-        return $this->error(BTGServiceInterface::ERROR_CODE_DUPLICATE_TRAN_ID);
     }
 
     /**

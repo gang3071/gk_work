@@ -105,9 +105,15 @@ class Player extends Model
 
     protected $table = 'player';
 
+    /**
+     * 实体机钱包关系（platform_id = 1）
+     *
+     * @return HasOne
+     */
     public function machine_wallet(): HasOne
     {
-        return $this->hasOne(PlayerPlatformCash::class);
+        return $this->hasOne(PlayerPlatformCash::class)
+            ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF);
     }
 
     /**

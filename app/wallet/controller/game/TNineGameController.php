@@ -2,12 +2,14 @@
 
 namespace app\wallet\controller\game;
 
+use app\Constants\TransactionType;
 use app\model\Player;
 use app\model\PlayGameRecord;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\game\TNineServiceInterface;
+use app\service\RedisLuaScripts;
 use Exception;
 use support\Log;
 use support\Request;
@@ -126,7 +128,7 @@ class TNineGameController
     }
 
     /**
-     * 下注
+     * 下注（Lua 原子操作版本 - 支持批量订单）
      * @param Request $request
      * @return Response
      * @throws Exception
@@ -136,7 +138,7 @@ class TNineGameController
         try {
             $params = $request->post();
 
-            $this->logger->info('t9下注记录', ['params' => $params]);
+            $this->logger->info('t9下注请求（Lua原子）', ['params' => $params]);
 
             $this->service->verifySign($params);
 
@@ -144,11 +146,71 @@ class TNineGameController
                 return $this->error($this->service->error);
             }
 
-            $return = $this->service->bet($params);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            /** @var Player $player */
+            $player = Player::query()->where('uuid', $params['MemberAccount'])->first();
+            if (!$player) {
+                return $this->error(self::API_CODE_ERROR);
             }
-            // 3. 使用常量获取状态码描述
+
+            $orders = $params['OrderList'] ?? [];
+            $return = ['OrderList' => []];
+            $finalBalance = 0;
+
+            // 批量处理每个订单（每个订单一次 Lua 原子操作）
+            foreach ($orders as $order) {
+                $orderNo = $order['OrderNumber'];
+                $bet = $order['BetAmount'];
+
+                // Lua 原子下注
+                $luaParams = [
+                    'order_no' => $orderNo,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $bet,
+                    'game_code' => $params['GameType'] ?? '',
+                    'transaction_type' => TransactionType::BET,
+                    'original_data' => $order,
+                ];
+
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'amount' => ['required', 'numeric', 'min:0'],
+                    'platform_id' => ['required', 'integer'],
+                    'game_code' => ['string'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicBet');
+
+                $result = RedisLuaScripts::atomicBet($player->id, 'TNINE', $luaParams);
+
+                // 审计日志
+                logLuaScriptCall('bet', 'TNINE', $player->id, $luaParams);
+
+                if ($result['ok'] === 0) {
+                    if ($result['error'] === 'duplicate_order') {
+                        $this->logger->info('TNine下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                        $return['OrderList'][] = [
+                            'OrderNumber' => $orderNo,
+                            'MerchantOrderNumber' => $orderNo,
+                        ];
+                        $finalBalance = $result['balance'];
+                        continue;
+                    } elseif ($result['error'] === 'insufficient_balance') {
+                        return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+                    }
+                }
+
+                $return['OrderList'][] = [
+                    'OrderNumber' => $orderNo,
+                    'MerchantOrderNumber' => $orderNo,
+                ];
+                $finalBalance = $result['balance'];
+            }
+
+            $this->logger->info('TNine下注成功（Lua原子）', ['count' => count($orders)]);
+
+            $return['Balance'] = (float)$finalBalance;
+            $return['SyncTime'] = date('Y-m-d H:i:s');
+
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
             Log::error('TNine bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -158,7 +220,7 @@ class TNineGameController
     }
 
     /**
-     * 結算
+     * 結算（Lua 原子操作版本）
      * @param Request $request
      * @return Response
      */
@@ -167,10 +229,57 @@ class TNineGameController
         try {
             $params = $request->post();
 
-            $this->logger->info('t9结算记录', ['params' => $params]);
+            $this->logger->info('t9结算请求（Lua原子）', ['params' => $params]);
 
             $this->service->verifySign($params);
-            $return = $this->service->betResulet($params);
+
+            /** @var Player $player */
+            $player = Player::query()->where('uuid', $params['MemberAccount'])->first();
+            if (!$player) {
+                return $this->error(self::API_CODE_ERROR);
+            }
+
+            $orderNo = $params['OrderNumber'];
+            $money = $params['GameAmount'] ?? 0;  // 派彩金额
+            $winAmount = $params['WinAmount'] ?? 0;  // 净输赢
+
+            // Lua 原子结算
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'amount' => max($money, 0),
+                'diff' => $winAmount,  // TNine 的 WinAmount 是净输赢
+                'transaction_type' => TransactionType::SETTLE,
+                'original_data' => $params,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric'],
+                'diff' => ['required', 'numeric'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicSettle');
+
+            $result = RedisLuaScripts::atomicSettle($player->id, 'TNINE', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('settle', 'TNINE', $player->id, $luaParams);
+
+            // 处理返回结果
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
+                $this->logger->info('TNine重复结算（Lua检测）', ['order_no' => $orderNo]);
+            }
+
+            $this->logger->info('TNine结算成功（Lua原子）', ['order_no' => $orderNo]);
+
+            $return = [
+                'MerchantOrderNumber' => $orderNo,
+                'SyncTime' => date('Y-m-d H:i:s'),
+                'Balance' => (float)$result['balance'],
+            ];
+
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
             Log::error('TNine betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);

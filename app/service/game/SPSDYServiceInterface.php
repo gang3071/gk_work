@@ -7,10 +7,6 @@ use app\model\Game;
 use app\model\GamePlatform;
 use app\model\Player;
 use app\model\PlayerGamePlatform;
-use app\model\PlayerPlatformCash;
-use app\model\PlayGameRecord;
-use app\traits\AsyncGameRecordTrait;
-use app\wallet\controller\game\SAGameController;
 use app\wallet\controller\game\SPSDYGameController;
 use Carbon\Carbon;
 use Exception;
@@ -19,7 +15,6 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
 
 class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
-    use AsyncGameRecordTrait;
     public $method = 'POST';
     public $successCode = 200;
     public $failCode = [
@@ -63,115 +58,12 @@ class SPSDYServiceInterface extends GameServiceFactory implements GameServiceInt
         return SPSDYGameController::API_CODE_INSUFFICIENT_BALANCE;
     }
 
-    public function bet($data)
-    {
-        $player = $this->player;
-        $bet = $data['Point'];
-        $orderNo = $data['TransferCode'];
-
-        $data['TicketData'] = json_decode($data['TicketData'], true);
-
-        // 检查设备是否爆机
-        if ($this->checkAndHandleMachineCrash()) {
-            return $this->player->machine_wallet->money;
-        }
-
-        // ✅ Redis预检查幂等性（在事务外，避免不必要的数据库锁）
-        $betKey = "spsdy:bet:lock:{$orderNo}";
-        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
-        if (!$isLocked) {
-            // 重复订单，直接返回当前余额
-            $this->error = SPSDYGameController::API_CODE_DECRYPT_ERROR;
-            return $this->player->machine_wallet->money;
-        }
-
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-        if ($machineWallet->money < $bet) {
-            $this->error = SPSDYGameController::API_CODE_INSUFFICIENT_BALANCE;
-            return $this->player->machine_wallet->money;
-        }
-
-        $beforeBalance = $machineWallet->money;
-
-        // 同步扣款
-        $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-
-        // ⚡ 异步创建下注记录（不阻塞API响应）
-        $this->asyncCreateBetRecord(
-            playerId: $player->id,
-            platformId: $this->platform->id,
-            gameCode: '',
-            orderNo: $orderNo,
-            bet: $bet,
-            originalData: $data,
-            orderTime: Carbon::createFromTimestampMs($data['Timestamp'])->toDateTimeString()
-        );
-
-        return [
-            'TransferCode' => $data['TransferCode'],
-            'User' => $data['User'],
-            'BeforeBalance' => $beforeBalance,
-            'Balance' => \app\service\WalletService::getBalance($player->id),
-        ];
-    }
 
     public function cancelBet($data)
     {
         // TODO: Implement cancelBet() method.
     }
 
-    public function betResulet($data)
-    {
-        /** @var PlayGameRecord $record */
-        // ✅ 加锁查询record，防止并发重复派彩
-        $record = PlayGameRecord::query()
-            ->where('order_no', $data['TransferCode'])
-            ->lockForUpdate()
-            ->first();
-
-        $player = $this->player;
-
-        if (!$record) {
-            $this->error = SPSDYGameController::API_CODE_DECRYPT_ERROR;
-            return $player->machine_wallet->money;
-        }
-
-        if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
-            $this->error = SAGameController::API_CODE_DECRYPT_ERROR;
-            return $player->machine_wallet->money;
-        }
-
-        // 锁钱包
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-
-        $money = $data['Point'];
-
-        $beforeGameAmount = $machineWallet->money;
-        //有金额则为赢
-        if ($data['Point'] > 0) {
-            // 同步增加余额
-            $machineWallet->money = bcadd($machineWallet->money, $money, 2);
-            $machineWallet->save();
-        }
-
-        // ⚡ 异步更新结算记录（不阻塞API响应）
-        // 彩金记录会在Consumer中处理
-        $this->asyncUpdateSettleRecord(
-            orderNo: $record->order_no,
-            win: $money,
-            diff: $record->bet - $money
-        );
-
-        return [
-            'TransferCode' => $data['TransferCode'],
-            'User' => $data['User'],
-            'BeforeBalance' => $beforeGameAmount,
-            'Balance' => \app\service\WalletService::getBalance($player->id),
-        ];
-    }
 
     public function reBetResulet($data)
     {

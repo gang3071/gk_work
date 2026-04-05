@@ -2,10 +2,12 @@
 
 namespace app\wallet\controller\game;
 
+use app\Constants\TransactionType;
 use app\service\game\DGServiceInterface;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\RedisLuaScripts;
 use support\Log;
 use support\Request;
 use support\Response;
@@ -82,19 +84,17 @@ class DGGameController
     }
 
     /**
-     * 下注（Redis 缓存版）
+     * 下注（Lua原子操作）
      * @param Request $request
      * @param string $agentName
      * @return Response
      */
     public function bet(Request $request, string $agentName): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
-            Log::channel('dg_server')->info('DG下注请求（Redis缓存）', ['params' => $params, 'name' => $agentName]);
+            Log::channel('dg_server')->info('DG下注请求（Lua原子）', ['params' => $params, 'name' => $agentName]);
             $this->service->verifyToken($params, $agentName);
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -107,79 +107,83 @@ class DGGameController
             $amount = abs($params['member']['amount']);
             $detail = json_decode($params['detail'], true);
 
-            // 幂等性检查
-            $lockKey = "order:dg:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复请求
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'member' => [
-                        'username' => $params['member']['username'],
-                        'balance' => (float)$balance,
-                        'amount' => $params['member']['amount'],
-                    ]
-                ]);
-            }
+            // 获取操作前余额（DG 特性：返回操作前余额）
+            $beforeBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
-            try {
-                // 获取当前余额
-                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                $beforeBalance = $currentBalance; // DG 返回操作前余额
-                $newBalance = $currentBalance;
+            //转账类型(1:下注 2:派彩 3:补单 5:红包 6:小费)
+            if (in_array($type, [2, 5])) {
+                // type=2:派彩 type=5:红包 → Lua 原子结算
+                $luaParams = [
+                    'order_no' => $orderNo,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $amount,
+                    'diff' => $amount,
+                    'game_code' => $detail['gameId'] ?? '',
+                    'transaction_type' => $type == 5 ? TransactionType::SETTLE_REWARD : TransactionType::SETTLE,
+                    'original_data' => $params,
+                ];
 
-                //转账类型(1:下注 2:派彩 3:补单 5:红包 6:小费)
-                if (in_array($type, [2, 5])) {
-                    // type=2:派彩 type=5:红包 → 结算
-                    \app\service\GameRecordCacheService::saveSettle('DG', [
-                        'order_no' => $orderNo,
-                        'player_id' => $player->id,
-                        'platform_id' => $this->service->platform->id,
-                        'amount' => $amount,
-                        'diff' => $amount,
-                        'game_code' => $detail['gameId'] ?? '',
-                        'settle_type' => $type == 5 ? 'reward' : 'settle',
-                        'original_data' => $params,
-                    ]);
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'amount' => ['required', 'numeric'],
+                    'diff' => ['required', 'numeric'],
+                    'platform_id' => ['required', 'integer'],
+                    'game_code' => ['string'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicSettle');
 
-                    if ($amount > 0) {
-                        $newBalance = bcadd($currentBalance, $amount, 2);
-                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                    }
+                $result = RedisLuaScripts::atomicSettle($player->id, 'DG', $luaParams);
 
-                } else {
-                    // type=1:下注 type=3:补单 type=6:小费 → 下注
-                    if ($amount > 0) {
-                        // 余额预检查
-                        if ($currentBalance < $amount) {
-                            \support\Redis::del($lockKey);
-                            return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
-                        }
+                // 审计日志
+                logLuaScriptCall('settle', 'DG', $player->id, $luaParams);
 
-                        \app\service\GameRecordCacheService::saveBet('DG', [
-                            'order_no' => $orderNo,
-                            'player_id' => $player->id,
-                            'platform_id' => $this->service->platform->id,
-                            'amount' => $amount,
-                            'game_code' => $detail['gameId'] ?? '',
-                            'bet_type' => $type == 3 ? 'adjust' : 'bet',
-                            'original_data' => $params,
-                        ]);
-
-                        $newBalance = bcsub($currentBalance, $amount, 2);
-                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                    }
+                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                    Log::channel('dg_server')->info('DG结算重复请求（Lua检测）', ['order_no' => $orderNo, 'type' => $type]);
                 }
 
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
+            } else {
+                // type=1:下注 type=3:补单 type=6:小费 → Lua 原子下注
+                if ($amount > 0) {
+                    $luaParams = [
+                        'order_no' => $orderNo,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $amount,
+                        'game_code' => $detail['gameId'] ?? '',
+                        'transaction_type' => $type == 3 ? TransactionType::BET_ADJUST : TransactionType::BET,
+                        'original_data' => $params,
+                    ];
+
+                    // 参数验证
+                    validateLuaScriptParams($luaParams, [
+                        'order_no' => ['required', 'string'],
+                        'amount' => ['required', 'numeric', 'min:0'],
+                        'platform_id' => ['required', 'integer'],
+                        'game_code' => ['string'],
+                        'transaction_type' => ['required', 'string'],
+                    ], 'atomicBet');
+
+                    $result = RedisLuaScripts::atomicBet($player->id, 'DG', $luaParams);
+
+                    // 审计日志
+                    logLuaScriptCall('bet', 'DG', $player->id, $luaParams);
+
+                    if ($result['ok'] === 0) {
+                        if ($result['error'] === 'duplicate_order') {
+                            Log::channel('dg_server')->info('DG下注重复请求（Lua检测）', ['order_no' => $orderNo, 'type' => $type]);
+                        } elseif ($result['error'] === 'insufficient_balance') {
+                            return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+                        }
+                    }
+                } else {
+                    // amount = 0 的特殊情况，直接返回
+                    $result = ['ok' => 1];
+                }
             }
 
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('dg_server')->info('DG操作成功（Redis缓存）', [
+            Log::channel('dg_server')->info('DG操作成功（Lua原子）', [
                 'order_no' => $orderNo,
                 'type' => $type,
-                'elapsed_ms' => round($elapsed, 2),
             ]);
 
             $return = [
@@ -222,19 +226,17 @@ class DGGameController
     }
 
     /**
-     * 通知接口 (取消投注、补偿等) - Redis 缓存版
+     * 通知接口 (取消投注、补偿等) - Lua原子操作
      * @param Request $request
      * @param string $agentName
      * @return Response
      */
     public function inform(Request $request, string $agentName): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
-            Log::channel('dg_server')->info('dg通知记录（Redis缓存）', ['params' => $params, 'name' => $agentName]);
+            Log::channel('dg_server')->info('dg通知记录（Lua原子）', ['params' => $params, 'name' => $agentName]);
             $this->service->verifyToken($params, $agentName);
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -247,125 +249,86 @@ class DGGameController
             $amount = abs($params['member']['amount']);
             $detail = json_decode($params['detail'], true);
 
+            // 获取操作前余额（DG 特性：返回操作前余额）
+            $beforeBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+
             // 根据 type 分流处理
             if ($type == 4) {
-                // type=4: 取消投注
-                $lockKey = "order:cancel:lock:{$orderNo}";
-                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                    // 重复请求
-                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'member' => [
-                            'username' => $params['member']['username'],
-                            'balance' => (float)$balance,
-                            'amount' => $params['member']['amount'],
-                        ]
-                    ]);
-                }
-
-                try {
-                    // 获取当前余额
-                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                    $beforeBalance = $currentBalance;
-
-                    // 写入取消记录
-                    \app\service\GameRecordCacheService::saveCancel('DG', [
-                        'order_no' => $orderNo,
-                        'player_id' => $player->id,
-                        'platform_id' => $this->service->platform->id,
-                        'cancel_type' => 'cancel',  // type=4 取消投注
-                        'game_code' => $detail['gameId'] ?? '',
-                        'original_data' => $params,
-                    ]);
-
-                    // 更新余额缓存（退回下注金额）
-                    $newBalance = bcadd($currentBalance, $amount, 2);
-                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-                } catch (\Throwable $e) {
-                    \support\Redis::del($lockKey);
-                    throw $e;
-                }
-
-                $return = [
-                    'member' => [
-                        'username' => $params['member']['username'],
-                        'balance' => (float)$beforeBalance, // DG 返回操作前余额
-                        'amount' => $params['member']['amount'],
-                    ]
+                // type=4: 取消投注 → Lua 原子取消
+                $luaParams = [
+                    'order_no' => $orderNo,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $amount,
+                    'transaction_type' => TransactionType::CANCEL,  // type=4 取消投注
+                    'game_code' => $detail['gameId'] ?? '',
+                    'original_data' => $params,
                 ];
+
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'refund_amount' => ['required', 'numeric', 'min:0'],
+                    'platform_id' => ['required', 'integer'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicCancel');
+
+                $result = RedisLuaScripts::atomicCancel($player->id, 'DG', $luaParams);
+
+                // 审计日志
+                logLuaScriptCall('cancel', 'DG', $player->id, $luaParams);
+
+                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                    Log::channel('dg_server')->info('DG取消重复请求（Lua检测）', ['order_no' => $orderNo]);
+                }
 
             } elseif ($type == 7) {
-                // type=7: 补偿 → 派彩处理
-                $lockKey = "order:settle:lock:{$orderNo}";
-                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                    // 重复请求
-                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'member' => [
-                            'username' => $params['member']['username'],
-                            'balance' => (float)$balance,
-                            'amount' => $params['member']['amount'],
-                        ]
-                    ]);
-                }
-
-                try {
-                    // 获取当前余额
-                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                    $beforeBalance = $currentBalance;
-
-                    // 写入补偿记录
-                    \app\service\GameRecordCacheService::saveSettle('DG', [
-                        'order_no' => $orderNo,
-                        'player_id' => $player->id,
-                        'platform_id' => $this->service->platform->id,
-                        'amount' => $amount,
-                        'diff' => $amount,
-                        'settle_type' => 'reward',  // type=7 补偿标记为奖励
-                        'game_code' => $detail['gameId'] ?? '',
-                        'original_data' => $params,
-                    ]);
-
-                    // 更新余额缓存（加钱）
-                    if ($amount > 0) {
-                        $newBalance = bcadd($currentBalance, $amount, 2);
-                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                    }
-
-                } catch (\Throwable $e) {
-                    \support\Redis::del($lockKey);
-                    throw $e;
-                }
-
-                $return = [
-                    'member' => [
-                        'username' => $params['member']['username'],
-                        'balance' => (float)$beforeBalance, // DG 返回操作前余额
-                        'amount' => $params['member']['amount'],
-                    ]
+                // type=7: 补偿 → Lua 原子结算
+                $luaParams = [
+                    'order_no' => $orderNo,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $amount,
+                    'diff' => $amount,
+                    'transaction_type' => TransactionType::SETTLE_REWARD,  // type=7 补偿标记为奖励
+                    'game_code' => $detail['gameId'] ?? '',
+                    'original_data' => $params,
                 ];
+
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'amount' => ['required', 'numeric'],
+                    'diff' => ['required', 'numeric'],
+                    'platform_id' => ['required', 'integer'],
+                    'game_code' => ['string'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicSettle');
+
+                $result = RedisLuaScripts::atomicSettle($player->id, 'DG', $luaParams);
+
+                // 审计日志
+                logLuaScriptCall('settle', 'DG', $player->id, $luaParams);
+
+                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                    Log::channel('dg_server')->info('DG补偿重复请求（Lua检测）', ['order_no' => $orderNo]);
+                }
 
             } else {
-                // 未知类型，记录警告并返回当前余额
+                // 未知类型，记录警告
                 Log::channel('dg_server')->warning('DG inform未知类型', ['type' => $type, 'data' => $params]);
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-
-                $return = [
-                    'member' => [
-                        'username' => $params['member']['username'],
-                        'balance' => (float)$balance,
-                        'amount' => $params['member']['amount'],
-                    ]
-                ];
             }
 
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('dg_server')->info('DG通知成功（Redis缓存）', [
+            Log::channel('dg_server')->info('DG通知成功（Lua原子）', [
                 'order_no' => $orderNo,
                 'type' => $type,
-                'elapsed_ms' => round($elapsed, 2),
             ]);
+
+            $return = [
+                'member' => [
+                    'username' => $params['member']['username'],
+                    'balance' => (float)$beforeBalance, // DG 返回操作前余额
+                    'amount' => $params['member']['amount'],
+                ]
+            ];
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (\Exception $e) {

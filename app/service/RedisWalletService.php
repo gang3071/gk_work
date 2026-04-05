@@ -436,8 +436,18 @@ class RedisWalletService
                     'diff' => $redisBalance - $dbBalance,
                 ]);
 
-                // 以数据库为准，修正 Redis
-                self::setBalance($playerId, $platformId, $dbBalance);
+                // ✅ 以 Redis 为准，修正 MySQL（Redis 是实时数据源）
+                \app\model\PlayerPlatformCash::where('player_id', $playerId)
+                    ->where('platform_id', $platformId)
+                    ->update(['money' => $redisBalance]);
+
+                Log::info('RedisWallet: 已修正 MySQL 钱包', [
+                    'player_id' => $playerId,
+                    'platform_id' => $platformId,
+                    'old_balance' => $dbBalance,
+                    'new_balance' => $redisBalance,
+                ]);
+
                 $inconsistent++;
             }
 

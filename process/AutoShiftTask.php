@@ -14,7 +14,7 @@ class AutoShiftTask
     public function onWorkerStart()
     {
         // 每5分钟检查一次自动交班任务
-        new Crontab('*/5 * * * *', function () {
+        new Crontab('0 */5 * * * *', function () {
             $this->executeAutoShift();
         });
 

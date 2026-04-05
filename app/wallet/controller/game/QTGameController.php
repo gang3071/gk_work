@@ -2,12 +2,14 @@
 
 namespace app\wallet\controller\game;
 
+use app\Constants\TransactionType;
 use app\model\Player;
 use app\model\PlayerDeliveryRecord;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\QTServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\RedisLuaScripts;
 use Exception;
 use support\Log;
 use support\Request;
@@ -283,7 +285,7 @@ class QTGameController
     }
 
     /**
-     * 3. 交易接口 - Transactions (DEBIT/CREDIT)
+     * 3. 交易接口（Lua原子操作）- Transactions (DEBIT/CREDIT)
      * POST /transactions
      *
      * DEBIT可能的错误:
@@ -305,11 +307,9 @@ class QTGameController
      */
     public function transaction(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = json_decode($request->rawBody(), true);
-            $this->logger->info('QT交易请求', ['params' => $params]);
+            $this->logger->info('QT交易请求（Lua原子）', ['params' => $params]);
 
             $txnType = $params['txnType'] ?? '';
 
@@ -395,142 +395,123 @@ class QTGameController
 
             $this->service->player = $player;
 
-            // ========== Redis 缓存处理 ==========
+            // ========== Lua 原子操作处理 ==========
             $txnId = $params['txnId'];
             $amount = (float)$params['amount'];
-            $roundId = $params['roundId'] ?? '';
-            $betId = $params['betId'] ?? '';
             $gameId = $params['gameId'] ?? '';
             $bonusType = $params['bonusType'] ?? null;
 
+            $result = null;
+
             // 根据 txnType 处理不同操作
             if ($txnType === 'DEBIT') {
-                // 下注扣款 - 幂等性检查
-                $lockKey = "order:bet:lock:{$txnId}";
-                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                    // 重复订单
-                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                    $result = [
-                        'balance' => round($balance, 2),
-                        'referenceId' => $txnId
+                // 下注扣款（Lua 原子操作）
+                // 注意：奖金回合（bonusType 存在）不扣余额，只记录
+                if ($bonusType) {
+                    // 奖金回合：使用 atomicBet 但金额为 0，仅记录
+                    $luaParams = [
+                        'order_no' => $txnId,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => 0,  // 奖金回合不扣款
+                        'game_code' => $gameId,
+                        'transaction_type' => TransactionType::BET_BONUS,
+                        'original_data' => $params,
                     ];
 
-                    $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-                    $this->logger->info('QT交易成功（重复订单）', [
-                        'txnType' => $txnType,
-                        'txnId' => $txnId,
-                        'balance' => $balance,
-                        'response_time_ms' => $responseTime
-                    ]);
+                    // 参数验证
+                    validateLuaScriptParams($luaParams, [
+                        'order_no' => ['required', 'string'],
+                        'amount' => ['required', 'numeric', 'min:0'],
+                        'platform_id' => ['required', 'integer'],
+                        'game_code' => ['string'],
+                        'transaction_type' => ['required', 'string'],
+                    ], 'atomicBet');
 
-                    return new Response(201, ['Content-Type' => 'application/json'], json_encode($result));
-                }
+                    $result = RedisLuaScripts::atomicBet($player->id, 'QT', $luaParams);
 
-                try {
-                    // 获取当前余额
-                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-
-                    // 余额预检查（除非是奖金回合）
-                    if (!$bonusType && $currentBalance < $amount) {
-                        \support\Redis::del($lockKey);
-                        return $this->errorResponse(self::ERROR_INSUFFICIENT_FUNDS, 'Insufficient funds', 400);
-                    }
-
-                    // 写入下注记录
-                    \app\service\GameRecordCacheService::saveBet('QT', [
+                    // 审计日志
+                    logLuaScriptCall('bet', 'QT', $player->id, $luaParams);
+                } else {
+                    // 普通下注：扣款
+                    $luaParams = [
                         'order_no' => $txnId,
-                        'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
                         'amount' => $amount,
                         'game_code' => $gameId,
-                        'bet_type' => $bonusType ? 'bonus' : 'bet',
+                        'transaction_type' => TransactionType::BET,
                         'original_data' => $params,
-                    ]);
-
-                    // 更新余额缓存（奖金回合不扣款）
-                    if (!$bonusType) {
-                        $newBalance = bcsub($currentBalance, $amount, 2);
-                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                    } else {
-                        $newBalance = $currentBalance;
-                    }
-
-                } catch (\Throwable $e) {
-                    \support\Redis::del($lockKey);
-                    throw $e;
-                }
-
-                $result = [
-                    'balance' => round($newBalance, 2),
-                    'referenceId' => $txnId
-                ];
-
-            } elseif ($txnType === 'CREDIT') {
-                // 结算派彩 - 幂等性检查
-                $lockKey = "order:settle:lock:{$txnId}";
-                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                    // 重复结算
-                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                    $result = [
-                        'balance' => round($balance, 2),
-                        'referenceId' => $txnId
                     ];
 
-                    $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-                    $this->logger->info('QT交易成功（重复结算）', [
-                        'txnType' => $txnType,
-                        'txnId' => $txnId,
-                        'balance' => $balance,
-                        'response_time_ms' => $responseTime
-                    ]);
+                    // 参数验证
+                    validateLuaScriptParams($luaParams, [
+                        'order_no' => ['required', 'string'],
+                        'amount' => ['required', 'numeric', 'min:0'],
+                        'platform_id' => ['required', 'integer'],
+                        'game_code' => ['string'],
+                        'transaction_type' => ['required', 'string'],
+                    ], 'atomicBet');
 
-                    return new Response(201, ['Content-Type' => 'application/json'], json_encode($result));
+                    $result = RedisLuaScripts::atomicBet($player->id, 'QT', $luaParams);
+
+                    // 审计日志
+                    logLuaScriptCall('bet', 'QT', $player->id, $luaParams);
                 }
 
-                try {
-                    // 获取当前余额
-                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-
-                    // 写入结算记录
-                    \app\service\GameRecordCacheService::saveSettle('QT', [
-                        'order_no' => $txnId,
-                        'player_id' => $player->id,
-                        'platform_id' => $this->service->platform->id,
-                        'amount' => max($amount, 0),
-                        'diff' => $amount,
-                        'original_data' => $params,
-                    ]);
-
-                    // 更新余额缓存（加上派彩金额）
-                    $newBalance = $currentBalance;
-                    if ($amount > 0) {
-                        $newBalance = bcadd($currentBalance, $amount, 2);
-                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
+                if ($result['ok'] === 0) {
+                    if ($result['error'] === 'duplicate_order') {
+                        $this->logger->info('QT下注重复请求（Lua检测）', ['txnId' => $txnId]);
+                        return new Response(201, ['Content-Type' => 'application/json'], json_encode([
+                            'balance' => round($result['balance'], 2),
+                            'referenceId' => $txnId
+                        ]));
+                    } elseif ($result['error'] === 'insufficient_balance') {
+                        return $this->errorResponse(self::ERROR_INSUFFICIENT_FUNDS, 'Insufficient funds', 400);
                     }
-
-                } catch (\Throwable $e) {
-                    \support\Redis::del($lockKey);
-                    throw $e;
                 }
 
-                $result = [
-                    'balance' => round($newBalance, 2),
-                    'referenceId' => $txnId
+            } elseif ($txnType === 'CREDIT') {
+                // 结算派彩（Lua 原子操作）
+                $luaParams = [
+                    'order_no' => $txnId,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => max($amount, 0),  // 派彩金额不能为负
+                    'diff' => $amount,
+                    'transaction_type' => TransactionType::SETTLE,
+                    'original_data' => $params,
                 ];
+
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'amount' => ['required', 'numeric'],
+                    'diff' => ['required', 'numeric'],
+                    'platform_id' => ['required', 'integer'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicSettle');
+
+                $result = RedisLuaScripts::atomicSettle($player->id, 'QT', $luaParams);
+
+                // 审计日志
+                logLuaScriptCall('settle', 'QT', $player->id, $luaParams);
+
+                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                    $this->logger->info('QT结算重复请求（Lua检测）', ['txnId' => $txnId]);
+                }
 
             } else {
                 throw new Exception("Invalid transaction type: {$txnType}");
             }
 
-            $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-            $this->logger->info('QT交易成功（Redis缓存）', [
+            $this->logger->info('QT交易成功（Lua原子）', [
                 'txnType' => $txnType,
                 'txnId' => $txnId,
                 'balance' => $result['balance'],
-                'response_time_ms' => $responseTime
             ]);
 
-            return new Response(201, ['Content-Type' => 'application/json'], json_encode($result));
+            return new Response(201, ['Content-Type' => 'application/json'], json_encode([
+                'balance' => round($result['balance'], 2),
+                'referenceId' => $txnId
+            ]));
         } catch (Exception $e) {
             $this->logger->error('QT交易异常', [
                 'error' => $e->getMessage(),
@@ -758,7 +739,7 @@ class QTGameController
     }
 
     /**
-     * 6. 回滚交易 - Rollback
+     * 6. 回滚交易（Lua原子操作）- Rollback
      * POST /transactions/rollback
      *
      * 可能的错误:
@@ -771,11 +752,9 @@ class QTGameController
      */
     public function rollback(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = json_decode($request->rawBody(), true);
-            $this->logger->info('QT回滚请求', ['params' => $params]);
+            $this->logger->info('QT回滚请求（Lua原子）', ['params' => $params]);
 
             // 验证Pass-Key
             $passKey = $request->header('Pass-Key');
@@ -816,70 +795,46 @@ class QTGameController
 
             $this->service->player = $player;
 
-            // ========== Redis 缓存处理 ==========
-            $betId = $params['betId'];
+            // ========== Lua 原子操作处理 ==========
             $txnId = $params['txnId'];
             $amount = (float)$params['amount'];
-            $roundId = $params['roundId'] ?? '';
-            $gameId = $params['gameId'] ?? '';
 
-            // 回滚 - 幂等性检查
-            $lockKey = "order:cancel:lock:{$txnId}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复回滚
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                $result = [
-                    'balance' => round($balance, 2),
-                    'referenceId' => $txnId
-                ];
-
-                $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-                $this->logger->info('QT回滚成功（重复订单）', [
-                    'betId' => $betId,
-                    'txnId' => $txnId,
-                    'balance' => $balance,
-                    'response_time_ms' => $responseTime
-                ]);
-
-                return new Response(200, ['Content-Type' => 'application/json'], json_encode($result));
-            }
-
-            try {
-                // 获取当前余额
-                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-
-                // 写入回滚记录
-                \app\service\GameRecordCacheService::saveCancel('QT', [
-                    'order_no' => $txnId,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'cancel_type' => 'rollback',
-                    'original_data' => $params,
-                ]);
-
-                // 更新余额缓存（回滚退款）
-                $newBalance = bcadd($currentBalance, $amount, 2);
-                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
-            }
-
-            $result = [
-                'balance' => round($newBalance, 2),
-                'referenceId' => $txnId
+            // 回滚（Lua 原子操作）
+            $luaParams = [
+                'order_no' => $txnId,
+                'platform_id' => $this->service->platform->id,
+                'refund_amount' => $amount,
+                'transaction_type' => TransactionType::CANCEL_ROLLBACK,
+                'original_data' => $params,
             ];
 
-            $responseTime = round((microtime(true) - $startTime) * 1000, 2);
-            $this->logger->info('QT回滚成功（Redis缓存）', [
-                'betId' => $betId,
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'refund_amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicCancel');
+
+            $result = RedisLuaScripts::atomicCancel($player->id, 'QT', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('cancel', 'QT', $player->id, $luaParams);
+
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                $this->logger->info('QT回滚重复请求（Lua检测）', ['txnId' => $txnId]);
+            }
+
+            $this->logger->info('QT回滚成功（Lua原子）', [
+                'betId' => $params['betId'],
                 'txnId' => $txnId,
-                'balance' => $newBalance,
-                'response_time_ms' => $responseTime
+                'balance' => $result['balance'],
             ]);
 
-            return new Response(200, ['Content-Type' => 'application/json'], json_encode($result));
+            return new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'balance' => round($result['balance'], 2),
+                'referenceId' => $txnId
+            ]));
         } catch (Exception $e) {
             $this->logger->error('QT回滚异常', [
                 'error' => $e->getMessage(),

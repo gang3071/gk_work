@@ -9,21 +9,14 @@ use app\model\GamePlatform;
 use app\model\GameType;
 use app\model\Player;
 use app\model\PlayerGamePlatform;
-use app\model\PlayerPlatformCash;
-use app\model\PlayGameRecord;
-use app\traits\AsyncGameRecordTrait;
 use app\wallet\controller\game\KTGameController;
-use app\wallet\controller\game\SAGameController;
 use app\wallet\controller\game\TNineGameController;
-use Carbon\Carbon;
 use Exception;
 use support\Log;
-use Webman\RedisQueue\Client;
 use WebmanTech\LaravelHttpClient\Facades\Http;
 
 class KTServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
-    use AsyncGameRecordTrait;
     public string $method = 'POST';
     public string $successCode = '0';
     private mixed $apiDomain;
@@ -260,180 +253,12 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
-     * 下注
-     * @param $data
-     * @return mixed
-     */
-    /**
      * 获取爆机时的余额不足错误码
      * @return mixed
      */
     protected function getInsufficientBalanceError(): mixed
     {
         return KTGameController::API_CODE_AMOUNT_OVER_BALANCE;
-    }
-
-    public function bet($data): mixed
-    {
-
-        /** @var Player $player */
-        $player = $this->player;
-
-        // 检查设备是否爆机
-        if ($this->checkAndHandleMachineCrash()) {
-            return \app\service\WalletService::getBalance($player->id);
-        }
-
-        $bet = $data['Bet'];
-        $orderNo = $data['MainTxID'];
-
-        // ✅ Redis预检查幂等性（在事务外，避免不必要的数据库锁）
-        // 注意：KT平台的奖金游戏会累计多次下注到同一订单，使用TxID作为幂等性检查
-        $betKey = "kt:bet:lock:{$data['TxID']}";
-        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
-        if (!$isLocked) {
-            // 重复订单，直接返回当前余额
-            $this->error = KTGameController::API_CODE_OTHER_ERROR;
-            return \app\service\WalletService::getBalance($player->id);
-        }
-
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-
-        if ($machineWallet->money < $bet) {
-            $this->error = KTGameController::API_CODE_AMOUNT_OVER_BALANCE;
-            return \app\service\WalletService::getBalance($player->id);
-        }
-
-        // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
-        $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-
-        // ⚡ 异步创建/更新下注记录（累计下注场景）
-        // KT奖金游戏会把多次下注整合到一笔订单中，需要在Consumer中合并处理
-        $this->asyncCreateBetRecord(
-            playerId: $player->id,
-            platformId: $this->platform->id,
-            gameCode: $data['GameID'],
-            orderNo: $orderNo,
-            bet: $bet,
-            originalData: $data,
-            orderTime: Carbon::createFromTimestamp($data['BetTimestamp'])->toDateTimeString()
-        );
-
-        // ✅ 立即从缓存返回余额
-        return \app\service\WalletService::getBalance($player->id);
-    }
-
-    /**
-     * 取消投注与结算
-     * @param $data
-     * @return float|string
-     */
-    public function cancelBet($data): float|string
-    {
-        /** @var Player $player */
-        $player = $this->player;
-
-        /** @var PlayGameRecord $record */
-        // ✅ 加锁查询，防止并发重复退款
-        // KT平台使用MainTxID + SubTxID作为唯一标识
-        $orderNo = $data['MainTxID'];
-        $record = PlayGameRecord::query()
-            ->where('order_no', $orderNo)
-            ->lockForUpdate()
-            ->first();
-
-        if (!$record) {
-            $this->error = KTGameController::API_CODE_OTHER_ERROR;
-            $this->log->error('KT cancelBet: 订单不存在', ['order_no' => $orderNo, 'params' => $data]);
-            return \app\service\WalletService::getBalance($player->id);
-        }
-
-        // 检查订单是否已经取消
-        if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-            $this->error = KTGameController::API_CODE_TRANSACTIONID_DUPLICATE;
-            $this->log->warning('KT cancelBet: 订单已取消', ['order_no' => $orderNo]);
-            return \app\service\WalletService::getBalance($player->id);
-        }
-
-        // 锁定钱包并退款
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-
-        // 同步退款
-        $machineWallet->money = bcadd($machineWallet->money, $record->bet, 2);
-        $machineWallet->save();
-
-        // 异步更新订单状态为已取消
-        $this->asyncCancelBetRecord($record->order_no);
-
-        $this->log->info('KT cancelBet 成功', [
-            'order_no' => $orderNo,
-            'refund_amount' => $record->bet,
-            'new_balance' => \app\service\WalletService::getBalance($player->id)
-        ]);
-
-        return \app\service\WalletService::getBalance($player->id);
-    }
-
-    /**
-     * 结算
-     * @param $data
-     * @return mixed
-     */
-    public function betResulet($data): mixed
-    {
-        /** @var PlayGameRecord $record */
-        // ✅ 加锁查询record，防止并发重复派彩
-        $record = PlayGameRecord::query()
-            ->where('order_no', $data['MainTxID'])
-            ->lockForUpdate()
-            ->first();
-
-        $player = $this->player;
-
-        if (!$record) {
-            $this->error = KTGameController::API_CODE_OTHER_ERROR;
-            return \app\service\WalletService::getBalance($player->id);
-        }
-
-        if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
-            $this->error = KTGameController::API_CODE_OTHER_ERROR;
-            return \app\service\WalletService::getBalance($player->id);
-        }
-
-        // 锁钱包
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-
-        //根据多订单总和进行处理
-        $originData = json_decode($record->original_data, true);
-
-        $money = array_sum(array_column($originData, 'Win'));
-
-        //有金额则为赢
-        if ($money > 0) {
-            // 同步增加余额
-            $machineWallet->money = bcadd($machineWallet->money, $money, 2);
-            $machineWallet->save();
-        }
-
-        // ⚡ 异步更新结算记录（不阻塞API响应）
-        $this->asyncUpdateSettleRecord(
-            orderNo: $record->order_no,
-            win: $money,
-            diff: $money - $record->bet
-        );
-
-        //彩金记录
-        Client::send('game-lottery', [
-            'player_id' => $player->id,
-            'bet' => $record->bet,
-            'play_game_record_id' => $record->id
-        ]);
-
-        return \app\service\WalletService::getBalance($player->id);
     }
 
     /**
@@ -443,50 +268,6 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
     public function reBetResulet($data)
     {
         return '';
-    }
-
-    /**
-     * 送礼
-     * @param $data
-     * @return array|int
-     */
-    public function gift($data): array|int
-    {
-        /** @var Player $player */
-        $player = Player::query()->where('uuid', $data['MemberAccount'])->first();
-
-        $bet = $data['Value'];
-
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-        if ($machineWallet->money < $bet) {
-            return $this->error = TNineGameController::API_CODE_INSUFFICIENT_BALANCE;
-        }
-
-        // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
-        $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-
-        // ⚡ 异步创建送礼记录（不阻塞API响应）
-        $this->asyncCreateBetRecord(
-            playerId: $player->id,
-            platformId: $this->platform->id,
-            gameCode: $data['GameType'],
-            orderNo: $data['RecordNumber'],
-            bet: $bet,
-            originalData: $data,
-            orderTime: $data['GiftTime'],
-            updateStats: false // 送礼不更新统计
-        );
-
-        // ✅ 立即从缓存读取余额
-        $balance = \app\service\WalletService::getBalance($player->id);
-
-        return [
-            'MerchantOrderNumber' => $data['RecordNumber'], // ✅ 使用外部订单号
-            'Balance' => $balance,
-            'SyncTime' => date('Y-m-d H:i:s'),
-        ];
     }
 
 

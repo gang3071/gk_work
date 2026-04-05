@@ -22,7 +22,7 @@ class BurstCleaner
     public function onWorkerStart()
     {
         // 每2分钟执行一次爆彩清理检查
-        new Crontab('*/2 * * * *', function () {
+        new Crontab('0 */2 * * * *', function () {
             try {
                 $this->cleanExpiredBursts();
             } catch (\Exception $e) {

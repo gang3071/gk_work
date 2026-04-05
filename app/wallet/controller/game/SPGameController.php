@@ -3,9 +3,11 @@
 namespace app\wallet\controller\game;
 
 
+use app\Constants\TransactionType;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\RedisLuaScripts;
 use Exception;
 use SimpleXMLElement;
 use support\Log;
@@ -68,19 +70,17 @@ class SPGameController
     }
 
     /**
-     * 下注（Redis 缓存版）
+     * 下注（Lua原子操作）
      * @param Request $request
      * @return Response
      * @throws Exception
      */
     public function bet(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->rawBody();
             $data = $this->service->decrypt($params);
-            Log::channel('sp_server')->info('SP下注请求（Redis缓存）', ['params' => $data]);
+            Log::channel('sp_server')->info('SP下注请求（Lua原子）', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -89,61 +89,54 @@ class SPGameController
             $orderNo = $data['txnid'];
             $bet = $data['amount'];
 
-            // 幂等性检查
-            $lockKey = "order:bet:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复订单
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                return $this->error(self::API_CODE_GENERAL_ERROR, [
-                    'username' => $data['username'],
-                    'currency' => $data['currency'],
-                    'amount' => (float)$balance,
-                ]);
-            }
+            // Lua 原子下注
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'amount' => $bet,
+                'game_code' => $data['gamecode'] ?? '',
+                'transaction_type' => TransactionType::BET,
+                'original_data' => $data,
+            ];
 
-            try {
-                // 获取当前余额
-                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'game_code' => ['string'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicBet');
 
-                // 余额预检查
-                if ($currentBalance < $bet) {
-                    \support\Redis::del($lockKey);
+            $result = RedisLuaScripts::atomicBet($player->id, 'SP', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('bet', 'SP', $player->id, $luaParams);
+
+            // 处理结果
+            if ($result['ok'] === 0) {
+                if ($result['error'] === 'duplicate_order') {
+                    Log::channel('sp_server')->info('SP下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => (float)$result['balance'],
+                    ]);
+                } elseif ($result['error'] === 'insufficient_balance') {
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE, [
                         'username' => $data['username'],
                         'currency' => $data['currency'],
-                        'amount' => (float)$currentBalance,
+                        'amount' => (float)$result['balance'],
                     ]);
                 }
-
-                // 写入 Redis 缓存
-                \app\service\GameRecordCacheService::saveBet('SP', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $bet,
-                    'game_code' => $data['gamecode'] ?? '',
-                    'original_data' => $data,
-                ]);
-
-                // 更新余额缓存
-                $newBalance = bcsub($currentBalance, $bet, 2);
-                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
             }
 
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('sp_server')->info('SP下注成功（Redis缓存）', [
-                'order_no' => $orderNo,
-                'elapsed_ms' => round($elapsed, 2),
-            ]);
+            Log::channel('sp_server')->info('SP下注成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'username' => $data['username'],
                 'currency' => $data['currency'],
-                'amount' => (float)$newBalance,
+                'amount' => (float)$result['balance'],
             ]);
         } catch (Exception $e) {
             Log::error('SP bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -153,18 +146,16 @@ class SPGameController
     }
 
     /**
-     * 取消下注（Redis 缓存版）
+     * 取消下注（Lua原子操作）
      * @param Request $request
      * @return Response
      */
     public function cancelBet(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->rawBody();
             $data = $this->service->decrypt($params);
-            Log::channel('sp_server')->info('SP取消下注请求（Redis缓存）', ['params' => $data]);
+            Log::channel('sp_server')->info('SP取消下注请求（Lua原子）', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -173,49 +164,39 @@ class SPGameController
             $orderNo = $data['txn_reverse_id'];
             $refundAmount = $data['amount'];
 
-            // 幂等性检查
-            $lockKey = "order:cancel:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'username' => $data['username'],
-                    'currency' => $data['currency'],
-                    'amount' => (float)$balance,
-                ]);
-            }
-
-            try {
-                // 获取当前余额
-                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-
-                // 写入取消记录
-                \app\service\GameRecordCacheService::saveCancel('SP', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'cancel_type' => 'refund',
-                    'original_data' => $data,
-                ]);
-
-                // 更新余额缓存
-                $newBalance = bcadd($currentBalance, $refundAmount, 2);
-                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
-            }
-
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('sp_server')->info('SP取消下注成功（Redis缓存）', [
+            // Lua 原子取消
+            $luaParams = [
                 'order_no' => $orderNo,
-                'elapsed_ms' => round($elapsed, 2),
-            ]);
+                'platform_id' => $this->service->platform->id,
+                'refund_amount' => $refundAmount,
+                'transaction_type' => TransactionType::CANCEL_REFUND,
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'refund_amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicCancel');
+
+            $result = RedisLuaScripts::atomicCancel($player->id, 'SP', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('cancel', 'SP', $player->id, $luaParams);
+
+            // 处理结果
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                Log::channel('sp_server')->info('SP取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+            }
+
+            Log::channel('sp_server')->info('SP取消下注成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'username' => $data['username'],
                 'currency' => $data['currency'],
-                'amount' => (float)$newBalance,
+                'amount' => (float)$result['balance'],
             ]);
         } catch (Exception $e) {
             Log::error('SP cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -225,81 +206,79 @@ class SPGameController
     }
 
     /**
-     * 結算（Redis 缓存版 - 批量处理）
+     * 結算（Lua原子操作 - 批量处理）
      * @param Request $request
      * @return Response
      */
     public function betResult(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->rawBody();
             $data = $this->service->decrypt($params);
-            Log::channel('sp_server')->info('SP结算请求（Redis缓存）', ['params' => $data]);
+            Log::channel('sp_server')->info('SP结算请求（Lua原子）', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
 
             $player = $this->service->player;
-            $totalWinAmount = $data['amount'] ?? 0;
 
             // 解析批量结算列表
             $detail = json_decode($data['payoutdetails'], true);
             $betList = $detail['betlist'] ?? [];
 
-            // 获取当前余额
-            $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-            $newBalance = $currentBalance;
+            $processedCount = 0;
+            $lastBalance = null;
 
-            // 批量处理结算
+            // 批量处理结算（每个订单一次 Lua 原子操作）
             foreach ($betList as $betInfo) {
                 $orderNo = $betInfo['txnid'];
+                $resultAmount = max($betInfo['resultamount'], 0);
 
-                // 每个订单幂等性检查
-                $lockKey = "order:settle:lock:{$orderNo}";
-                if (\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
+                // Lua 原子结算
+                $luaParams = [
+                    'order_no' => $orderNo,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $resultAmount,
+                    'diff' => $betInfo['resultamount'], // 保留原始值（可能为负）
+                    'transaction_type' => TransactionType::SETTLE,
+                    'original_data' => $betInfo,
+                ];
 
-                    try {
-                        $resultAmount = max($betInfo['resultamount'], 0);
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'amount' => ['required', 'numeric'],
+                    'diff' => ['required', 'numeric'],
+                    'platform_id' => ['required', 'integer'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicSettle');
 
-                        // 写入结算记录
-                        \app\service\GameRecordCacheService::saveSettle('SP', [
-                            'order_no' => $orderNo,
-                            'player_id' => $player->id,
-                            'platform_id' => $this->service->platform->id,
-                            'amount' => $resultAmount,
-                            'diff' => $betInfo['resultamount'], // 保留原始值（可能为负）
-                            'original_data' => $betInfo,
-                        ]);
+                $result = RedisLuaScripts::atomicSettle($player->id, 'SP', $luaParams);
 
-                        // 累加派彩金额
-                        if ($resultAmount > 0) {
-                            $newBalance = bcadd($newBalance, $resultAmount, 2);
-                        }
+                // 审计日志
+                logLuaScriptCall('settle', 'SP', $player->id, $luaParams);
 
-                    } catch (\Throwable $e) {
-                        \support\Redis::del($lockKey);
-                        throw $e;
-                    }
+                if ($result['ok'] === 1) {
+                    $processedCount++;
+                    $lastBalance = $result['balance'];
+                } elseif ($result['error'] === 'duplicate_order') {
+                    Log::channel('sp_server')->info('SP结算订单重复（Lua检测）', ['order_no' => $orderNo]);
+                    $lastBalance = $result['balance'];
                 }
             }
 
-            // 更新余额缓存（只更新一次）
-            if ($newBalance != $currentBalance) {
-                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-            }
+            // 获取最终余额
+            $finalBalance = $lastBalance ?? \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            Log::channel('sp_server')->info('SP结算成功（Redis缓存）', [
-                'count' => count($betList),
-                'elapsed_ms' => round($elapsed, 2),
+            Log::channel('sp_server')->info('SP结算成功（Lua原子）', [
+                'total' => count($betList),
+                'processed' => $processedCount,
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'username' => $data['username'],
                 'currency' => $data['currency'],
-                'amount' => (float)$newBalance,
+                'amount' => (float)$finalBalance,
             ]);
         } catch (Exception $e) {
             Log::error('SP betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);

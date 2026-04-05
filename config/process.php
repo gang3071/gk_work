@@ -15,6 +15,7 @@
 use process\BurstCleaner;
 use process\ChannelSettlement;
 use process\GamePoolSocket;
+use process\GameRecordCleanWorker;
 use process\GameRecordSyncWorker;
 use process\LotteryPoolSocket;
 use process\LotteryRemind;
@@ -56,6 +57,11 @@ return [
     'GameRecordSyncWorker' => [
         'handler' => GameRecordSyncWorker::class,
         'count' => 2,  // 2个进程（可根据负载调整）
+    ],
+    // ✅ 游戏记录清理进程（Redis 过期记录清理）
+    'GameRecordCleanWorker' => [
+        'handler' => GameRecordCleanWorker::class,
+        'count' => 1,  // 1个进程即可（低频任务）
     ],
 ];
 

@@ -12,11 +12,10 @@ use support\Redis;
  */
 class WalletService
 {
-    // Redis 缓存键前缀（包含项目标识避免跨项目冲突）
-    private const CACHE_PREFIX = 'gk_work:wallet:balance:';
-
-    // 缓存版本号（修改此值可批量失效所有缓存）
-    private const CACHE_VERSION = 'v1';
+    // Redis 缓存键前缀（与 Lua 原子脚本统一）
+    // 修改说明：统一使用 wallet:balance:{player_id} 格式
+    // 与 RedisLuaScripts 保持一致，避免缓存不一致
+    private const CACHE_PREFIX = 'wallet:balance:';
 
     // 缓存过期时间（秒）
     private const CACHE_TTL = 3600; // 1小时
@@ -354,9 +353,18 @@ class WalletService
      * @param int $platformId 平台ID
      * @return string
      */
+    /**
+     * 获取缓存键（与 Lua 原子脚本统一格式）
+     *
+     * @param int $playerId 玩家ID
+     * @param int $platformId 平台ID（保留参数兼容性，实际不使用）
+     * @return string Redis 缓存键
+     */
     private static function getCacheKey(int $playerId, int $platformId): string
     {
-        return self::CACHE_PREFIX . self::CACHE_VERSION . ":{$playerId}:{$platformId}";
+        // 统一使用 wallet:balance:{player_id} 格式
+        // 与 RedisLuaScripts::atomicBet/atomicSettle 保持一致
+        return self::CACHE_PREFIX . $playerId;
     }
 
     /**

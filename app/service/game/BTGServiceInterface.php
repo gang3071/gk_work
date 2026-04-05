@@ -11,7 +11,6 @@ use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGamePlatform;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
-use app\traits\AsyncGameRecordTrait;
 use Carbon\Carbon;
 use DateTime;
 use DateTimeInterface;
@@ -19,11 +18,9 @@ use DateTimeZone;
 use Exception;
 use support\Cache;
 use support\Log;
-use Webman\RedisQueue\Client;
 
 class BTGServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
-    use AsyncGameRecordTrait;
     // 错误码常量
     public const ERROR_CODE_SUCCESS = '1000';
     public const ERROR_CODE_GENERAL_ERROR = '2001';
@@ -751,323 +748,8 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
         return self::ERROR_CODE_INSUFFICIENT_BALANCE;
     }
 
-    public function bet($data): array|float
-    {
-        try {
-            $params = $data;
 
-            // 防御性检查：player应该由Controller设置，这里只做防御性验证
-            if (!$this->player) {
-                // 单一钱包模式：player不存在视为参数错误（不使用4202游戏平台错误码）
-                $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
-                return 0;
-            }
 
-            $player = $this->player;
-            $orderNo = $params['external_order_id'];
-            $bet = (float)$params['deposit_amount'];
-
-            // 检查设备是否爆机
-            if ($this->checkAndHandleMachineCrash()) {
-                return \app\service\WalletService::getBalance($player->id);
-            }
-
-            // 🚀 Redis 预检查幂等性
-            $betKey = "btg:bet:lock:{$orderNo}";
-            $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
-            if (!$isLocked) {
-                $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
-                return [
-                    'balance' => (float)\app\service\WalletService::getBalance($player->id),
-                    'order_id' => $orderNo,
-                ];
-            }
-
-            try {
-                // 🚀 单次事务 + 原子操作
-                $newBalance = \support\Db::transaction(function () use ($orderNo, $bet, $player) {
-                    /** @var PlayerPlatformCash $machineWallet */
-                    $machineWallet = PlayerPlatformCash::query()
-                        ->where('player_id', $player->id)
-                        ->lockForUpdate()
-                        ->first();
-
-                    if ($machineWallet->money < $bet) {
-                        throw new \RuntimeException('INSUFFICIENT_BALANCE');
-                    }
-
-                    // 🚀 使用原生 SQL 更新余额（避免 Model Event 开销）
-                    $newBalance = bcsub($machineWallet->money, $bet, 2);
-                    \support\Db::table('player_platform_cash')
-                        ->where('id', $machineWallet->id)
-                        ->update([
-                            'money' => $newBalance,
-                            'updated_at' => Carbon::now()
-                        ]);
-
-                    return $newBalance;
-                });
-
-                // 🚀 事务外异步创建记录 + 更新缓存
-                $this->asyncCreateBetRecord(
-                    playerId: $player->id,
-                    platformId: $this->platform->id,
-                    gameCode: $params['game_code'] ?? '',
-                    orderNo: $orderNo,
-                    bet: $bet,
-                    originalData: $params,
-                    orderTime: Carbon::now()->toDateTimeString()
-                );
-
-                // 立即更新 Redis 缓存
-                \app\service\WalletService::updateCache(
-                    $player->id,
-                    PlayerPlatformCash::PLATFORM_SELF,
-                    $newBalance
-                );
-
-                return [
-                    'balance' => (float)$newBalance,
-                    'order_id' => $orderNo,
-                ];
-
-            } catch (\RuntimeException $e) {
-                \support\Redis::del($betKey);
-                if ($e->getMessage() === 'INSUFFICIENT_BALANCE') {
-                    $this->error = self::ERROR_CODE_WITHDRAW_FAILED;
-                    return \app\service\WalletService::getBalance($player->id);
-                }
-                throw $e;
-            } catch (\Throwable $e) {
-                \support\Redis::del($betKey);
-                throw $e;
-            }
-
-        } catch (Exception $e) {
-            Log::error('BTG bet error', ['error' => $e->getMessage()]);
-            $this->error = self::ERROR_CODE_DEPOSIT_FAILED;
-            return \app\service\WalletService::getBalance($this->player->id);
-        }
-    }
-
-    /**
-     * 单一钱包 - 结算加款
-     * @param $data
-     * @return array|float
-     */
-    public function betResulet($data): array|float
-    {
-        try {
-            $params = $data;
-
-            // 防御性检查：player应该由Controller设置，这里只做防御性验证
-            if (!$this->player) {
-                // 单一钱包模式：player不存在视为参数错误（不使用4202游戏平台错误码）
-                $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
-                return 0;
-            }
-
-            $player = $this->player;
-            $orderNo = $params['external_order_id'];
-            $winAmount = (float)$params['withdraw_amount'];
-
-            // 🚀 Redis 预检查幂等性
-            $settleKey = "btg:settle:lock:{$orderNo}";
-            $isLocked = \support\Redis::set($settleKey, 1, ['NX', 'EX' => 10]);
-            if (!$isLocked) {
-                $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
-                return [
-                    'balance' => (float)\app\service\WalletService::getBalance($player->id),
-                    'order_id' => $orderNo,
-                ];
-            }
-
-            try {
-                // 🚀 单次事务 + 合并锁查询（从 2次锁 → 1次锁）
-                $newBalance = \support\Db::transaction(function () use ($orderNo, $winAmount, $player) {
-                    // ✅ 统一锁顺序：wallet → record
-                    /** @var PlayerPlatformCash $machineWallet */
-                    $machineWallet = PlayerPlatformCash::query()
-                        ->where('player_id', $player->id)
-                        ->lockForUpdate()
-                        ->first();
-
-                    /** @var PlayGameRecord $record */
-                    $record = PlayGameRecord::query()
-                        ->where('order_no', $orderNo)
-                        ->where('platform_id', $this->platform->id)
-                        ->lockForUpdate()
-                        ->first();
-
-                    if (!$record) {
-                        throw new \RuntimeException('ORDER_NOT_EXIST');
-                    }
-
-                    if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
-                        throw new \RuntimeException('ORDER_SETTLED');
-                    }
-
-                    // 🚀 使用原生 SQL 更新余额
-                    $newBalance = bcadd($machineWallet->money, $winAmount, 2);
-                    if ($winAmount > 0) {
-                        \support\Db::table('player_platform_cash')
-                            ->where('id', $machineWallet->id)
-                            ->update([
-                                'money' => $newBalance,
-                                'updated_at' => Carbon::now()
-                            ]);
-                    }
-
-                    return [
-                        'balance' => $newBalance,
-                        'record_id' => $record->id,
-                        'bet' => $record->bet,
-                        'game_type' => json_decode($record->original_data, true)['game_type'] ?? ''
-                    ];
-                });
-
-                // 🚀 事务外异步操作
-                $this->asyncUpdateSettleRecord(
-                    orderNo: $orderNo,
-                    win: $winAmount,
-                    diff: $winAmount - $newBalance['bet']
-                );
-
-                // 彩金记录 - 过滤鱼机类型
-                if ($newBalance['game_type'] !== 'fish' && $newBalance['bet'] > 0) {
-                    Client::send('game-lottery', [
-                        'player_id' => $player->id,
-                        'bet' => $newBalance['bet'],
-                        'play_game_record_id' => $newBalance['record_id']
-                    ]);
-                }
-
-                // 立即更新 Redis 缓存
-                \app\service\WalletService::updateCache(
-                    $player->id,
-                    PlayerPlatformCash::PLATFORM_SELF,
-                    $newBalance['balance']
-                );
-
-                return [
-                    'balance' => (float)$newBalance['balance'],
-                    'order_id' => $orderNo,
-                ];
-
-            } catch (\RuntimeException $e) {
-                \support\Redis::del($settleKey);
-                if ($e->getMessage() === 'ORDER_NOT_EXIST') {
-                    $this->error = self::ERROR_CODE_TRANSACTION_NOT_FOUND;
-                    return \app\service\WalletService::getBalance($player->id);
-                }
-                if ($e->getMessage() === 'ORDER_SETTLED') {
-                    $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
-                    return \app\service\WalletService::getBalance($player->id);
-                }
-                throw $e;
-            } catch (\Throwable $e) {
-                \support\Redis::del($settleKey);
-                throw $e;
-            }
-
-        } catch (Exception $e) {
-            Log::error('BTG betResulet error', ['error' => $e->getMessage()]);
-            $this->error = self::ERROR_CODE_WITHDRAW_FAILED;
-            return \app\service\WalletService::getBalance($this->player->id);
-        }
-    }
-
-    /**
-     * 单一钱包 - 取消下注
-     * @param $data
-     * @return array|float
-     */
-    public function cancelBet($data): array|float
-    {
-        try {
-            $params = $data;
-
-            // 防御性检查：player应该由Controller设置，这里只做防御性验证
-            if (!$this->player) {
-                // 单一钱包模式：player不存在视为参数错误（不使用4202游戏平台错误码）
-                $this->error = self::ERROR_CODE_BAD_FORMAT_PARAMS;
-                return 0;
-            }
-
-            $player = $this->player;
-            $orderNo = $params['external_order_id'];
-
-            try {
-                // 🚀 单次事务 + 合并锁查询
-                $newBalance = \support\Db::transaction(function () use ($orderNo, $player) {
-                    // ✅ 统一锁顺序：wallet → record
-                    /** @var PlayerPlatformCash $machineWallet */
-                    $machineWallet = PlayerPlatformCash::query()
-                        ->where('player_id', $player->id)
-                        ->lockForUpdate()
-                        ->first();
-
-                    /** @var PlayGameRecord $record */
-                    $record = PlayGameRecord::query()
-                        ->where('order_no', $orderNo)
-                        ->where('platform_id', $this->platform->id)
-                        ->lockForUpdate()
-                        ->first();
-
-                    if (!$record) {
-                        throw new \RuntimeException('ORDER_NOT_EXIST');
-                    }
-
-                    if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-                        throw new \RuntimeException('ORDER_CANCELLED');
-                    }
-
-                    // 🚀 使用原生 SQL 更新余额
-                    $refundAmount = $record->bet;
-                    $newBalance = bcadd($machineWallet->money, $refundAmount, 2);
-                    \support\Db::table('player_platform_cash')
-                        ->where('id', $machineWallet->id)
-                        ->update([
-                            'money' => $newBalance,
-                            'updated_at' => Carbon::now()
-                        ]);
-
-                    return ['balance' => $newBalance, 'record_id' => $record->id];
-                });
-
-                // 🚀 事务外异步操作
-                $this->asyncCancelBetRecord($orderNo);
-
-                // 立即更新 Redis 缓存
-                \app\service\WalletService::updateCache(
-                    $player->id,
-                    PlayerPlatformCash::PLATFORM_SELF,
-                    $newBalance['balance']
-                );
-
-                return [
-                    'balance' => (float)$newBalance['balance'],
-                    'order_id' => (string)$newBalance['record_id'],
-                ];
-
-            } catch (\RuntimeException $e) {
-                if ($e->getMessage() === 'ORDER_NOT_EXIST') {
-                    $this->error = self::ERROR_CODE_TRANSACTION_NOT_FOUND;
-                    return \app\service\WalletService::getBalance($player->id);
-                }
-                if ($e->getMessage() === 'ORDER_CANCELLED') {
-                    $this->error = self::ERROR_CODE_DUPLICATE_ORDER;
-                    return \app\service\WalletService::getBalance($player->id);
-                }
-                throw $e;
-            }
-
-        } catch (Exception $e) {
-            Log::error('BTG cancelBet error', ['error' => $e->getMessage()]);
-            $this->error = self::ERROR_CODE_GENERAL_ERROR;
-            return \app\service\WalletService::getBalance($this->player->id);
-        }
-    }
 
     /**
      * 单一钱包 - 重新结算
@@ -1106,9 +788,13 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     /**
      * Transfer - start (下注扣款)
+     *
      * @param array $params 请求参数
      * @param array $transDetails 交易详情
      * @return array
+     * @deprecated 此方法已废弃，不再被使用
+     * @reason BTGGameController 直接调用 RedisLuaScripts::atomicBet()
+     *
      */
     public function transferStart(array $params, array $transDetails): array
     {
@@ -1122,7 +808,6 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'round_id' => $roundId,
                 'amount' => $amount,
                 'player_id' => $this->player->id,
-                'balance' => \app\service\WalletService::getBalance($this->player->id)
             ]);
 
             // 只拒绝负数金额，允许0（免费游戏）
@@ -1135,25 +820,6 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 return ['balance' => \app\service\WalletService::getBalance($this->player->id)];
             }
 
-            /** @var PlayerPlatformCash $machineWallet */
-            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-            // 检查订单是否已存在（使用 order_id）
-            $existingRecord = PlayGameRecord::query()
-                ->where('order_no', $orderId)
-                ->where('platform_id', $this->platform->id)
-                ->first();
-
-            if ($existingRecord) {
-                // 订单已存在，返回当前余额（幂等性）
-                Log::channel('btg_server')->info('BTG transferStart 订单已存在（幂等性）', [
-                    'order_id' => $orderId,
-                    'existing_record_id' => $existingRecord->id
-                ]);
-                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
-                return ['balance' => $machineWallet->money];
-            }
-
             // amount=0 的情况（免费游戏）
             if ($amount == 0) {
                 Log::channel('btg_server')->info('BTG transferStart 免费游戏（amount=0）', [
@@ -1161,18 +827,31 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                     'player_id' => $this->player->id
                 ]);
 
-                // 创建游戏记录（不扣款）
-                $insert = array_merge($this->buildGameRecordBaseData($orderId, $params), [
-                    'bet' => 0,
-                    'win' => 0,
-                    'diff' => 0,
-                    'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
-                    'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-                ]);
+                // ✅ 使用 Lua 脚本处理免费游戏（金额为0，不扣款但记录）
+                $result = \app\service\RedisLuaScripts::atomicBet(
+                    $this->player->id,
+                    'BTG',
+                    [
+                        'order_no' => $orderId,
+                        'platform_id' => $this->platform->id,
+                        'amount' => 0,
+                        'game_code' => $params['game_code'] ?? '',
+                        'game_type' => $params['game_type'] ?? '',
+                        'transaction_type' => 'bet',
+                        'original_data' => $params,
+                    ]
+                );
 
-                PlayGameRecord::query()->create($insert);
+                if ($result['ok'] == 1) {
+                    return ['balance' => (float)$result['balance']];
+                }
 
-                return ['balance' => (float)$machineWallet->money];
+                // 免费游戏理论上不会失败，但还是处理错误
+                $this->error = $result['error'] == 'duplicate_order'
+                    ? self::ERROR_CODE_DUPLICATE_TRAN_ID
+                    : self::ERROR_CODE_SOMETHING_WRONG;
+
+                return ['balance' => (float)($result['balance'] ?? 0)];
             }
 
             // amount>0 的情况（正常下注）
@@ -1181,30 +860,66 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 return ['balance' => \app\service\WalletService::getBalance($this->player->id)];
             }
 
-            // 检查余额
-            if ($machineWallet->money < $amount) {
-                $this->error = self::ERROR_CODE_INSUFFICIENT_BALANCE;
-                return ['balance' => $machineWallet->money];
+            // ✅ 使用 Redis Lua 原子脚本（检查余额 + 扣款 + 幂等性 + 保存记录 全部原子完成）
+            $result = \app\service\RedisLuaScripts::atomicBet(
+                $this->player->id,
+                'BTG',
+                [
+                    'order_no' => $orderId,
+                    'platform_id' => $this->platform->id,
+                    'amount' => $amount,
+                    'game_code' => $params['game_code'] ?? '',
+                    'game_type' => $params['game_type'] ?? '',
+                    'transaction_type' => 'bet',
+                    'original_data' => $params,
+                ]
+            );
+
+            // 处理 Lua 脚本返回结果
+            if ($result['ok'] == 1) {
+                // ✅ 成功：余额已扣，记录已保存到 Redis，已加入同步队列
+                Log::channel('btg_server')->info('BTG transferStart 成功', [
+                    'order_id' => $orderId,
+                    'old_balance' => $result['old_balance'],
+                    'new_balance' => $result['balance'],
+                    'bet_amount' => $amount
+                ]);
+
+                return ['balance' => (float)$result['balance']];
             }
 
-            // 创建游戏记录
-            $insert = array_merge($this->buildGameRecordBaseData($orderId, $params), [
-                'bet' => $amount,
-                'win' => 0,
-                'diff' => -$amount,
-                'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
-                'settlement_status' => PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-            ]);
+            // ❌ 失败：处理各种错误情况
+            if ($result['error'] == 'insufficient_balance') {
+                $this->error = self::ERROR_CODE_INSUFFICIENT_BALANCE;
 
-            /** @var PlayGameRecord $record */
-            $record = PlayGameRecord::query()->create($insert);
+                Log::channel('btg_server')->warning('BTG transferStart 余额不足', [
+                    'order_id' => $orderId,
+                    'bet_amount' => $amount,
+                    'balance' => $result['balance']
+                ]);
+            } elseif ($result['error'] == 'duplicate_order') {
+                $this->error = self::ERROR_CODE_DUPLICATE_TRAN_ID;
 
-            // 扣款并创建交易记录
-            $afterBalance = $this->createBetRecord($machineWallet, $this->player, $record, $amount);
+                Log::channel('btg_server')->info('BTG transferStart 重复订单', [
+                    'order_id' => $orderId
+                ]);
+            } else {
+                $this->error = self::ERROR_CODE_SOMETHING_WRONG;
 
-            return ['balance' => (float)$afterBalance];
+                Log::channel('btg_server')->error('BTG transferStart Lua脚本错误', [
+                    'order_id' => $orderId,
+                    'error' => $result['error'] ?? 'unknown'
+                ]);
+            }
+
+            return ['balance' => (float)($result['balance'] ?? 0)];
+
         } catch (Exception $e) {
-            Log::channel('btg_server')->error('BTG transferStart error', ['error' => $e->getMessage(), 'params' => $params]);
+            Log::channel('btg_server')->error('BTG transferStart 异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'params' => $params
+            ]);
             $this->error = self::ERROR_CODE_SOMETHING_WRONG;
             return ['balance' => \app\service\WalletService::getBalance($this->player->id)];
         }
@@ -1212,10 +927,14 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     /**
      * Transfer - end (结算派彩)
+     *
      * @param array $params 请求参数
      * @param array $transDetails 交易详情
      * @param array $betformDetails 注单详情
      * @return array
+     *@deprecated 此方法已废弃，不再被使用
+     * @reason BTGGameController 直接调用 RedisLuaScripts::atomicSettle()
+     *
      */
     public function transferEnd(array $params, array $transDetails, array $betformDetails): array
     {
@@ -1231,80 +950,64 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
                 'player_id' => $this->player->id
             ]);
 
-            /** @var PlayerPlatformCash $machineWallet */
-            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-            // 查找对应的下注记录（加锁防止并发）
-            $record = $this->findAndLockGameRecord($orderId);
-
-            // 如果找不到下注记录，返回交易不存在错误
-            if (!$record) {
-                Log::channel('btg_server')->error('BTG transferEnd 找不到下注记录', [
-                    'order_id' => $orderId,
+            // ✅ 使用 Redis Lua 原子脚本（加钱 + 更新记录 + 幂等性 全部原子完成）
+            $result = \app\service\RedisLuaScripts::atomicSettle(
+                $this->player->id,
+                'BTG',
+                [
+                    'order_no' => $orderId,
                     'platform_id' => $this->platform->id,
-                    'player_id' => $this->player->id
-                ]);
-                $this->error = self::ERROR_CODE_TRANSACTION_NOT_EXIST;
-                return ['balance' => $machineWallet->money];
-            }
-
-            Log::channel('btg_server')->info('BTG transferEnd 找到下注记录', [
-                'record_id' => $record->id,
-                'order_no' => $record->order_no,
-                'settlement_status' => $record->settlement_status,
-                'bet' => $record->bet
-            ]);
-
-            // 检查是否已结算或已取消
-            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
-                // 已结算，不允许重复结算
-                Log::channel('btg_server')->info('BTG transferEnd 订单已结算', [
-                    'order_id' => $orderId,
-                    'record_id' => $record->id
-                ]);
-                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
-                return ['balance' => $machineWallet->money];
-            }
-
-            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-                // 已取消，不允许结算
-                Log::channel('btg_server')->info('BTG transferEnd 订单已取消', [
-                    'order_id' => $orderId,
-                    'record_id' => $record->id
-                ]);
-                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
-                return ['balance' => $machineWallet->money];
-            }
-
-            // ✅ 同步增加余额（有金额时，触发 updated 事件，自动更新 Redis 缓存）
-            if ($winAmount > 0) {
-                $machineWallet->money = bcadd($machineWallet->money, $winAmount, 2);
-                $machineWallet->save();
-            }
-
-            // ⚡ 异步更新结算记录（不阻塞API响应）
-            $this->asyncUpdateSettleRecord(
-                orderNo: $record->order_no,
-                win: $winAmount,
-                diff: $winAmount - $record->bet
+                    'amount' => $winAmount,
+                    'diff' => $winAmount, // BTG 的 diff 在 Lua 脚本内计算（win - bet）
+                    'game_code' => $params['game_code'] ?? '',
+                    'transaction_type' => 'settle',
+                    'original_data' => $params,
+                ]
             );
 
-            // 彩金记录 - 过滤鱼机类型
-            $gameType = $params['game_type'] ?? '';
-            if ($gameType !== 'fish') {
-                Client::send('game-lottery', [
-                    'player_id' => $this->player->id,
-                    'bet' => $record->bet,
-                    'play_game_record_id' => $record->id
+            // 处理 Lua 脚本返回结果
+            if ($result['ok'] == 1) {
+                // ✅ 成功：余额已加，记录已更新到 Redis
+                Log::channel('btg_server')->info('BTG transferEnd 成功', [
+                    'order_id' => $orderId,
+                    'old_balance' => $result['old_balance'],
+                    'new_balance' => $result['balance'],
+                    'win_amount' => $winAmount
+                ]);
+
+                // 彩金记录 - 过滤鱼机类型
+                // 注意：这里暂时保留，但实际上在 Redis 阶段还没有 MySQL record->id
+                // 后续可能需要移到 GameRecordSyncWorker 中处理
+                $gameType = $params['game_type'] ?? '';
+                if ($gameType !== 'fish' && $winAmount > 0) {
+                    // 由于 Lua 脚本只保存到 Redis，MySQL 的 record 还未创建
+                    // 彩金队列将在 GameRecordSyncWorker 同步时触发
+                    // 这里只是保留逻辑兼容性，实际执行在 Worker 中
+                }
+
+                return ['balance' => (float)$result['balance']];
+            }
+
+            // ❌ 失败：处理各种错误情况
+            if ($result['error'] == 'duplicate_settle') {
+                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
+
+                Log::channel('btg_server')->info('BTG transferEnd 重复结算', [
+                    'order_id' => $orderId
+                ]);
+            } else {
+                $this->error = self::ERROR_CODE_SOMETHING_WRONG;
+
+                Log::channel('btg_server')->error('BTG transferEnd Lua脚本错误', [
+                    'order_id' => $orderId,
+                    'error' => $result['error'] ?? 'unknown'
                 ]);
             }
 
-            // ✅ 立即从缓存读取余额
-            $balance = \app\service\WalletService::getBalance($this->player->id);
+            return ['balance' => (float)($result['balance'] ?? \app\service\WalletService::getBalance($this->player->id))];
 
-            return ['balance' => (float)$balance];
         } catch (Exception $e) {
-            Log::channel('btg_server')->error('BTG transferEnd error', [
+            Log::channel('btg_server')->error('BTG transferEnd 异常', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
                 'params' => $params,
@@ -1318,9 +1021,13 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     /**
      * Transfer - refund (退款)
+     *
      * @param array $params 请求参数
      * @param array $transDetails 交易详情
      * @return array
+     * @deprecated 此方法已废弃，不再被使用
+     * @reason BTGGameController 直接调用 RedisLuaScripts::atomicCancel()
+     *
      */
     public function transferRefund(array $params, array $transDetails): array
     {
@@ -1328,52 +1035,62 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             $refundAmount = (float)$params['amount']; // amount 为正数（退款金额）
             $orderId = $transDetails['order_id'] ?? '';
 
-            /** @var PlayerPlatformCash $machineWallet */
-            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+            Log::channel('btg_server')->info('BTG transferRefund 开始处理', [
+                'order_id' => $orderId,
+                'refund_amount' => $refundAmount,
+                'player_id' => $this->player->id
+            ]);
 
-            // 查找对应的下注记录（加锁防止并发）
-            $record = $this->findAndLockGameRecord($orderId);
+            // ✅ 使用 Redis Lua 原子脚本（退款 + 更新记录 + 幂等性 全部原子完成）
+            $result = \app\service\RedisLuaScripts::atomicCancel(
+                $this->player->id,
+                'BTG',
+                [
+                    'order_no' => $orderId,
+                    'platform_id' => $this->platform->id,
+                    'refund_amount' => $refundAmount,
+                    'transaction_type' => 'refund',
+                    'original_data' => $params,
+                ]
+            );
 
-            if (!$record) {
-                $this->error = self::ERROR_CODE_TRANSACTION_NOT_EXIST;
-                return ['balance' => $machineWallet->money];
-            }
-
-            // 检查是否已结算或已取消
-            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
-                // 已结算，不允许退款
-                Log::channel('btg_server')->info('BTG transferRefund 订单已结算', [
+            // 处理 Lua 脚本返回结果
+            if ($result['ok'] == 1) {
+                // ✅ 成功：余额已退，记录已更新到 Redis
+                Log::channel('btg_server')->info('BTG transferRefund 成功', [
                     'order_id' => $orderId,
-                    'record_id' => $record->id
+                    'old_balance' => $result['old_balance'],
+                    'new_balance' => $result['balance'],
+                    'refund_amount' => $refundAmount
                 ]);
-                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
-                return ['balance' => $machineWallet->money];
+
+                return ['balance' => (float)$result['balance']];
             }
 
-            if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-                // 已退款，不允许重复退款
-                Log::channel('btg_server')->info('BTG transferRefund 订单已退款', [
+            // ❌ 失败：处理各种错误情况
+            if ($result['error'] == 'duplicate_cancel') {
+                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
+
+                Log::channel('btg_server')->info('BTG transferRefund 重复退款', [
+                    'order_id' => $orderId
+                ]);
+            } else {
+                $this->error = self::ERROR_CODE_SOMETHING_WRONG;
+
+                Log::channel('btg_server')->error('BTG transferRefund Lua脚本错误', [
                     'order_id' => $orderId,
-                    'record_id' => $record->id
+                    'error' => $result['error'] ?? 'unknown'
                 ]);
-                $this->error = self::ERROR_CODE_TRANSACTION_SETTLED;
-                return ['balance' => $machineWallet->money];
             }
 
-            // ✅ 同步退款加款（触发 updated 事件，自动更新 Redis 缓存）
-            $machineWallet->money = bcadd($machineWallet->money, $refundAmount, 2);
-            $machineWallet->save();
+            return ['balance' => (float)($result['balance'] ?? \app\service\WalletService::getBalance($this->player->id))];
 
-            // ⚡ 异步更新取消状态（不阻塞API响应）
-            // PlayerDeliveryRecord交由Consumer处理
-            $this->asyncCancelBetRecord($record->order_no);
-
-            // ✅ 立即从缓存读取余额
-            $balance = \app\service\WalletService::getBalance($this->player->id);
-
-            return ['balance' => (float)$balance];
         } catch (Exception $e) {
-            Log::channel('btg_server')->error('BTG transferRefund error', ['error' => $e->getMessage(), 'params' => $params]);
+            Log::channel('btg_server')->error('BTG transferRefund 异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'params' => $params
+            ]);
             $this->error = self::ERROR_CODE_SOMETHING_WRONG;
             return ['balance' => \app\service\WalletService::getBalance($this->player->id)];
         }
@@ -1381,16 +1098,26 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     /**
      * Transfer - adjust (调整金额)
+     *
      * @param array $params 请求参数
      * @param array $transDetails 交易详情
      * @param array $betformDetails 注单详情
      * @return array
+     *@deprecated 此方法已废弃，不再被使用
+     * @reason BTGGameController 直接调用 RedisLuaScripts (正数用atomicSettle，负数用atomicBet)
+     *
      */
     public function transferAdjust(array $params, array $transDetails, array $betformDetails): array
     {
         try {
             $adjustAmount = (float)$params['amount']; // amount 可正可负
             $orderId = $transDetails['order_id'] ?? '';
+
+            Log::channel('btg_server')->info('BTG transferAdjust 开始处理', [
+                'order_id' => $orderId,
+                'adjust_amount' => $adjustAmount,
+                'player_id' => $this->player->id
+            ]);
 
             // 如果是扣款操作，检查设备是否爆机
             if ($adjustAmount < 0 && $this->checkAndHandleMachineCrash()) {
@@ -1429,24 +1156,29 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
             $machineWallet->save();
 
-            // ⚡ 异步更新游戏记录（不阻塞API响应）
-            // PlayerDeliveryRecord和action_data更新交由Consumer处理
-            // 注意：调整金额会影响win/diff，通过异步更新
+            // 更新游戏记录
             $newWin = (float)($betformDetails['win'] ?? $record->win);
             $newDiff = (float)($betformDetails['diff'] ?? $record->diff);
 
-            $this->asyncUpdateSettleRecord(
-                orderNo: $record->order_no,
-                win: $newWin,
-                diff: $newDiff
-            );
+            $record->win = $newWin;
+            $record->diff = $newDiff;
+            $record->save();
 
-            // ✅ 立即从缓存读取余额
-            $balance = \app\service\WalletService::getBalance($this->player->id);
+            Log::channel('btg_server')->info('BTG transferAdjust 成功', [
+                'order_id' => $orderId,
+                'old_balance' => $beforeBalance,
+                'new_balance' => $machineWallet->money,
+                'adjust_amount' => $adjustAmount
+            ]);
 
-            return ['balance' => (float)$balance];
+            return ['balance' => (float)$machineWallet->money];
+
         } catch (Exception $e) {
-            Log::channel('btg_server')->error('BTG transferAdjust error', ['error' => $e->getMessage(), 'params' => $params]);
+            Log::channel('btg_server')->error('BTG transferAdjust 异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'params' => $params
+            ]);
             $this->error = self::ERROR_CODE_SOMETHING_WRONG;
             return ['balance' => \app\service\WalletService::getBalance($this->player->id)];
         }
@@ -1454,10 +1186,14 @@ class BTGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     /**
      * Transfer - reward (额外奖金)
+     *
      * @param array $params 请求参数
      * @param array $transDetails 交易详情
      * @param array $betformDetails 注单详情
      * @return array
+     *@deprecated 此方法已废弃，不再被使用
+     * @reason BTGGameController 直接调用 RedisLuaScripts::atomicSettle()
+     *
      */
     public function transferReward(array $params, array $transDetails, array $betformDetails): array
     {

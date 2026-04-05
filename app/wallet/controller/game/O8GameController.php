@@ -2,12 +2,14 @@
 
 namespace app\wallet\controller\game;
 
+use app\Constants\TransactionType;
 use app\model\GameExtend;
 use app\model\Player;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\O8ServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\RedisLuaScripts;
 use Exception;
 use Firebase\JWT\JWT;
 use support\Log;
@@ -167,7 +169,7 @@ class O8GameController
     }
 
     /**
-     * 下注
+     * 下注（Lua原子操作 - 批量处理）
      * @param Request $request
      * @return Response
      * @throws Exception
@@ -178,14 +180,14 @@ class O8GameController
             $params = $request->post();
             $token = request()->header('authorization');
 
-            $this->logger->info('o8_server下注记录', ['params' => $params, 'token' => $token]);
+            $this->logger->info('o8_server下注请求（Lua原子）', ['params' => $params, 'token' => $token]);
 
             $this->service->verifyToken($token);
 
             $orders = $params['transactions'];
             $return = ['transactions' => []];
 
-            // 批量处理每个订单（Redis 缓存版）
+            // 批量处理每个订单（每个订单一次 Lua 原子操作）
             foreach ($orders as $order) {
                 /** @var Player $player */
                 $player = Player::query()->where('uuid', $order['userid'])->first();
@@ -196,63 +198,61 @@ class O8GameController
                 $orderNo = $order['externalroundid'];
                 $bet = $order['amt'];
 
-                // 幂等性检查
-                $lockKey = "order:bet:lock:{$orderNo}";
-                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                    // 重复订单
-                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                    $return['transactions'][] = [
-                        'txid' => $orderNo,
-                        'ptxid' => $order['ptxid'],
-                        'bal' => (float)$balance,
-                        'cur' => 'TWD',
-                        'dup' => true
-                    ];
-                    continue;
-                }
+                // 查询平台ID
+                $platformId = GameExtend::query()
+                    ->where('code', $order['gamecode'])
+                    ->value('platform_id') ?? $this->service->platform->id;
 
-                try {
-                    // 获取当前余额
-                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                // Lua 原子下注
+                $luaParams = [
+                    'order_no' => $orderNo,
+                    'platform_id' => $platformId,
+                    'amount' => $bet,
+                    'game_code' => $order['gamecode'],
+                    'transaction_type' => TransactionType::BET,
+                    'original_data' => $order,
+                ];
 
-                    // 余额预检查
-                    if ($currentBalance < $bet) {
-                        \support\Redis::del($lockKey);
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'amount' => ['required', 'numeric', 'min:0'],
+                    'platform_id' => ['required', 'integer'],
+                    'game_code' => ['string'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicBet');
+
+                $result = RedisLuaScripts::atomicBet($player->id, 'O8', $luaParams);
+
+                // 审计日志
+                logLuaScriptCall('bet', 'O8', $player->id, $luaParams);
+
+                if ($result['ok'] === 0) {
+                    if ($result['error'] === 'duplicate_order') {
+                        $this->logger->info('O8下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                        $return['transactions'][] = [
+                            'txid' => $orderNo,
+                            'ptxid' => $order['ptxid'],
+                            'bal' => (float)$result['balance'],
+                            'cur' => 'TWD',
+                            'dup' => true
+                        ];
+                        continue;
+                    } elseif ($result['error'] === 'insufficient_balance') {
                         return $this->error(self::API_CODE_AMOUNT_OVER_BALANCE);
                     }
-
-                    // 查询平台ID
-                    $platformId = GameExtend::query()
-                        ->where('code', $order['gamecode'])
-                        ->value('platform_id') ?? $this->service->platform->id;
-
-                    // 写入 Redis 缓存
-                    \app\service\GameRecordCacheService::saveBet('O8', [
-                        'order_no' => $orderNo,
-                        'player_id' => $player->id,
-                        'platform_id' => $platformId,
-                        'amount' => $bet,
-                        'game_code' => $order['gamecode'],
-                        'original_data' => $order,
-                    ]);
-
-                    // 更新余额缓存
-                    $newBalance = bcsub($currentBalance, $bet, 2);
-                    \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-                    $return['transactions'][] = [
-                        'txid' => $orderNo,
-                        'ptxid' => $order['ptxid'],
-                        'bal' => (float)$newBalance,
-                        'cur' => 'TWD',
-                        'dup' => false
-                    ];
-
-                } catch (\Throwable $e) {
-                    \support\Redis::del($lockKey);
-                    throw $e;
                 }
+
+                $return['transactions'][] = [
+                    'txid' => $orderNo,
+                    'ptxid' => $order['ptxid'],
+                    'bal' => (float)$result['balance'],
+                    'cur' => 'TWD',
+                    'dup' => false
+                ];
             }
+
+            $this->logger->info('O8下注成功（Lua原子）', ['count' => count($orders)]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
@@ -263,7 +263,7 @@ class O8GameController
     }
 
     /**
-     * 結算
+     * 結算（Lua原子操作 - 批量处理）
      * @param Request $request
      * @return Response
      */
@@ -273,14 +273,14 @@ class O8GameController
             $params = $request->post();
             $token = request()->header('authorization');
 
-            $this->logger->info('o8_server结算记录', ['params' => $params, 'token' => $token]);
+            $this->logger->info('o8_server结算请求（Lua原子）', ['params' => $params, 'token' => $token]);
 
             $this->service->verifyToken($token);
 
             $orders = $params['transactions'];
             $return = ['transactions' => []];
 
-            // 批量处理每个订单
+            // 批量处理每个订单（每个订单一次 Lua 原子操作）
             foreach ($orders as $order) {
                 /** @var Player $player */
                 $player = Player::query()->where('uuid', $order['userid'])->first();
@@ -292,55 +292,55 @@ class O8GameController
                 $winAmount = $order['turnover'] - $order['ggr'];
                 $txtype = $order['txtype'];
 
-                // 幂等性检查
-                $lockKey = "order:settle:lock:{$orderNo}";
-                if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                    // 已结算，返回缓存余额
-                    $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+                // 确定实际派彩金额：txtype=510 且 winAmount>0 才加钱
+                $actualAmount = ($txtype == 510 && $winAmount > 0) ? $winAmount : 0;
+
+                // Lua 原子结算
+                $luaParams = [
+                    'order_no' => $orderNo,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $actualAmount,
+                    'diff' => $winAmount, // 保留原始值用于统计
+                    'transaction_type' => TransactionType::SETTLE,
+                    'original_data' => $order,
+                ];
+
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'amount' => ['required', 'numeric'],
+                    'diff' => ['required', 'numeric'],
+                    'platform_id' => ['required', 'integer'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicSettle');
+
+                $result = RedisLuaScripts::atomicSettle($player->id, 'O8', $luaParams);
+
+                // 审计日志
+                logLuaScriptCall('settle', 'O8', $player->id, $luaParams);
+
+                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                    $this->logger->info('O8结算重复请求（Lua检测）', ['order_no' => $orderNo]);
                     $return['transactions'][] = [
                         'txid' => $orderNo,
                         'ptxid' => $order['ptxid'],
-                        'bal' => (float)$balance,
+                        'bal' => (float)$result['balance'],
                         'cur' => 'TWD',
                         'dup' => true
                     ];
                     continue;
                 }
 
-                try {
-                    // 获取当前余额
-                    $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                    $newBalance = $currentBalance;
-
-                    // 写入结算记录
-                    \app\service\GameRecordCacheService::saveSettle('O8', [
-                        'order_no' => $orderNo,
-                        'player_id' => $player->id,
-                        'platform_id' => $this->service->platform->id,
-                        'amount' => $winAmount,
-                        'diff' => $winAmount,
-                        'original_data' => $order,
-                    ]);
-
-                    // txtype=510 且 winAmount>0 才加钱
-                    if ($txtype == 510 && $winAmount > 0) {
-                        $newBalance = bcadd($currentBalance, $winAmount, 2);
-                        \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                    }
-
-                    $return['transactions'][] = [
-                        'txid' => $orderNo,
-                        'ptxid' => $order['ptxid'],
-                        'bal' => (float)$newBalance,
-                        'cur' => 'TWD',
-                        'dup' => false
-                    ];
-
-                } catch (\Throwable $e) {
-                    \support\Redis::del($lockKey);
-                    throw $e;
-                }
+                $return['transactions'][] = [
+                    'txid' => $orderNo,
+                    'ptxid' => $order['ptxid'],
+                    'bal' => (float)$result['balance'],
+                    'cur' => 'TWD',
+                    'dup' => false
+                ];
             }
+
+            $this->logger->info('O8结算成功（Lua原子）', ['count' => count($orders)]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
@@ -389,16 +389,47 @@ class O8GameController
             $params = $request->post();
 
             $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('打鱼退款金额记录', ['params' => $data]);
+            $this->logger->info('O8打鱼退款请求（Lua原子）', ['params' => $data]);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
-            $balance = $this->service->refund($data);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+
+            $player = $this->service->player;
+            $orderNo = $data['externalroundid'] ?? $data['TxID'] ?? '';
+            $refundAmount = $data['amt'] ?? $data['Amount'] ?? 0;
+
+            // Lua 原子退款
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'refund_amount' => $refundAmount,
+                'transaction_type' => TransactionType::CANCEL_REFUND,
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'refund_amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicCancel');
+
+            $result = RedisLuaScripts::atomicCancel($player->id, 'O8', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('cancel', 'O8', $player->id, $luaParams);
+
+            // 处理结果
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_cancel') {
+                $this->logger->info('O8退款重复请求（Lua检测）', ['order_no' => $orderNo]);
             }
-            // 3. 使用常量获取状态码描述
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $balance);
+
+            $this->logger->info('O8退款成功（Lua原子）', ['order_no' => $orderNo]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'Balance' => (float)$result['balance']
+            ]);
         } catch (Exception $e) {
             Log::error('O8 refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('O8', '退款异常', $e, ['params' => $request->post()]);

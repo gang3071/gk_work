@@ -8,9 +8,7 @@ use app\model\GameExtend;
 use app\model\GamePlatform;
 use app\model\Player;
 use app\model\PlayerGamePlatform;
-use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
-use app\traits\AsyncGameRecordTrait;
 use app\wallet\controller\game\RsgGameController;
 use app\wallet\controller\game\RsgLiveGameController;
 use Carbon\Carbon;
@@ -26,7 +24,6 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
  */
 class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
-    use AsyncGameRecordTrait;
     public $method = 'POST';
     public $successCode = '0';
     private $systemCode;
@@ -409,125 +406,8 @@ class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceI
         return RsgLiveGameController::API_CODE_AMOUNT_OVER_BALANCE;
     }
 
-    public function bet($data)
-    {
-        // 检查设备是否爆机
-        if ($this->checkAndHandleMachineCrash()) {
-            return $this->error;
-        }
 
-        $bet = $data['transaction']['amount'];
-        $player = $this->player;
 
-        // ✅ Redis预检查幂等性（在事务外，避免不必要的数据库锁）
-        // 注意：RSG真人使用transactionId作为幂等性检查（而非referenceId）
-        $txnId = $data['transaction']['transactionId'];
-        $betKey = "rsglive:bet:lock:{$txnId}";
-        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
-        if (!$isLocked) {
-            // 重复订单，直接返回当前余额
-            return $this->error = RsgLiveGameController::API_CODE_TRANSACTIONID_DUPLICATE;
-        }
-
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-        if ($machineWallet->money < $bet) {
-            return $this->error = RsgLiveGameController::API_CODE_AMOUNT_OVER_BALANCE;
-        }
-
-        // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
-        $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-
-        // ⚡ 异步创建/更新下注记录（累计下注场景）
-        // RSG真人会把多次下注整合到一笔订单中，需要在Consumer中合并处理
-        $this->asyncCreateBetRecord(
-            playerId: $this->player->id,
-            platformId: $this->platform->id,
-            gameCode: $data['game']['gameName'],
-            orderNo: $data['transaction']['referenceId'],
-            bet: $bet,
-            originalData: $data,
-            orderTime: Carbon::now()->toDateTimeString()
-        );
-
-        // ✅ 立即从缓存返回余额
-        return \app\service\WalletService::getBalance($player->id);
-    }
-
-    /**
-     * 取消下注
-     * @param $data
-     * @return float|mixed|string
-     */
-    public function cancelBet($data): mixed
-    {
-        /** @var PlayGameRecord $record */
-        // ✅ 加锁查询，防止并发重复退款
-        $record = PlayGameRecord::query()
-            ->where('order_no', $data['SequenNumber'])
-            ->lockForUpdate()
-            ->first();
-
-        if (!$record) {
-            return $this->error = RsgGameController::API_CODE_DUPLICATE_ORDER;
-        }
-
-        if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-            return $this->error = RsgGameController::API_CODE_ORDER_CANCELLED;
-        }
-
-        //返还用户金钱  修改注单状态
-        $bet = $record['BetAmount'];
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-        // 同步退款
-        $machineWallet->money = bcadd($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-        // 异步更新状态
-        $this->asyncCancelBetRecord($record->order_no);
-        return \app\service\WalletService::getBalance($this->player->id);
-    }
-
-    public function betResulet($data)
-    {
-        /** @var PlayGameRecord $record */
-        // ✅ 加锁查询record，防止并发重复派彩
-        $record = PlayGameRecord::query()
-            ->where('order_no', $data['transaction']['referenceId'])
-            ->lockForUpdate()
-            ->first();
-
-        if (!$record) {
-            return $this->error = RsgLiveGameController::API_CODE_REFERENCEID_NOT_FOUND;
-        }
-
-        if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
-            return $this->error = RsgLiveGameController::API_CODE_TRANSACTIONID_DUPLICATE;
-        }
-
-        //处理用户中奖金额
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-        $money = $data['transaction']['amount'];
-
-        //判断输赢
-        if ($money > 0) {
-            //赢 - 同步增加余额
-            $machineWallet->money = bcadd($machineWallet->money, $money, 2);
-            $machineWallet->save();
-        }
-
-        // ⚡ 异步更新结算记录（不阻塞API响应）
-        $this->asyncUpdateSettleRecord(
-            orderNo: $record->order_no,
-            win: $money,
-            diff: bcsub($money, $record->bet, 2)
-        );
-
-        return \app\service\WalletService::getBalance($this->player->id);
-    }
 
     public function reBetResulet($data)
     {

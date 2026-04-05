@@ -9,9 +9,6 @@ use app\model\GamePlatform;
 use app\model\GameType;
 use app\model\Player;
 use app\model\PlayerGamePlatform;
-use app\model\PlayerPlatformCash;
-use app\model\PlayGameRecord;
-use app\traits\AsyncGameRecordTrait;
 use app\wallet\controller\game\MtGameController;
 use app\wallet\controller\game\SAGameController;
 use Carbon\Carbon;
@@ -21,7 +18,6 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
 
 class SAServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
-    use AsyncGameRecordTrait;
     public string $method = 'POST';
     public string $successCode = '0';
     private mixed $apiDomain;
@@ -285,131 +281,8 @@ class SAServiceInterface extends GameServiceFactory implements GameServiceInterf
         return SAGameController::API_CODE_INSUFFICIENT_BALANCE;
     }
 
-    /**
-     * 下注（异步优化版）
-     * @param $data
-     * @return mixed
-     */
-    public function bet($data): mixed
-    {
-        $player = $this->player;
 
-        // 检查设备是否爆机
-        if ($this->checkAndHandleMachineCrash()) {
-            return \app\service\WalletService::getBalance($this->player->id);
-        }
 
-        $bet = $data['amount'];
-        $orderNo = $data['txnid'];
-
-        // ✅ Redis预检查幂等性（在事务外，避免不必要的数据库锁）
-        $betKey = "sa:bet:lock:{$orderNo}";
-        $isLocked = \support\Redis::set($betKey, 1, ['NX', 'EX' => 300]);
-        if (!$isLocked) {
-            // 重复订单，直接返回当前余额
-            $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-            return \app\service\WalletService::getBalance($this->player->id);
-        }
-
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-        if ($machineWallet->money < $bet) {
-            $this->error = SAGameController::API_CODE_INSUFFICIENT_BALANCE;
-            return \app\service\WalletService::getBalance($this->player->id);
-        }
-
-        // ✅ 同步扣减余额（触发 updated 事件，自动更新 Redis 缓存）
-        $machineWallet->money = bcsub($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-
-        // ⚡ 异步创建下注记录（不阻塞API响应）
-        $this->asyncCreateBetRecord(
-            playerId: $this->player->id,
-            platformId: $this->platform->id,
-            gameCode: $data['hostid'],
-            orderNo: $orderNo,
-            bet: $bet,
-            originalData: $data,
-            orderTime: $data['timestamp']
-        );
-
-        // ✅ 立即从缓存读取余额
-        return \app\service\WalletService::getBalance($player->id);
-    }
-
-    /**
-     * 取消单（异步优化版）
-     * @param $data
-     * @return float|string
-     */
-    public function cancelBet($data): float|string
-    {
-        /** @var PlayGameRecord $record */
-        // ✅ 加锁查询，防止并发重复退款
-        $record = PlayGameRecord::query()
-            ->where('order_no', $data['txn_reverse_id'])
-            ->lockForUpdate()
-            ->first();
-
-        if (!$record) {
-            $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-            return \app\service\WalletService::getBalance($this->player->id);
-        }
-
-        if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_CANCELLED) {
-            $this->error = SAGameController::API_CODE_GENERAL_ERROR;
-            return \app\service\WalletService::getBalance($this->player->id);
-        }
-
-        // ✅ 同步退还用户金钱（触发 updated 事件，自动更新 Redis 缓存）
-        $bet = $data['amount'];
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-        $machineWallet->money = bcadd($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-
-        // ⚡ 异步更新取消状态（不阻塞API响应）
-        $this->asyncCancelBetRecord($data['txn_reverse_id']);
-
-        // ✅ 立即从缓存返回余额
-        return \app\service\WalletService::getBalance($this->player->id);
-    }
-
-    /**
-     * 结算（异步优化版）
-     * @param $data
-     * @return mixed
-     */
-    public function betResulet($data): mixed
-    {
-        $detail = json_decode($data['payoutdetails'], true);
-        $betList = $detail['betlist'];
-
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-        // ✅ 同步增加余额（有金额时，触发 updated 事件，自动更新 Redis 缓存）
-        if (isset($data['amount']) && $data['amount'] > 0) {
-            $machineWallet->money = bcadd($machineWallet->money, $data['amount'], 2);
-            $machineWallet->save();
-        }
-
-        foreach ($betList as $betInfo) {
-            $orderNo = $betInfo['txnid'];
-
-            // ⚡ 异步更新结算记录（不阻塞API响应）
-            // 记录检查交由Consumer处理（如果不存在会先创建，如果已结算会跳过）
-            $this->asyncUpdateSettleRecord(
-                orderNo: $orderNo,
-                win: max($betInfo['resultamount'], 0),
-                diff: $betInfo['resultamount']
-            );
-        }
-
-        // ✅ 立即从缓存读取余额
-        return \app\service\WalletService::getBalance($this->player->id);
-    }
 
     /**
      * 重新结算

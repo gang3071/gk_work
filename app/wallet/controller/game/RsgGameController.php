@@ -2,15 +2,15 @@
 
 namespace app\wallet\controller\game;
 
+use app\Constants\TransactionType;
 use app\model\Player;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
-use app\service\GameRecordCacheService;
+use app\service\RedisLuaScripts;
 use Exception;
 use Monolog\Logger;
 use support\Log;
-use support\Redis;
 use support\Request;
 use support\Response;
 use Throwable;
@@ -101,7 +101,7 @@ class RsgGameController
     }
 
     /**
-     * 下注（异步队列版）
+     * 下注（Lua 原子操作版本）
      * @param Request $request
      * @return Response
      * @throws Throwable
@@ -113,7 +113,7 @@ class RsgGameController
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG下注请求（Redis缓存）', ['order_no' => $data['SequenNumber'] ?? '']);
+            $this->logger->info('RSG下注请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -125,67 +125,72 @@ class RsgGameController
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
+
             $orderNo = $data['SequenNumber'];
-            // 3. 幂等性检查（Redis 锁）
-            $betKey = "rsg:bet:lock:{$orderNo}";
-            if (!\support\Redis::set($betKey, 1, ['NX', 'EX' => 300])) {
-                // 重复订单，返回当前余额
-                $currentBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
-                $this->logger->warning('RSG: 重复下注请求', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                ]);
+            // ========== 核心：Lua 原子下注（1次调用完成所有操作）==========
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'amount' => $data['Amount'],
+                'game_code' => $data['GameId'] ?? '',
+                'game_type' => $data['GameType'] ?? '',
+                'transaction_type' => TransactionType::BET,
+                'original_data' => $data,
+            ];
 
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => (float)$currentBalance
-                ]);
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'game_code' => ['string'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicBet');
+
+            $result = RedisLuaScripts::atomicBet($player->id, 'RSG', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('bet', 'RSG', $player->id, $luaParams);
+
+            // 处理返回结果
+            if ($result['ok'] === 0) {
+                // 失败场景
+                if ($result['error'] === 'duplicate_order') {
+                    // 幂等性：重复订单返回当前余额
+                    $this->logger->warning('RSG重复订单（Lua检测）', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'balance' => $result['balance'],
+                    ]);
+
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                        'Balance' => (float)$result['balance']
+                    ]);
+
+                } elseif ($result['error'] === 'insufficient_balance') {
+                    // 余额不足
+                    $this->logger->warning('RSG余额不足（Lua检测）', [
+                        'order_no' => $orderNo,
+                        'amount' => $data['Amount'],
+                        'balance' => $result['balance'],
+                    ]);
+
+                    return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+                }
             }
 
-            // 4. 获取当前余额（从缓存）
-            $currentBalance = GameRecordCacheService::getCachedBalance($player->id);
-
-            // 5. 预检查余额（快速失败）
-            if ($currentBalance < $data['Amount']) {
-                \support\Redis::del($betKey);  // 清理锁
-
-                $this->logger->warning('RSG: 余额不足', [
-                    'order_no' => $orderNo,
-                    'balance' => $currentBalance,
-                    'amount' => $data['Amount'],
-                ]);
-                return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
-            }
-
-            // 6. ✅ 写入 Redis 缓存（<0.5ms）
-            try {
-                GameRecordCacheService::saveBet('RSG', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $data['Amount'],
-                    'game_code' => $data['GameId'] ?? '',
-                    'original_data' => $data,
-                ]);
-            } catch (\Throwable $e) {
-                \support\Redis::del($betKey);  // 清理锁
-                throw $e;
-            }
-
-            // 7. ✅ 更新余额缓存（<0.2ms）
-            $newBalance = bcsub($currentBalance, $data['Amount'], 2);
-            $newBalance = max(0, $newBalance);
-            GameRecordCacheService::updateCachedBalance($player->id, $newBalance);
-
-            $this->logger->info('RSG下注成功（Redis缓存）', [
+            // 成功场景
+            $this->logger->info('RSG下注成功（Lua原子）', [
                 'username' => $data['UserId'],
                 'order_no' => $orderNo,
-                'balance_before' => $currentBalance,
-                'balance_after' => $newBalance,
+                'balance_before' => $result['old_balance'],
+                'balance_after' => $result['balance'],
+                'amount' => $data['Amount'],
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$newBalance
+                'Balance' => (float)$result['balance']
             ]);
 
         } catch (Throwable $e) {
@@ -199,7 +204,7 @@ class RsgGameController
     }
 
     /**
-     * 取消下注（异步队列版）
+     * 取消下注（Lua 原子操作版本）
      * @param Request $request
      * @return Response
      */
@@ -210,7 +215,7 @@ class RsgGameController
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG取消下注请求（异步）', ['params' => $data]);
+            $this->logger->info('RSG取消下注请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -222,44 +227,55 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            // 2.5 获取当前余额（使用缓存模式）
-            $currentBalance = \app\service\WalletService::getBalance($player->id, \app\model\PlayerPlatformCash::PLATFORM_SELF);
             $orderNo = $data['SequenNumber'];
+            $refundAmount = $data['BetAmount'] ?? 0;
 
-            // 2.6 幂等性检查（原子锁 - 防止重复取消）
-            $cancelKey = "rsg:cancel:lock:{$orderNo}";
-            if (!\support\Redis::set($cancelKey, 1, ['NX', 'EX' => 300])) {
-                // 重复取消请求
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => (float)$currentBalance
-                ]);
-            }
-
-            // 3. 写入 Redis 缓存
-            try {
-                GameRecordCacheService::saveCancel('RSG', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'cancel_type' => 'cancel',
-                    'original_data' => $data,
-                ]);
-
-                // 4. 更新余额缓存（退回下注金额）
-                $newBalance = bcadd($currentBalance, $data['BetAmount'], 2);
-                GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                Redis::del($cancelKey);
-                throw $e;
-            }
-
-            // 5. 快速返回
-            $this->logger->info('RSG取消下注已入队（快速响应）', [
+            // ========== 核心：Lua 原子取消 ==========
+            $luaParams = [
                 'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'refund_amount' => $refundAmount,
+                'transaction_type' => TransactionType::CANCEL,
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'refund_amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicCancel');
+
+            $result = RedisLuaScripts::atomicCancel($player->id, 'RSG', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('cancel', 'RSG', $player->id, $luaParams);
+
+            // 处理返回结果
+            if ($result['ok'] === 0) {
+                if ($result['error'] === 'duplicate_cancel') {
+                    // 幂等性：重复取消返回当前余额
+                    $this->logger->info('RSG重复取消（Lua检测）', [
+                        'order_no' => $orderNo,
+                        'balance' => $result['balance'],
+                    ]);
+
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                        'Balance' => (float)$result['balance']
+                    ]);
+                }
+            }
+
+            $this->logger->info('RSG取消下注成功（Lua原子）', [
+                'order_no' => $orderNo,
+                'refund_amount' => $refundAmount,
+                'balance_before' => $result['old_balance'],
+                'balance_after' => $result['balance'],
             ]);
+
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$newBalance
+                'Balance' => (float)$result['balance']
             ]);
 
         } catch (Throwable $e) {
@@ -273,7 +289,7 @@ class RsgGameController
     }
 
     /**
-     * 結算（异步队列版）
+     * 結算（Lua 原子操作版本）
      * @param Request $request
      * @return Response
      */
@@ -283,7 +299,7 @@ class RsgGameController
             $params = $request->post();
             // 1. 解密和验证
             $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG结算请求（Redis缓存）', ['order_no' => $data['SequenNumber'] ?? '']);
+            $this->logger->info('RSG结算请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -297,64 +313,59 @@ class RsgGameController
             }
 
             $orderNo = $data['SequenNumber'];
-
-            // 3. 幂等性检查（Redis 原子锁）
-            $settleKey = "rsg:settle:lock:{$orderNo}";
-            if (!\support\Redis::set($settleKey, 1, ['NX', 'EX' => 300])) {
-                // 重复结算请求，返回当前余额
-                $currentBalance = GameRecordCacheService::getCachedBalance($player->id);
-
-                $this->logger->warning('RSG: 重复结算请求', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                ]);
-
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => (float)$currentBalance
-                ]);
-            }
-
-            // 4. 获取当前余额（从缓存）
-            $currentBalance = GameRecordCacheService::getCachedBalance($player->id);
-
-            // 5. ✅ 写入 Redis 缓存（<0.5ms）
-            try {
-                GameRecordCacheService::saveSettle('RSG', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $data['Amount'],
-                    'diff' => bcsub($data['Amount'], $data['BetAmount'] ?? 0, 2),
-                    'play_time' => $data['PlayTime'] ?? '',
-                    'is_game_flow_end' => $data['IsGameFlowEnd'] ?? false,
-                    'belong_sequen_number' => $data['BelongSequenNumber'] ?? '',
-                    'game_code' => $data['GameId'] ?? '',
-                    'original_data' => $data,
-                ]);
-            } catch (\Throwable $e) {
-                Redis::del($settleKey);
-                throw $e;
-            }
-
-            // 6. ✅ 更新余额缓存（<0.2ms）
             $winAmount = $data['Amount'] ?? 0;
-            $newBalance = $currentBalance;
-            if ($winAmount > 0) {
-                $newBalance = bcadd($currentBalance, $winAmount, 2);
-                GameRecordCacheService::updateCachedBalance($player->id, $newBalance);
+
+            // ========== 核心：Lua 原子结算 ==========
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'amount' => $winAmount,
+                'diff' => bcsub($winAmount, $data['BetAmount'] ?? 0, 2),
+                'transaction_type' => TransactionType::SETTLE,
+                'game_code' => $data['GameId'] ?? '',
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric', 'min:0'],
+                'diff' => ['required', 'numeric'],
+                'platform_id' => ['required', 'integer'],
+                'game_code' => ['string'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicSettle');
+
+            $result = RedisLuaScripts::atomicSettle($player->id, 'RSG', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('settle', 'RSG', $player->id, $luaParams);
+
+            // 处理返回结果
+            if ($result['ok'] === 0) {
+                if ($result['error'] === 'duplicate_settle') {
+                    // 幂等性：重复结算返回当前余额
+                    $this->logger->warning('RSG重复结算（Lua检测）', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'balance' => $result['balance'],
+                    ]);
+
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                        'Balance' => (float)$result['balance']
+                    ]);
+                }
             }
 
-            // 7. ✅ 立即返回（总耗时 <1ms）
-
-            $this->logger->info('RSG结算成功（Redis缓存）', [
+            $this->logger->info('RSG结算成功（Lua原子）', [
                 'order_no' => $orderNo,
-                'amount' => $winAmount,
-                'balance_before' => $currentBalance,
-                'balance_after' => $newBalance,
+                'win_amount' => $winAmount,
+                'balance_before' => $result['old_balance'],
+                'balance_after' => $result['balance'],
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$newBalance
+                'Balance' => (float)$result['balance']
             ]);
 
         } catch (Throwable $e) {
@@ -368,20 +379,18 @@ class RsgGameController
     }
 
     /**
-     * 重新結算（Redis 缓存版）
+     * 重新結算（Lua 原子操作版本）
      * @param Request $request
      * @return Response
      */
     public function reBetResult(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG重新结算请求（Redis缓存）', ['params' => $data]);
+            $this->logger->info('RSG重新结算请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -395,51 +404,47 @@ class RsgGameController
             }
 
             $orderNo = $data['SequenNumber'];
+            $winAmount = ($data['Amount'] ?? 0) - ($data['BetAmount'] ?? 0);
 
-            // 幂等性检查
-            $lockKey = "order:settle:lock:{$orderNo}";
-            if (!Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复重新结算
-                $balance = GameRecordCacheService::getCachedBalance($player->id);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => (float)$balance
-                ]);
-            }
-
-            try {
-                // 获取当前余额
-                $currentBalance = GameRecordCacheService::getCachedBalance($player->id);
-
-                // 写入重新结算记录
-                GameRecordCacheService::saveSettle('RSG', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $data['Amount'] ?? 0,
-                    'diff' => ($data['Amount'] ?? 0) - ($data['BetAmount'] ?? 0),
-                    'settle_type' => 'adjust',  // 重新结算标记为调整
-                    'original_data' => $data,
-                ]);
-
-                // 更新余额缓存
-                $winAmount = ($data['Amount'] ?? 0) - ($data['BetAmount'] ?? 0);
-                $newBalance = $currentBalance;
-                if ($winAmount != 0) {
-                    $newBalance = bcadd($currentBalance, $winAmount, 2);
-                    GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-                }
-
-            } catch (\Throwable $e) {
-                Redis::del($lockKey);
-                throw $e;
-            }
-
-            $this->logger->info('RSG重新结算成功（Redis缓存）', [
+            // ========== 核心：Lua 原子重新结算 ==========
+            $luaParams = [
                 'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'amount' => $data['Amount'] ?? 0,
+                'diff' => $winAmount,
+                'transaction_type' => TransactionType::SETTLE_ADJUST,  // 重新结算标记为调整
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric', 'min:0'],
+                'diff' => ['required', 'numeric'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicSettle');
+
+            $result = RedisLuaScripts::atomicSettle($player->id, 'RSG', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('settle', 'RSG', $player->id, $luaParams);
+
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
+                $this->logger->info('RSG重复重新结算（Lua检测）', ['order_no' => $orderNo]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                    'Balance' => (float)$result['balance']
+                ]);
+            }
+
+            $this->logger->info('RSG重新结算成功（Lua原子）', [
+                'order_no' => $orderNo,
+                'win_amount' => $winAmount,
+                'balance_after' => $result['balance'],
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$newBalance
+                'Balance' => (float)$result['balance']
             ]);
 
         } catch (Throwable $e) {
@@ -453,20 +458,18 @@ class RsgGameController
     }
 
     /**
-     * Jackpot 中獎（异步队列版）
+     * Jackpot 中獎（Lua 原子操作版本）
      * @param Request $request
      * @return Response
      */
     public function jackpotResult(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG Jackpot中奖请求（Redis缓存）', ['params' => $data]);
+            $this->logger->info('RSG Jackpot中奖请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -480,50 +483,47 @@ class RsgGameController
             }
 
             $orderNo = $data['SequenNumber'];
+            $jackpotAmount = $data['Amount'] ?? 0;
 
-            // 幂等性检查
-            $lockKey = "order:settle:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复Jackpot
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => (float)$balance
-                ]);
-            }
-
-            try {
-                // 获取当前余额
-                $currentBalance = GameRecordCacheService::getCachedBalance($player->id);
-
-                $jackpotAmount = $data['Amount'] ?? 0;
-
-                // 写入Jackpot记录（无下注，直接中奖）
-                GameRecordCacheService::saveSettle('RSG', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $jackpotAmount,
-                    'diff' => $jackpotAmount,
-                    'settle_type' => 'jackpot',
-                    'original_data' => $data,
-                ]);
-
-                // 更新余额缓存
-                $newBalance = bcadd($currentBalance, $jackpotAmount, 2);
-                GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                Redis::del($lockKey);
-                throw $e;
-            }
-
-            $this->logger->info('RSG Jackpot成功（Redis缓存）', [
+            // ========== 核心：Lua 原子 Jackpot ==========
+            $luaParams = [
                 'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
                 'amount' => $jackpotAmount,
+                'diff' => $jackpotAmount,
+                'transaction_type' => TransactionType::SETTLE_JACKPOT,
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric', 'min:0'],
+                'diff' => ['required', 'numeric'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicSettle');
+
+            $result = RedisLuaScripts::atomicSettle($player->id, 'RSG', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('settle', 'RSG', $player->id, $luaParams);
+
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
+                $this->logger->info('RSG重复Jackpot（Lua检测）', ['order_no' => $orderNo]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                    'Balance' => (float)$result['balance']
+                ]);
+            }
+
+            $this->logger->info('RSG Jackpot成功（Lua原子）', [
+                'order_no' => $orderNo,
+                'jackpot_amount' => $jackpotAmount,
+                'balance_after' => $result['balance'],
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$newBalance
+                'Balance' => (float)$result['balance']
             ]);
 
         } catch (Throwable $e) {
@@ -537,20 +537,18 @@ class RsgGameController
     }
 
     /**
-     * 打鱼机预扣金额（Redis 缓存版）
+     * 打鱼机预扣金额（Lua 原子操作版本）
      * @param Request $request
      * @return Response
      */
     public function prepay(Request $request): Response
     {
-        $startTime = microtime(true);
-
         try {
             $params = $request->post();
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG打鱼机预扣金额请求（Redis缓存）', ['params' => $data]);
+            $this->logger->info('RSG打鱼机预扣金额请求（Lua原子）', ['session_id' => $data['SessionId'] ?? '']);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -564,59 +562,100 @@ class RsgGameController
             }
 
             $orderNo = $data['SessionId'];  // prepay使用SessionId作为订单号
+            $requestAmount = $data['Amount'] ?? 0;
 
-            // 3. 幂等性检查（原子锁）
-            $lockKey = "order:bet:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复请求
-                $balance = GameRecordCacheService::getCachedBalance($player->id);
-                $this->logger->warning('RSG: 重复预扣请求', ['session_id' => $orderNo]);
+            // ========== 核心：Lua 原子预扣 ==========
+            // 注意：prepay 特殊逻辑 - 余额不足时扣除所有余额
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'amount' => $requestAmount,  // Lua 脚本内部会处理余额不足
+                'game_code' => $data['GameId'] ?? '',
+                'transaction_type' => TransactionType::BET_PREPAY,  // 标记为prepay类型
+                'original_data' => $data,
+            ];
 
-                // 返回当前余额和0扣款金额
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => (float)$balance,
-                    'Amount' => 0
-                ]);
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'game_code' => ['string'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicBet');
+
+            $result = RedisLuaScripts::atomicBet($player->id, 'RSG', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('bet', 'RSG', $player->id, $luaParams);
+
+            // 处理返回结果
+            if ($result['ok'] === 0) {
+                if ($result['error'] === 'duplicate_order') {
+                    // 重复请求，返回当前余额和0扣款
+                    $this->logger->warning('RSG重复预扣请求（Lua检测）', ['session_id' => $orderNo]);
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                        'Balance' => (float)$result['balance'],
+                        'Amount' => 0
+                    ]);
+                } elseif ($result['error'] === 'insufficient_balance') {
+                    // prepay 特殊处理：余额不足时扣除所有余额
+                    $actualDeductAmount = $result['balance'];  // 当前全部余额
+
+                    // 重新执行扣除全部余额
+                    if ($actualDeductAmount > 0) {
+                        $retryLuaParams = [
+                            'order_no' => $orderNo,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $actualDeductAmount,
+                            'game_code' => $data['GameId'] ?? '',
+                            'transaction_type' => TransactionType::BET_PREPAY,
+                            'original_data' => $data,
+                        ];
+
+                        // 参数验证
+                        validateLuaScriptParams($retryLuaParams, [
+                            'order_no' => ['required', 'string'],
+                            'amount' => ['required', 'numeric', 'min:0'],
+                            'platform_id' => ['required', 'integer'],
+                            'game_code' => ['string'],
+                            'transaction_type' => ['required', 'string'],
+                        ], 'atomicBet');
+
+                        $result = RedisLuaScripts::atomicBet($player->id, 'RSG', $retryLuaParams);
+
+                        // 审计日志
+                        logLuaScriptCall('bet', 'RSG', $player->id, $retryLuaParams);
+
+                        $this->logger->info('RSG预扣不足扣全部（Lua原子）', [
+                            'session_id' => $orderNo,
+                            'request' => $requestAmount,
+                            'actual' => $actualDeductAmount,
+                        ]);
+
+                        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                            'Balance' => (float)$result['balance'],
+                            'Amount' => $actualDeductAmount
+                        ]);
+                    } else {
+                        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                            'Balance' => 0.0,
+                            'Amount' => 0
+                        ]);
+                    }
+                }
             }
 
-            try {
-                // 4. 获取当前余额
-                $currentBalance = GameRecordCacheService::getCachedBalance($player->id);
-                $requestAmount = $data['Amount'] ?? 0;
-
-                // prepay特殊逻辑：余额不足时扣除所有余额
-                $actualDeductAmount = min($currentBalance, $requestAmount);
-
-                // 5. 写入预扣记录
-                GameRecordCacheService::saveBet('RSG', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $actualDeductAmount,
-                    'game_code' => $data['GameId'] ?? '',
-                    'bet_type' => 'prepay',  // 标记为prepay类型
-                    'original_data' => $data,
-                ]);
-
-                // 6. 更新余额缓存
-                $newBalance = bcsub($currentBalance, $actualDeductAmount, 2);
-                $newBalance = max(0, $newBalance);
-                GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                Redis::del($lockKey);
-                throw $e;
-            }
-
-            $this->logger->info('RSG打鱼机预扣成功（Redis缓存）', [
+            $this->logger->info('RSG打鱼机预扣成功（Lua原子）', [
                 'session_id' => $orderNo,
                 'request_amount' => $requestAmount,
-                'actual_deduct' => $actualDeductAmount,
+                'actual_deduct' => $requestAmount,
+                'balance_after' => $result['balance'],
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$newBalance,
-                'Amount' => $actualDeductAmount
+                'Balance' => (float)$result['balance'],
+                'Amount' => $requestAmount
             ]);
 
         } catch (Throwable $e) {
@@ -629,7 +668,7 @@ class RsgGameController
     }
 
     /**
-     * 打鱼机退款（Redis 缓存版）
+     * 打鱼机退款（Lua 原子操作版本）
      * @param Request $request
      * @return Response
      */
@@ -640,7 +679,7 @@ class RsgGameController
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG打鱼机退款请求（Redis缓存）', ['params' => $data]);
+            $this->logger->info('RSG打鱼机退款请求（Lua原子）', ['session_id' => $data['SessionId'] ?? '']);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -653,52 +692,54 @@ class RsgGameController
             }
 
             $orderNo = $data['SessionId'];
-            // 3. 幂等性检查（原子锁）
-            $lockKey = "order:settle:lock:{$orderNo}";
-            if (!\support\Redis::set($lockKey, 1, ['NX', 'EX' => 300])) {
-                // 重复请求
-                $balance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
-                $this->logger->warning('RSG: 重复退款请求', ['orderNo' => $orderNo]);
+            $refundAmount = $data['Amount'] ?? 0;
 
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => (float)$balance,
-                    'Amount' => 0
-                ]);
-            }
-
-            try {
-                // 4. 获取当前余额
-                $currentBalance = GameRecordCacheService::getCachedBalance($player->id);
-                $refundAmount = $data['Amount'] ?? 0;
-
-                // 5. 写入退款记录
-                GameRecordCacheService::saveSettle('RSG', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $refundAmount,
-                    'diff' => $refundAmount,
-                    'settle_type' => 'refund',  // 标记为refund类型
-                    'session_id' => $orderNo,  // 关联原prepay的SessionId
-                    'game_code' => $data['GameId'] ?? '',
-                    'original_data' => $data,
-                ]);
-
-                // 6. 更新余额缓存（退回金额）
-                $newBalance = bcadd($currentBalance, $refundAmount, 2);
-                \app\service\GameRecordCacheService::updateCachedBalance($player->id, (float)$newBalance);
-
-            } catch (\Throwable $e) {
-                \support\Redis::del($lockKey);
-                throw $e;
-            }
-
-            $this->logger->info('RSG打鱼机退款成功（Redis缓存）', [
+            // ========== 核心：Lua 原子退款 ==========
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
                 'amount' => $refundAmount,
+                'diff' => $refundAmount,
+                'transaction_type' => TransactionType::SETTLE_REFUND,  // 标记为refund类型
+                'game_code' => $data['GameId'] ?? '',
+                'original_data' => $data,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric', 'min:0'],
+                'diff' => ['required', 'numeric'],
+                'platform_id' => ['required', 'integer'],
+                'game_code' => ['string'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicSettle');
+
+            $result = RedisLuaScripts::atomicSettle($player->id, 'RSG', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('settle', 'RSG', $player->id, $luaParams);
+
+            // 处理返回结果
+            if ($result['ok'] === 0) {
+                if ($result['error'] === 'duplicate_settle') {
+                    // 重复退款请求
+                    $this->logger->warning('RSG重复退款请求（Lua检测）', ['session_id' => $orderNo]);
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                        'Balance' => (float)$result['balance'],
+                        'Amount' => 0
+                    ]);
+                }
+            }
+
+            $this->logger->info('RSG打鱼机退款成功（Lua原子）', [
+                'session_id' => $orderNo,
+                'refund_amount' => $refundAmount,
+                'balance_after' => $result['balance'],
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$newBalance,
+                'Balance' => (float)$result['balance'],
                 'Amount' => (float)$refundAmount
             ]);
 
