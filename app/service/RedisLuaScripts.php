@@ -451,6 +451,7 @@ LUA;
      *   - refund_amount: 退款金额（必需）
      *   - transaction_type: 交易类型（必需）
      *   - original_data: 原始数据（可选）
+     *   - skip_amount_validation: 跳过金额验证（可选，默认 false）
      * @return array
      * @throws \InvalidArgumentException 参数验证失败时抛出
      */
@@ -465,6 +466,30 @@ LUA;
 
         $orderNo = $data['order_no'];
         $refundAmount = $data['refund_amount'];
+
+        // ✅ 问题5修复：验证退款金额是否合理（除非明确跳过验证）
+        $skipValidation = $data['skip_amount_validation'] ?? false;
+        if (!$skipValidation && $refundAmount > 0) {
+            $platformId = $data['platform_id'] ?? null;
+            $validation = validateRefundAmount($platform, $orderNo, $refundAmount, $playerId, $platformId);
+
+            if (!$validation['valid']) {
+                // 退款金额超过下注金额，记录告警但仍允许执行（保守处理）
+                \support\Log::warning('[atomicCancel] 退款金额异常但仍执行', [
+                    'platform' => $platform,
+                    'order_no' => $orderNo,
+                    'player_id' => $playerId,
+                    'refund_amount' => $refundAmount,
+                    'bet_amount' => $validation['bet_amount'],
+                    'message' => $validation['message'],
+                ]);
+
+                // 🔴 可选：如果要严格拒绝，取消下面的注释
+                // throw new \InvalidArgumentException(
+                //     sprintf('[atomicCancel] %s', $validation['message'])
+                // );
+            }
+        }
 
         // 准备 Keys
         $keys = [

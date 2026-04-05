@@ -281,10 +281,8 @@ class RsgLiveGameController
             $orderNo = (string)($params['transaction']['id'] ?? '');
             $winAmount = $params['transaction']['winAmount'] ?? 0;
 
-            // 从 Redis 获取下注金额以计算正确的 diff（win - bet）
-            $betRecordKey = "game:record:bet:RSGLIVE:{$orderNo}";
-            $betRecord = Redis::hGetAll($betRecordKey);
-            $betAmount = isset($betRecord['amount']) ? (float)$betRecord['amount'] : 0;
+            // ✅ 问题3修复：使用降级方案获取下注金额（传入 platform_id 优化性能）
+            $betAmount = getBetAmountWithFallback('RSGLIVE', $orderNo, $player->id, $this->service->platform->id);
 
             // 计算 diff = win - bet
             $diff = bcsub($winAmount, $betAmount, 2);

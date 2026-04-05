@@ -112,12 +112,22 @@ class DGGameController
 
             //转账类型(1:下注 2:派彩 3:补单 5:红包 6:小费)
             if (in_array($type, [2, 5])) {
+                // ✅ 修复：区分派彩和红包的 diff 计算
+                if ($type == 2) {
+                    // type=2 派彩：需要计算 diff = win - bet
+                    $betAmount = getBetAmountWithFallback('DG', $orderNo, $player->id, $this->service->platform->id);
+                    $diff = bcsub($amount, $betAmount, 2);
+                } else {
+                    // type=5 红包：额外奖励，diff = amount
+                    $diff = $amount;
+                }
+
                 // type=2:派彩 type=5:红包 → Lua 原子结算
                 $luaParams = [
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $amount,
-                    'diff' => $amount,
+                    'diff' => $diff,  // ✅ 修正：根据类型计算 diff
                     'game_code' => $detail['gameId'] ?? '',
                     'transaction_type' => $type == 5 ? TransactionType::SETTLE_REWARD : TransactionType::SETTLE,
                     'original_data' => $params,
@@ -136,22 +146,12 @@ class DGGameController
 
                 // 审计日志
                 logLuaScriptCall('settle', 'DG', $player->id, $luaParams);
-                // 游戏交互日志
-                logGameInteraction('DG', 'cancel', $params, [
-                    'ok' => $result['ok'],
-                    'balance' => $result['balance'],
-                ]);
 
-                // 游戏交互日志
-                logGameInteraction('DG', 'bet', $params, [
-                    'ok' => $result['ok'],
-                    'balance' => $result['balance'],
-                ]);
-
-                // 游戏交互日志
+                // ✅ 修复：清理重复日志，只记录正确的结算日志
                 logGameInteraction('DG', 'settle', $params, [
                     'ok' => $result['ok'],
                     'balance' => $result['balance'],
+                    'type' => $type,  // 添加 type 字段便于区分
                 ]);
 
 
