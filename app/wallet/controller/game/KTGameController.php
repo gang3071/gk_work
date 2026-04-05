@@ -203,9 +203,8 @@ class KTGameController
                 $diff = bcsub($winAmount, $betAmount, 2);
 
                 // Lua 原子结算（使用独立的结算订单号避免冲突）
-                $settleOrderNo = $orderNo . '_settle';
                 $settleLuaParams = [
-                    'order_no' => $settleOrderNo,
+                    'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $winAmount,
                     'diff' => $diff,  // ✅ 修正：diff = win - bet
@@ -230,7 +229,7 @@ class KTGameController
                 if ($settleResult['ok'] === 1) {
                     $finalBalance = $settleResult['balance'];
                 } elseif ($settleResult['error'] === 'duplicate_order') {
-                    $this->logger->info('KT立即结算重复请求（Lua检测）', ['order_no' => $settleOrderNo]);
+                    $this->logger->info('KT立即结算重复请求（Lua检测）', ['order_no' => $orderNo]);
                     $finalBalance = $settleResult['balance'];
                 }
             }
