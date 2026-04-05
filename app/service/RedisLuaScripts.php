@@ -120,6 +120,7 @@ LUA;
      * ARGV[8] = 玩家ID
      * ARGV[9] = 平台ID
      * ARGV[10] = settle 记录 JSON（用于独立结算）
+     * ARGV[11] = 预格式化日期字符串 (Y-m-d H:i:s)
      *
      * 返回值：
      * - success: {ok: 1, balance: 新余额, old_balance: 旧余额}
@@ -160,7 +161,7 @@ if betExists == 1 then
         'settlement_status', 1,
         'transaction_type', ARGV[3],
         'settle_time', ARGV[4],
-        'platform_action_at', os.date('%Y-%m-%d %H:%M:%S', tonumber(ARGV[4])),
+        'platform_action_at', ARGV[11],
         'action_data', ARGV[7],
         'status', 'pending'
     )
@@ -185,7 +186,7 @@ else
         'settle_time', ARGV[4],
         'original_data', settleData.original_data or '{}',
         'status', 'pending',
-        'created_at', os.date('%Y-%m-%d %H:%M:%S', tonumber(ARGV[4]))
+        'created_at', ARGV[11]
     )
     redis.call('EXPIRE', KEYS[6], ARGV[5])
     redis.call('ZADD', KEYS[3], ARGV[4], KEYS[6])
@@ -396,17 +397,19 @@ LUA;
         // 支持新旧参数兼容
         $transactionType = $data['transaction_type'] ?? TransactionType::mapFromLegacy($data);
 
+        $timestamp = time();
         $argv = [
             $winAmount,                                      // ARGV[1]
             $diff,                                           // ARGV[2]
             $transactionType,                                // ARGV[3]
-            time(),                                          // ARGV[4]
+            $timestamp,                                      // ARGV[4]
             604800,                                          // ARGV[5]
             3600,                                            // ARGV[6]
             json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE), // ARGV[7]
             $playerId,                                       // ARGV[8]
             $data['platform_id'],                            // ARGV[9]
             $settleRecordJson,                               // ARGV[10]
+            date('Y-m-d H:i:s', $timestamp),                 // ARGV[11] - 预格式化日期
         ];
 
         $result = Redis::eval(self::LUA_ATOMIC_SETTLE, count($keys), ...array_merge($keys, $argv));
