@@ -160,7 +160,7 @@ if betExists == 1 then
         'settlement_status', 1,
         'transaction_type', ARGV[3],
         'settle_time', ARGV[4],
-        'platform_action_at', os.date('%Y-%m-%d %H:%M:%S', ARGV[4]),
+        'platform_action_at', os.date('%Y-%m-%d %H:%M:%S', tonumber(ARGV[4])),
         'action_data', ARGV[7],
         'status', 'pending'
     )
@@ -185,7 +185,7 @@ else
         'settle_time', ARGV[4],
         'original_data', settleData.original_data or '{}',
         'status', 'pending',
-        'created_at', os.date('%Y-%m-%d %H:%M:%S', ARGV[4])
+        'created_at', os.date('%Y-%m-%d %H:%M:%S', tonumber(ARGV[4]))
     )
     redis.call('EXPIRE', KEYS[6], ARGV[5])
     redis.call('ZADD', KEYS[3], ARGV[4], KEYS[6])
