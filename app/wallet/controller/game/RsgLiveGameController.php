@@ -188,7 +188,7 @@ class RsgLiveGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $params['transaction']['id'] ?? '';
+            $orderNo = (string)($params['transaction']['id'] ?? '');
             $betAmount = $params['transaction']['amount'] ?? 0;
 
             // Lua 原子下注
@@ -267,7 +267,7 @@ class RsgLiveGameController
             }
 
             $player = $this->service->player;
-            $orderNo = $params['transaction']['id'] ?? '';
+            $orderNo = (string)($params['transaction']['id'] ?? '');
             $winAmount = $params['transaction']['winAmount'] ?? 0;
 
             // 从 Redis 获取下注金额以计算正确的 diff（win - bet）

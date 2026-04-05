@@ -322,7 +322,7 @@ LUA;
         ];
 
         // 执行 Lua 脚本
-        $result = Redis::eval(self::LUA_ATOMIC_BET, array_merge($keys, $argv), count($keys));
+        $result = Redis::eval(self::LUA_ATOMIC_BET, count($keys), ...array_merge($keys, $argv));
 
         return json_decode($result, true);
     }
@@ -393,7 +393,7 @@ LUA;
             $settleRecordJson,                               // ARGV[10]
         ];
 
-        $result = Redis::eval(self::LUA_ATOMIC_SETTLE, array_merge($keys, $argv), count($keys));
+        $result = Redis::eval(self::LUA_ATOMIC_SETTLE, count($keys), ...array_merge($keys, $argv));
 
         return json_decode($result, true);
     }
@@ -443,7 +443,7 @@ LUA;
             json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE), // ARGV[5]
         ];
 
-        $result = Redis::eval(self::LUA_ATOMIC_CANCEL, array_merge($keys, $argv), count($keys));
+        $result = Redis::eval(self::LUA_ATOMIC_CANCEL, count($keys), ...array_merge($keys, $argv));
 
         return json_decode($result, true);
     }

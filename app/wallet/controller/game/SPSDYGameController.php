@@ -117,7 +117,7 @@ class SPSDYGameController
             $this->service->player = Player::query()->where('uuid', $params['User'])->first();
             $player = $this->service->player;
 
-            $orderNo = $params['OrderId'] ?? '';
+            $orderNo = (string)($params['OrderId'] ?? '');
             $ttype = $params['TType'] ?? 0;
             $amount = $params['Amount'] ?? 0;
 

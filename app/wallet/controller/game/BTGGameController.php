@@ -186,7 +186,7 @@ class BTGGameController
 
             // ========== Lua 原子操作处理 ==========
             $amount = abs((float)$params['amount']);
-            $orderId = $transDetails['order_id'] ?? '';
+            $orderId = (string)($transDetails['order_id'] ?? '');
             $transferType = $params['transfer_type'];
 
             $result = null;
