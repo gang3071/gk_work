@@ -447,17 +447,6 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
     }
 
     /**
-     * 查询余额
-     * @return mixed
-     * @deprecated 已迁移到 Redis Lua 原子脚本，此方法不再使用
-     */
-    public function balance(): mixed
-    {
-        // RSG 使用单一钱包，余额统一管理，不需要此方法
-        return 0;
-    }
-
-    /**
      * 下注
      * @param $data
      * @return mixed

@@ -138,9 +138,13 @@ class O8GameController
             // 1. 批量查询玩家（1 次数据库查询）
             $players = Player::query()->whereIn('uuid', $userIds)->get()->keyBy('uuid');
 
+            $this->logger->info('O8余额查询:玩家数据', ['players' => $players]);
+
             // 2. 批量查询余额（使用 WalletService::getBatchBalance）
             $playerIds = $players->pluck('id')->toArray();
             $balances = \app\service\WalletService::getBatchBalance($playerIds);
+
+            $this->logger->info('O8余额查询:余额数据', ['balances' => $balances]);
 
             // 3. 组装返回数据
             $return = [];
