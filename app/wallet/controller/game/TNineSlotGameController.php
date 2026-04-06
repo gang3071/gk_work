@@ -242,9 +242,9 @@ class TNineSlotGameController
             $afterBalance = $betResult['balance'];
 
             // T9Slot 总是下注后立即结算（Lua 原子操作）
-            $settleOrderNo = $orderNo . '_settle';
+            // 使用相同订单号，通过 transaction_type 区分 bet 和 settle
             $settleLuaParams = [
-                'order_no' => $settleOrderNo,
+                'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
                 'amount' => max($winAmount, 0),
                 'diff' => $winAmount,
@@ -269,7 +269,7 @@ class TNineSlotGameController
             // 保存结算记录到 Redis
             if ($settleResult['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveSettle('T9SLOT', [
-                    'order_no' => $settleOrderNo,
+                    'order_no' => $orderNo,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($winAmount, 0),
@@ -278,7 +278,7 @@ class TNineSlotGameController
                 ]);
                 $afterBalance = $settleResult['balance'];
             } elseif ($settleResult['error'] === 'duplicate_order') {
-                $this->logger->info('TNineSlot立即结算重复请求（Lua检测）', ['order_no' => $settleOrderNo]);
+                $this->logger->info('TNineSlot立即结算重复请求（Lua检测）', ['order_no' => $orderNo]);
                 $afterBalance = $settleResult['balance'];
             }
 
@@ -286,7 +286,7 @@ class TNineSlotGameController
             logGameInteraction('T9SLOT', 'settle', $params, [
                 'ok' => $settleResult['ok'],
                 'balance' => $settleResult['balance'],
-                'order_no' => $settleOrderNo,
+                'order_no' => $orderNo,
                 'win_amount' => $winAmount,
             ]);
 
