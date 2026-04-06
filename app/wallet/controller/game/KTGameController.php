@@ -11,7 +11,6 @@ use app\service\game\SingleWalletServiceInterface;
 use app\service\RedisLuaScripts;
 use Exception;
 use support\Log;
-use support\Redis;
 use support\Request;
 use support\Response;
 
@@ -169,6 +168,18 @@ class KTGameController
             // 审计日志
             logLuaScriptCall('bet', 'KT', $player->id, $luaParams);
 
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveBet('KT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $bet,
+                    'game_code' => $params['GameCode'] ?? '',
+                    'original_data' => $params,
+                ]);
+            }
+
             // 游戏交互日志
             logGameInteraction('KT', 'bet', $params, [
                 'ok' => $result['ok'],
@@ -224,7 +235,16 @@ class KTGameController
                 // 审计日志
                 logLuaScriptCall('settle', 'KT', $player->id, $settleLuaParams);
 
+                // 保存结算记录到 Redis
                 if ($settleResult['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveSettle('KT', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $winAmount,
+                        'diff' => $diff,
+                        'original_data' => $params,
+                    ]);
                     $finalBalance = $settleResult['balance'];
                 } elseif ($settleResult['error'] === 'duplicate_order') {
                     $this->logger->info('KT立即结算重复请求（Lua检测）', ['order_no' => $orderNo]);
@@ -301,6 +321,18 @@ class KTGameController
 
             // 审计日志
             logLuaScriptCall('settle', 'KT', $player->id, $luaParams);
+
+            // 保存结算记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveSettle('KT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $winAmount,
+                    'diff' => $diff,
+                    'original_data' => $data,
+                ]);
+            }
 
             // 游戏交互日志
             logGameInteraction('KT', 'settle', $data, [
@@ -408,6 +440,17 @@ class KTGameController
             // 审计日志
             logLuaScriptCall('cancel', 'KT', $player->id, $luaParams);
 
+            // 保存取消记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveCancel('KT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $refundAmount,
+                    'original_data' => $params,
+                ]);
+            }
+
             // 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 $this->logger->info('KT取消投注重复请求（Lua检测）', ['order_no' => $orderNo]);
@@ -471,6 +514,17 @@ class KTGameController
 
             // 审计日志
             logLuaScriptCall('cancel', 'KT', $player->id, $luaParams);
+
+            // 保存取消记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveCancel('KT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $refundAmount,
+                    'original_data' => $data,
+                ]);
+            }
 
             // 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_cancel') {

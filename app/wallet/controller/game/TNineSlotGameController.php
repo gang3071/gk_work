@@ -149,6 +149,18 @@ class TNineSlotGameController
                 // 审计日志
                 logLuaScriptCall('settle', 'T9SLOT', $player->id, $luaParams);
 
+                // 保存结算记录到 Redis（免费游戏）
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveSettle('T9SLOT', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => max($winAmount, 0),
+                        'diff' => $winAmount,
+                        'original_data' => $params,
+                    ]);
+                }
+
                 // 游戏交互日志
                 logGameInteraction('T9SLOT', 'settle', $params, [
                     'ok' => $result['ok'],
@@ -194,6 +206,18 @@ class TNineSlotGameController
 
             // 审计日志
             logLuaScriptCall('bet', 'T9SLOT', $player->id, $luaParams);
+
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            if ($betResult['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveBet('T9SLOT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $betAmount,
+                    'game_code' => $params['gameCode'] ?? '',
+                    'original_data' => $params,
+                ]);
+            }
 
             // 游戏交互日志
             logGameInteraction('T9SLOT', 'bet', $params, [
@@ -242,6 +266,22 @@ class TNineSlotGameController
             // 审计日志
             logLuaScriptCall('settle', 'T9SLOT', $player->id, $settleLuaParams);
 
+            // 保存结算记录到 Redis
+            if ($settleResult['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveSettle('T9SLOT', [
+                    'order_no' => $settleOrderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => max($winAmount, 0),
+                    'diff' => $winAmount,
+                    'original_data' => $params,
+                ]);
+                $afterBalance = $settleResult['balance'];
+            } elseif ($settleResult['error'] === 'duplicate_order') {
+                $this->logger->info('TNineSlot立即结算重复请求（Lua检测）', ['order_no' => $settleOrderNo]);
+                $afterBalance = $settleResult['balance'];
+            }
+
             // 游戏交互日志
             logGameInteraction('T9SLOT', 'settle', $params, [
                 'ok' => $settleResult['ok'],
@@ -249,13 +289,6 @@ class TNineSlotGameController
                 'order_no' => $settleOrderNo,
                 'win_amount' => $winAmount,
             ]);
-
-            if ($settleResult['ok'] === 1) {
-                $afterBalance = $settleResult['balance'];
-            } elseif ($settleResult['error'] === 'duplicate_order') {
-                $this->logger->info('TNineSlot立即结算重复请求（Lua检测）', ['order_no' => $settleOrderNo]);
-                $afterBalance = $settleResult['balance'];
-            }
 
             $this->logger->info('t9电子下注成功（Lua原子）', ['order_no' => $orderNo]);
 
@@ -342,6 +375,17 @@ class TNineSlotGameController
 
             // 审计日志
             logLuaScriptCall('cancel', 'T9SLOT', $player->id, $luaParams);
+
+            // 保存取消记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveCancel('T9SLOT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $refundAmount,
+                    'original_data' => $params,
+                ]);
+            }
 
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 $this->logger->info('TNineSlot取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);

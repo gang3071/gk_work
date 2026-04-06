@@ -213,6 +213,18 @@ class RsgLiveGameController
             // 审计日志
             logLuaScriptCall('bet', 'RSGLIVE', $player->id, $luaParams);
 
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveBet('RSGLIVE', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $betAmount,
+                    'game_code' => $params['transaction']['gameCode'] ?? '',
+                    'original_data' => $params,
+                ]);
+            }
+
             // 游戏交互日志
             logGameInteraction('RSGLIVE', 'bet', $params, [
                 'ok' => $result['ok'],
@@ -305,6 +317,18 @@ class RsgLiveGameController
 
             // 审计日志
             logLuaScriptCall('settle', 'RSGLIVE', $player->id, $luaParams);
+
+            // 保存结算记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveSettle('RSGLIVE', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => max($winAmount, 0),
+                    'diff' => $diff,
+                    'original_data' => $params,
+                ]);
+            }
 
             // 处理结算结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {

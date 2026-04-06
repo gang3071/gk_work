@@ -188,6 +188,19 @@ class RsgGameController
                 'amount' => $data['Amount'],
             ]);
 
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveBet('RSG', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $data['Amount'],
+                    'game_code' => $data['GameId'] ?? '',
+                    'game_type' => $data['GameType'] ?? '',
+                    'original_data' => $data,
+                ]);
+            }
+
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => (float)$result['balance']
             ]);
@@ -272,6 +285,17 @@ class RsgGameController
                 'balance_before' => $result['old_balance'],
                 'balance_after' => $result['balance'],
             ]);
+
+            // 保存取消记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveCancel('RSG', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $refundAmount,
+                    'original_data' => $data,
+                ]);
+            }
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => (float)$result['balance']
@@ -361,6 +385,18 @@ class RsgGameController
                 'balance_before' => $result['old_balance'],
                 'balance_after' => $result['balance'],
             ]);
+
+            // 保存结算记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveSettle('RSG', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $winAmount,
+                    'diff' => bcsub($winAmount, $data['BetAmount'] ?? 0, 2),
+                    'original_data' => $data,
+                ]);
+            }
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => (float)$result['balance']

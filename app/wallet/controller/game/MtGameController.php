@@ -158,6 +158,20 @@ class MtGameController
                 'order_no' => $orderNo,
             ]);
 
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveBet('MT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $data['order_money'],
+                    'game_code' => $data['game_code'] ?? '',
+                    'game_type' => $data['gameType'] ?? '',
+                    'game_name' => $data['gameName'] ?? '',
+                    'original_data' => $data,
+                ]);
+            }
+
             // 4. 处理结果
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
@@ -248,6 +262,17 @@ class MtGameController
                 'refund_amount' => $data['order_money'],
             ]);
 
+            // 保存取消记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveCancel('MT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $data['order_money'],
+                    'original_data' => $data,
+                ]);
+            }
+
             // 4. 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 Log::channel('mt_server')->info('MT取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);
@@ -337,6 +362,18 @@ class MtGameController
                 'order_no' => $orderNo,
                 'win_amount' => $winMoney,
             ]);
+
+            // 保存结算记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveSettle('MT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $winMoney,
+                    'diff' => $winMoney,
+                    'original_data' => $data,
+                ]);
+            }
 
             // 4. 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {

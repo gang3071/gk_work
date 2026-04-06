@@ -264,6 +264,18 @@ class O8GameController
                     }
                 }
 
+                // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveBet('O8', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $platformId,
+                        'amount' => $bet,
+                        'game_code' => $order['gamecode'] ?? '',
+                        'original_data' => $order,
+                    ]);
+                }
+
                 $return['transactions'][] = [
                     'txid' => $orderNo,
                     'ptxid' => $order['ptxid'],
@@ -350,6 +362,18 @@ class O8GameController
                         'dup' => true
                     ];
                     continue;
+                }
+
+                // 保存结算记录到 Redis
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveSettle('O8', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $actualAmount,
+                        'diff' => $winAmount,
+                        'original_data' => $order,
+                    ]);
                 }
 
                 $return['transactions'][] = [
@@ -444,6 +468,17 @@ class O8GameController
             // 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_cancel') {
                 $this->logger->info('O8退款重复请求（Lua检测）', ['order_no' => $orderNo]);
+            }
+
+            // 保存取消记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveCancel('O8', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $refundAmount,
+                    'original_data' => $data,
+                ]);
             }
 
             $this->logger->info('O8退款成功（Lua原子）', ['order_no' => $orderNo]);

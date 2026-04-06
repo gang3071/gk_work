@@ -134,6 +134,18 @@ class ATGGameController
             // 审计日志
             logLuaScriptCall('bet', 'ATG', $player->id, $luaParams);
 
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveBet('ATG', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $bet,
+                    'game_code' => $data['gameCode'] ?? '',
+                    'original_data' => $data,
+                ]);
+            }
+
             // 游戏交互日志
             logGameInteraction('ATG', 'bet', $data, [
                 'ok' => $result['ok'],
@@ -226,6 +238,18 @@ class ATGGameController
             // 审计日志
             logLuaScriptCall('settle', 'ATG', $player->id, $luaParams);
 
+            // 保存结算记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveSettle('ATG', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => max($winAmount, 0),
+                    'diff' => $diff,
+                    'original_data' => $data,
+                ]);
+            }
+
             // 处理返回结果
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_settle') {
@@ -294,6 +318,17 @@ class ATGGameController
 
             // 审计日志
             logLuaScriptCall('cancel', 'ATG', $player->id, $luaParams);
+
+            // 保存取消记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveCancel('ATG', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $refundAmount,
+                    'original_data' => $data,
+                ]);
+            }
 
             // 处理返回结果
             if ($result['ok'] === 0) {

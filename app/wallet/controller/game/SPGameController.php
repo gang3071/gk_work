@@ -112,6 +112,18 @@ class SPGameController
             // 审计日志
             logLuaScriptCall('bet', 'SP', $player->id, $luaParams);
 
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveBet('SP', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $bet,
+                    'game_code' => $data['gamecode'] ?? '',
+                    'original_data' => $data,
+                ]);
+            }
+
             // 游戏交互日志
             logGameInteraction('SP', 'bet', $data, [
                 'ok' => $result['ok'],
@@ -193,6 +205,17 @@ class SPGameController
             // 审计日志
             logLuaScriptCall('cancel', 'SP', $player->id, $luaParams);
 
+            // 保存取消记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveCancel('SP', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $refundAmount,
+                    'original_data' => $data,
+                ]);
+            }
+
             // 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 Log::channel('sp_server')->info('SP取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);
@@ -266,6 +289,15 @@ class SPGameController
                 logLuaScriptCall('settle', 'SP', $player->id, $luaParams);
 
                 if ($result['ok'] === 1) {
+                    // 保存结算记录到 Redis
+                    \app\service\GameRecordCacheService::saveSettle('SP', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $resultAmount,
+                        'diff' => $betInfo['resultamount'],
+                        'original_data' => $betInfo,
+                    ]);
                     $processedCount++;
                     $lastBalance = $result['balance'];
                 } elseif ($result['error'] === 'duplicate_order') {

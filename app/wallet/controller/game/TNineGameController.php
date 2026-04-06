@@ -184,6 +184,18 @@ class TNineGameController
                 // 审计日志
                 logLuaScriptCall('bet', 'TNINE', $player->id, $luaParams);
 
+                // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveBet('TNINE', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $bet,
+                        'game_code' => $params['GameType'] ?? '',
+                        'original_data' => $order,
+                    ]);
+                }
+
                 // 游戏交互日志
                 logGameInteraction('TNINE', 'bet', $params, [
                     'ok' => $result['ok'],
@@ -273,6 +285,18 @@ class TNineGameController
 
             // 审计日志
             logLuaScriptCall('settle', 'TNINE', $player->id, $luaParams);
+
+            // 保存结算记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveSettle('TNINE', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => max($money, 0),
+                    'diff' => $winAmount,
+                    'original_data' => $params,
+                ]);
+            }
 
             // 处理返回结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {

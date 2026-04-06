@@ -159,6 +159,18 @@ class DGGameController
                     Log::channel('dg_server')->info('DG结算重复请求（Lua检测）', ['order_no' => $orderNo, 'type' => $type]);
                 }
 
+                // 保存结算记录到 Redis
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveSettle('DG', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $amount,
+                        'diff' => $diff,
+                        'original_data' => $params,
+                    ]);
+                }
+
             } else {
                 // type=1:下注 type=3:补单 type=6:小费 → Lua 原子下注
                 if ($amount > 0) {
@@ -190,6 +202,18 @@ class DGGameController
                         } elseif ($result['error'] === 'insufficient_balance') {
                             return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
                         }
+                    }
+
+                    // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+                    if ($result['ok'] === 1) {
+                        \app\service\GameRecordCacheService::saveBet('DG', [
+                            'order_no' => $orderNo,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $amount,
+                            'game_code' => $detail['gameId'] ?? '',
+                            'original_data' => $params,
+                        ]);
                     }
                 } else {
                     // amount = 0 的特殊情况，直接返回
@@ -297,6 +321,17 @@ class DGGameController
                     Log::channel('dg_server')->info('DG取消重复请求（Lua检测）', ['order_no' => $orderNo]);
                 }
 
+                // 保存取消记录到 Redis
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveCancel('DG', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'refund_amount' => $amount,
+                        'original_data' => $params,
+                    ]);
+                }
+
             } elseif ($type == 7) {
                 // type=7: 补偿 → Lua 原子结算
                 $luaParams = [
@@ -325,6 +360,18 @@ class DGGameController
 
                 if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                     Log::channel('dg_server')->info('DG补偿重复请求（Lua检测）', ['order_no' => $orderNo]);
+                }
+
+                // 保存补偿记录到 Redis
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveSettle('DG', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $amount,
+                        'diff' => $amount,
+                        'original_data' => $params,
+                    ]);
                 }
 
             } else {

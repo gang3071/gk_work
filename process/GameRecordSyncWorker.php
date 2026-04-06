@@ -44,6 +44,11 @@ class GameRecordSyncWorker
      */
     private const BATCH_SIZE = 100;
 
+    /**
+     * 执行锁标志
+     */
+    private bool $isRunning = false;
+
     public function __construct()
     {
         $this->log = Log::channel('game_bet_record');
@@ -75,6 +80,13 @@ class GameRecordSyncWorker
      */
     private function syncRecords(): void
     {
+        // ✅ 执行锁：防止重复执行
+        if ($this->isRunning) {
+            $this->log->debug("上次同步仍在执行，跳过本次");
+            return;
+        }
+
+        $this->isRunning = true;
         $startTime = microtime(true);
 
         try {
@@ -82,6 +94,12 @@ class GameRecordSyncWorker
             $records = GameRecordCacheService::getPendingSyncRecords(self::BATCH_SIZE);
 
             if (empty($records)) {
+                // 每10秒记录一次（避免日志刷屏）
+                static $lastLogTime = 0;
+                if (time() - $lastLogTime >= 10) {
+                    $this->log->debug("队列为空，无待同步记录");
+                    $lastLogTime = time();
+                }
                 return;  // 无待同步记录
             }
 
@@ -107,6 +125,9 @@ class GameRecordSyncWorker
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
+        } finally {
+            // ✅ 释放执行锁
+            $this->isRunning = false;
         }
     }
 

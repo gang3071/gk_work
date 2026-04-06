@@ -430,6 +430,18 @@ class QTGameController
 
                     // 审计日志
                     logLuaScriptCall('bet', 'QT', $player->id, $luaParams);
+
+                    // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+                    if ($result['ok'] === 1) {
+                        \app\service\GameRecordCacheService::saveBet('QT', [
+                            'order_no' => $txnId,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => 0,
+                            'game_code' => $gameId,
+                            'original_data' => $params,
+                        ]);
+                    }
                 } else {
                     // 普通下注：扣款
                     $luaParams = [
@@ -453,6 +465,18 @@ class QTGameController
 
                     // 审计日志
                     logLuaScriptCall('bet', 'QT', $player->id, $luaParams);
+
+                    // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+                    if ($result['ok'] === 1) {
+                        \app\service\GameRecordCacheService::saveBet('QT', [
+                            'order_no' => $txnId,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $amount,
+                            'game_code' => $gameId,
+                            'original_data' => $params,
+                        ]);
+                    }
                 }
 
                 // 游戏交互日志
@@ -498,6 +522,18 @@ class QTGameController
 
                 // 审计日志
                 logLuaScriptCall('settle', 'QT', $player->id, $luaParams);
+
+                // 保存结算记录到 Redis
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveSettle('QT', [
+                        'order_no' => $txnId,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => max($amount, 0),
+                        'diff' => $amount,
+                        'original_data' => $params,
+                    ]);
+                }
 
                 // 游戏交互日志
                 logGameInteraction('QT', 'credit', $params, [
@@ -839,6 +875,17 @@ class QTGameController
 
             // 审计日志
             logLuaScriptCall('cancel', 'QT', $player->id, $luaParams);
+
+            // 保存取消记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveCancel('QT', [
+                    'order_no' => $txnId,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $amount,
+                    'original_data' => $params,
+                ]);
+            }
 
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 $this->logger->info('QT回滚重复请求（Lua检测）', ['txnId' => $txnId]);

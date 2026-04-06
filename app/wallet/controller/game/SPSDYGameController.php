@@ -134,6 +134,18 @@ class SPSDYGameController
                     'original_data' => $params,
                 ]);
 
+                // 保存结算记录到 Redis
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveSettle('SPSDY', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => max($amount, 0),
+                        'diff' => $amount,
+                        'original_data' => $params,
+                    ]);
+                }
+
                 // 游戏交互日志
                 logGameInteraction('SPSDY', 'settle', $params, [
                     'ok' => $result['ok'],
@@ -162,6 +174,18 @@ class SPSDYGameController
                 'transaction_type' => TransactionType::BET,
                 'original_data' => $params,
             ]);
+
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveBet('SPSDY', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $amount,
+                    'game_code' => '',
+                    'original_data' => $params,
+                ]);
+            }
 
             // 游戏交互日志
             logGameInteraction('SPSDY', 'bet', $params, [
