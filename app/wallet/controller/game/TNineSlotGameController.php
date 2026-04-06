@@ -157,7 +157,7 @@ class TNineSlotGameController
                         'platform_id' => $this->service->platform->id,
                         'amount' => max($winAmount, 0),
                         'diff' => $winAmount,
-                        'game_code' => $params['gameCode'] ?? '',
+                        'game_code' => $this->extractGameCode($params),
                         'original_data' => $params,
                     ]);
                 }
@@ -215,7 +215,7 @@ class TNineSlotGameController
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $betAmount,
-                    'game_code' => $params['gameCode'] ?? '',
+                    'game_code' => $this->extractGameCode($params),
                     'original_data' => $params,
                 ]);
             }
@@ -275,7 +275,7 @@ class TNineSlotGameController
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($winAmount, 0),
                     'diff' => $winAmount,
-                    'game_code' => $params['gameCode'] ?? '',
+                    'game_code' => $this->extractGameCode($params),
                     'original_data' => $params,
                 ]);
                 $afterBalance = $settleResult['balance'];
@@ -453,5 +453,35 @@ class TNineSlotGameController
             ['Content-Type' => 'application/json'],
             json_encode($responseData)
         ));
+    }
+
+    /**
+     * 从T9Slot请求参数中提取游戏编号
+     *
+     * betInfoData结构示例：
+     * {
+     *   "SlotsFishing": {"GameCode": "SL2573", "GameName": "關老爺"},
+     *   "LiveCasino": {"GameCode": "LC001", "GameName": "百家樂"}
+     * }
+     *
+     * @param array $params 请求参数
+     * @return string 游戏编号
+     */
+    private function extractGameCode(array $params): string
+    {
+        $betInfoData = $params['betInfoData'] ?? [];
+
+        if (empty($betInfoData) || !is_array($betInfoData)) {
+            return '';
+        }
+
+        // 获取第一个游戏类型（SlotsFishing, LiveCasino等）
+        $firstType = reset($betInfoData);
+
+        if (is_array($firstType)) {
+            return $firstType['GameCode'] ?? '';
+        }
+
+        return '';
     }
 }
