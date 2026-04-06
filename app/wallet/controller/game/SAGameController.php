@@ -297,6 +297,7 @@ class SAGameController
                         'platform_id' => $this->service->platform->id,
                         'amount' => $resultAmount,
                         'diff' => $betInfo['resultamount'],
+                        'game_code' => $betInfo['hostid'] ?? '',
                         'original_data' => $betInfo,
                     ]);
                     $processedCount++;

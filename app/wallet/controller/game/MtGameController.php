@@ -371,6 +371,7 @@ class MtGameController
                     'platform_id' => $this->service->platform->id,
                     'amount' => $winMoney,
                     'diff' => $winMoney,
+                    'game_code' => $data['game_code'] ?? '',
                     'original_data' => $data,
                 ]);
             }

@@ -394,6 +394,7 @@ class RsgGameController
                     'platform_id' => $this->service->platform->id,
                     'amount' => $winAmount,
                     'diff' => bcsub($winAmount, $data['BetAmount'] ?? 0, 2),
+                    'game_code' => $data['GameId'] ?? '',
                     'original_data' => $data,
                 ]);
             }
