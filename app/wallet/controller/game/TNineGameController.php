@@ -294,6 +294,7 @@ class TNineGameController
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($money, 0),
                     'diff' => $winAmount,
+                    'game_code' => $params['GameType'] ?? '',
                     'original_data' => $params,
                 ]);
             }

@@ -372,6 +372,7 @@ class O8GameController
                         'platform_id' => $this->service->platform->id,
                         'amount' => $actualAmount,
                         'diff' => $winAmount,
+                        'game_code' => $order['gamecode'] ?? '',
                         'original_data' => $order,
                     ]);
                 }

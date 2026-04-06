@@ -531,6 +531,7 @@ class QTGameController
                         'platform_id' => $this->service->platform->id,
                         'amount' => max($amount, 0),
                         'diff' => $amount,
+                        'game_code' => $params['gameId'] ?? '',
                         'original_data' => $params,
                     ]);
                 }
