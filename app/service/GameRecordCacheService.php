@@ -273,30 +273,29 @@ LUA;
     }
 
     /**
-     * 获取缓存余额
+     * 获取缓存余额（单一钱包）
+     *
+     * 注意：此方法已废弃，建议直接使用 Lua 脚本返回的余额
+     * 仅用于需要返回操作前余额的特殊场景（如DG平台）
+     *
+     * @deprecated 建议使用 Lua 脚本返回的余额
      */
     public static function getCachedBalance(int $playerId): float
     {
-        $key = self::PREFIX_BALANCE . $playerId;
-        $balance = Redis::get($key);
-
-        if ($balance === null) {
-            // 从数据库读取并缓存
-            $wallet = \app\model\PlayerPlatformCash::where('player_id', $playerId)->first();
-            $balance = $wallet ? $wallet->money : 0;
-            self::updateCachedBalance($playerId, (float)$balance);
-        }
-
-        return (float)$balance;
+        // 直接从 player 表读取（单一钱包）
+        $player = \app\model\Player::find($playerId);
+        return $player ? (float)$player->money : 0.0;
     }
 
     /**
      * 更新缓存余额
+     *
+     * @deprecated 单一钱包模式下不需要缓存余额，Lua脚本直接操作player.money
      */
     public static function updateCachedBalance(int $playerId, float $balance): void
     {
-        $key = self::PREFIX_BALANCE . $playerId;
-        Redis::setex($key, self::TTL_BALANCE, $balance);
+        // 单一钱包模式下不需要此方法，保留空实现避免兼容性问题
+        // 余额由 Lua 脚本直接更新到 player 表
     }
 
     /**

@@ -6,14 +6,20 @@ use support\Log;
 use support\Redis;
 
 /**
- * Redis 钱包服务
- * 用于快速路径的余额操作，提供极致性能
+ * Redis 钱包服务（已废弃）
  *
- * 🚀 核心功能：
- * - Redis 临时钱包（快速扣款/加款）
- * - 分布式锁（防止并发冲突）
- * - 订单幂等性（防止重复处理）
- * - 对账同步（保证最终一致性）
+ * ⚠️ 警告：此类已废弃，请勿使用！
+ *
+ * 原因：
+ * - 所有平台已迁移到单一钱包模式
+ * - 使用 Lua 原子脚本直接操作 player.money
+ * - 不再需要分平台的 Redis 余额缓存
+ *
+ * 替代方案：
+ * - 使用 RedisLuaScripts::atomicBet/atomicSettle/atomicCancel
+ * - 余额直接从 player.money 读取
+ *
+ * @deprecated 已迁移到单一钱包+Lua原子操作，此类保留仅为兼容性
  */
 class RedisWalletService
 {
