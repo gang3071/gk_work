@@ -49,7 +49,8 @@ return [
     'BurstCleaner' => [
         'handler' => BurstCleaner::class
     ],
-    // Redis 钱包对账任务（每分钟）
+    // ✅ Redis 钱包对账任务（每10分钟）
+    // 作用：监控和兜底，确保 Redis 与 MySQL 数据一致性
     'ReconciliationTask' => [
         'handler' => ReconciliationTask::class
     ],
