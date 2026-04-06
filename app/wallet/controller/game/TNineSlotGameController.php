@@ -157,6 +157,7 @@ class TNineSlotGameController
                         'platform_id' => $this->service->platform->id,
                         'amount' => max($winAmount, 0),
                         'diff' => $winAmount,
+                        'game_code' => $params['gameCode'] ?? '',
                         'original_data' => $params,
                     ]);
                 }
@@ -274,6 +275,7 @@ class TNineSlotGameController
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($winAmount, 0),
                     'diff' => $winAmount,
+                    'game_code' => $params['gameCode'] ?? '',
                     'original_data' => $params,
                 ]);
                 $afterBalance = $settleResult['balance'];
