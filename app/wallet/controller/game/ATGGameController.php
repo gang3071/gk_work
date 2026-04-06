@@ -246,6 +246,7 @@ class ATGGameController
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($winAmount, 0),
                     'diff' => $diff,
+                    'game_code' => $data['gameCode'] ?? '',
                     'original_data' => $data,
                 ]);
             }

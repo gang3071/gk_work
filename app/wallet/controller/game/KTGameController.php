@@ -243,6 +243,7 @@ class KTGameController
                         'platform_id' => $this->service->platform->id,
                         'amount' => $winAmount,
                         'diff' => $diff,
+                        'game_code' => $params['GameID'] ?? '',
                         'original_data' => $params,
                     ]);
                     $finalBalance = $settleResult['balance'];
@@ -330,6 +331,7 @@ class KTGameController
                     'platform_id' => $this->service->platform->id,
                     'amount' => $winAmount,
                     'diff' => $diff,
+                    'game_code' => $data['GameID'] ?? '',
                     'original_data' => $data,
                 ]);
             }
