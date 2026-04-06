@@ -286,6 +286,7 @@ class BTGGameController
                             'platform_id' => $this->service->platform->id,
                             'amount' => $amount,
                             'diff' => $amount,
+                            'game_code' => $params['game_code'] ?? '',
                             'original_data' => $params,
                         ]);
                     }
@@ -388,6 +389,7 @@ class BTGGameController
                                 'platform_id' => $this->service->platform->id,
                                 'amount' => $adjustAmount,
                                 'diff' => $adjustAmount,
+                                'game_code' => $params['game_code'] ?? '',
                                 'original_data' => $params,
                             ]);
                         }
@@ -499,6 +501,7 @@ class BTGGameController
                             'platform_id' => $this->service->platform->id,
                             'amount' => $amount,
                             'diff' => $amount,
+                            'game_code' => $params['game_code'] ?? '',
                             'original_data' => $params,
                         ]);
                     }

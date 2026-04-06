@@ -142,6 +142,7 @@ class SPSDYGameController
                         'platform_id' => $this->service->platform->id,
                         'amount' => max($amount, 0),
                         'diff' => $amount,
+                        'game_code' => '',
                         'original_data' => $params,
                     ]);
                 }

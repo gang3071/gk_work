@@ -167,6 +167,7 @@ class DGGameController
                         'platform_id' => $this->service->platform->id,
                         'amount' => $amount,
                         'diff' => $diff,
+                        'game_code' => $params['gameId'] ?? '',
                         'original_data' => $params,
                     ]);
                 }
@@ -370,6 +371,7 @@ class DGGameController
                         'platform_id' => $this->service->platform->id,
                         'amount' => $amount,
                         'diff' => $amount,
+                        'game_code' => $params['gameId'] ?? '',
                         'original_data' => $params,
                     ]);
                 }

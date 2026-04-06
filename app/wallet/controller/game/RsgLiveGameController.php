@@ -326,6 +326,7 @@ class RsgLiveGameController
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($winAmount, 0),
                     'diff' => $diff,
+                    'game_code' => $params['transaction']['gameCode'] ?? '',
                     'original_data' => $params,
                 ]);
             }
