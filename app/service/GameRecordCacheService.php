@@ -263,6 +263,8 @@ LUA;
 
         // 如果重试次数 < 3，重置为 pending 状态，重新加入队列（延迟10秒）
         if ($retryCount < 3) {
+            // 重置状态为 pending，以便 Lua 脚本可以重新处理
+            Redis::hSet($redisKey, 'status', 'pending');
             Redis::zAdd(self::PREFIX_SYNC_QUEUE, time() + 10, $redisKey);
         } else {
             // 重试次数过多，移除队列，等待人工处理
