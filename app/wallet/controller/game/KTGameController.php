@@ -175,7 +175,7 @@ class KTGameController
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $bet,
-                    'game_code' => $params['GameCode'] ?? '',
+                    'game_code' => $params['GameID'] ?? '',
                     'original_data' => $params,
                 ]);
             }
