@@ -217,7 +217,7 @@ class BTGGameController
                     // 审计日志
                     logLuaScriptCall('bet', 'BTG', $player->id, $luaParams);
 
-                    // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+                    // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                     if ($result['ok'] === 1) {
                         \app\service\GameRecordCacheService::saveBet('BTG', [
                             'order_no' => $orderId,
@@ -226,6 +226,8 @@ class BTGGameController
                             'amount' => $amount,
                             'game_code' => $params['game_code'] ?? '',
                             'original_data' => $params,
+                            'balance_before' => $result['old_balance'] ?? 0,
+                            'balance_after' => $result['balance'],
                         ]);
                     }
 
@@ -278,7 +280,7 @@ class BTGGameController
                     // 审计日志
                     logLuaScriptCall('settle', 'BTG', $player->id, $luaParams);
 
-                    // 保存结算记录到 Redis
+                    // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                     if ($result['ok'] === 1) {
                         \app\service\GameRecordCacheService::saveSettle('BTG', [
                             'order_no' => $orderId,
@@ -288,6 +290,8 @@ class BTGGameController
                             'diff' => $amount,
                             'game_code' => $params['game_code'] ?? '',
                             'original_data' => $params,
+                            'balance_before' => $result['old_balance'] ?? 0,
+                            'balance_after' => $result['balance'],
                         ]);
                     }
 
@@ -335,6 +339,8 @@ class BTGGameController
                             'platform_id' => $this->service->platform->id,
                             'refund_amount' => $amount,
                             'original_data' => $params,
+                            'balance_before' => $result['old_balance'] ?? 0,
+                            'balance_after' => $result['balance'],
                         ]);
                     }
 
@@ -381,7 +387,7 @@ class BTGGameController
                         // 审计日志
                         logLuaScriptCall('settle', 'BTG', $player->id, $luaParams);
 
-                        // 保存结算记录到 Redis（调整加款）
+                        // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                         if ($result['ok'] === 1) {
                             \app\service\GameRecordCacheService::saveSettle('BTG', [
                                 'order_no' => $orderId,
@@ -391,6 +397,8 @@ class BTGGameController
                                 'diff' => $adjustAmount,
                                 'game_code' => $params['game_code'] ?? '',
                                 'original_data' => $params,
+                                'balance_before' => $result['old_balance'] ?? 0,
+                                'balance_after' => $result['balance'],
                             ]);
                         }
 
@@ -431,7 +439,7 @@ class BTGGameController
                         // 审计日志
                         logLuaScriptCall('bet', 'BTG', $player->id, $luaParams);
 
-                        // 保存下注记录到 Redis（调整扣款）
+                        // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                         if ($result['ok'] === 1) {
                             \app\service\GameRecordCacheService::saveBet('BTG', [
                                 'order_no' => $orderId,
@@ -440,6 +448,8 @@ class BTGGameController
                                 'amount' => $deductAmount,
                                 'game_code' => $params['game_code'] ?? '',
                                 'original_data' => $params,
+                                'balance_before' => $result['old_balance'] ?? 0,
+                                'balance_after' => $result['balance'],
                             ]);
                         }
 
@@ -493,7 +503,7 @@ class BTGGameController
                     // 审计日志
                     logLuaScriptCall('settle', 'BTG', $player->id, $luaParams);
 
-                    // 保存结算记录到 Redis（奖金）
+                    // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                     if ($result['ok'] === 1) {
                         \app\service\GameRecordCacheService::saveSettle('BTG', [
                             'order_no' => $orderId,
@@ -503,6 +513,8 @@ class BTGGameController
                             'diff' => $amount,
                             'game_code' => $params['game_code'] ?? '',
                             'original_data' => $params,
+                            'balance_before' => $result['old_balance'] ?? 0,
+                            'balance_after' => $result['balance'],
                         ]);
                     }
 

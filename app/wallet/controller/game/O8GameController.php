@@ -264,7 +264,7 @@ class O8GameController
                     }
                 }
 
-                // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+                // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                 if ($result['ok'] === 1) {
                     \app\service\GameRecordCacheService::saveBet('O8', [
                         'order_no' => $orderNo,
@@ -273,6 +273,8 @@ class O8GameController
                         'amount' => $bet,
                         'game_code' => $order['gamecode'] ?? '',
                         'original_data' => $order,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
                     ]);
                 }
 
@@ -364,7 +366,7 @@ class O8GameController
                     continue;
                 }
 
-                // 保存结算记录到 Redis
+                // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                 if ($result['ok'] === 1) {
                     \app\service\GameRecordCacheService::saveSettle('O8', [
                         'order_no' => $orderNo,
@@ -374,6 +376,8 @@ class O8GameController
                         'diff' => $winAmount,
                         'game_code' => $order['gamecode'] ?? '',
                         'original_data' => $order,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
                     ]);
                 }
 
@@ -479,6 +483,8 @@ class O8GameController
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $refundAmount,
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 

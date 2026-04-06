@@ -144,6 +144,8 @@ class SPSDYGameController
                         'diff' => $amount,
                         'game_code' => '',
                         'original_data' => $params,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
                     ]);
                 }
 
@@ -185,6 +187,8 @@ class SPSDYGameController
                     'amount' => $amount,
                     'game_code' => '',
                     'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 

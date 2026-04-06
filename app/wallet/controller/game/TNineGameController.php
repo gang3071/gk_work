@@ -193,6 +193,8 @@ class TNineGameController
                         'amount' => $bet,
                         'game_code' => $params['GameType'] ?? '',
                         'original_data' => $order,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
                     ]);
                 }
 
@@ -296,6 +298,8 @@ class TNineGameController
                     'diff' => $winAmount,
                     'game_code' => $params['GameType'] ?? '',
                     'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 

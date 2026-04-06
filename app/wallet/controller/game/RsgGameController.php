@@ -188,7 +188,7 @@ class RsgGameController
                 'amount' => $data['Amount'],
             ]);
 
-            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveBet('RSG', [
                     'order_no' => $orderNo,
@@ -198,6 +198,9 @@ class RsgGameController
                     'game_code' => $data['GameId'] ?? '',
                     'game_type' => $data['GameType'] ?? '',
                     'original_data' => $data,
+                    // ✅ 传入余额数据供 Worker 推送
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -294,6 +297,8 @@ class RsgGameController
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $refundAmount,
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -386,7 +391,7 @@ class RsgGameController
                 'balance_after' => $result['balance'],
             ]);
 
-            // 保存结算记录到 Redis
+            // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveSettle('RSG', [
                     'order_no' => $orderNo,
@@ -396,6 +401,8 @@ class RsgGameController
                     'diff' => bcsub($winAmount, $data['BetAmount'] ?? 0, 2),
                     'game_code' => $data['GameId'] ?? '',
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 

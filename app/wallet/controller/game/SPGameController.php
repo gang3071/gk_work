@@ -112,7 +112,7 @@ class SPGameController
             // 审计日志
             logLuaScriptCall('bet', 'SP', $player->id, $luaParams);
 
-            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveBet('SP', [
                     'order_no' => $orderNo,
@@ -121,6 +121,8 @@ class SPGameController
                     'amount' => $bet,
                     'game_code' => $data['gamecode'] ?? '',
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -213,6 +215,8 @@ class SPGameController
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $refundAmount,
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -289,7 +293,7 @@ class SPGameController
                 logLuaScriptCall('settle', 'SP', $player->id, $luaParams);
 
                 if ($result['ok'] === 1) {
-                    // 保存结算记录到 Redis
+                    // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                     \app\service\GameRecordCacheService::saveSettle('SP', [
                         'order_no' => $orderNo,
                         'player_id' => $player->id,
@@ -298,6 +302,8 @@ class SPGameController
                         'diff' => $betInfo['resultamount'],
                         'game_code' => $betInfo['gamecode'] ?? '',
                         'original_data' => $betInfo,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
                     ]);
                     $processedCount++;
                     $lastBalance = $result['balance'];

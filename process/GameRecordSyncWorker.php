@@ -342,6 +342,9 @@ class GameRecordSyncWorker
             'count' => count($insertData),
         ]);
 
+        // 7. 批量推送余额变化（下注）
+        $this->batchPushBalanceChanges($records, 'bet');
+
         return count($insertData);
     }
 
@@ -387,6 +390,28 @@ class GameRecordSyncWorker
             $this->log->info("批量更新记录", [
                 'count' => $updated,
             ]);
+
+            // ✅ 批量推送余额变化（结算和取消）
+            // 分离结算和取消记录
+            $settleRecords = [];
+            $cancelRecords = [];
+
+            foreach ($records as $record) {
+                if (isset($record['cancel_type'])) {
+                    // 有 cancel_type 说明是取消操作
+                    $cancelRecords[] = $record;
+                } else {
+                    // 否则是结算操作
+                    $settleRecords[] = $record;
+                }
+            }
+
+            if (!empty($settleRecords)) {
+                $this->batchPushBalanceChanges($settleRecords, 'settle');
+            }
+            if (!empty($cancelRecords)) {
+                $this->batchPushBalanceChanges($cancelRecords, 'cancel');
+            }
         }
 
         return $updated;
@@ -759,6 +784,65 @@ class GameRecordSyncWorker
         }
 
         return true;
+    }
+
+    /**
+     * 批量推送余额变化到客户端
+     *
+     * @param array $records Redis 缓存记录数组
+     * @param string $reason 推送原因（bet | settle | cancel）
+     */
+    private function batchPushBalanceChanges(array $records, string $reason): void
+    {
+        $pushCount = 0;
+        $skipCount = 0;
+
+        foreach ($records as $record) {
+            try {
+                $playerId = $record['player_id'] ?? null;
+                $platform = $record['platform'] ?? '';
+
+                // ✅ 统一使用 balance_before 和 balance_after 字段
+                $oldBalance = $record['balance_before'] ?? '';
+                $newBalance = $record['balance_after'] ?? '';
+
+                // 检查是否有余额信息
+                if (!$playerId || $oldBalance === '' || $newBalance === '') {
+                    $skipCount++;
+                    continue;
+                }
+
+                // 调用推送服务
+                \app\service\BalancePushService::pushBalanceChange(
+                    (int)$playerId,
+                    (float)$oldBalance,
+                    (float)$newBalance,
+                    $reason,
+                    [
+                        'platform' => $platform,
+                        'order_no' => $record['order_no'] ?? '',
+                    ]
+                );
+
+                $pushCount++;
+
+            } catch (\Throwable $e) {
+                // 推送失败不影响同步，仅记录日志
+                $this->log->warning('余额推送失败', [
+                    'order_no' => $record['order_no'] ?? 'unknown',
+                    'reason' => $reason,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($pushCount > 0) {
+            $this->log->info('批量推送余额变化', [
+                'reason' => $reason,
+                'pushed' => $pushCount,
+                'skipped' => $skipCount,
+            ]);
+        }
     }
 
 }

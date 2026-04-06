@@ -222,6 +222,8 @@ class RsgLiveGameController
                     'amount' => $betAmount,
                     'game_code' => $params['transaction']['gameCode'] ?? '',
                     'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -328,6 +330,8 @@ class RsgLiveGameController
                     'diff' => $diff,
                     'game_code' => $params['transaction']['gameCode'] ?? '',
                     'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 

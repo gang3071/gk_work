@@ -159,6 +159,8 @@ class TNineSlotGameController
                         'diff' => $winAmount,
                         'game_code' => $this->extractGameCode($params),
                         'original_data' => $params,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
                     ]);
                 }
 
@@ -217,6 +219,8 @@ class TNineSlotGameController
                     'amount' => $betAmount,
                     'game_code' => $this->extractGameCode($params),
                     'original_data' => $params,
+                    'balance_before' => $betResult['old_balance'] ?? 0,
+                    'balance_after' => $betResult['balance'],
                 ]);
             }
 
@@ -277,6 +281,8 @@ class TNineSlotGameController
                     'diff' => $winAmount,
                     'game_code' => $this->extractGameCode($params),
                     'original_data' => $params,
+                    'balance_before' => $settleResult['old_balance'] ?? 0,
+                    'balance_after' => $settleResult['balance'],
                 ]);
                 $afterBalance = $settleResult['balance'];
             } elseif ($settleResult['error'] === 'duplicate_order') {
@@ -386,6 +392,8 @@ class TNineSlotGameController
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $refundAmount,
                     'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 

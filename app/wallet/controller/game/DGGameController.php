@@ -159,7 +159,7 @@ class DGGameController
                     Log::channel('dg_server')->info('DG结算重复请求（Lua检测）', ['order_no' => $orderNo, 'type' => $type]);
                 }
 
-                // 保存结算记录到 Redis
+                // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                 if ($result['ok'] === 1) {
                     \app\service\GameRecordCacheService::saveSettle('DG', [
                         'order_no' => $orderNo,
@@ -169,6 +169,8 @@ class DGGameController
                         'diff' => $diff,
                         'game_code' => $params['gameId'] ?? '',
                         'original_data' => $params,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
                     ]);
                 }
 
@@ -205,7 +207,7 @@ class DGGameController
                         }
                     }
 
-                    // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+                    // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                     if ($result['ok'] === 1) {
                         \app\service\GameRecordCacheService::saveBet('DG', [
                             'order_no' => $orderNo,
@@ -214,6 +216,8 @@ class DGGameController
                             'amount' => $amount,
                             'game_code' => $detail['gameId'] ?? '',
                             'original_data' => $params,
+                            'balance_before' => $result['old_balance'] ?? 0,
+                            'balance_after' => $result['balance'],
                         ]);
                     }
                 } else {
@@ -330,6 +334,8 @@ class DGGameController
                         'platform_id' => $this->service->platform->id,
                         'refund_amount' => $amount,
                         'original_data' => $params,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
                     ]);
                 }
 
@@ -363,7 +369,7 @@ class DGGameController
                     Log::channel('dg_server')->info('DG补偿重复请求（Lua检测）', ['order_no' => $orderNo]);
                 }
 
-                // 保存补偿记录到 Redis
+                // 保存补偿记录到 Redis（供 GameRecordSyncWorker 同步和推送）
                 if ($result['ok'] === 1) {
                     \app\service\GameRecordCacheService::saveSettle('DG', [
                         'order_no' => $orderNo,
@@ -373,6 +379,8 @@ class DGGameController
                         'diff' => $amount,
                         'game_code' => $params['gameId'] ?? '',
                         'original_data' => $params,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
                     ]);
                 }
 

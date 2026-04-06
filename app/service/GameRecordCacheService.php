@@ -43,6 +43,8 @@ class GameRecordCacheService
      *   - game_name: 游戏名称（可选）
      *   - bet_type: 下注类型（可选：bet, prepay, 默认 bet）
      *   - original_data: 原始请求数据（可选）
+     *   - balance_before: 变化前余额（可选，用于推送）
+     *   - balance_after: 变化后余额（可选，用于推送）
      */
     public static function saveBet(string $platform, array $data): void
     {
@@ -66,6 +68,9 @@ class GameRecordCacheService
             'win' => 0,
             'diff' => 0,
             'created_at' => date('Y-m-d H:i:s'),
+            // ✅ 保存余额变化信息（用于 Worker 推送）
+            'balance_before' => $data['balance_before'] ?? '',
+            'balance_after' => $data['balance_after'] ?? '',
         ];
 
         // 写入 Redis Hash
@@ -91,6 +96,8 @@ class GameRecordCacheService
      *   - diff: 输赢金额（可选，会自动计算）
      *   - settle_type: 结算类型（可选：settle, refund, jackpot, adjust, reward, 默认 settle）
      *   - original_data: 原始请求数据（可选）
+     *   - balance_before: 变化前余额（可选，用于推送）
+     *   - balance_after: 变化后余额（可选，用于推送）
      */
     public static function saveSettle(string $platform, array $data): void
     {
@@ -113,6 +120,9 @@ class GameRecordCacheService
                 'platform_action_at' => date('Y-m-d H:i:s'),
                 'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',  // 重新标记待同步
+                // ✅ 结算时覆盖余额字段（用于 Worker 推送）
+                'balance_before' => $data['balance_before'] ?? '',
+                'balance_after' => $data['balance_after'] ?? '',
             ]);
 
             // 更新同步队列（提升优先级）
@@ -138,6 +148,9 @@ class GameRecordCacheService
                 'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',
                 'created_at' => date('Y-m-d H:i:s'),
+                // ✅ 保存余额变化信息（统一字段名）
+                'balance_before' => $data['balance_before'] ?? '',
+                'balance_after' => $data['balance_after'] ?? '',
             ];
 
             Redis::hMSet($settleKey, $record);
@@ -324,6 +337,8 @@ LUA;
      *   - platform_id: 平台ID（必需）
      *   - cancel_type: 取消类型（cancel | refund）
      *   - original_data: 原始请求数据（可选）
+     *   - balance_before: 变化前余额（可选，用于推送）
+     *   - balance_after: 变化后余额（可选，用于推送）
      */
     public static function saveCancel(string $platform, array $data): void
     {
@@ -340,6 +355,9 @@ LUA;
                 'cancel_time' => time(),
                 'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',
+                // ✅ 取消时覆盖余额字段（统一字段名）
+                'balance_before' => $data['balance_before'] ?? '',
+                'balance_after' => $data['balance_after'] ?? '',
             ]);
 
             // 更新同步队列

@@ -158,7 +158,7 @@ class MtGameController
                 'order_no' => $orderNo,
             ]);
 
-            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveBet('MT', [
                     'order_no' => $orderNo,
@@ -169,6 +169,9 @@ class MtGameController
                     'game_type' => $data['gameType'] ?? '',
                     'game_name' => $data['gameName'] ?? '',
                     'original_data' => $data,
+                    // ✅ 传入余额数据供 Worker 推送
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -270,6 +273,8 @@ class MtGameController
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $data['order_money'],
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -363,7 +368,7 @@ class MtGameController
                 'win_amount' => $winMoney,
             ]);
 
-            // 保存结算记录到 Redis
+            // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveSettle('MT', [
                     'order_no' => $orderNo,
@@ -373,6 +378,9 @@ class MtGameController
                     'diff' => $winMoney,
                     'game_code' => $data['game_code'] ?? '',
                     'original_data' => $data,
+                    // ✅ 传入余额数据供 Worker 推送
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 

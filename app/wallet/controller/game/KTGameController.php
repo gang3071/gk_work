@@ -177,6 +177,8 @@ class KTGameController
                     'amount' => $bet,
                     'game_code' => $params['GameID'] ?? '',
                     'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -245,6 +247,8 @@ class KTGameController
                         'diff' => $diff,
                         'game_code' => $params['GameID'] ?? '',
                         'original_data' => $params,
+                        'balance_before' => $settleResult['old_balance'] ?? 0,
+                        'balance_after' => $settleResult['balance'],
                     ]);
                     $finalBalance = $settleResult['balance'];
                 } elseif ($settleResult['error'] === 'duplicate_order') {
@@ -333,6 +337,8 @@ class KTGameController
                     'diff' => $diff,
                     'game_code' => $data['GameID'] ?? '',
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -450,6 +456,8 @@ class KTGameController
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $refundAmount,
                     'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -525,6 +533,8 @@ class KTGameController
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $refundAmount,
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 

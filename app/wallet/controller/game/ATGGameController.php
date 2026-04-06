@@ -134,7 +134,7 @@ class ATGGameController
             // 审计日志
             logLuaScriptCall('bet', 'ATG', $player->id, $luaParams);
 
-            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveBet('ATG', [
                     'order_no' => $orderNo,
@@ -143,6 +143,8 @@ class ATGGameController
                     'amount' => $bet,
                     'game_code' => $data['gameCode'] ?? '',
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -238,7 +240,7 @@ class ATGGameController
             // 审计日志
             logLuaScriptCall('settle', 'ATG', $player->id, $luaParams);
 
-            // 保存结算记录到 Redis
+            // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveSettle('ATG', [
                     'order_no' => $orderNo,
@@ -248,6 +250,8 @@ class ATGGameController
                     'diff' => $diff,
                     'game_code' => $data['gameCode'] ?? '',
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
@@ -328,6 +332,8 @@ class ATGGameController
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $refundAmount,
                     'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 

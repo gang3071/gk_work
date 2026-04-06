@@ -440,6 +440,8 @@ class QTGameController
                             'amount' => 0,
                             'game_code' => $gameId,
                             'original_data' => $params,
+                            'balance_before' => $result['old_balance'] ?? 0,
+                            'balance_after' => $result['balance'],
                         ]);
                     }
                 } else {
@@ -475,6 +477,8 @@ class QTGameController
                             'amount' => $amount,
                             'game_code' => $gameId,
                             'original_data' => $params,
+                            'balance_before' => $result['old_balance'] ?? 0,
+                            'balance_after' => $result['balance'],
                         ]);
                     }
                 }
@@ -533,6 +537,8 @@ class QTGameController
                         'diff' => $amount,
                         'game_code' => $params['gameId'] ?? '',
                         'original_data' => $params,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
                     ]);
                 }
 
@@ -885,6 +891,8 @@ class QTGameController
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $amount,
                     'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
                 ]);
             }
 
