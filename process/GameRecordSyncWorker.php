@@ -327,6 +327,9 @@ class GameRecordSyncWorker
                         'after' => $wallet->money,
                         'order_no' => $record['order_no'],
                     ]);
+
+                    // ✅ 触发爆机检测（在业务层处理，不在模型事件中）
+                    \app\service\MachineCrashCheckService::checkAndHandle($playerId, $beforeBalance);
                 }
             }
         }
@@ -629,6 +632,9 @@ class GameRecordSyncWorker
                             'redis_balance' => $redisBalance,
                             'order_no' => $orderNo,
                         ]);
+
+                        // ✅ 触发爆机检测（在业务层处理，不在模型事件中）
+                        \app\service\MachineCrashCheckService::checkAndHandle($playerId, $beforeBalance);
                     } else {
                         // Redis 余额不存在，可能是缓存过期，跳过钱包同步
                         $wallet = null;
@@ -823,6 +829,9 @@ class GameRecordSyncWorker
                         'order_no' => $record['order_no'] ?? '',
                     ]
                 );
+
+                // ✅ 触发爆机检测（结算/取消后余额变化）
+                \app\service\MachineCrashCheckService::checkAndHandle((int)$playerId, (float)$oldBalance);
 
                 $pushCount++;
 
