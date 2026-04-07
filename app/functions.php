@@ -1246,20 +1246,23 @@ function machineWashZero(
             ->where('status', PlayerGameRecord::STATUS_START)
             ->orderBy('created_at', 'desc')
             ->first();
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = PlayerPlatformCash::query()->where('player_id', $player->id)->lockForUpdate()->first();
-        $beforeGameAmount = $machineWallet->money;
+
+        // ✅ 从 Redis 读取实时余额（Redis 作为唯一实时标准）
+        $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
+
         if ($money > 0) {
             //api洗分
             $wash_point = $money;
             //依照比值轉成錢包幣值 無條件捨去
             $game_amount = floor($money * ($machine->odds_x ?? 1) / ($machine->odds_y ?? 1));
-            $machineWallet->money = bcadd($machineWallet->money, $game_amount, 2);
-            $machineWallet->save();
+
+            // ✅ 使用 Lua 原子操作加款（Redis 作为唯一实时标准）
+            $addResult = \app\service\WalletService::add($player->id, $game_amount);
+            $afterGameAmount = $addResult['balance'];  // 提取余额
             if (!empty($gameRecord)) {
                 $gameRecord->wash_point = bcadd($gameRecord->wash_point, $wash_point, 2);
                 $gameRecord->wash_amount = bcadd($gameRecord->wash_amount, $game_amount, 2);
-                $gameRecord->after_game_amount = $machineWallet->money;
+                $gameRecord->after_game_amount = $afterGameAmount;
                 if ($action == 'leave') {
                     $gameRecord->status = PlayerGameRecord::STATUS_END;
                     /** TODO 计算客损 */
@@ -1280,7 +1283,7 @@ function machineWashZero(
             $playerGameLog->wash_point = $wash_point;
             $playerGameLog->game_amount = $game_amount;
             $playerGameLog->before_game_amount = $beforeGameAmount;
-            $playerGameLog->after_game_amount = $machineWallet->money;
+            $playerGameLog->after_game_amount = $afterGameAmount;
             $playerGameLog->action = ($action == 'leave' ? PlayerGameLog::ACTION_LEAVE : PlayerGameLog::ACTION_DOWN);
             $playerGameLog->chip_amount = 0;
             if ($machine->type == GameType::TYPE_SLOT) {
@@ -1305,7 +1308,7 @@ function machineWashZero(
             $playerDeliveryRecord->source = 'game_machine';
             $playerDeliveryRecord->amount = $game_amount;
             $playerDeliveryRecord->amount_before = $beforeGameAmount;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->amount_after = $afterGameAmount;
             $playerDeliveryRecord->tradeno = $playerGameLog->tradeno ?? '';
             $playerDeliveryRecord->remark = $playerGameLog->remark ?? '';
             $playerDeliveryRecord->user_id = 0;
@@ -1316,18 +1319,21 @@ function machineWashZero(
             $services->last_point_at = time();
             //累計該玩家洗分
             $services->player_wash_point = bcadd($services->player_wash_point, $wash_point);
+
+            // ✅ 余额变化后更新爆机状态
+            \app\service\WalletService::checkMachineCrashAfterTransaction($player->id, $afterGameAmount, $beforeGameAmount);
         } else {
             //添加机台点数转换记录
             $playerGameLog = addPlayerGameLog($player, $machine, $gameRecord, $control_open_point);
             $playerGameLog->wash_point = 0;
             $playerGameLog->game_amount = 0;
-            $playerGameLog->before_game_amount = $machineWallet->money;
-            $playerGameLog->after_game_amount = $machineWallet->money;
+            $playerGameLog->before_game_amount = $beforeGameAmount;
+            $playerGameLog->after_game_amount = $beforeGameAmount;
             $playerGameLog->action = ($action == 'leave' ? PlayerGameLog::ACTION_LEAVE : PlayerGameLog::ACTION_DOWN);
             extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint);
 
             if (!empty($gameRecord)) {
-                $gameRecord->after_game_amount = $machineWallet->money;
+                $gameRecord->after_game_amount = $beforeGameAmount;
                 if ($action == 'leave') {
                     $gameRecord->status = PlayerGameRecord::STATUS_END;
                     /** TODO 计算客损 */
@@ -1643,10 +1649,11 @@ function nationalPromoterRebate(): void
  */
 function checkMachineCrash(Player $player): array
 {
-    // 直接通过玩家ID查询钱包的爆机状态
-    $wallet = PlayerPlatformCash::where('player_id', $player->id)->first();
+    // ✅ Redis 作为余额的"唯一实时标准"
+    $currentAmount = \app\service\WalletService::getBalance($player->id);
 
-    $currentAmount = $wallet->money ?? 0;
+    // 仅从数据库读取爆机状态标记
+    $wallet = PlayerPlatformCash::where('player_id', $player->id)->first(['is_crashed']);
     $isCrashed = $wallet && $wallet->is_crashed == 1;
 
     // 获取爆机金额配置（用于返回信息）
@@ -2192,5 +2199,32 @@ function validateRefundAmount(string $platform, string $orderNo, float $refundAm
             'bet_amount' => 0,
             'message' => 'validation_error',
         ];
+    }
+}
+
+/**
+ * 清除爆机状态缓存
+ *
+ * @param int $playerId 玩家ID
+ * @return bool 是否成功
+ */
+function clearMachineCrashCache(int $playerId): bool
+{
+    try {
+        $cacheKey = "machine_crash_status:{$playerId}";
+        \support\Redis::del($cacheKey);
+
+        \support\Log::info('clearMachineCrashCache: 缓存已清除', [
+            'player_id' => $playerId,
+        ]);
+
+        return true;
+    } catch (\Exception $e) {
+        \support\Log::error('clearMachineCrashCache: 清除失败', [
+            'player_id' => $playerId,
+            'error' => $e->getMessage(),
+        ]);
+
+        return false;
     }
 }
