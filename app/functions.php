@@ -1649,11 +1649,33 @@ function nationalPromoterRebate(): void
  */
 function checkMachineCrash(Player $player): array
 {
+    // 🚀 优化 #1: 使用 Redis 缓存爆机状态
+    $cacheKey = "machine_crash_status:{$player->id}";
+
+    try {
+        $cached = \support\Redis::get($cacheKey);
+
+        if ($cached !== null && $cached !== false) {
+            // 缓存命中，解析缓存数据
+            return json_decode($cached, true);
+        }
+    } catch (\Exception $e) {
+        // Redis 故障时降级到数据库查询
+        Log::error('checkMachineCrash: Redis get failed', [
+            'player_id' => $player->id,
+            'error' => $e->getMessage(),
+        ]);
+    }
+
+    // 缓存未命中或 Redis 故障，从 Redis 读取实时余额 + 数据库读取爆机状态
     // ✅ Redis 作为余额的"唯一实时标准"
     $currentAmount = \app\service\WalletService::getBalance($player->id);
 
     // 仅从数据库读取爆机状态标记
-    $wallet = PlayerPlatformCash::where('player_id', $player->id)->first(['is_crashed']);
+    $wallet = PlayerPlatformCash::where('player_id', $player->id)
+        ->where('platform_id', PlayerPlatformCash::PLATFORM_SELF)
+        ->first(['is_crashed']);
+
     $isCrashed = $wallet && $wallet->is_crashed == 1;
 
     // 获取爆机金额配置（用于返回信息）
@@ -1670,11 +1692,25 @@ function checkMachineCrash(Player $player): array
         $crashAmount = ($crashSetting && $crashSetting->status == 1) ? ($crashSetting->num ?? 0) : null;
     }
 
-    return [
+    $result = [
         'crashed' => $isCrashed,
         'crash_amount' => $crashAmount,
         'current_amount' => $currentAmount,
     ];
+
+    // 🚀 优化 #2: 根据爆机状态设置不同的缓存过期时间
+    try {
+        $ttl = $isCrashed ? 3600 : 600;  // 爆机1小时，未爆机10分钟
+        \support\Redis::setex($cacheKey, $ttl, json_encode($result));
+    } catch (\Exception $e) {
+        // 缓存写入失败不影响业务
+        Log::error('checkMachineCrash: Redis setex failed', [
+            'player_id' => $player->id,
+            'error' => $e->getMessage(),
+        ]);
+    }
+
+    return $result;
 }
 
 /**

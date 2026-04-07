@@ -335,7 +335,7 @@ class GameServiceFactory
             return false;
         }
 
-        $isCrashed = $this->checkMachineCrash();
+        $isCrashed = checkMachineCrash($this->player);
 
         if ($isCrashed) {
             // 设备已爆机，设置余额不足错误
