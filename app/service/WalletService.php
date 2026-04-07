@@ -528,8 +528,10 @@ LUA;
             // 执行 Lua 脚本，原子性增加余额
             $newBalance = Redis::eval(
                 self::LUA_ATOMIC_INCREMENT,
-                [$cacheKey, $amount, $ttl],
-                1  // KEYS 数量
+                1,  // KEYS 数量
+                $cacheKey,  // KEYS[1]
+                $amount,    // ARGV[1]
+                $ttl        // ARGV[2]
             );
 
             // ✅ 异步同步数据库（Redis 是实时标准，数据库用于持久化）
@@ -584,8 +586,10 @@ LUA;
             // 执行 Lua 脚本，原子性减少余额
             $resultJson = Redis::eval(
                 self::LUA_ATOMIC_DECREMENT,
-                [$cacheKey, $amount, $ttl],
-                1  // KEYS 数量
+                1,  // KEYS 数量
+                $cacheKey,  // KEYS[1]
+                $amount,    // ARGV[1]
+                $ttl        // ARGV[2]
             );
 
             $result = json_decode($resultJson, true);
