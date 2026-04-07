@@ -812,6 +812,13 @@ class LotteryServices
             $notice = $this->sendNotice($playerLotteryRecord->id, $playerLotteryRecord->lottery_name);
 
             // 更新玩家钱包（加彩金金额）
+            // 1. 从 Redis 读取余额（唯一可信源）
+            $beforeAmount = WalletService::getBalance($this->player->id);
+
+            // 2. 使用 WalletService 原子性加款（Redis）
+            $newBalance = WalletService::atomicIncrement($this->player->id, $amount);
+
+            // 3. 同步到数据库（冷备份）
             /** @var PlayerPlatformCash $machineWallet */
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
             if (!$machineWallet) {
@@ -821,10 +828,8 @@ class LotteryServices
                 DB::rollback();
                 return false;
             }
-
-            $beforeAmount = $machineWallet->money;
-            $machineWallet->money = bcadd($machineWallet->money, $amount, 2);
-            $machineWallet->save();
+            $machineWallet->money = $newBalance;
+            $machineWallet->saveWithoutEvents();
 
             // 创建交易记录
             $playerDeliveryRecord = new PlayerDeliveryRecord();
@@ -837,7 +842,7 @@ class LotteryServices
             $playerDeliveryRecord->source = 'lottery_random';
             $playerDeliveryRecord->amount = $amount;
             $playerDeliveryRecord->amount_before = $beforeAmount;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->amount_after = $newBalance;
             $playerDeliveryRecord->tradeno = '';
             $playerDeliveryRecord->remark = '随机彩金派彩';
             $playerDeliveryRecord->user_id = 0;

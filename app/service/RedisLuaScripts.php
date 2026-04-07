@@ -39,7 +39,14 @@ class RedisLuaScripts
      * - 重复订单: {ok: 0, error: "duplicate_order", balance: 当前余额}
      */
     public const LUA_ATOMIC_BET = <<<'LUA'
--- 1. 幂等性检查
+-- 1. 幂等性检查（先检查记录，再检查锁）
+-- ✅ 修复：先检查 bet 记录是否已存在（7天TTL），再检查幂等性锁（5分钟TTL）
+local recordExists = redis.call('EXISTS', KEYS[2])
+if recordExists == 1 then
+    local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+    return cjson.encode({ok = 0, error = 'duplicate_order', balance = currentBalance})
+end
+
 local lockExists = redis.call('EXISTS', KEYS[5])
 if lockExists == 1 then
     local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
@@ -127,7 +134,23 @@ LUA;
      * - 重复结算: {ok: 0, error: "duplicate_settle", balance: 当前余额}
      */
     public const LUA_ATOMIC_SETTLE = <<<'LUA'
--- 1. 幂等性检查
+-- 1. 幂等性检查（先检查记录，再检查锁）
+-- ✅ 修复：检查是否已结算（bet已结算 或 独立settle记录已存在）
+local betExists = redis.call('EXISTS', KEYS[2])
+if betExists == 1 then
+    local settlementStatus = tonumber(redis.call('HGET', KEYS[2], 'settlement_status') or 0)
+    if settlementStatus == 1 then
+        local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+        return cjson.encode({ok = 0, error = 'duplicate_settle', balance = currentBalance})
+    end
+end
+
+local settleRecordExists = redis.call('EXISTS', KEYS[6])
+if settleRecordExists == 1 then
+    local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+    return cjson.encode({ok = 0, error = 'duplicate_settle', balance = currentBalance})
+end
+
 local lockExists = redis.call('EXISTS', KEYS[5])
 if lockExists == 1 then
     local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
@@ -148,8 +171,8 @@ end
 -- 4. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
 
--- 5. 检查 bet 记录是否存在
-local betExists = redis.call('EXISTS', KEYS[2])
+-- 5. 根据之前检查的结果，更新相应记录
+-- betExists 已在幂等性检查时获取
 
 if betExists == 1 then
     -- 更新 bet 记录
@@ -225,7 +248,17 @@ LUA;
      * - 重复取消: {ok: 0, error: "duplicate_cancel", balance: 当前余额}
      */
     public const LUA_ATOMIC_CANCEL = <<<'LUA'
--- 1. 幂等性检查
+-- 1. 幂等性检查（先检查记录，再检查锁）
+-- ✅ 修复：检查是否已取消/退款
+local betExists = redis.call('EXISTS', KEYS[2])
+if betExists == 1 then
+    local transactionType = redis.call('HGET', KEYS[2], 'transaction_type') or ''
+    if transactionType == 'cancel' or transactionType == 'refund' then
+        local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+        return cjson.encode({ok = 0, error = 'duplicate_cancel', balance = currentBalance})
+    end
+end
+
 local lockExists = redis.call('EXISTS', KEYS[5])
 if lockExists == 1 then
     local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
@@ -243,8 +276,7 @@ redis.call('SETEX', KEYS[1], ARGV[4], newBalance)
 -- 4. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
 
--- 5. 更新记录（如果存在）
-local betExists = redis.call('EXISTS', KEYS[2])
+-- 5. 更新记录（betExists 已在幂等性检查时获取）
 if betExists == 1 then
     redis.call('HMSET', KEYS[2],
         'transaction_type', ARGV[2],

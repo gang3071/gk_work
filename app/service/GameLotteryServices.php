@@ -787,6 +787,13 @@ class GameLotteryServices
 
             // 更新玩家钱包（加彩金金额）
             /** @var PlayerPlatformCash $machineWallet */
+            // 1. 从 Redis 读取余额（唯一可信源）
+            $beforeAmount = WalletService::getBalance($this->player->id);
+
+            // 2. 使用 WalletService 原子性加款（Redis）
+            $newBalance = WalletService::atomicIncrement($this->player->id, $amount);
+
+            // 3. 同步到数据库（冷备份）
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
             if (!$machineWallet) {
                 $this->log->error('电子游戏彩金派发失败：玩家钱包不存在', [
@@ -795,10 +802,8 @@ class GameLotteryServices
                 DB::rollback();
                 return;
             }
-
-            $beforeAmount = $machineWallet->money;
-            $machineWallet->money = bcadd($machineWallet->money, $amount, 2);
-            $machineWallet->save();
+            $machineWallet->money = $newBalance;
+            $machineWallet->saveWithoutEvents();
 
             // 创建交易记录
             $playerDeliveryRecord = new PlayerDeliveryRecord();
@@ -811,7 +816,7 @@ class GameLotteryServices
             $playerDeliveryRecord->source = 'lottery_game';
             $playerDeliveryRecord->amount = $amount;
             $playerDeliveryRecord->amount_before = $beforeAmount;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->amount_after = $newBalance;
             $playerDeliveryRecord->tradeno = '';
             $playerDeliveryRecord->remark = '电子游戏彩金派彩';
             $playerDeliveryRecord->user_id = 0;

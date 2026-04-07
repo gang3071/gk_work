@@ -118,8 +118,18 @@ class MtGameController
                 return $this->error($this->service->error);
             }
 
-            // 2. 查询玩家
-            $player = Player::where('uuid', $data['account'])->first();
+            // 2. 验证必需参数
+            $validationError = $this->validateRequiredParams(
+                $data,
+                ['user_id', 'bet_sn', 'order_money'],
+                '下注'
+            );
+            if ($validationError) {
+                return $validationError;
+            }
+
+            // 3. 查询玩家
+            $player = Player::where('uuid', $data['user_id'])->first();
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -227,15 +237,25 @@ class MtGameController
                 return $this->error($this->service->error);
             }
 
-            // 2. 查询玩家
-            $player = Player::where('uuid', $data['account'])->first();
+            // 2. 验证必需参数
+            $validationError = $this->validateRequiredParams(
+                $data,
+                ['user_id', 'bet_sn'],
+                '取消下注'
+            );
+            if ($validationError) {
+                return $validationError;
+            }
+
+            // 3. 查询玩家
+            $player = Player::where('uuid', $data['user_id'])->first();
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = (string)($data['bet_sn'] ?? '');
+            $orderNo = (string)($data['bet_sn']);
 
-            // 3. Lua 原子取消
+            // 4. Lua 原子取消
             $luaParams = [
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
@@ -326,8 +346,18 @@ class MtGameController
                 return $this->error($this->service->error);
             }
 
-            // 2. 查询玩家
-            $player = Player::where('uuid', $data['account'])->first();
+            // 2. 验证必需参数
+            $validationError = $this->validateRequiredParams(
+                $data,
+                ['user_id', 'bet_sn'],
+                '结算'
+            );
+            if ($validationError) {
+                return $validationError;
+            }
+
+            // 3. 查询玩家
+            $player = Player::where('uuid', $data['user_id'])->first();
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -436,8 +466,18 @@ class MtGameController
                 return $this->error($this->service->error);
             }
 
-            // 2. 查询玩家
-            $player = Player::where('uuid', $data['account'])->first();
+            // 2. 验证必需参数
+            $validationError = $this->validateRequiredParams(
+                $data,
+                ['user_id', 'bet_sn'],
+                '重新结算'
+            );
+            if ($validationError) {
+                return $validationError;
+            }
+
+            // 3. 查询玩家
+            $player = Player::where('uuid', $data['user_id'])->first();
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -515,8 +555,18 @@ class MtGameController
                 return $this->error($this->service->error);
             }
 
-            // 2. 查询玩家
-            $player = Player::where('uuid', $data['account'])->first();
+            // 2. 验证必需参数
+            $validationError = $this->validateRequiredParams(
+                $data,
+                ['user_id', 'tip_sn', 'money'],
+                '打赏'
+            );
+            if ($validationError) {
+                return $validationError;
+            }
+
+            // 3. 查询玩家
+            $player = Player::where('uuid', $data['user_id'])->first();
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -644,5 +694,29 @@ class MtGameController
         }
 
         return $this->error($apiCode, self::API_CODE_MAP[$apiCode] ?? null, $data, $httpCode);
+    }
+
+    /**
+     * 验证必需参数
+     *
+     * @param array $data 解密后的数据
+     * @param array $requiredFields 必需字段列表
+     * @param string $action 操作名称（用于日志）
+     * @return Response|null 如果验证失败返回错误响应，成功返回 null
+     */
+    private function validateRequiredParams(array $data, array $requiredFields, string $action): ?Response
+    {
+        foreach ($requiredFields as $field) {
+            if (!isset($data[$field])) {
+                Log::channel('mt_server')->error("MT{$action}请求缺少{$field}参数", [
+                    'data' => $data,
+                    'required_fields' => $requiredFields,
+                    'action' => $action,
+                ]);
+                return $this->error(self::API_CODE_INVALID_PARAM, "缺少{$field}参数");
+            }
+        }
+
+        return null;
     }
 }

@@ -1456,7 +1456,9 @@ function nationalPromoterSettlement($data): bool
             /** @var NationalProfitRecord $nationalProfitRecord */
             $nationalProfitRecord = NationalProfitRecord::query()->where('uid', $player->id)
                 ->where('type', 1)
-                ->whereDate('created_at', date('Y-m-d'))->first();
+                ->whereDate('created_at', date('Y-m-d'))
+                ->lockForUpdate()
+                ->first();
             if (!empty($nationalProfitRecord)) {
                 $nationalProfitRecord->money = bcadd($nationalProfitRecord->money, $money, 2);
             } else {

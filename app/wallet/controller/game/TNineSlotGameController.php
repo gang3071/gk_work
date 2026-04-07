@@ -83,8 +83,6 @@ class TNineSlotGameController
 
             $this->logger->info('t9电子余额查询记录', ['params' => $params]);
 
-//        $this->service->verifySign($params);
-
             $user = $params['gameAccount'];
             $userId = explode('_', $user)[0];
             $this->service->player = Player::query()->where('uuid', $userId)->first();
@@ -112,6 +110,16 @@ class TNineSlotGameController
             $params = $request->post();
 
             $this->logger->info('t9电子下注请求（Lua原子）', ['params' => $params]);
+
+            // 验证必需参数
+            $validationError = $this->validateRequiredParams(
+                $params,
+                ['gameAccount', 'gameOrderNumber'],
+                '下注'
+            );
+            if ($validationError) {
+                return $validationError;
+            }
 
             $user = $params['gameAccount'];
             $userId = explode('_', $user)[0];
@@ -354,6 +362,16 @@ class TNineSlotGameController
 
             $this->logger->info('t9电子取消下注请求（Lua原子）', ['params' => $params]);
 
+            // 验证必需参数
+            $validationError = $this->validateRequiredParams(
+                $params,
+                ['gameAccount'],
+                '取消下注'
+            );
+            if ($validationError) {
+                return $validationError;
+            }
+
             $user = $params['gameAccount'];
             $userId = explode('_', $user)[0];
             $this->service->player = Player::query()->where('uuid', $userId)->first();
@@ -491,5 +509,29 @@ class TNineSlotGameController
         }
 
         return '';
+    }
+
+    /**
+     * 验证必需参数
+     *
+     * @param array $data 请求数据
+     * @param array $requiredFields 必需字段列表
+     * @param string $action 操作名称（用于日志）
+     * @return Response|null 如果验证失败返回错误响应，成功返回 null
+     */
+    private function validateRequiredParams(array $data, array $requiredFields, string $action): ?Response
+    {
+        foreach ($requiredFields as $field) {
+            if (!isset($data[$field])) {
+                $this->logger->error("T9电子{$action}请求缺少{$field}参数", [
+                    'data' => $data,
+                    'required_fields' => $requiredFields,
+                    'action' => $action,
+                ]);
+                return $this->error(self::API_CODE_ERROR);
+            }
+        }
+
+        return null;
     }
 }

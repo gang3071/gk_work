@@ -191,4 +191,17 @@ class PlayerPlatformCash extends Model
             }
         });
     }
+
+    /**
+     * 保存模型但不触发事件（用于从 Redis 同步到数据库时避免循环）
+     *
+     * @param array $options
+     * @return bool
+     */
+    public function saveWithoutEvents(array $options = []): bool
+    {
+        return static::withoutEvents(function () use ($options) {
+            return $this->save($options);
+        });
+    }
 }

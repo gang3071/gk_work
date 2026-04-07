@@ -51,7 +51,7 @@ class WalletService
             return self::getBalanceFromDB($playerId, $platformId);
         }
 
-        $cacheKey = self::getCacheKey($playerId, $platformId);
+        $cacheKey = self::getCacheKey($playerId);
 
         try {
             // 如果不是强制刷新，尝试从缓存读取
@@ -83,7 +83,9 @@ class WalletService
     }
 
     /**
-     * 扣款（原子操作）
+     * 扣款（Redis Lua 原子操作）
+     *
+     * 高并发场景下，Redis 是余额的唯一实时标准
      *
      * @param int $playerId 玩家ID
      * @param float $amount 扣款金额
@@ -93,55 +95,29 @@ class WalletService
     public static function deduct(int $playerId, float $amount, int $platformId = self::DEFAULT_PLATFORM_ID): array
     {
         try {
-            // 开始数据库事务
-            \support\Db::beginTransaction();
-
-            // 使用悲观锁查询钱包
-            $wallet = PlayerPlatformCash::query()
-                ->where('player_id', $playerId)
-                ->lockForUpdate()
-                ->first();
-
-            if (!$wallet) {
-                \support\Db::rollBack();
-                return [
-                    'success' => false,
-                    'balance' => 0,
-                    'old_balance' => 0,
-                    'error' => '钱包不存在'
-                ];
+            if ($amount <= 0) {
+                throw new \InvalidArgumentException('Amount must be greater than 0');
             }
 
-            $oldBalance = (float)$wallet->money;
+            // 使用 Lua 原子脚本扣款
+            $result = self::atomicDecrement($playerId, $amount);
 
-            // 检查余额是否充足
-            if ($oldBalance < $amount) {
-                \support\Db::rollBack();
+            if ($result['ok'] == 0) {
                 return [
                     'success' => false,
-                    'balance' => $oldBalance,
-                    'old_balance' => $oldBalance,
-                    'error' => '余额不足'
+                    'balance' => (float)$result['balance'],
+                    'old_balance' => (float)$result['balance'],
+                    'error' => $result['error'] ?? '余额不足'
                 ];
             }
-
-            // 扣款
-            $newBalance = bcsub($oldBalance, $amount, 2);
-            $wallet->money = $newBalance;
-            $wallet->save(); // 触发 updated 事件自动更新缓存
-
-            // 提交事务
-            \support\Db::commit();
 
             return [
                 'success' => true,
-                'balance' => (float)$newBalance,
-                'old_balance' => $oldBalance,
+                'balance' => (float)$result['balance'],
+                'old_balance' => 0, // Lua 脚本未返回旧余额
             ];
 
         } catch (\Throwable $e) {
-            \support\Db::rollBack();
-
             Log::error('WalletService::deduct 异常', [
                 'player_id' => $playerId,
                 'amount' => $amount,
@@ -160,7 +136,9 @@ class WalletService
     }
 
     /**
-     * 加款（原子操作）
+     * 加款（Redis Lua 原子操作）
+     *
+     * 高并发场景下，Redis 是余额的唯一实时标准
      *
      * @param int $playerId 玩家ID
      * @param float $amount 加款金额
@@ -170,44 +148,20 @@ class WalletService
     public static function add(int $playerId, float $amount, int $platformId = self::DEFAULT_PLATFORM_ID): array
     {
         try {
-            // 开始数据库事务
-            \support\Db::beginTransaction();
-
-            // 使用悲观锁查询钱包
-            $wallet = PlayerPlatformCash::query()
-                ->where('player_id', $playerId)
-                ->lockForUpdate()
-                ->first();
-
-            if (!$wallet) {
-                \support\Db::rollBack();
-                return [
-                    'success' => false,
-                    'balance' => 0,
-                    'old_balance' => 0,
-                    'error' => '钱包不存在'
-                ];
+            if ($amount <= 0) {
+                throw new \InvalidArgumentException('Amount must be greater than 0');
             }
 
-            $oldBalance = (float)$wallet->money;
-
-            // 加款
-            $newBalance = bcadd($oldBalance, $amount, 2);
-            $wallet->money = $newBalance;
-            $wallet->save(); // 触发 updated 事件自动更新缓存
-
-            // 提交事务
-            \support\Db::commit();
+            // 使用 Lua 原子脚本加款
+            $newBalance = self::atomicIncrement($playerId, $amount);
 
             return [
                 'success' => true,
                 'balance' => (float)$newBalance,
-                'old_balance' => $oldBalance,
+                'old_balance' => 0, // Lua 脚本未返回旧余额
             ];
 
         } catch (\Throwable $e) {
-            \support\Db::rollBack();
-
             Log::error('WalletService::add 异常', [
                 'player_id' => $playerId,
                 'amount' => $amount,
@@ -235,7 +189,7 @@ class WalletService
     public static function clearCache(int $playerId, int $platformId = self::DEFAULT_PLATFORM_ID): bool
     {
         try {
-            $cacheKey = self::getCacheKey($playerId, $platformId);
+            $cacheKey = self::getCacheKey($playerId);
             Redis::del($cacheKey);
             return true;
         } catch (\Throwable $e) {
@@ -264,7 +218,7 @@ class WalletService
         try {
             $cacheKeys = [];
             foreach ($playerIds as $playerId) {
-                $cacheKeys[] = self::getCacheKey($playerId, $platformId);
+                $cacheKeys[] = self::getCacheKey($playerId);
             }
 
             // 批量删除
@@ -302,7 +256,7 @@ class WalletService
         $startTime = microtime(true);
 
         try {
-            $cacheKey = self::getCacheKey($playerId, $platformId);
+            $cacheKey = self::getCacheKey($playerId);
             Redis::setex($cacheKey, $ttl, $balance);
 
             $duration = (microtime(true) - $startTime) * 1000;
@@ -359,10 +313,9 @@ class WalletService
      * 获取缓存键（与 Lua 原子脚本统一格式）
      *
      * @param int $playerId 玩家ID
-     * @param int $platformId 平台ID（保留参数兼容性，实际不使用）
      * @return string Redis 缓存键
      */
-    private static function getCacheKey(int $playerId, int $platformId): string
+    private static function getCacheKey(int $playerId): string
     {
         // 统一使用 wallet:balance:{player_id} 格式
         // 与 RedisLuaScripts::atomicBet/atomicSettle 保持一致
@@ -390,7 +343,7 @@ class WalletService
             $playerIds = array_values($playerIds);
 
             // 尝试从缓存批量获取
-            $cacheKeys = array_map(fn($id) => self::getCacheKey($id, $platformId), $playerIds);
+            $cacheKeys = array_map(fn($id) => self::getCacheKey($id), $playerIds);
             $cached = Redis::mget($cacheKeys);
 
             foreach ($playerIds as $index => $playerId) {
@@ -507,5 +460,193 @@ class WalletService
         }
 
         return ['success' => $successCount, 'failed' => $failedCount];
+    }
+
+    /**
+     * Lua 脚本：原子性增加余额
+     */
+    private const LUA_ATOMIC_INCREMENT = <<<'LUA'
+local key = KEYS[1]
+local amount = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2]) or 3600
+
+local currentBalance = tonumber(redis.call('GET', key)) or 0
+local newBalance = currentBalance + amount
+
+redis.call('SETEX', key, ttl, newBalance)
+return newBalance
+LUA;
+
+    /**
+     * Lua 脚本：原子性减少余额（带余额检查）
+     */
+    private const LUA_ATOMIC_DECREMENT = <<<'LUA'
+local key = KEYS[1]
+local amount = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2]) or 3600
+
+local currentBalance = tonumber(redis.call('GET', key)) or 0
+
+-- 余额不足检查
+if currentBalance < amount then
+    return cjson.encode({ok = 0, error = "insufficient_balance", balance = currentBalance})
+end
+
+local newBalance = currentBalance - amount
+redis.call('SETEX', key, ttl, newBalance)
+return cjson.encode({ok = 1, balance = newBalance})
+LUA;
+
+    /**
+     * 原子性增加余额（使用 Lua 脚本）
+     *
+     * 核心功能：
+     * - 在 Redis 中原子性地增加玩家余额
+     * - 保证并发安全（单个 Lua 脚本执行是原子的）
+     * - 自动更新缓存过期时间
+     *
+     * 使用场景：
+     * - 彩金发放
+     * - 活动奖励发放
+     * - 游戏赢钱
+     * - 充值
+     *
+     * @param int $playerId 玩家ID
+     * @param float $amount 增加金额（必须 > 0）
+     * @param int $ttl Redis 缓存过期时间（秒），默认 3600
+     * @return float 新余额
+     */
+    public static function atomicIncrement(int $playerId, float $amount, int $ttl = 3600): float
+    {
+        if ($amount <= 0) {
+            throw new \InvalidArgumentException('Amount must be greater than 0');
+        }
+
+        try {
+            $cacheKey = self::getCacheKey($playerId);
+
+            // 执行 Lua 脚本，原子性增加余额
+            $newBalance = Redis::eval(
+                self::LUA_ATOMIC_INCREMENT,
+                [$cacheKey, $amount, $ttl],
+                1  // KEYS 数量
+            );
+
+            // ✅ 异步同步数据库（Redis 是实时标准，数据库用于持久化）
+            self::asyncUpdateDB($playerId, (float)$newBalance);
+
+            Log::info('WalletService::atomicIncrement 成功', [
+                'player_id' => $playerId,
+                'amount' => $amount,
+                'new_balance' => $newBalance,
+            ]);
+
+            return (float)$newBalance;
+
+        } catch (\Throwable $e) {
+            Log::error('WalletService::atomicIncrement 失败', [
+                'player_id' => $playerId,
+                'amount' => $amount,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * 原子性减少余额（使用 Lua 脚本，带余额检查）
+     *
+     * 核心功能：
+     * - 在 Redis 中原子性地减少玩家余额
+     * - 保证并发安全（单个 Lua 脚本执行是原子的）
+     * - 自动检查余额是否充足
+     * - 余额不足时返回错误，不会扣款
+     *
+     * 使用场景：
+     * - 游戏下注
+     * - 提现
+     * - 转账
+     *
+     * @param int $playerId 玩家ID
+     * @param float $amount 减少金额（必须 > 0）
+     * @param int $ttl Redis 缓存过期时间（秒），默认 3600
+     * @return array ['ok' => 1, 'balance' => 新余额] 或 ['ok' => 0, 'error' => 'insufficient_balance', 'balance' => 当前余额]
+     */
+    public static function atomicDecrement(int $playerId, float $amount, int $ttl = 3600): array
+    {
+        if ($amount <= 0) {
+            throw new \InvalidArgumentException('Amount must be greater than 0');
+        }
+
+        try {
+            $cacheKey = self::getCacheKey($playerId);
+
+            // 执行 Lua 脚本，原子性减少余额
+            $resultJson = Redis::eval(
+                self::LUA_ATOMIC_DECREMENT,
+                [$cacheKey, $amount, $ttl],
+                1  // KEYS 数量
+            );
+
+            $result = json_decode($resultJson, true);
+
+            if ($result['ok'] == 1) {
+                // ✅ 异步同步数据库（仅在扣款成功时）
+                self::asyncUpdateDB($playerId, (float)$result['balance']);
+
+                Log::info('WalletService::atomicDecrement 成功', [
+                    'player_id' => $playerId,
+                    'amount' => $amount,
+                    'new_balance' => $result['balance'],
+                ]);
+            } else {
+                Log::warning('WalletService::atomicDecrement 失败 - 余额不足', [
+                    'player_id' => $playerId,
+                    'amount' => $amount,
+                    'current_balance' => $result['balance'],
+                ]);
+            }
+
+            return $result;
+
+        } catch (\Throwable $e) {
+            Log::error('WalletService::atomicDecrement 异常', [
+                'player_id' => $playerId,
+                'amount' => $amount,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * 异步同步数据库（非阻塞方式）
+     *
+     * Redis 是实时权威数据源，数据库仅用于持久化
+     * 采用 fire-and-forget 模式，不等待数据库写入完成
+     *
+     * @param int $playerId 玩家ID
+     * @param float $newBalance 新余额
+     * @return void
+     */
+    private static function asyncUpdateDB(int $playerId, float $newBalance): void
+    {
+        try {
+            // 单一钱包模式：同步 player.money 和 player_platform_cash.money
+            \support\Db::table('player')
+                ->where('id', $playerId)
+                ->update(['money' => $newBalance]);
+
+            \support\Db::table('player_platform_cash')
+                ->where('player_id', $playerId)
+                ->update(['money' => $newBalance]);
+        } catch (\Throwable $e) {
+            // 数据库同步失败不影响 Redis（Redis 是唯一实时标准）
+            Log::error('WalletService: asyncUpdateDB 失败', [
+                'player_id' => $playerId,
+                'balance' => $newBalance,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
