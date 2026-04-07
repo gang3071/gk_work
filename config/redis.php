@@ -13,9 +13,9 @@
  */
 
 return [
-    // ========== 业务专用 Redis 连接 ==========
+    // ========== gk_work 业务连接池 ==========
     // 用于：余额查询、缓存、Lua原子操作等
-    'default' => [
+    'work' => [
         'host' => env('REDIS_HOST', '127.0.0.1'),
         'password' => env('REDIS_PASSWORD', null),
         'port' => env('REDIS_PORT', 6379),
@@ -36,21 +36,39 @@ return [
         ],
     ],
 
-    // ========== 队列专用 Redis 连接 ==========
-    // 🎯 物理隔离：防止队列 BRPOP 阻塞业务连接
-    // 用于：redis-queue 插件的阻塞拉取操作
-    'queue_link' => [
+    // ========== gk_work 队列操作连接池 ==========
+    // 🎯 用于业务代码中的队列操作（非 redis-queue 插件）
+    // 注意：redis-queue 插件使用独立配置，不使用此连接
+    'queue' => [
         'host' => env('REDIS_HOST', '127.0.0.1'),
         'password' => env('REDIS_PASSWORD', null),
         'port' => env('REDIS_PORT', 6379),
         'database' => env('REDIS_DB', 0),
 
-        // 🚨 关键区别：队列需要长时间阻塞，不设置 read_timeout
+        // 🚨 关键区别：队列需要长时间阻塞
         'timeout' => 2.5,              // 连接建立超时
         'read_timeout' => 0,           // 💡 0 = 无限等待（队列 BRPOP 需要）
         'persistent' => true,          // 持久连接
         'retry_interval' => 100,
 
+        'options' => [
+            'prefix' => env('REDIS_PREFIX', ''),
+            'parameters' => [
+                'tcp_nodelay' => true,
+            ],
+        ],
+    ],
+
+    // ========== 向后兼容：default 指向 work ==========
+    'default' => [
+        'host' => env('REDIS_HOST', '127.0.0.1'),
+        'password' => env('REDIS_PASSWORD', null),
+        'port' => env('REDIS_PORT', 6379),
+        'database' => env('REDIS_DB', 0),
+        'timeout' => 2.5,
+        'read_timeout' => 2.5,
+        'persistent' => true,
+        'retry_interval' => 100,
         'options' => [
             'prefix' => env('REDIS_PREFIX', ''),
             'parameters' => [

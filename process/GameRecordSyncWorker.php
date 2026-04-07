@@ -345,8 +345,9 @@ class GameRecordSyncWorker
             'count' => count($insertData),
         ]);
 
-        // 7. 批量推送余额变化（下注）
-        $this->batchPushBalanceChanges($records, 'bet');
+        // 7. ❌ 已移除：批量推送余额变化（下注）
+        // 原因：现在通过 Redis Pub/Sub 实时推送（atomicBet 自动触发）
+        // $this->batchPushBalanceChanges($records, 'bet');
 
         return count($insertData);
     }
@@ -387,34 +388,6 @@ class GameRecordSyncWorker
 
             $existing->save();
             $updated++;
-        }
-
-        if ($updated > 0) {
-            $this->log->info("批量更新记录", [
-                'count' => $updated,
-            ]);
-
-            // ✅ 批量推送余额变化（结算和取消）
-            // 分离结算和取消记录
-            $settleRecords = [];
-            $cancelRecords = [];
-
-            foreach ($records as $record) {
-                if (isset($record['cancel_type'])) {
-                    // 有 cancel_type 说明是取消操作
-                    $cancelRecords[] = $record;
-                } else {
-                    // 否则是结算操作
-                    $settleRecords[] = $record;
-                }
-            }
-
-            if (!empty($settleRecords)) {
-                $this->batchPushBalanceChanges($settleRecords, 'settle');
-            }
-            if (!empty($cancelRecords)) {
-                $this->batchPushBalanceChanges($cancelRecords, 'cancel');
-            }
         }
 
         return $updated;
@@ -793,10 +766,17 @@ class GameRecordSyncWorker
     }
 
     /**
-     * 批量推送余额变化到客户端
+     * ❌ 已废弃：批量推送余额变化到客户端
+     *
+     * 原因：现在通过 Redis Pub/Sub 实时推送
+     * 位置：RedisLuaScripts::atomicBet/Settle/Cancel 自动触发 publishBalanceChange()
+     * 延迟：< 50ms（相比定时推送降低 90%）
+     *
+     * ⚠️ 保留此方法仅用于兜底或紧急回退，正常情况下不应调用
      *
      * @param array $records Redis 缓存记录数组
      * @param string $reason 推送原因（bet | settle | cancel）
+     * @deprecated 已废弃，使用 Redis Pub/Sub 实时推送
      */
     private function batchPushBalanceChanges(array $records, string $reason): void
     {

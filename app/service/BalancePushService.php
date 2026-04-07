@@ -47,19 +47,16 @@ class BalancePushService
             // 映射操作原因到交易类型
             $type = self::REASON_TYPE_MAP[$reason] ?? PlayerDeliveryRecord::TYPE_SETTLEMENT;
 
-            // 构建推送数据（与 PlayerDeliveryRecord 模型事件格式一致）
+            // ✅ 构建推送数据（与 PlayerDeliveryRecord 模型事件格式完全一致）
             $pushData = [
-                'msg_type' => 'player_info',           // 消息类型（与现有格式一致）
+                'msg_type' => 'player_info',
                 'player_id' => $playerId,
-                'type' => $type,                        // 交易类型
+                'type' => $type,
                 'amount' => bcsub($newBalance, $oldBalance, 2),  // 变化金额
-                'amount_before' => $oldBalance,         // 变化前余额
-                'amount_after' => $newBalance,          // 变化后余额
-                'machine_name' => $extra['platform'] ?? '',      // 平台名称
-                'machine_type' => 0,                    // 机台类型（游戏平台为0）
-                'reason' => $reason,                    // 原始原因（用于调试）
-                'order_no' => $extra['order_no'] ?? '', // 订单号
-                'timestamp' => time(),
+                'amount_before' => $oldBalance,
+                'amount_after' => $newBalance,
+                'machine_name' => $extra['platform'] ?? '',
+                'machine_type' => 0,  // 游戏平台固定为 0
             ];
 
             // 使用系统统一的推送函数

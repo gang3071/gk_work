@@ -1,10 +1,8 @@
 <?php
 return [
     'default' => [
-        // 🎯 物理隔离：使用专用的 queue_link 连接
-        // 避免队列 BRPOP 阻塞占用业务连接
-        'connection' => 'queue_link',
-
+        // 🎯 gk_work 系统独立队列连接（redis-queue 插件专用）
+        // 注意：插件不支持 connection 字段，使用独立的 host 配置
         'host' => sprintf(
             'redis://%s:%s',
             env('REDIS_HOST', '127.0.0.1'),

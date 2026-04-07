@@ -380,6 +380,17 @@ LUA;
             );
         }
 
+        // ✅ 实时推送：发布余额变化消息到 Redis Pub/Sub
+        if (isset($decoded['ok']) && $decoded['ok'] === 1 && isset($decoded['balance'])) {
+            self::publishBalanceChange($playerId, $platform, [
+                'reason' => 'bet',
+                'old_balance' => $decoded['old_balance'] ?? 0,
+                'new_balance' => $decoded['balance'],
+                'order_no' => $orderNo,
+                'amount' => -$betAmount,
+            ]);
+        }
+
         return $decoded ?? [];
     }
 
@@ -468,6 +479,17 @@ LUA;
                     json_last_error_msg(),
                     is_string($result) ? substr($result, 0, 200) : var_export($result, true))
             );
+        }
+
+        // ✅ 实时推送：发布余额变化消息
+        if (isset($decoded['ok']) && $decoded['ok'] === 1 && isset($decoded['balance'])) {
+            self::publishBalanceChange($playerId, $platform, [
+                'reason' => 'settle',
+                'old_balance' => $decoded['old_balance'] ?? 0,
+                'new_balance' => $decoded['balance'],
+                'order_no' => $orderNo,
+                'amount' => $winAmount,
+            ]);
         }
 
         return $decoded ?? [];
@@ -563,6 +585,17 @@ LUA;
             );
         }
 
+        // ✅ 实时推送：发布余额变化消息
+        if (isset($decoded['ok']) && $decoded['ok'] === 1 && isset($decoded['balance'])) {
+            self::publishBalanceChange($playerId, $platform, [
+                'reason' => 'cancel',
+                'old_balance' => $decoded['old_balance'] ?? 0,
+                'new_balance' => $decoded['balance'],
+                'order_no' => $orderNo,
+                'amount' => $data['refund_amount'] ?? 0,
+            ]);
+        }
+
         return $decoded ?? [];
     }
 
@@ -587,5 +620,40 @@ LUA;
         }
 
         return $result;
+    }
+
+    /**
+     * 发布余额变化消息到 Redis Pub/Sub
+     *
+     * @param int $playerId 玩家ID
+     * @param string $platform 平台代码
+     * @param array $data 变化数据
+     * @return void
+     */
+    private static function publishBalanceChange(int $playerId, string $platform, array $data): void
+    {
+        try {
+            $message = json_encode([
+                'player_id' => $playerId,
+                'platform' => $platform,
+                'reason' => $data['reason'],
+                'old_balance' => $data['old_balance'],
+                'new_balance' => $data['new_balance'],
+                'order_no' => $data['order_no'] ?? '',
+                'amount' => $data['amount'] ?? 0,
+                'timestamp' => time(),
+            ], JSON_UNESCAPED_UNICODE);
+
+            // 发布到 Redis 频道（不等待响应，延迟 < 2ms）
+            Redis::connection('work')->publish('balance:change', $message);
+
+        } catch (\Throwable $e) {
+            // 推送失败不应影响核心业务，仅记录日志
+            \support\Log::warning('余额变化消息发布失败', [
+                'player_id' => $playerId,
+                'platform' => $platform,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }

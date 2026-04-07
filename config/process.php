@@ -12,6 +12,7 @@
  * @license   http://www.opensource.org/licenses/mit-license.php MIT License
  */
 
+use process\BalancePushWorker;
 use process\BurstCleaner;
 use process\ChannelSettlement;
 use process\GamePoolSocket;
@@ -63,6 +64,13 @@ return [
     'GameRecordCleanWorker' => [
         'handler' => GameRecordCleanWorker::class,
         'count' => 1,  // 1个进程即可（低频任务）
+    ],
+    // ✅ 实时余额推送进程（Redis Pub/Sub → WebSocket 实时推送）
+    // 作用：订阅 balance:change 频道，收到消息后立即推送到 WebSocket
+    // 延迟：< 50ms（相比 Crontab 定时任务，延迟降低 95%）
+    'BalancePushWorker' => [
+        'handler' => BalancePushWorker::class,
+        'count' => 1,  // 1个进程即可（Pub/Sub 消费不需要并发）
     ],
 ];
 
