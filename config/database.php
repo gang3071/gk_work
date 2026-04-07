@@ -43,7 +43,7 @@ return [
             'engine' => null,
             'options' => [
                 // 🚀 性能优化配置
-                \PDO::ATTR_TIMEOUT => 1,                          // 连接超时1秒（原3秒）
+                \PDO::ATTR_TIMEOUT => 5,                          // ✅ 连接超时5秒（从1秒增加，防止高负载时误超时）
                 \PDO::ATTR_PERSISTENT => true,                    // 持久连接，复用连接减少握手
                 \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,    // 异常模式
                 \PDO::ATTR_EMULATE_PREPARES => false,             // 使用原生预处理（更快）
