@@ -438,6 +438,16 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
     }
 
     /**
+     * 查询玩家余额
+     * @return mixed
+     */
+    public function balance(): mixed
+    {
+        // 使用单一钱包，余额统一管理
+        return \app\service\WalletService::getBalance($this->player->id);
+    }
+
+    /**
      * 获取爆机时的余额不足错误码
      * @return mixed
      */
