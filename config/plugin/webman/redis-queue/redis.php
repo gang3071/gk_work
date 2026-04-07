@@ -1,6 +1,10 @@
 <?php
 return [
     'default' => [
+        // 🎯 物理隔离：使用专用的 queue_link 连接
+        // 避免队列 BRPOP 阻塞占用业务连接
+        'connection' => 'queue_link',
+
         'host' => sprintf(
             'redis://%s:%s',
             env('REDIS_HOST', '127.0.0.1'),

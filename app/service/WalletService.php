@@ -474,7 +474,7 @@ local currentBalance = tonumber(redis.call('GET', key)) or 0
 local newBalance = currentBalance + amount
 
 redis.call('SETEX', key, ttl, newBalance)
-return newBalance
+return cjson.encode({old = currentBalance, new = newBalance})
 LUA;
 
     /**
@@ -489,12 +489,12 @@ local currentBalance = tonumber(redis.call('GET', key)) or 0
 
 -- 余额不足检查
 if currentBalance < amount then
-    return cjson.encode({ok = 0, error = "insufficient_balance", balance = currentBalance})
+    return cjson.encode({ok = 0, error = "insufficient_balance", balance = currentBalance, old = currentBalance})
 end
 
 local newBalance = currentBalance - amount
 redis.call('SETEX', key, ttl, newBalance)
-return cjson.encode({ok = 1, balance = newBalance})
+return cjson.encode({ok = 1, balance = newBalance, old = currentBalance, new = newBalance})
 LUA;
 
     /**
@@ -526,7 +526,7 @@ LUA;
             $cacheKey = self::getCacheKey($playerId);
 
             // 执行 Lua 脚本，原子性增加余额
-            $newBalance = Redis::eval(
+            $result = Redis::eval(
                 self::LUA_ATOMIC_INCREMENT,
                 1,  // KEYS 数量
                 $cacheKey,  // KEYS[1]
@@ -534,16 +534,22 @@ LUA;
                 $ttl        // ARGV[2]
             );
 
+            // 解析返回的 JSON：{old: 旧余额, new: 新余额}
+            $balanceData = json_decode($result, true);
+            $oldBalance = (float)($balanceData['old'] ?? 0);
+            $newBalance = (float)($balanceData['new'] ?? 0);
+
             // ✅ 异步同步数据库（Redis 是实时标准，数据库用于持久化）
-            self::asyncUpdateDB($playerId, (float)$newBalance);
+            self::asyncUpdateDB($playerId, $newBalance);
 
             Log::info('WalletService::atomicIncrement 成功', [
                 'player_id' => $playerId,
                 'amount' => $amount,
+                'old_balance' => $oldBalance,
                 'new_balance' => $newBalance,
             ]);
 
-            return (float)$newBalance;
+            return $newBalance;
 
         } catch (\Throwable $e) {
             Log::error('WalletService::atomicIncrement 失败', [
@@ -595,12 +601,16 @@ LUA;
             $result = json_decode($resultJson, true);
 
             if ($result['ok'] == 1) {
+                $oldBalance = (float)($result['old'] ?? 0);
+                $newBalance = (float)($result['new'] ?? 0);
+
                 // ✅ 异步同步数据库（仅在扣款成功时）
-                self::asyncUpdateDB($playerId, (float)$result['balance']);
+                self::asyncUpdateDB($playerId, $newBalance);
 
                 Log::info('WalletService::atomicDecrement 成功', [
                     'player_id' => $playerId,
                     'amount' => $amount,
+                    'old_balance' => $oldBalance,
                     'new_balance' => $result['balance'],
                 ]);
             } else {
