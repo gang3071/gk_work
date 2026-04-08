@@ -369,9 +369,15 @@ class SAServiceInterface extends GameServiceFactory implements GameServiceInterf
             return $this->error = SAGameController::API_CODE_DECRYPT_ERROR;
         }
 
+        // 玩家验证
         $player = Player::query()->where('uuid', $array['username'])->first();
         if (!$player) {
-            return $this->error = MtGameController::API_CODE_PLAYER_NOT_EXIST;
+            return $this->error = SAGameController::API_CODE_PLAYER_NOT_EXIST;
+        }
+
+        // 货币验证
+        if (isset($array['currency']) && !isset($this->currency[$array['currency']])) {
+            return $this->error = SAGameController::API_CODE_CURRENCY_ERROR;
         }
 
         $this->player = $player;

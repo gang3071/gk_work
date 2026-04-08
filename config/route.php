@@ -91,6 +91,7 @@ Route::group('/single-wallet', function () {
         Route::post('/PlayerWin', [\app\wallet\controller\game\SAGameController::class, 'betResult']);
         Route::post('/PlayerLost', [\app\wallet\controller\game\SAGameController::class, 'betResult']);
         Route::post('/PlaceBetCancel', [\app\wallet\controller\game\SAGameController::class, 'cancelBet']);
+        Route::post('/Adjustment', [\app\wallet\controller\game\SAGameController::class, 'adjustment']);
     });
     Route::group('/atg-channel', function () {
         Route::post('/balance', [\app\wallet\controller\game\ATGGameController::class, 'balance']);
