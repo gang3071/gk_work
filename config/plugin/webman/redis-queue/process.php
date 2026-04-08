@@ -6,11 +6,12 @@ return [
     // 处理游戏相关的实时业务，需要立即响应
     // 包括：下注记录、游戏转账、游戏彩票、玩家活动、取消充值
     // ============================================================
-    // 🚀 性能优化: 增加进程数，解决队列积压问题
-    // BRPOP rejected: 10,479 → 增加消费能力
+    // ✅ 性能优化（2026-04-09）：减少进程数，降低 Redis 空轮询 CPU 占用
+    // 原因：队列长期为空，16 个进程疯狂轮询导致 Redis CPU 100%
+    // 策略：从 16 降到 4，有积压时再动态调整
     'redis_consumer_fast' => [
         'handler' => Webman\RedisQueue\Process\Consumer::class,
-        'count' => 16, // ✅ 从 8 增加到 16（解决队列积压）
+        'count' => 4, // ✅ 从 16 降到 4（队列空时减少无效轮询）
         'constructor' => [
             'consumer_dir' => app_path() . '/queue/redis/fast'
         ]
@@ -24,7 +25,7 @@ return [
     // ============================================================
     'redis_consumer_slow' => [
         'handler' => Webman\RedisQueue\Process\Consumer::class,
-        'count' => 2, // 2个进程（从4降低，慢业务可以排队）
+        'count' => 1, // ✅ 从 2 降到 1（进一步减少轮询）
         'constructor' => [
             'consumer_dir' => app_path() . '/queue/redis/slow'
         ]
