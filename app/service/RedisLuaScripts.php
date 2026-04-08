@@ -34,10 +34,17 @@ class RedisLuaScripts
      *
      * ARGV[1] = 玩家ID
      * ARGV[2] = 下注金额
-     * ARGV[3] = 记录JSON (包含 platform, order_no, player_id, platform_id, game_code 等)
-     * ARGV[4] = 当前时间戳
-     * ARGV[5] = 记录TTL (3600 = 1小时，极限内存优化)
-     * ARGV[6] = 余额TTL (3600 = 1小时)
+     * ARGV[3] = 平台代码
+     * ARGV[4] = 订单号
+     * ARGV[5] = 平台ID
+     * ARGV[6] = 游戏代码
+     * ARGV[7] = 游戏类型
+     * ARGV[8] = 游戏名称
+     * ARGV[9] = 交易类型
+     * ARGV[10] = 当前时间戳
+     * ARGV[11] = 记录TTL (3600 = 1小时，极限内存优化)
+     * ARGV[12] = 余额TTL (3600 = 1小时)
+     * ARGV[13] = 创建时间字符串
      *
      * 返回值：
      * - success: {ok: 1, balance: 新余额, old_balance: 旧余额}
@@ -46,22 +53,21 @@ class RedisLuaScripts
      */
     public const LUA_ATOMIC_BET = <<<'LUA'
 -- 1. 幂等性检查（先检查记录，再检查锁）
--- ✅ 修复：先检查 bet 记录是否已存在（7天TTL），再检查幂等性锁（5分钟TTL）
 local recordExists = redis.call('EXISTS', KEYS[2])
 if recordExists == 1 then
-    local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+    local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
     return cjson.encode({ok = 0, error = 'duplicate_order', balance = currentBalance})
 end
 
 local lockExists = redis.call('EXISTS', KEYS[5])
 if lockExists == 1 then
-    local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+    local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
     return cjson.encode({ok = 0, error = 'duplicate_order', balance = currentBalance})
 end
 
--- 2. 获取当前余额
-local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
-local betAmount = tonumber(ARGV[2])
+-- 2. 获取当前余额（防御性：确保即使 Redis 数据损坏也能得到有效数字）
+local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
+local betAmount = tonumber(ARGV[2]) or 0
 
 -- 3. 余额检查
 if currentBalance < betAmount then
@@ -70,41 +76,33 @@ end
 
 -- 4. 扣款
 local newBalance = currentBalance - betAmount
-redis.call('SETEX', KEYS[1], ARGV[6], newBalance)
+redis.call('SETEX', KEYS[1], ARGV[12], newBalance)
 
 -- 5. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
 
--- 6. 保存下注记录（Hash）
-local recordData = cjson.decode(ARGV[3])
-recordData.bet_time = ARGV[4]
-recordData.status = 'pending'
-recordData.settlement_status = 0
-recordData.win = 0
-recordData.diff = 0
-
+-- 6. 保存下注记录（Hash）- ✅ 优化：不再存储 original_data，减少 CPU 和内存占用
 redis.call('HMSET', KEYS[2],
-    'platform', recordData.platform,
-    'order_no', recordData.order_no,
-    'player_id', recordData.player_id,
-    'platform_id', recordData.platform_id,
-    'amount', recordData.amount,
-    'game_code', recordData.game_code or '',
-    'game_type', recordData.game_type or '',
-    'game_name', recordData.game_name or '',
-    'transaction_type', recordData.transaction_type or 'bet',
-    'bet_time', recordData.bet_time,
-    'original_data', recordData.original_data or '{}',
+    'platform', ARGV[3],
+    'order_no', ARGV[4],
+    'player_id', ARGV[1],
+    'platform_id', ARGV[5],
+    'amount', ARGV[2],
+    'game_code', ARGV[6],
+    'game_type', ARGV[7],
+    'game_name', ARGV[8],
+    'transaction_type', ARGV[9],
+    'bet_time', ARGV[10],
     'status', 'pending',
     'settlement_status', 0,
     'win', 0,
     'diff', 0,
-    'created_at', recordData.created_at
+    'created_at', ARGV[13]
 )
-redis.call('EXPIRE', KEYS[2], ARGV[5])
+redis.call('EXPIRE', KEYS[2], ARGV[11])
 
 -- 7. 加入同步队列
-redis.call('ZADD', KEYS[3], ARGV[4], KEYS[2])
+redis.call('ZADD', KEYS[3], ARGV[10], KEYS[2])
 
 -- 8. 统计计数
 redis.call('INCR', KEYS[4])
@@ -129,11 +127,12 @@ LUA;
      * ARGV[4] = 当前时间戳
      * ARGV[5] = 记录TTL (3600 = 1小时)
      * ARGV[6] = 余额TTL
-     * ARGV[7] = action_data JSON
-     * ARGV[8] = 玩家ID
-     * ARGV[9] = 平台ID
-     * ARGV[10] = settle 记录 JSON（用于独立结算）
-     * ARGV[11] = 预格式化日期字符串 (Y-m-d H:i:s)
+     * ARGV[7] = 玩家ID
+     * ARGV[8] = 平台ID
+     * ARGV[9] = 预格式化日期字符串 (Y-m-d H:i:s)
+     * ARGV[10] = 平台代码（用于独立结算）
+     * ARGV[11] = 订单号（用于独立结算）
+     * ARGV[12] = 游戏代码（用于独立结算）
      *
      * 返回值：
      * - success: {ok: 1, balance: 新余额, old_balance: 旧余额}
@@ -141,31 +140,30 @@ LUA;
      */
     public const LUA_ATOMIC_SETTLE = <<<'LUA'
 -- 1. 幂等性检查（先检查记录，再检查锁）
--- ✅ 修复：检查是否已结算（bet已结算 或 独立settle记录已存在）
 local betExists = redis.call('EXISTS', KEYS[2])
 if betExists == 1 then
     local settlementStatus = tonumber(redis.call('HGET', KEYS[2], 'settlement_status') or 0)
     if settlementStatus == 1 then
-        local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+        local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
         return cjson.encode({ok = 0, error = 'duplicate_settle', balance = currentBalance})
     end
 end
 
 local settleRecordExists = redis.call('EXISTS', KEYS[6])
 if settleRecordExists == 1 then
-    local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+    local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
     return cjson.encode({ok = 0, error = 'duplicate_settle', balance = currentBalance})
 end
 
 local lockExists = redis.call('EXISTS', KEYS[5])
 if lockExists == 1 then
-    local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+    local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
     return cjson.encode({ok = 0, error = 'duplicate_settle', balance = currentBalance})
 end
 
--- 2. 获取当前余额
-local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
-local winAmount = tonumber(ARGV[1])
+-- 2. 获取当前余额（防御性：确保即使 Redis 数据损坏也能得到有效数字）
+local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
+local winAmount = tonumber(ARGV[1]) or 0
 
 -- 3. 更新余额（加钱）
 local newBalance = currentBalance
@@ -178,50 +176,42 @@ end
 redis.call('SETEX', KEYS[5], 300, 1)
 
 -- 5. 根据之前检查的结果，更新相应记录
--- betExists 已在幂等性检查时获取
 
 if betExists == 1 then
-    -- 更新 bet 记录
-    local betAmount = tonumber(redis.call('HGET', KEYS[2], 'amount') or 0)
-
+    -- 更新 bet 记录 - ✅ 优化：不再存储 action_data，减少内存占用
     redis.call('HMSET', KEYS[2],
         'win', ARGV[1],
         'diff', ARGV[2],
         'settlement_status', 1,
         'transaction_type', ARGV[3],
         'settle_time', ARGV[4],
-        'platform_action_at', ARGV[11],
-        'action_data', ARGV[7],
+        'platform_action_at', ARGV[9],
         'status', 'pending'
     )
 
     -- 更新同步队列（提升优先级）
     redis.call('ZADD', KEYS[3], ARGV[4], KEYS[2])
 else
-    -- bet 不存在，创建独立 settle 记录
-    local settleData = cjson.decode(ARGV[10])
-
-    -- 智能处理订单号：如果已包含 _settle，不再追加
-    local finalOrderNo = settleData.order_no
+    -- bet 不存在，创建独立 settle 记录 - ✅ 优化：不再存储 original_data
+    local finalOrderNo = ARGV[11]
     if not string.find(finalOrderNo, '_settle$') then
         finalOrderNo = finalOrderNo .. '_settle'
     end
 
     redis.call('HMSET', KEYS[6],
-        'platform', settleData.platform,
+        'platform', ARGV[10],
         'order_no', finalOrderNo,
-        'player_id', ARGV[8],
-        'platform_id', ARGV[9],
+        'player_id', ARGV[7],
+        'platform_id', ARGV[8],
         'amount', 0,
         'win', ARGV[1],
         'diff', ARGV[2],
-        'game_code', settleData.game_code or '',
+        'game_code', ARGV[12],
         'settlement_status', 1,
         'transaction_type', ARGV[3],
         'settle_time', ARGV[4],
-        'original_data', settleData.original_data or '{}',
         'status', 'pending',
-        'created_at', ARGV[11]
+        'created_at', ARGV[9]
     )
     redis.call('EXPIRE', KEYS[6], ARGV[5])
     redis.call('ZADD', KEYS[3], ARGV[4], KEYS[6])
@@ -247,7 +237,6 @@ LUA;
      * ARGV[2] = 取消类型 (cancel/refund)
      * ARGV[3] = 当前时间戳
      * ARGV[4] = 余额TTL
-     * ARGV[5] = action_data JSON
      *
      * 返回值：
      * - success: {ok: 1, balance: 新余额, old_balance: 旧余额}
@@ -255,25 +244,24 @@ LUA;
      */
     public const LUA_ATOMIC_CANCEL = <<<'LUA'
 -- 1. 幂等性检查（先检查记录，再检查锁）
--- ✅ 修复：检查是否已取消/退款
 local betExists = redis.call('EXISTS', KEYS[2])
 if betExists == 1 then
     local transactionType = redis.call('HGET', KEYS[2], 'transaction_type') or ''
     if transactionType == 'cancel' or transactionType == 'refund' then
-        local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+        local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
         return cjson.encode({ok = 0, error = 'duplicate_cancel', balance = currentBalance})
     end
 end
 
 local lockExists = redis.call('EXISTS', KEYS[5])
 if lockExists == 1 then
-    local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
+    local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
     return cjson.encode({ok = 0, error = 'duplicate_cancel', balance = currentBalance})
 end
 
--- 2. 获取当前余额
-local currentBalance = tonumber(redis.call('GET', KEYS[1]) or 0)
-local refundAmount = tonumber(ARGV[1])
+-- 2. 获取当前余额（防御性：确保即使 Redis 数据损坏也能得到有效数字）
+local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
+local refundAmount = tonumber(ARGV[1]) or 0
 
 -- 3. 退款
 local newBalance = currentBalance + refundAmount
@@ -282,12 +270,11 @@ redis.call('SETEX', KEYS[1], ARGV[4], newBalance)
 -- 4. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
 
--- 5. 更新记录（betExists 已在幂等性检查时获取）
+-- 5. 更新记录（betExists 已在幂等性检查时获取）- ✅ 优化：不再存储 action_data
 if betExists == 1 then
     redis.call('HMSET', KEYS[2],
         'transaction_type', ARGV[2],
         'cancel_time', ARGV[3],
-        'action_data', ARGV[5],
         'status', 'pending'
     )
 
@@ -419,6 +406,8 @@ LUA;
 
         $orderNo = $data['order_no'];
         $betAmount = $data['amount'];
+        $transactionType = $data['transaction_type'] ?? TransactionType::mapFromLegacy($data);
+        $createdAt = date('Y-m-d H:i:s');
 
         // 准备 Keys
         $keys = [
@@ -429,30 +418,21 @@ LUA;
             "order:bet:lock:{$orderNo}",                     // KEYS[5]
         ];
 
-        // 准备 Arguments（支持新旧参数兼容）
-        $transactionType = $data['transaction_type'] ?? TransactionType::mapFromLegacy($data);
-
-        $recordJson = json_encode([
-            'platform' => $platform,
-            'order_no' => $orderNo,
-            'player_id' => $playerId,
-            'platform_id' => $data['platform_id'],
-            'amount' => $betAmount,
-            'game_code' => $data['game_code'] ?? '',
-            'game_type' => $data['game_type'] ?? '',
-            'game_name' => $data['game_name'] ?? '',
-            'transaction_type' => $transactionType,
-            'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-            'created_at' => date('Y-m-d H:i:s'),
-        ], JSON_UNESCAPED_UNICODE);
-
+        // ✅ 优化：Lua 脚本只接收核心字段，不再接收 original_data
         $argv = [
-            $playerId,                  // ARGV[1]
-            $betAmount,                 // ARGV[2]
-            $recordJson,                // ARGV[3]
-            time(),                     // ARGV[4]
-            3600,                       // ARGV[5] - 1小时 TTL（极限优化：7天→1小时，减少内存占用 98%）
-            3600,                       // ARGV[6] - 1小时 TTL
+            $playerId,                                       // ARGV[1]
+            $betAmount,                                      // ARGV[2]
+            $platform,                                       // ARGV[3]
+            $orderNo,                                        // ARGV[4]
+            $data['platform_id'],                            // ARGV[5]
+            $data['game_code'] ?? '',                        // ARGV[6]
+            $data['game_type'] ?? '',                        // ARGV[7]
+            $data['game_name'] ?? '',                        // ARGV[8]
+            $transactionType,                                // ARGV[9]
+            time(),                                          // ARGV[10]
+            3600,                                            // ARGV[11] - 1小时 TTL
+            3600,                                            // ARGV[12] - 余额 TTL
+            $createdAt,                                      // ARGV[13]
         ];
 
         // 执行 Lua 脚本（使用 work 连接池，确保 igaming 核心业务稳定）
@@ -488,8 +468,20 @@ LUA;
             );
         }
 
-        // ✅ 实时推送：发布余额变化消息到 Redis Pub/Sub
-        if (isset($decoded['ok']) && $decoded['ok'] === 1 && isset($decoded['balance'])) {
+        // ✅ 成功后异步追加 original_data 到 Redis Hash（不阻塞响应）
+        if (isset($decoded['ok']) && $decoded['ok'] === 1) {
+            $originalData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
+            try {
+                $redis->hSet($keys[1], 'original_data', $originalData);
+            } catch (\Throwable $e) {
+                // 失败不影响核心业务，仅记录日志
+                \support\Log::warning('[atomicBet] 追加 original_data 失败', [
+                    'order_no' => $orderNo,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // ✅ 实时推送：发布余额变化消息到 Redis Pub/Sub
             self::publishBalanceChange($playerId, $platform, [
                 'reason' => 'bet',
                 'old_balance' => $decoded['old_balance'] ?? 0,
@@ -532,6 +524,9 @@ LUA;
         $orderNo = $data['order_no'];
         $winAmount = $data['amount'];
         $diff = $data['diff'];
+        $transactionType = $data['transaction_type'] ?? TransactionType::mapFromLegacy($data);
+        $timestamp = time();
+        $dateTime = date('Y-m-d H:i:s', $timestamp);
 
         // 准备 Keys
         $keys = [
@@ -543,30 +538,20 @@ LUA;
             "game:record:settle:{$platform}:{$orderNo}",     // KEYS[6]
         ];
 
-        // 准备独立结算记录 JSON（用于 bet 不存在的情况）
-        $settleRecordJson = json_encode([
-            'platform' => $platform,
-            'order_no' => $orderNo,
-            'game_code' => $data['game_code'] ?? '',
-            'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-        ], JSON_UNESCAPED_UNICODE);
-
-        // 支持新旧参数兼容
-        $transactionType = $data['transaction_type'] ?? TransactionType::mapFromLegacy($data);
-
-        $timestamp = time();
+        // ✅ 优化：Lua 脚本只接收核心字段，不再接收 original_data 和 action_data
         $argv = [
             $winAmount,                                      // ARGV[1]
             $diff,                                           // ARGV[2]
             $transactionType,                                // ARGV[3]
             $timestamp,                                      // ARGV[4]
             3600,                                            // ARGV[5] - 1小时 TTL
-            3600,                                            // ARGV[6]
-            json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE), // ARGV[7]
-            $playerId,                                       // ARGV[8]
-            $data['platform_id'],                            // ARGV[9]
-            $settleRecordJson,                               // ARGV[10]
-            date('Y-m-d H:i:s', $timestamp),                 // ARGV[11] - 预格式化日期
+            3600,                                            // ARGV[6] - 余额 TTL
+            $playerId,                                       // ARGV[7]
+            $data['platform_id'],                            // ARGV[8]
+            $dateTime,                                       // ARGV[9] - 预格式化日期
+            $platform,                                       // ARGV[10] - 平台代码（独立结算用）
+            $orderNo,                                        // ARGV[11] - 订单号（独立结算用）
+            $data['game_code'] ?? '',                        // ARGV[12] - 游戏代码（独立结算用）
         ];
 
         // 执行 Lua 脚本（使用 work 连接池，确保 igaming 核心业务稳定）
@@ -602,8 +587,28 @@ LUA;
             );
         }
 
-        // ✅ 实时推送：发布余额变化消息
-        if (isset($decoded['ok']) && $decoded['ok'] === 1 && isset($decoded['balance'])) {
+        // ✅ 成功后异步追加 original_data 和 action_data 到 Redis Hash
+        if (isset($decoded['ok']) && $decoded['ok'] === 1) {
+            $originalData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
+
+            try {
+                // 检查是否存在 bet 记录
+                if ($redis->exists($keys[1])) {
+                    // 更新 bet 记录的 action_data
+                    $redis->hSet($keys[1], 'action_data', $originalData);
+                } else {
+                    // 独立 settle 记录，追加 original_data
+                    $redis->hSet($keys[5], 'original_data', $originalData);
+                }
+            } catch (\Throwable $e) {
+                // 失败不影响核心业务，仅记录日志
+                \support\Log::warning('[atomicSettle] 追加 original_data/action_data 失败', [
+                    'order_no' => $orderNo,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // ✅ 实时推送：发布余额变化消息
             self::publishBalanceChange($playerId, $platform, [
                 'reason' => 'settle',
                 'old_balance' => $decoded['old_balance'] ?? 0,
@@ -641,6 +646,7 @@ LUA;
 
         $orderNo = $data['order_no'];
         $refundAmount = $data['refund_amount'];
+        $transactionType = $data['transaction_type'] ?? TransactionType::mapFromLegacy($data);
 
         // ✅ 问题5修复：验证退款金额是否合理（除非明确跳过验证）
         $skipValidation = $data['skip_amount_validation'] ?? false;
@@ -675,15 +681,12 @@ LUA;
             "order:cancel:lock:{$orderNo}",                  // KEYS[5]
         ];
 
-        // 支持新旧参数兼容
-        $transactionType = $data['transaction_type'] ?? TransactionType::mapFromLegacy($data);
-
+        // ✅ 优化：Lua 脚本只接收核心字段，不再接收 action_data
         $argv = [
             $refundAmount,                                   // ARGV[1]
             $transactionType,                                // ARGV[2]
             time(),                                          // ARGV[3]
-            3600,                                            // ARGV[4]
-            json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE), // ARGV[5]
+            3600,                                            // ARGV[4] - 余额 TTL
         ];
 
         // 执行 Lua 脚本（使用 work 连接池，确保 igaming 核心业务稳定）
@@ -719,8 +722,24 @@ LUA;
             );
         }
 
-        // ✅ 实时推送：发布余额变化消息
-        if (isset($decoded['ok']) && $decoded['ok'] === 1 && isset($decoded['balance'])) {
+        // ✅ 成功后异步追加 action_data 到 Redis Hash
+        if (isset($decoded['ok']) && $decoded['ok'] === 1) {
+            $actionData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
+
+            try {
+                // 只有当 bet 记录存在时才追加 action_data
+                if ($redis->exists($keys[1])) {
+                    $redis->hSet($keys[1], 'action_data', $actionData);
+                }
+            } catch (\Throwable $e) {
+                // 失败不影响核心业务，仅记录日志
+                \support\Log::warning('[atomicCancel] 追加 action_data 失败', [
+                    'order_no' => $orderNo,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // ✅ 实时推送：发布余额变化消息
             self::publishBalanceChange($playerId, $platform, [
                 'reason' => 'cancel',
                 'old_balance' => $decoded['old_balance'] ?? 0,
