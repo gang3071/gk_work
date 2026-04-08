@@ -6,11 +6,11 @@ return [
     // 处理游戏相关的实时业务，需要立即响应
     // 包括：下注记录、游戏转账、游戏彩票、玩家活动、取消充值
     // ============================================================
-    // 🚀 性能优化: 降低进程数，减少对API的资源争抢
-    // 只要队列不积压，进程越少，系统整体IO抖动越小
+    // 🚀 性能优化: 增加进程数，解决队列积压问题
+    // BRPOP rejected: 10,479 → 增加消费能力
     'redis_consumer_fast' => [
         'handler' => Webman\RedisQueue\Process\Consumer::class,
-        'count' => 8, // 4个进程（从12降低，避免抢占API资源）
+        'count' => 16, // ✅ 从 8 增加到 16（解决队列积压）
         'constructor' => [
             'consumer_dir' => app_path() . '/queue/redis/fast'
         ]
