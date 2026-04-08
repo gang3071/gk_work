@@ -125,8 +125,14 @@ class RsgGameController
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
+            $this->service->player = $player;
 
             $orderNo = (string)($data['SequenNumber'] ?? '');
+
+            //判断当前设备是否爆机
+            if ($this->service->checkAndHandleMachineCrash()) {
+                return $this->error($this->service->error);
+            }
 
             // ========== 核心：Lua 原子下注（1次调用完成所有操作）==========
             $luaParams = [
@@ -602,9 +608,15 @@ class RsgGameController
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
+            $this->service->player = $player;
 
             $orderNo = (string)($data['SessionId'] ?? '');  // prepay使用SessionId作为订单号
             $requestAmount = $data['Amount'] ?? 0;
+
+            //判断当前设备是否爆机
+            if ($this->service->checkAndHandleMachineCrash()) {
+                return $this->error($this->service->error);
+            }
 
             // ========== 核心：Lua 原子预扣 ==========
             // 注意：prepay 特殊逻辑 - 余额不足时扣除所有余额

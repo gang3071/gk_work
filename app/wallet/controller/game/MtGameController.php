@@ -133,8 +133,14 @@ class MtGameController
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
+            $this->service->player = $player;
 
             $orderNo = (string)($data['bet_sn'] ?? '');
+
+            //判断当前设备是否爆机
+            if ($this->service->checkAndHandleMachineCrash()) {
+                return $this->error($this->service->error);
+            }
 
             // 3. Lua 原子下注
             $luaParams = [
@@ -570,9 +576,15 @@ class MtGameController
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
+            $this->service->player = $player;
 
             $orderNo = (string)($data['tip_sn'] ?? '');  // MT使用tip_sn
             $giftAmount = $data['money'] ?? 0;
+
+            //判断当前设备是否爆机
+            if ($this->service->checkAndHandleMachineCrash()) {
+                return $this->error($this->service->error);
+            }
 
             // 3. Lua 原子打赏（打赏是扣款操作，使用bet）
             $luaParams = [

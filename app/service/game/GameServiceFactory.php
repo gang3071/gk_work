@@ -328,16 +328,16 @@ class GameServiceFactory
      *
      * @return bool 如果已爆机返回true，否则返回false
      */
-    protected function checkAndHandleMachineCrash(): bool
+    public function checkAndHandleMachineCrash(): bool
     {
         // 🚀 优化 #1: Redis 预检查（避免不必要的方法调用）
         if (!$this->player || !$this->player->id) {
             return false;
         }
 
-        $isCrashed = checkMachineCrash($this->player);
+        $crashCheck = checkMachineCrash($this->player);
 
-        if ($isCrashed) {
+        if ($crashCheck['crashed'] && $crashCheck['crash_amount'] > 0) {
             // 设备已爆机，设置余额不足错误
             $this->error = $this->getInsufficientBalanceError();
 

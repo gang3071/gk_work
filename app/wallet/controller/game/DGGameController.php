@@ -177,6 +177,11 @@ class DGGameController
             } else {
                 // type=1:下注 type=3:补单 type=6:小费 → Lua 原子下注
                 if ($amount > 0) {
+                    //判断当前设备是否爆机
+                    if ($this->service->checkAndHandleMachineCrash()) {
+                        return $this->error($this->service->error);
+                    }
+
                     $luaParams = [
                         'order_no' => $orderNo,
                         'platform_id' => $this->service->platform->id,

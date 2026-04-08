@@ -169,6 +169,11 @@ class SPSDYGameController
                 ]);
             }
 
+            //判断当前设备是否爆机
+            if ($this->service->checkAndHandleMachineCrash()) {
+                return $this->error($this->service->error);
+            }
+
             // 普通下注（Lua 原子操作）
             $result = RedisLuaScripts::atomicBet($player->id, 'SPSDY', [
                 'order_no' => $orderNo,
