@@ -103,6 +103,7 @@ Route::group('/single-wallet', function () {
         Route::post('/wallet/balance', [\app\wallet\controller\game\O8GameController::class, 'balance']);
         Route::post('/wallet/debit', [\app\wallet\controller\game\O8GameController::class, 'bet']);
         Route::post('/wallet/credit', [\app\wallet\controller\game\O8GameController::class, 'betResult']);
+        Route::post('/wallet/cancel', [\app\wallet\controller\game\O8GameController::class, 'cancel']);
     });
     Route::group('/tnine-channel', function () {
         Route::post('/balance', [\app\wallet\controller\game\TNineGameController::class, 'balance']);

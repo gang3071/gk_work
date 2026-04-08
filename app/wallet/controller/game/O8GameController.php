@@ -36,6 +36,8 @@ class O8GameController
     public const API_CODE_CERTIFICATE_ERROR = 10;
     public const API_CODE_REQUEST_A_TIMEOUT = 11;
     public const API_CODE_DATABASE_ERROR = 12;
+    public const API_CODE_TRANSACTION_NOT_EXIST = 600;
+    public const API_CODE_TRANSACTION_ALREADY_CANCELLED = 610;
 
 
     // 2. 将状态码映射移到私有常量或属性
@@ -52,6 +54,8 @@ class O8GameController
         self::API_CODE_CERTIFICATE_ERROR => 'Token has expired',
         self::API_CODE_REQUEST_A_TIMEOUT => '請求逾時',
         self::API_CODE_DATABASE_ERROR => '數據庫錯誤',
+        self::API_CODE_TRANSACTION_NOT_EXIST => 'Transaction does not exist',
+        self::API_CODE_TRANSACTION_ALREADY_CANCELLED => 'Transaction has already been cancelled',
     ];
 
     /** 排除签名验证的接口 */
@@ -200,7 +204,7 @@ class O8GameController
                 }
                 $this->service->player = $player;
 
-                $orderNo = $order['externalroundid'];
+                $orderNo = $order['ptxid'];
                 $bet = $order['amt'];
 
                 //判断当前设备是否爆机
@@ -329,7 +333,7 @@ class O8GameController
                     continue;
                 }
 
-                $orderNo = $order['externalroundid'];
+                $orderNo = $order['refptxid'];
                 $winAmount = $order['turnover'] - $order['ggr'];
                 $txtype = $order['txtype'];
 
@@ -502,6 +506,159 @@ class O8GameController
         } catch (Exception $e) {
             Log::error('O8 refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('O8', '退款异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
+        }
+    }
+
+    /**
+     * UGS Cancel接口 - 取消失败的Debit操作
+     * @param Request $request
+     * @return Response
+     */
+    public function cancel(Request $request): Response
+    {
+        try {
+            $params = $request->post();
+            $token = request()->header('authorization');
+
+            $this->logger->info('O8取消交易请求（Lua原子）', ['params' => $params, 'token' => $token]);
+
+            $this->service->verifyToken($token);
+
+            $orders = $params['transactions'];
+            $return = ['transactions' => []];
+
+            foreach ($orders as $order) {
+                /** @var Player $player */
+                $player = Player::query()->where('uuid', $order['userid'])->first();
+                if (empty($player)) {
+                    $return['transactions'][] = [
+                        'txid' => '',
+                        'ptxid' => $order['refptxid'],
+                        'bal' => 0,
+                        'cur' => 'TWD',
+                        'dup' => false,
+                        'err' => self::API_CODE_TARGET_ID_NOT_FOUND,
+                        'errdesc' => self::API_CODE_MAP[self::API_CODE_TARGET_ID_NOT_FOUND]
+                    ];
+                    continue;
+                }
+
+                $refPtxid = $order['refptxid'];
+                $refundAmount = $order['amt'] ?? 0;
+
+                // UGS规范：检查订单是否存在（Lua未返回此错误）
+                $betRecordKey = "game:record:bet:O8:{$refPtxid}";
+                if (!\support\Redis::exists($betRecordKey)) {
+                    $this->logger->warning('O8取消交易失败：交易不存在', ['refptxid' => $refPtxid]);
+                    $currentBalance = \app\service\WalletService::getBalance($player->id);
+                    $return['transactions'][] = [
+                        'txid' => $refPtxid,
+                        'ptxid' => $order['refptxid'],
+                        'bal' => (float)$currentBalance,
+                        'cur' => 'TWD',
+                        'dup' => false,
+                        'err' => self::API_CODE_TRANSACTION_NOT_EXIST,
+                        'errdesc' => self::API_CODE_MAP[self::API_CODE_TRANSACTION_NOT_EXIST]
+                    ];
+                    continue;
+                }
+
+                // UGS规范：检查订单是否已取消（Lua未返回此错误）
+                $transactionType = \support\Redis::hGet($betRecordKey, 'transaction_type');
+                if ($transactionType === 'cancel' || $transactionType === 'refund') {
+                    $this->logger->info('O8取消交易失败：已被取消', ['refptxid' => $refPtxid]);
+                    $currentBalance = \app\service\WalletService::getBalance($player->id);
+                    $return['transactions'][] = [
+                        'txid' => $refPtxid,
+                        'ptxid' => $order['refptxid'],
+                        'bal' => (float)$currentBalance,
+                        'cur' => 'TWD',
+                        'dup' => true,
+                        'err' => self::API_CODE_TRANSACTION_ALREADY_CANCELLED,
+                        'errdesc' => self::API_CODE_MAP[self::API_CODE_TRANSACTION_ALREADY_CANCELLED]
+                    ];
+                    continue;
+                }
+
+                // Lua 原子取消
+                $luaParams = [
+                    'order_no' => $refPtxid,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $refundAmount,
+                    'transaction_type' => TransactionType::CANCEL_REFUND,
+                    'original_data' => $order,
+                ];
+
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'refund_amount' => ['required', 'numeric', 'min:0'],
+                    'platform_id' => ['required', 'integer'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicCancel');
+
+                $result = RedisLuaScripts::atomicCancel($player->id, 'O8', $luaParams);
+
+                // 审计日志
+                logLuaScriptCall('cancel', 'O8', $player->id, $luaParams);
+
+                // 游戏交互日志
+                logGameInteraction('O8', 'cancel', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                ]);
+
+                // 处理Lua返回的duplicate_cancel（冗余检查，保留作为防御）
+                if ($result['ok'] === 0) {
+                    if ($result['error'] === 'duplicate_cancel') {
+                        $this->logger->info('O8重复取消（Lua检测）', ['refptxid' => $refPtxid]);
+                        $return['transactions'][] = [
+                            'txid' => $refPtxid,
+                            'ptxid' => $order['refptxid'],
+                            'bal' => (float)$result['balance'],
+                            'cur' => 'TWD',
+                            'dup' => true
+                        ];
+                        continue;
+                    }
+                }
+
+                $this->logger->info('O8取消交易成功（Lua原子）', [
+                    'refptxid' => $refPtxid,
+                    'refund_amount' => $refundAmount,
+                    'balance_before' => $result['old_balance'],
+                    'balance_after' => $result['balance'],
+                ]);
+
+                // 保存取消记录到 Redis
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveCancel('O8', [
+                        'order_no' => $refPtxid,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'refund_amount' => $refundAmount,
+                        'original_data' => $order,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
+                    ]);
+                }
+
+                $return['transactions'][] = [
+                    'txid' => $refPtxid,
+                    'ptxid' => $order['refptxid'],
+                    'bal' => (float)$result['balance'],
+                    'cur' => 'TWD',
+                    'dup' => false
+                ];
+            }
+
+            $this->logger->info('O8取消交易批量完成（Lua原子）', ['count' => count($orders)]);
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
+        } catch (Exception $e) {
+            Log::error('O8 cancel failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('O8', '取消交易异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_DATABASE_ERROR);
         }
     }
