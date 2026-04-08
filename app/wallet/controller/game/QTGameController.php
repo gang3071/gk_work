@@ -405,6 +405,11 @@ class QTGameController
 
             // 根据 txnType 处理不同操作
             if ($txnType === 'DEBIT') {
+                //判断当前设备是否爆机
+                if ($this->service->checkAndHandleMachineCrash()) {
+                    return $this->errorResponse(self::ERROR_INSUFFICIENT_FUNDS, 'Insufficient funds', 400);
+                }
+
                 // 下注扣款（Lua 原子操作）
                 // 注意：奖金回合（bonusType 存在）不扣余额，只记录
                 if ($bonusType) {

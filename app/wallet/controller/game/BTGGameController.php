@@ -194,6 +194,11 @@ class BTGGameController
             // 根据 transfer_type 执行 Lua 原子操作
             switch ($transferType) {
                 case 'start':
+                    //判断当前设备是否爆机
+                    if ($this->service->checkAndHandleMachineCrash()) {
+                        return $this->error($this->service->error);
+                    }
+
                     // 下注（扣款）
                     $luaParams = [
                         'order_no' => $orderId,

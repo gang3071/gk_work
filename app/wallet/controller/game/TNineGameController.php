@@ -151,6 +151,12 @@ class TNineGameController
             if (!$player) {
                 return $this->error(self::API_CODE_ERROR);
             }
+            $this->service->player = $player;
+
+            //判断当前设备是否爆机
+            if ($this->service->checkAndHandleMachineCrash()) {
+                return $this->error($this->service->error);
+            }
 
             $orders = $params['OrderList'] ?? [];
             $return = ['OrderList' => []];

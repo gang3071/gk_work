@@ -198,9 +198,15 @@ class O8GameController
                 if (empty($player)) {
                     continue;
                 }
+                $this->service->player = $player;
 
                 $orderNo = $order['externalroundid'];
                 $bet = $order['amt'];
+
+                //判断当前设备是否爆机
+                if ($this->service->checkAndHandleMachineCrash()) {
+                    return $this->error($this->service->error);
+                }
 
                 // 查询平台ID
                 $platformId = GameExtend::query()

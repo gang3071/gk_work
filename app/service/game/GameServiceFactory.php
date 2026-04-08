@@ -328,7 +328,7 @@ class GameServiceFactory
      *
      * @return bool 如果已爆机返回true，否则返回false
      */
-    protected function checkAndHandleMachineCrash(): bool
+    public function checkAndHandleMachineCrash(): bool
     {
         // 🚀 优化 #1: Redis 预检查（避免不必要的方法调用）
         if (!$this->player || !$this->player->id) {

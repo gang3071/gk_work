@@ -89,6 +89,11 @@ class SPGameController
             $orderNo = (string)($data['txnid'] ?? '');
             $bet = $data['amount'];
 
+            //判断当前设备是否爆机
+            if ($this->service->checkAndHandleMachineCrash()) {
+                return $this->error($this->service->error);
+            }
+
             // Lua 原子下注
             $luaParams = [
                 'order_no' => $orderNo,
