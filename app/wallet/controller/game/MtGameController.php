@@ -265,7 +265,7 @@ class MtGameController
             $luaParams = [
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
-                'refund_amount' => $data['order_money'],
+                'refund_amount' => $data['bet'],
                 'transaction_type' => TransactionType::CANCEL,
                 'original_data' => $data,
             ];
@@ -288,7 +288,7 @@ class MtGameController
                 'ok' => $result['ok'],
                 'balance' => $result['balance'],
                 'order_no' => $orderNo,
-                'refund_amount' => $data['order_money'],
+                'refund_amount' => $data['bet'],
             ]);
 
             // 保存取消记录到 Redis
@@ -297,7 +297,7 @@ class MtGameController
                     'order_no' => $orderNo,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
-                    'refund_amount' => $data['order_money'],
+                    'refund_amount' => $data['bet'],
                     'original_data' => $data,
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
