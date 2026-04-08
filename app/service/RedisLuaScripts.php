@@ -325,6 +325,14 @@ LUA;
             try {
                 $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
 
+                // 🔍 调试：记录 EVALSHA 返回值类型
+                \support\Log::debug('EVALSHA 执行完成', [
+                    'sha' => substr($sha, 0, 8),
+                    'result_type' => gettype($result),
+                    'result_is_false' => $result === false,
+                    'result_is_null' => $result === null,
+                ]);
+
                 // 记录执行时间
                 $duration = (microtime(true) - $start) * 1000;
                 if ($duration > 10) {
@@ -338,7 +346,10 @@ LUA;
                 return $result;
             } catch (\RedisException $e) {
                 // SHA 可能已过期（Redis 重启或脚本被清除），重新加载
-                \support\Log::info('Redis Lua 脚本 SHA 失效，重新加载', ['sha' => substr($sha, 0, 8)]);
+                \support\Log::warning('Redis Lua 脚本 SHA 失效，降级到 EVAL', [
+                    'sha' => substr($sha, 0, 8),
+                    'error' => $e->getMessage(),
+                ]);
                 unset(self::$scriptShas[$sha]);
             }
         }
@@ -346,6 +357,14 @@ LUA;
         // 第一次执行或 SHA 失效：使用 EVAL
         try {
             $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+
+            // 🔍 调试：记录 EVAL 返回值类型
+            \support\Log::debug('EVAL 执行完成', [
+                'sha' => substr($sha, 0, 8),
+                'result_type' => gettype($result),
+                'result_is_false' => $result === false,
+                'result_is_null' => $result === null,
+            ]);
 
             // 标记为已加载
             self::$scriptShas[$sha] = true;
@@ -441,11 +460,21 @@ LUA;
         $redis = Redis::connection('work');
         $result = self::evalScript($redis, self::LUA_ATOMIC_BET, $keys, $argv);
 
+        // 🔍 调试日志：记录实际返回值
+        \support\Log::info('[atomicBet] Redis Lua 返回值', [
+            'player_id' => $playerId,
+            'platform' => $platform,
+            'order_no' => $orderNo,
+            'result_type' => gettype($result),
+            'result_value' => is_string($result) ? substr($result, 0, 200) : var_export($result, true),
+            'bet_amount' => $betAmount,
+        ]);
+
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
             throw new \RuntimeException(
-                sprintf('[atomicBet] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s',
-                    $playerId, $platform, $orderNo)
+                sprintf('[atomicBet] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s, 下注金额: %s',
+                    $playerId, $platform, $orderNo, $betAmount)
             );
         }
 
@@ -545,11 +574,21 @@ LUA;
         $redis = Redis::connection('work');
         $result = self::evalScript($redis, self::LUA_ATOMIC_SETTLE, $keys, $argv);
 
+        // 🔍 调试日志：记录实际返回值
+        \support\Log::info('[atomicSettle] Redis Lua 返回值', [
+            'player_id' => $playerId,
+            'platform' => $platform,
+            'order_no' => $orderNo,
+            'result_type' => gettype($result),
+            'result_value' => is_string($result) ? substr($result, 0, 200) : var_export($result, true),
+            'win_amount' => $winAmount,
+        ]);
+
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
             throw new \RuntimeException(
-                sprintf('[atomicSettle] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s',
-                    $playerId, $platform, $orderNo)
+                sprintf('[atomicSettle] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s, 赢取金额: %s',
+                    $playerId, $platform, $orderNo, $winAmount)
             );
         }
 
@@ -652,11 +691,21 @@ LUA;
         $redis = Redis::connection('work');
         $result = self::evalScript($redis, self::LUA_ATOMIC_CANCEL, $keys, $argv);
 
+        // 🔍 调试日志：记录实际返回值
+        \support\Log::info('[atomicCancel] Redis Lua 返回值', [
+            'player_id' => $playerId,
+            'platform' => $platform,
+            'order_no' => $orderNo,
+            'result_type' => gettype($result),
+            'result_value' => is_string($result) ? substr($result, 0, 200) : var_export($result, true),
+            'refund_amount' => $refundAmount,
+        ]);
+
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
             throw new \RuntimeException(
-                sprintf('[atomicCancel] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s',
-                    $playerId, $platform, $orderNo)
+                sprintf('[atomicCancel] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s, 退款金额: %s',
+                    $playerId, $platform, $orderNo, $refundAmount)
             );
         }
 
