@@ -312,25 +312,35 @@ LUA;
             try {
                 $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
 
-                // 🔍 调试：记录 EVALSHA 返回值类型
-                \support\Log::debug('EVALSHA 执行完成', [
-                    'sha' => substr($sha, 0, 8),
-                    'result_type' => gettype($result),
-                    'result_is_false' => $result === false,
-                    'result_is_null' => $result === null,
-                ]);
-
-                // 记录执行时间
-                $duration = (microtime(true) - $start) * 1000;
-                if ($duration > 10) {
-                    \support\Log::warning('慢 Lua 脚本 (EVALSHA)', [
-                        'duration_ms' => round($duration, 2),
-                        'keys_count' => count($keys),
+                // ✅ 修复：检查 EVALSHA 返回值，false 表示脚本不存在或执行失败
+                if ($result === false) {
+                    $lastError = $redis->getLastError();
+                    \support\Log::warning('EVALSHA 返回 false，脚本可能已失效，降级到 EVAL', [
                         'sha' => substr($sha, 0, 8),
+                        'last_error' => $lastError,
                     ]);
-                }
+                    // 清除 SHA 缓存，强制降级到 EVAL
+                    unset(self::$scriptShas[$sha]);
+                    // 不返回 false，继续执行下面的 EVAL
+                } else {
+                    // 🔍 调试：记录 EVALSHA 返回值类型
+                    \support\Log::debug('EVALSHA 执行完成', [
+                        'sha' => substr($sha, 0, 8),
+                        'result_type' => gettype($result),
+                    ]);
 
-                return $result;
+                    // 记录执行时间
+                    $duration = (microtime(true) - $start) * 1000;
+                    if ($duration > 10) {
+                        \support\Log::warning('慢 Lua 脚本 (EVALSHA)', [
+                            'duration_ms' => round($duration, 2),
+                            'keys_count' => count($keys),
+                            'sha' => substr($sha, 0, 8),
+                        ]);
+                    }
+
+                    return $result;
+                }
             } catch (\RedisException $e) {
                 // SHA 可能已过期（Redis 重启或脚本被清除），重新加载
                 \support\Log::warning('Redis Lua 脚本 SHA 失效，降级到 EVAL', [
