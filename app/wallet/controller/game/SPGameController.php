@@ -8,6 +8,7 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\RedisLuaScripts;
+use app\service\WalletService;
 use Exception;
 use SimpleXMLElement;
 use support\Log;
@@ -17,22 +18,30 @@ use support\Response;
 class SPGameController
 {
     use TelegramAlertTrait;
-    // 1. 使用常量定义状态码，更符合常量的语义
-    public const API_CODE_SUCCESS = 0;
-    public const API_CODE_DECRYPT_ERROR = 1006;
-    public const API_CODE_MAINTENANCE = 9999;
-    public const API_CODE_PLAYER_NOT_EXIST = 1000;
-    public const API_CODE_INSUFFICIENT_BALANCE = 1004;
-    public const API_CODE_GENERAL_ERROR = 1005;
+    // SP平台错误码定义（官方文档）
+    public const API_CODE_SUCCESS = 0;                      // 成功
+    public const API_CODE_PLAYER_NOT_EXIST = 1000;          // 会员帐号不存在
+    public const API_CODE_CURRENCY_ERROR = 1001;            // 货币代码不正确
+    public const API_CODE_AMOUNT_ERROR = 1002;              // 金额不正确
+    public const API_CODE_PLAYER_LOCKED = 1003;             // 会员帐号已被锁
+    public const API_CODE_INSUFFICIENT_BALANCE = 1004;      // 不足够点数
+    public const API_CODE_GENERAL_ERROR = 1005;             // 一般错误
+    public const API_CODE_DECRYPT_ERROR = 1006;             // 解密错误
+    public const API_CODE_SESSION_EXPIRED = 1007;           // 登入时段过期，需要重新登入
+    public const API_CODE_MAINTENANCE = 9999;               // 系统错误
 
-    // 2. 将状态码映射移到私有常量或属性
+    // 错误码映射
     public const API_CODE_MAP = [
         self::API_CODE_SUCCESS => '成功',
-        self::API_CODE_DECRYPT_ERROR => '解密错误',
-        self::API_CODE_MAINTENANCE => '系统错误',
-        self::API_CODE_PLAYER_NOT_EXIST => '此玩家帳戶不存在',
+        self::API_CODE_PLAYER_NOT_EXIST => '会员帐号不存在',
+        self::API_CODE_CURRENCY_ERROR => '货币代码不正确',
+        self::API_CODE_AMOUNT_ERROR => '金额不正确',
+        self::API_CODE_PLAYER_LOCKED => '会员帐号已被锁',
         self::API_CODE_INSUFFICIENT_BALANCE => '不足够点数',
         self::API_CODE_GENERAL_ERROR => '一般错误',
+        self::API_CODE_DECRYPT_ERROR => '解密错误',
+        self::API_CODE_SESSION_EXPIRED => '登入时段过期，需要重新登入',
+        self::API_CODE_MAINTENANCE => '系统错误',
     ];
 
     /** 排除签名验证的接口 */
@@ -143,10 +152,12 @@ class SPGameController
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
                     Log::channel('sp_server')->info('SP下注重复请求（Lua检测）', ['order_no' => $orderNo]);
-                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                    // 重复订单返回成功（幂等性）
+                    $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'username' => $data['username'],
                         'currency' => $data['currency'],
-                        'amount' => (float)$result['balance'],
+                        'amount' => (float)$currentBalance,
                     ]);
                 } elseif ($result['error'] === 'insufficient_balance') {
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE, [
@@ -225,9 +236,16 @@ class SPGameController
                 ]);
             }
 
-            // 处理结果
+            // 处理重复订单
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 Log::channel('sp_server')->info('SP取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                // 重复订单返回当前余额
+                $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => (float)$currentBalance,
+                ]);
             }
 
             Log::channel('sp_server')->info('SP取消下注成功（Lua原子）', ['order_no' => $orderNo]);
@@ -314,12 +332,15 @@ class SPGameController
                     $lastBalance = $result['balance'];
                 } elseif ($result['error'] === 'duplicate_order') {
                     Log::channel('sp_server')->info('SP结算订单重复（Lua检测）', ['order_no' => $orderNo]);
-                    $lastBalance = $result['balance'];
+                    // 重复订单也要更新余额
+                    if (isset($result['balance'])) {
+                        $lastBalance = $result['balance'];
+                    }
                 }
             }
 
-            // 获取最终余额
-            $finalBalance = $lastBalance ?? \app\service\GameRecordCacheService::getCachedBalance($player->id);
+            // 获取最终余额：优先使用Lua返回的余额，如果没有则从钱包服务获取
+            $finalBalance = $lastBalance ?? WalletService::getBalance($player->id);
 
             Log::channel('sp_server')->info('SP结算成功（Lua原子）', [
                 'total' => count($betList),
