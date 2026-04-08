@@ -736,65 +736,103 @@ class QTGameController
                 return $this->errorResponse(self::ERROR_REQUEST_DECLINED, 'Invalid amount', 400);
             }
 
-            // 幂等性检查 - 检查是否已发放过该奖金
-            $existingReward = PlayerDeliveryRecord::query()
-                ->where('tradeno', $txnId)
-                ->where('source', 'qt_reward')
-                ->first();
+            // ========== Lua 原子操作处理 ==========
+            // 使用atomicSettle增加余额（类似SA/SP的adjustment接口）
+            $luaParams = [
+                'order_no' => $txnId,
+                'platform_id' => $this->service->platform->id,
+                'amount' => $amount,
+                'diff' => $amount, // 增加金额
+                'transaction_type' => TransactionType::SETTLE,
+                'original_data' => $params,
+            ];
 
-            if ($existingReward) {
-                $this->logger->info('QT奖金已发放（幂等）', [
-                    'txnId' => $txnId,
-                    'record_id' => $existingReward->id
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'amount' => ['required', 'numeric'],
+                'diff' => ['required', 'numeric'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicSettle');
+
+            $result = RedisLuaScripts::atomicSettle($player->id, 'QT', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('reward', 'QT', $player->id, $luaParams);
+
+            $playerDeliveryRecord = null;
+
+            // 保存结算记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveSettle('QT', [
+                    'order_no' => $txnId,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $amount,
+                    'diff' => $amount,
+                    'game_code' => 'reward',
+                    'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
+                    'reward_type' => $rewardType,
+                    'reward_title' => $rewardTitle,
                 ]);
 
-                // 返回当前余额
-                $machineWallet = $player->machine_wallet;
+                // 创建奖金交易记录（用于报表）
+                $playerDeliveryRecord = new PlayerDeliveryRecord();
+                $playerDeliveryRecord->player_id = $player->id;
+                $playerDeliveryRecord->department_id = $player->department_id;
+                $playerDeliveryRecord->target = 'qt_rewards';
+                $playerDeliveryRecord->target_id = 0;
+                $playerDeliveryRecord->platform_id = $this->service->platform->id;
+                $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
+                $playerDeliveryRecord->source = 'qt_reward';
+                $playerDeliveryRecord->amount = $amount;
+                $playerDeliveryRecord->amount_before = $result['old_balance'] ?? 0;
+                $playerDeliveryRecord->amount_after = $result['balance'];
+                $playerDeliveryRecord->tradeno = $txnId;
+                $playerDeliveryRecord->remark = "QT奖金: {$rewardTitle} ({$rewardType})";
+                $playerDeliveryRecord->user_id = 0;
+                $playerDeliveryRecord->user_name = 'QT系统';
+                $playerDeliveryRecord->save();
+
+                $this->logger->info('QT奖金发放成功（Lua原子）', [
+                    'txnId' => $txnId,
+                    'player_id' => $player->id,
+                    'amount' => $amount,
+                    'reward_type' => $rewardType,
+                    'reward_title' => $rewardTitle,
+                    'balance' => $result['balance']
+                ]);
+
                 return new Response(200, ['Content-Type' => 'application/json'], json_encode([
-                    'balance' => round((float)($machineWallet->money ?? 0), 2),
-                    'referenceId' => (string)$existingReward->id
+                    'balance' => round($result['balance'], 2),
+                    'referenceId' => (string)$playerDeliveryRecord->id
+                ]));
+            } elseif ($result['error'] === 'duplicate_order') {
+                // 重复订单（幂等性）
+                $this->logger->info('QT奖金发放重复请求（Lua检测）', ['txnId' => $txnId]);
+
+                // 查询已存在的记录
+                $existingReward = PlayerDeliveryRecord::query()
+                    ->where('tradeno', $txnId)
+                    ->where('source', 'qt_reward')
+                    ->first();
+
+                return new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                    'balance' => round($result['balance'], 2),
+                    'referenceId' => $existingReward ? (string)$existingReward->id : $txnId
                 ]));
             }
 
-            // 锁定玩家钱包
-            $machineWallet = $player->machine_wallet()->lockForUpdate()->first();
-
-            // 发放奖金 - 加款
-            $beforeBalance = $machineWallet->money;
-            $machineWallet->money = bcadd($machineWallet->money, $amount, 2);
-            $machineWallet->save();
-
-            // 创建奖金交易记录
-            $playerDeliveryRecord = new PlayerDeliveryRecord();
-            $playerDeliveryRecord->player_id = $player->id;
-            $playerDeliveryRecord->department_id = $player->department_id;
-            $playerDeliveryRecord->target = 'qt_rewards';
-            $playerDeliveryRecord->target_id = 0;
-            $playerDeliveryRecord->platform_id = $this->service->platform->id;
-            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_SETTLEMENT;
-            $playerDeliveryRecord->source = 'qt_reward';
-            $playerDeliveryRecord->amount = $amount;
-            $playerDeliveryRecord->amount_before = $beforeBalance;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
-            $playerDeliveryRecord->tradeno = $txnId;
-            $playerDeliveryRecord->remark = "QT奖金: {$rewardTitle} ({$rewardType})";
-            $playerDeliveryRecord->user_id = 0;
-            $playerDeliveryRecord->user_name = 'QT系统';
-            $playerDeliveryRecord->save();
-
-            $this->logger->info('QT奖金发放成功', [
-                'txnId' => $txnId,
-                'player_id' => $player->id,
-                'amount' => $amount,
-                'reward_type' => $rewardType,
-                'reward_title' => $rewardTitle,
-                'balance' => $machineWallet->money
+            // 如果走到这里，说明Lua返回了未预期的结果
+            $this->logger->error('QT奖金发放Lua返回异常', [
+                'result' => $result,
+                'txnId' => $txnId
             ]);
 
-            return new Response(200, ['Content-Type' => 'application/json'], json_encode([
-                'balance' => round((float)$machineWallet->money, 2),
-                'referenceId' => (string)$playerDeliveryRecord->id
-            ]));
+            return $this->errorResponse(self::ERROR_UNKNOWN_ERROR, 'Failed to process reward', 500);
         } catch (Exception $e) {
             $this->logger->error('QT奖金发放异常', [
                 'error' => $e->getMessage(),
