@@ -328,6 +328,14 @@ class SPGameController
                         'balance_before' => $result['old_balance'] ?? 0,
                         'balance_after' => $result['balance'],
                     ]);
+
+                    // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
+                    WalletService::checkMachineCrashAfterTransaction(
+                        $player->id,
+                        $result['balance'],
+                        $result['old_balance'] ?? null
+                    );
+
                     $processedCount++;
                     $lastBalance = $result['balance'];
                 } elseif ($result['error'] === 'duplicate_order') {

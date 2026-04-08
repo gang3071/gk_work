@@ -10,6 +10,7 @@ use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\game\TNineServiceInterface;
 use app\service\RedisLuaScripts;
+use app\service\WalletService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -97,7 +98,7 @@ class TNineGameController
 
             // 2. 批量查询余额（使用 WalletService::getBatchBalance）
             $playerIds = $players->pluck('id')->toArray();
-            $balances = \app\service\WalletService::getBatchBalance($playerIds);
+            $balances = WalletService::getBatchBalance($playerIds);
 
             $this->logger->info('t9余额查询记录:balances', ['balances' => $balances]);
 
@@ -307,6 +308,13 @@ class TNineGameController
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
                 ]);
+
+                // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
+                WalletService::checkMachineCrashAfterTransaction(
+                    $player->id,
+                    $result['balance'],
+                    $result['old_balance'] ?? null
+                );
             }
 
             // 处理返回结果

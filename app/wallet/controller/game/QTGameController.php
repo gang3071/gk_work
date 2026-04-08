@@ -10,6 +10,7 @@ use app\service\game\GameServiceInterface;
 use app\service\game\QTServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\RedisLuaScripts;
+use app\service\WalletService;
 use Exception;
 use support\Log;
 use support\Request;
@@ -545,6 +546,13 @@ class QTGameController
                         'balance_before' => $result['old_balance'] ?? 0,
                         'balance_after' => $result['balance'],
                     ]);
+
+                    // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
+                    WalletService::checkMachineCrashAfterTransaction(
+                        $player->id,
+                        $result['balance'],
+                        $result['old_balance'] ?? null
+                    );
                 }
 
                 // 游戏交互日志
@@ -778,6 +786,13 @@ class QTGameController
                     'reward_type' => $rewardType,
                     'reward_title' => $rewardTitle,
                 ]);
+
+                // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
+                WalletService::checkMachineCrashAfterTransaction(
+                    $player->id,
+                    $result['balance'],
+                    $result['old_balance'] ?? null
+                );
 
                 // 创建奖金交易记录（用于报表）
                 $playerDeliveryRecord = new PlayerDeliveryRecord();

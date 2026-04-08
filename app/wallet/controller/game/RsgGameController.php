@@ -8,6 +8,7 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\RedisLuaScripts;
+use app\service\WalletService;
 use Exception;
 use Monolog\Logger;
 use support\Log;
@@ -410,6 +411,13 @@ class RsgGameController
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
                 ]);
+
+                // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
+                WalletService::checkMachineCrashAfterTransaction(
+                    $player->id,
+                    $result['balance'],
+                    $result['old_balance'] ?? null
+                );
             }
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [

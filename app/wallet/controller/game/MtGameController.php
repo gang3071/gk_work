@@ -418,6 +418,13 @@ class MtGameController
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
                 ]);
+
+                // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
+                \app\service\WalletService::checkMachineCrashAfterTransaction(
+                    $player->id,
+                    $result['balance'],
+                    $result['old_balance'] ?? null
+                );
             }
 
             // 4. 处理结果
@@ -539,6 +546,13 @@ class MtGameController
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
                 ]);
+
+                // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
+                \app\service\WalletService::checkMachineCrashAfterTransaction(
+                    $player->id,
+                    $result['balance'],
+                    $result['old_balance'] ?? null
+                );
             }
 
             // 4. 处理结果
@@ -642,7 +656,9 @@ class MtGameController
             logLuaScriptCall('bet', 'MT', $player->id, $luaParams);
 
             // 4. 处理结果
-            if ($result['ok'] === 0) {
+            if ($result['ok'] === 1) {
+                // Success
+            } elseif ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
                     Log::channel('mt_server')->info('MT打赏重复请求（Lua检测）', ['tip_sn' => $orderNo]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$result['balance']]);
