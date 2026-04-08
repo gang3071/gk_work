@@ -14,24 +14,25 @@
 
 return [
     // ========== gk_work 业务连接池 ==========
-    // 用于：余额查询、缓存、Lua原子操作等
+    // 🎯 iGaming 核心系统：结算、返点、流水处理
+    // 特点：大量 Lua 脚本、高并发写入、单一钱包架构
     'work' => [
         'host' => env('REDIS_HOST', '127.0.0.1'),
         'password' => env('REDIS_PASSWORD', null),
         'port' => env('REDIS_PORT', 6379),
         'database' => env('REDIS_DB', 0),
 
-        // ✅ 连接管理配置（防止僵死连接和连接耗尽）
-        'timeout' => 2.5,              // 连接超时2.5秒（防止无限等待）
-        'read_timeout' => 2.5,         // 读取超时2.5秒（防止读操作阻塞）
-        'persistent' => true,          // 持久连接（复用连接，减少连接数）
+        // ✅ 针对 iGaming 结算任务的加固配置
+        'timeout' => 5.0,              // 🔧 调高到5秒：容忍结算高峰时的连接排队
+        'read_timeout' => 5.0,         // 🔧 调高到5秒：容忍复杂 Lua 脚本执行时间
+        'persistent' => true,          // ✅ 持久连接（每进程1个，54进程=54个稳定连接）
         'retry_interval' => 100,       // 连接失败后100ms重试
 
-        // 连接池配置（可选，predis支持）
+        // 连接优化配置
         'options' => [
             'prefix' => env('REDIS_PREFIX', ''),
             'parameters' => [
-                'tcp_nodelay' => true,  // 禁用Nagle算法，降低延迟
+                'tcp_nodelay' => true,  // ✅ 禁用Nagle算法，降低延迟
             ],
         ],
     ],

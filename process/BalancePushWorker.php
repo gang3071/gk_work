@@ -53,20 +53,9 @@ class BalancePushWorker
         ]);
 
         try {
-            // 创建 Redis 连接（使用 phpredis 扩展）
-            $this->redis = new \Redis();
-            $this->redis->connect(
-                env('REDIS_HOST', '127.0.0.1'),
-                (int)env('REDIS_PORT', 6379)
-            );
-
-            if ($password = env('REDIS_PASSWORD')) {
-                $this->redis->auth($password);
-            }
-
-            if ($db = env('REDIS_DB', 0)) {
-                $this->redis->select($db);
-            }
+            // 使用 queue 连接池（支持阻塞操作，不影响 igaming 核心业务）
+            $redisConnection = \support\Redis::connection('queue');
+            $this->redis = $redisConnection->client();
 
             // 设置为阻塞模式（Redis Pub/Sub 需要）
             $this->redis->setOption(\Redis::OPT_READ_TIMEOUT, -1);

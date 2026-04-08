@@ -258,7 +258,8 @@ class GameRecordSyncWorker
         if (!empty($betPlayerIds)) {
             // 批量读取 Redis 余额
             $balanceKeys = array_map(fn($id) => "wallet:balance:{$id}", array_unique($betPlayerIds));
-            $balanceValues = \support\Redis::mGet($balanceKeys);
+            // 使用 work 连接池读取余额（共享数据）
+            $balanceValues = \support\Redis::connection('work')->mGet($balanceKeys);
 
             foreach (array_unique($betPlayerIds) as $index => $playerId) {
                 if (isset($balanceValues[$index]) && $balanceValues[$index] !== false) {
@@ -576,7 +577,8 @@ class GameRecordSyncWorker
                 // ✅ Lua 脚本已经在 Redis 中扣款，这里只需要同步到 MySQL
                 if ($settlementStatus == 0 && ($record['amount'] ?? 0) > 0) {
                     // 从 Redis 读取 Lua 脚本扣款后的最新余额
-                    $redisBalance = \support\Redis::get("wallet:balance:{$playerId}");
+                    // 使用 work 连接池读取余额（共享数据）
+                    $redisBalance = \support\Redis::connection('work')->get("wallet:balance:{$playerId}");
 
                     if ($redisBalance !== null && $redisBalance !== false) {
                         /** @var PlayerPlatformCash $wallet */
