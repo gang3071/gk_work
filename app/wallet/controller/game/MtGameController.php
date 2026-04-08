@@ -490,13 +490,14 @@ class MtGameController
 
             $orderNo = (string)($data['bet_sn'] ?? '');
             $winMoney = $data['win_money'] ?? 0;
+            $profit = $data['profit'] ?? $winMoney;  // profit = win_money - bet_amount
 
             // 3. Lua 原子重新结算
             $luaParams = [
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
                 'amount' => $winMoney,
-                'diff' => $winMoney,  // MT的win_money就是输赢金额
+                'diff' => $profit,  // ✅ 使用profit（输赢金额）
                 'transaction_type' => TransactionType::SETTLE_ADJUST,  // 重新结算标记为调整
                 'original_data' => $data,
             ];
@@ -515,6 +516,31 @@ class MtGameController
             // 审计日志
             logLuaScriptCall('settle', 'MT', $player->id, $luaParams);
 
+            // 游戏交互日志
+            logGameInteraction('MT', 'resettle', $data, [
+                'ok' => $result['ok'],
+                'balance' => $result['balance'],
+                'order_no' => $orderNo,
+                'win_amount' => $winMoney,
+                'profit' => $profit,
+            ]);
+
+            // 保存重新结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveSettle('MT', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $winMoney,
+                    'diff' => $profit,  // ✅ 保存正确的输赢金额
+                    'settle_type' => 'adjust',  // 标记为重新结算
+                    'game_code' => $data['game_code'] ?? '',
+                    'original_data' => $data,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
+                ]);
+            }
+
             // 4. 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 Log::channel('mt_server')->info('MT重新结算重复请求（Lua检测）', ['bet_sn' => $orderNo]);
@@ -524,7 +550,11 @@ class MtGameController
                 ]);
             }
 
-            Log::channel('mt_server')->info('MT重新结算成功（Lua原子）', ['bet_sn' => $orderNo]);
+            Log::channel('mt_server')->info('MT重新结算成功（Lua原子）', [
+                'bet_sn' => $orderNo,
+                'win_money' => $winMoney,
+                'profit' => $profit,
+            ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'bet_sn' => $orderNo,
