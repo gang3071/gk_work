@@ -151,7 +151,8 @@ class ReverseWater
      */
     private function lock(string $key, int $ttl = 60): bool
     {
-        return Redis::set($key, 1, 'NX', 'EX', $ttl);
+        // 使用 queue 连接池（后台任务锁）
+        return Redis::connection('queue')->set($key, 1, 'NX', 'EX', $ttl);
     }
 
     /**
@@ -159,6 +160,7 @@ class ReverseWater
      */
     private function release(string $key): void
     {
-        Redis::del($key);
+        // 使用 queue 连接池（后台任务锁）
+        Redis::connection('queue')->del($key);
     }
 }

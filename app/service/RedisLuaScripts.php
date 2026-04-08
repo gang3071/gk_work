@@ -359,8 +359,9 @@ LUA;
             3600,                       // ARGV[6] - 1小时 TTL
         ];
 
-        // 执行 Lua 脚本
-        $result = Redis::eval(self::LUA_ATOMIC_BET, count($keys), ...array_merge($keys, $argv));
+        // 执行 Lua 脚本（使用 work 连接池，确保 igaming 核心业务稳定）
+        $redis = Redis::connection('work');
+        $result = $redis->eval(self::LUA_ATOMIC_BET, count($keys), ...array_merge($keys, $argv));
 
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
@@ -461,7 +462,9 @@ LUA;
             date('Y-m-d H:i:s', $timestamp),                 // ARGV[11] - 预格式化日期
         ];
 
-        $result = Redis::eval(self::LUA_ATOMIC_SETTLE, count($keys), ...array_merge($keys, $argv));
+        // 执行 Lua 脚本（使用 work 连接池，确保 igaming 核心业务稳定）
+        $redis = Redis::connection('work');
+        $result = $redis->eval(self::LUA_ATOMIC_SETTLE, count($keys), ...array_merge($keys, $argv));
 
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
@@ -565,7 +568,9 @@ LUA;
             json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE), // ARGV[5]
         ];
 
-        $result = Redis::eval(self::LUA_ATOMIC_CANCEL, count($keys), ...array_merge($keys, $argv));
+        // 执行 Lua 脚本（使用 work 连接池，确保 igaming 核心业务稳定）
+        $redis = Redis::connection('work');
+        $result = $redis->eval(self::LUA_ATOMIC_CANCEL, count($keys), ...array_merge($keys, $argv));
 
         // 检查 Redis 返回值
         if ($result === null || $result === false) {

@@ -30,6 +30,16 @@ class GameRecordCacheService
     private const TTL_BALANCE = 3600;   // 1小时
 
     /**
+     * 获取 Redis 连接（使用 work 连接池，确保 igaming 核心业务稳定）
+     *
+     * @return \Illuminate\Redis\Connections\Connection
+     */
+    private static function redis()
+    {
+        return Redis::connection('work');
+    }
+
+    /**
      * 保存下注记录到 Redis
      *
      * @param string $platform 平台代码（RSG, MT, BTG 等）
@@ -74,14 +84,14 @@ class GameRecordCacheService
         ];
 
         // 写入 Redis Hash
-        Redis::hMSet($key, $record);
-        Redis::expire($key, self::TTL_RECORD);
+        self::redis()->hMSet($key, $record);
+        self::redis()->expire($key, self::TTL_RECORD);
 
         // 加入同步队列
-        Redis::zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
+        self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
 
         // 记录统计
-        Redis::incr("game:stats:{$platform}:bet:count");
+        self::redis()->incr("game:stats:{$platform}:bet:count");
     }
 
     /**
@@ -105,13 +115,13 @@ class GameRecordCacheService
         $betKey = self::PREFIX_BET . "{$platform}:{$orderNo}";
 
         // 检查是否存在 bet 记录
-        $betExists = Redis::exists($betKey);
+        $betExists = self::redis()->exists($betKey);
 
         if ($betExists) {
             // 更新 bet 记录
-            $betAmount = Redis::hGet($betKey, 'amount') ?? 0;
+            $betAmount = self::redis()->hGet($betKey, 'amount') ?? 0;
 
-            Redis::hMSet($betKey, [
+            self::redis()->hMSet($betKey, [
                 'win' => $data['amount'],
                 'diff' => $data['diff'] ?? bcsub($data['amount'], $betAmount, 2),
                 'settlement_status' => 1,  // 已结算
@@ -126,7 +136,7 @@ class GameRecordCacheService
             ]);
 
             // 更新同步队列（提升优先级）
-            Redis::zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
+            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
 
         } else {
             // bet 记录不存在，创建独立 settle 记录
@@ -153,13 +163,13 @@ class GameRecordCacheService
                 'balance_after' => $data['balance_after'] ?? '',
             ];
 
-            Redis::hMSet($settleKey, $record);
-            Redis::expire($settleKey, self::TTL_RECORD);
-            Redis::zAdd(self::PREFIX_SYNC_QUEUE, time(), $settleKey);
+            self::redis()->hMSet($settleKey, $record);
+            self::redis()->expire($settleKey, self::TTL_RECORD);
+            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $settleKey);
         }
 
         // 记录统计
-        Redis::incr("game:stats:{$platform}:settle:count");
+        self::redis()->incr("game:stats:{$platform}:settle:count");
     }
 
     /**
@@ -226,7 +236,7 @@ return result
 LUA;
 
         // 执行 Lua 脚本
-        $keys = Redis::eval($luaScript, 1, $queueKey, $limit, $currentTime, $processTimeout);
+        $keys = self::redis()->eval($luaScript, 1, $queueKey, $limit, $currentTime, $processTimeout);
 
         if (empty($keys)) {
             return [];
@@ -235,7 +245,7 @@ LUA;
         // 读取完整记录数据
         $records = [];
         foreach ($keys as $key) {
-            $data = Redis::hGetAll($key);
+            $data = self::redis()->hGetAll($key);
             if (!empty($data)) {
                 $data['redis_key'] = $key;
                 $records[] = $data;
@@ -250,7 +260,7 @@ LUA;
      */
     public static function markAsSynced(string $redisKey, int $recordId): void
     {
-        Redis::hMSet($redisKey, [
+        self::redis()->hMSet($redisKey, [
             'status' => 'synced',
             'record_id' => $recordId,
             'synced_at' => date('Y-m-d H:i:s'),
@@ -265,9 +275,9 @@ LUA;
      */
     public static function markAsFailed(string $redisKey, string $error): void
     {
-        $retryCount = (int)(Redis::hGet($redisKey, 'retry_count') ?: 0);
+        $retryCount = (int)(self::redis()->hGet($redisKey, 'retry_count') ?: 0);
 
-        Redis::hMSet($redisKey, [
+        self::redis()->hMSet($redisKey, [
             'status' => 'failed',
             'error' => $error,
             'retry_count' => $retryCount + 1,
@@ -278,7 +288,7 @@ LUA;
         if ($retryCount < 3) {
             // 重置状态为 pending，以便 Lua 脚本可以重新处理
             Redis::hSet($redisKey, 'status', 'pending');
-            Redis::zAdd(self::PREFIX_SYNC_QUEUE, time() + 10, $redisKey);
+            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time() + 10, $redisKey);
         } else {
             // 重试次数过多，移除队列，等待人工处理
             Redis::zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
@@ -346,11 +356,11 @@ LUA;
         $betKey = self::PREFIX_BET . "{$platform}:{$orderNo}";
 
         // 检查是否存在 bet 记录
-        $betExists = Redis::exists($betKey);
+        $betExists = self::redis()->exists($betKey);
 
         if ($betExists) {
             // 标记为已取消
-            Redis::hMSet($betKey, [
+            self::redis()->hMSet($betKey, [
                 'cancel_type' => $data['cancel_type'] ?? 'cancel',
                 'cancel_time' => time(),
                 'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
@@ -361,11 +371,11 @@ LUA;
             ]);
 
             // 更新同步队列
-            Redis::zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
+            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
         }
 
         // 记录统计
-        Redis::incr("game:stats:{$platform}:cancel:count");
+        self::redis()->incr("game:stats:{$platform}:cancel:count");
     }
 
     /**
@@ -379,14 +389,14 @@ LUA;
     {
         $betKey = self::PREFIX_BET . "{$platform}:{$orderNo}";
 
-        if (Redis::exists($betKey)) {
-            Redis::hMSet($betKey, array_merge($updates, [
+        if (self::redis()->exists($betKey)) {
+            self::redis()->hMSet($betKey, array_merge($updates, [
                 'status' => 'pending',  // 标记待同步
                 'updated_at' => date('Y-m-d H:i:s'),
             ]));
 
             // 更新同步队列
-            Redis::zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
+            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
         }
     }
 

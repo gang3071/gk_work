@@ -117,7 +117,8 @@ class ReconciliationTask
 
             // ✅ 直接读取 Redis 缓存
             $cacheKey = "wallet:balance:{$playerId}";
-            $redisBalance = Redis::get($cacheKey);
+            // 使用 work 连接池读取余额（共享数据）
+            $redisBalance = Redis::connection('work')->get($cacheKey);
 
             if ($redisBalance !== null && $redisBalance !== false) {
                 $redisBalance = (float)$redisBalance;
