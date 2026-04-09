@@ -815,7 +815,7 @@ LUA;
      * @param int $attemptIndex
      * @param int $totalAttempts
      * @param bool $isDoubled
-     * @return void
+     * @return bool 派发成功返回 true，失败返回 false
      * @throws Exception
      * @throws PushException
      */
@@ -829,13 +829,13 @@ LUA;
         int         $attemptIndex,
         int         $totalAttempts,
         bool        $isDoubled = false
-    ): void
+    ): bool
     {
         // 增加业务锁
         $actionLockerKey = 'game_lottery_pool_random_locker_' . $lottery->id;
         $lock = Locker::lock($actionLockerKey, 2, true);
         if (!$lock->acquire()) {
-            return;
+            return false;
         }
 
         DB::beginTransaction();
@@ -856,7 +856,7 @@ LUA;
             $lottery->refresh();
             if ($lottery->amount < $amount) {
                 DB::rollback();
-                return;
+                return false;
             }
 
             // 创建派彩记录
@@ -880,7 +880,7 @@ LUA;
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
             if (!$machineWallet) {
                 DB::rollback();
-                return;
+                return false;
             }
             $machineWallet->money = $newBalance;
             $machineWallet->saveWithoutEvents();
@@ -942,7 +942,7 @@ LUA;
             // 发送派彩和通知消息
             $this->sendWinningMessages($playerLotteryRecord, $lottery, $notice, $burstInfo, $isDoubled);
 
-            return;
+            return true;
         } catch (\Exception $e) {
             DB::rollback();
             $this->log->error('派发彩金失败', [
@@ -951,7 +951,7 @@ LUA;
                 'player_id' => $this->player->id,
                 'trace' => $e->getTraceAsString(),
             ]);
-            return;
+            return false;
         }
     }
 

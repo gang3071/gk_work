@@ -400,16 +400,41 @@ class GameRecordSyncWorker
         $lotteryTriggers = [];
 
         // 1. 检查新插入的已结算记录
+        // ⚠️ 新插入的记录需要查询数据库获取 ID
+        $newRecordKeys = [];  // 存储 [platform_id, order_no] 组合
         foreach ($insertedRecords as $record) {
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
                 if (($record['amount'] ?? 0) > 0) {  // 快速过滤
-                    $lotteryTriggers[] = [
+                    $newRecordKeys[] = [
+                        'platform_id' => $record['platform_id'],
                         'order_no' => $record['order_no'],
-                        'player_id' => $record['player_id'],
-                        'bet' => $record['amount'] ?? 0,
-                        'original_data' => $record['original_data'] ?? '{}',
                     ];
                 }
+            }
+        }
+
+        // 批量查询新插入记录的 ID（使用 platform_id + order_no 组合查询）
+        if (!empty($newRecordKeys)) {
+            // 提取所有订单号和平台ID
+            $orderNos = array_column($newRecordKeys, 'order_no');
+            $platformIds = array_unique(array_column($newRecordKeys, 'platform_id'));
+
+            $newRecords = PlayGameRecord::query()
+                ->whereIn('order_no', $orderNos)
+                ->whereIn('platform_id', $platformIds)
+                ->select('id', 'order_no', 'platform_id', 'player_id', 'bet', 'original_data')
+                ->get();
+
+            // 使用 platform_id + order_no 作为复合键
+            foreach ($newRecords as $newRecord) {
+                $lotteryTriggers[] = [
+                    'order_no' => $newRecord->order_no,
+                    'platform_id' => $newRecord->platform_id,
+                    'player_id' => $newRecord->player_id,
+                    'bet' => $newRecord->bet,
+                    'original_data' => $newRecord->original_data ?? '{}',
+                    'record_id' => $newRecord->id,  // ✅ 现在有 ID 了
+                ];
             }
         }
 
