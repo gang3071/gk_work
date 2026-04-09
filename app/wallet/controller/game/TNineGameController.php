@@ -327,7 +327,7 @@ class TNineGameController
             $return = [
                 'MerchantOrderNumber' => $orderNo,
                 'SyncTime' => date('Y-m-d H:i:s'),
-                'Balance' => (float)$result['balance'],
+                'Balance' => round((float)$result['balance'], 2),
             ];
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);

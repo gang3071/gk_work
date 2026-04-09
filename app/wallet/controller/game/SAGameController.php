@@ -164,7 +164,7 @@ class SAGameController
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE, [
                         'username' => $data['username'],
                         'currency' => $data['currency'],
-                        'amount' => (float)$result['balance'],
+                        'amount' => round((float)$result['balance'], 2),
                     ]);
                 }
             }
@@ -174,7 +174,7 @@ class SAGameController
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'username' => $data['username'],
                 'currency' => $data['currency'],
-                'amount' => (float)$result['balance'],
+                'amount' => round((float)$result['balance'], 2),
             ]);
         } catch (Exception $e) {
             Log::error('SA bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -254,7 +254,7 @@ class SAGameController
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'username' => $data['username'],
                 'currency' => $data['currency'],
-                'amount' => (float)$result['balance'],
+                'amount' => round((float)$result['balance'], 2),
             ]);
         } catch (Exception $e) {
             Log::error('SA cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -443,7 +443,7 @@ class SAGameController
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                     'username' => $data['username'],
                     'currency' => $data['currency'],
-                    'amount' => (float)$result['balance'],
+                    'amount' => round((float)$result['balance'], 2),
                 ]);
             } else {
                 // 类型1和2: 奖励/赠送奖赏（增加余额）
@@ -512,7 +512,7 @@ class SAGameController
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                     'username' => $data['username'],
                     'currency' => $data['currency'],
-                    'amount' => (float)$result['balance'],
+                    'amount' => round((float)$result['balance'], 2),
                 ]);
             }
         } catch (Exception $e) {

@@ -256,8 +256,8 @@ class TNineSlotGameController
                 if ($betResult['error'] === 'duplicate_order') {
                     $this->logger->info('TNineSlot下注重复请求（Lua检测）', ['order_no' => $orderNo]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'afterBalance' => (float)$betResult['balance'],
-                        'beforeBalance' => (float)$betResult['balance'],
+                        'afterBalance' => round((float)$betResult['balance'], 2),
+                        'beforeBalance' => round((float)$betResult['balance'], 2),
                     ]);
                 } elseif ($betResult['error'] === 'insufficient_balance') {
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);

@@ -172,7 +172,7 @@ class SPSDYGameController
 
                 return $this->success(self::API_CODE_SUCCESS, [
                     'User' => $params['User'],
-                    'Balance' => (float)$result['balance'],
+                    'Balance' => round((float)$result['balance'], 2),
                     'TransferId' => $orderNo,
                 ]);
             }
@@ -218,7 +218,7 @@ class SPSDYGameController
                     Log::channel('sps_server')->info('SPSDY下注重复请求（Lua检测）', ['order_no' => $orderNo]);
                     return $this->success(self::API_CODE_SUCCESS, [
                         'User' => $params['User'],
-                        'Balance' => (float)$result['balance'],
+                        'Balance' => round((float)$result['balance'], 2),
                         'TransferId' => $orderNo,
                     ]);
                 } elseif ($result['error'] === 'insufficient_balance') {
@@ -230,7 +230,7 @@ class SPSDYGameController
 
             return $this->success(self::API_CODE_SUCCESS, [
                 'User' => $params['User'],
-                'Balance' => (float)$result['balance'],
+                'Balance' => round((float)$result['balance'], 2),
                 'TransferId' => $orderNo,
             ]);
         } catch (Exception $e) {

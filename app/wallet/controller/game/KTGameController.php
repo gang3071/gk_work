@@ -200,7 +200,7 @@ class KTGameController
                 if ($result['error'] === 'duplicate_order') {
                     $this->logger->info('KT下注重复请求（Lua检测）', ['order_no' => $orderNo]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'Balance' => (float)$result['balance'],
+                        'Balance' => round((float)$result['balance'], 2),
                     ]);
                 } elseif ($result['error'] === 'insufficient_balance') {
                     return $this->error(self::API_CODE_AMOUNT_OVER_BALANCE);
@@ -379,7 +379,7 @@ class KTGameController
             $this->logger->info('KT延迟结算成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance']
+                'Balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Exception $e) {
@@ -490,7 +490,7 @@ class KTGameController
             $this->logger->info('KT取消投注成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance']
+                'Balance' => round((float)$result['balance'], 2)
             ]);
         } catch (Exception $e) {
             Log::error('KT cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -567,7 +567,7 @@ class KTGameController
             $this->logger->info('KT退款成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance']
+                'Balance' => round((float)$result['balance'], 2)
             ]);
         } catch (Exception $e) {
             Log::error('KT refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);

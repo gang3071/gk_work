@@ -248,7 +248,7 @@ class RsgLiveGameController
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'transaction' => [
                             'id' => $orderNo,
-                            'balance' => (float)$result['balance'],
+                            'balance' => round((float)$result['balance'], 2),
                         ],
                         'requestId' => $params['requestId'],
                         'account' => $data['memberaccount'],
@@ -263,7 +263,7 @@ class RsgLiveGameController
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'transaction' => [
                     'id' => $orderNo,
-                    'balance' => (float)$result['balance'],
+                    'balance' => round((float)$result['balance'], 2),
                 ],
                 'requestId' => $params['requestId'],
                 'account' => $data['memberaccount'],
@@ -358,7 +358,7 @@ class RsgLiveGameController
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'transaction' => [
                     'id' => $orderNo,
-                    'balance' => (float)$result['balance'],
+                    'balance' => round((float)$result['balance'], 2),
                 ],
                 'requestId' => $params['requestId'],
                 'account' => $data['memberaccount'],

@@ -195,7 +195,7 @@ class MtGameController
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
                     Log::channel('mt_server')->info('MT下注重复请求（Lua检测）', ['order_no' => $orderNo]);
-                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$result['balance']]);
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => round((float)$result['balance'], 2)]);
                 } elseif ($result['error'] === 'insufficient_balance') {
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
                 }
@@ -204,7 +204,7 @@ class MtGameController
             Log::channel('mt_server')->info('MT下注成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'balance' => (float)$result['balance']
+                'balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Exception $e) {
@@ -307,13 +307,13 @@ class MtGameController
             // 4. 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 Log::channel('mt_server')->info('MT取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$result['balance']]);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => round((float)$result['balance'], 2)]);
             }
 
             Log::channel('mt_server')->info('MT取消下注成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'balance' => (float)$result['balance']
+                'balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Exception $e) {
@@ -432,7 +432,7 @@ class MtGameController
                 Log::channel('mt_server')->info('MT结算重复请求（Lua检测）', ['bet_sn' => $orderNo]);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                     'bet_sn' => $orderNo,
-                    'balance' => (float)$result['balance']
+                    'balance' => round((float)$result['balance'], 2)
                 ]);
             }
 
@@ -440,7 +440,7 @@ class MtGameController
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'bet_sn' => $orderNo,
-                'balance' => (float)$result['balance']
+                'balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Exception $e) {
@@ -560,7 +560,7 @@ class MtGameController
                 Log::channel('mt_server')->info('MT重新结算重复请求（Lua检测）', ['bet_sn' => $orderNo]);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                     'bet_sn' => $orderNo,
-                    'balance' => (float)$result['balance']
+                    'balance' => round((float)$result['balance'], 2)
                 ]);
             }
 
@@ -572,7 +572,7 @@ class MtGameController
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'bet_sn' => $orderNo,
-                'balance' => (float)$result['balance']
+                'balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Exception $e) {
@@ -661,7 +661,7 @@ class MtGameController
             } elseif ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
                     Log::channel('mt_server')->info('MT打赏重复请求（Lua检测）', ['tip_sn' => $orderNo]);
-                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => (float)$result['balance']]);
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['balance' => round((float)$result['balance'], 2)]);
                 } elseif ($result['error'] === 'insufficient_balance') {
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
                 }
@@ -673,7 +673,7 @@ class MtGameController
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'balance' => (float)$result['balance']
+                'balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Exception $e) {

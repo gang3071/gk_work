@@ -247,7 +247,7 @@ class DGGameController
             $return = [
                 'member' => [
                     'username' => $params['member']['username'],
-                    'balance' => (float)$beforeBalance, // DG 返回操作前余额
+                    'balance' => round((float)$beforeBalance, 2), // DG 返回操作前余额
                     'amount' => $params['member']['amount'],
                 ]
             ];
@@ -417,7 +417,7 @@ class DGGameController
             $return = [
                 'member' => [
                     'username' => $params['member']['username'],
-                    'balance' => (float)$beforeBalance, // DG 返回操作前余额
+                    'balance' => round((float)$beforeBalance, 2), // DG 返回操作前余额
                     'amount' => $params['member']['amount'],
                 ]
             ];

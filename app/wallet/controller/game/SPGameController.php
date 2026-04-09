@@ -163,7 +163,7 @@ class SPGameController
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE, [
                         'username' => $data['username'],
                         'currency' => $data['currency'],
-                        'amount' => (float)$result['balance'],
+                        'amount' => round((float)$result['balance'], 2),
                     ]);
                 }
             }
@@ -173,7 +173,7 @@ class SPGameController
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'username' => $data['username'],
                 'currency' => $data['currency'],
-                'amount' => (float)$result['balance'],
+                'amount' => round((float)$result['balance'], 2),
             ]);
         } catch (Exception $e) {
             Log::error('SP bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -253,7 +253,7 @@ class SPGameController
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'username' => $data['username'],
                 'currency' => $data['currency'],
-                'amount' => (float)$result['balance'],
+                'amount' => round((float)$result['balance'], 2),
             ]);
         } catch (Exception $e) {
             Log::error('SP cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);

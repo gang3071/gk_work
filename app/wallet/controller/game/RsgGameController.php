@@ -90,7 +90,7 @@ class RsgGameController
             }
 
             $balance = $this->service->balance();
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => (float)$balance]);
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => round((float)$balance, 2)]);
         } catch (Throwable $e) {
             $this->logger->error('RSG余额查询异常', [
                 'error' => $e->getMessage(),
@@ -171,7 +171,7 @@ class RsgGameController
                     ]);
 
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'Balance' => (float)$result['balance']
+                        'Balance' => round((float)$result['balance'], 2)
                     ]);
 
                 } elseif ($result['error'] === 'insufficient_balance') {
@@ -212,7 +212,7 @@ class RsgGameController
             }
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance']
+                'Balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Throwable $e) {
@@ -284,7 +284,7 @@ class RsgGameController
                     ]);
 
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'Balance' => (float)$result['balance']
+                        'Balance' => round((float)$result['balance'], 2)
                     ]);
                 }
             }
@@ -310,7 +310,7 @@ class RsgGameController
             }
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance']
+                'Balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Throwable $e) {
@@ -386,7 +386,7 @@ class RsgGameController
                     ]);
 
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'Balance' => (float)$result['balance']
+                        'Balance' => round((float)$result['balance'], 2)
                     ]);
                 }
             }
@@ -421,7 +421,7 @@ class RsgGameController
             }
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance']
+                'Balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Throwable $e) {
@@ -489,7 +489,7 @@ class RsgGameController
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
                 $this->logger->info('RSG重复重新结算（Lua检测）', ['order_no' => $orderNo]);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => (float)$result['balance']
+                    'Balance' => round((float)$result['balance'], 2)
                 ]);
             }
 
@@ -500,7 +500,7 @@ class RsgGameController
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance']
+                'Balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Throwable $e) {
@@ -568,7 +568,7 @@ class RsgGameController
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
                 $this->logger->info('RSG重复Jackpot（Lua检测）', ['order_no' => $orderNo]);
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => (float)$result['balance']
+                    'Balance' => round((float)$result['balance'], 2)
                 ]);
             }
 
@@ -579,7 +579,7 @@ class RsgGameController
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance']
+                'Balance' => round((float)$result['balance'], 2)
             ]);
 
         } catch (Throwable $e) {
@@ -656,7 +656,7 @@ class RsgGameController
                     // 重复请求，返回当前余额和0扣款
                     $this->logger->warning('RSG重复预扣请求（Lua检测）', ['session_id' => $orderNo]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'Balance' => (float)$result['balance'],
+                        'Balance' => round((float)$result['balance'], 2),
                         'Amount' => 0
                     ]);
                 } elseif ($result['error'] === 'insufficient_balance') {
@@ -694,7 +694,7 @@ class RsgGameController
                         ]);
 
                         return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                            'Balance' => (float)$result['balance'],
+                            'Balance' => round((float)$result['balance'], 2),
                             'Amount' => $actualDeductAmount
                         ]);
                     } else {
@@ -714,7 +714,7 @@ class RsgGameController
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance'],
+                'Balance' => round((float)$result['balance'], 2),
                 'Amount' => $requestAmount
             ]);
 
@@ -785,7 +785,7 @@ class RsgGameController
                     // 重复退款请求
                     $this->logger->warning('RSG重复退款请求（Lua检测）', ['session_id' => $orderNo]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'Balance' => (float)$result['balance'],
+                        'Balance' => round((float)$result['balance'], 2),
                         'Amount' => 0
                     ]);
                 }
@@ -798,8 +798,8 @@ class RsgGameController
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance'],
-                'Amount' => (float)$refundAmount
+                'Balance' => round((float)$result['balance'], 2),
+                'Amount' => round((float)$refundAmount, 2)
             ]);
 
         } catch (Throwable $e) {

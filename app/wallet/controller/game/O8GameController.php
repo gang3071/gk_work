@@ -162,7 +162,7 @@ class O8GameController
                 $return['users'][] = [
                     'userid' => $user['userid'],
                     'wallets' => [
-                        ['code' => 'MainWallet', 'bal' => $balance, 'cur' => 'TWD']
+                        ['code' => 'MainWallet', 'bal' => round((float)$balance, 2), 'cur' => 'TWD']
                     ]
                 ];
             }
@@ -264,7 +264,7 @@ class O8GameController
                         $return['transactions'][] = [
                             'txid' => $orderNo,
                             'ptxid' => $order['ptxid'],
-                            'bal' => (float)$result['balance'],
+                            'bal' => round((float)$result['balance'], 2),
                             'cur' => 'TWD',
                             'dup' => true
                         ];
@@ -291,7 +291,7 @@ class O8GameController
                 $return['transactions'][] = [
                     'txid' => $orderNo,
                     'ptxid' => $order['ptxid'],
-                    'bal' => (float)$result['balance'],
+                    'bal' => round((float)$result['balance'], 2),
                     'cur' => 'TWD',
                     'dup' => false
                 ];
@@ -369,7 +369,7 @@ class O8GameController
                     $return['transactions'][] = [
                         'txid' => $orderNo,
                         'ptxid' => $order['ptxid'],
-                        'bal' => (float)$result['balance'],
+                        'bal' => round((float)$result['balance'], 2),
                         'cur' => 'TWD',
                         'dup' => true
                     ];
@@ -401,7 +401,7 @@ class O8GameController
                 $return['transactions'][] = [
                     'txid' => $orderNo,
                     'ptxid' => $order['ptxid'],
-                    'bal' => (float)$result['balance'],
+                    'bal' => round((float)$result['balance'], 2),
                     'cur' => 'TWD',
                     'dup' => false
                 ];
@@ -508,7 +508,7 @@ class O8GameController
             $this->logger->info('O8退款成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => (float)$result['balance']
+                'Balance' => round((float)$result['balance'], 2)
             ]);
         } catch (Exception $e) {
             Log::error('O8 refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -562,7 +562,7 @@ class O8GameController
                     $return['transactions'][] = [
                         'txid' => $refPtxid,
                         'ptxid' => $order['refptxid'],
-                        'bal' => (float)$currentBalance,
+                        'bal' => round((float)$currentBalance, 2),
                         'cur' => 'TWD',
                         'dup' => false,
                         'err' => self::API_CODE_TRANSACTION_NOT_EXIST,
@@ -579,7 +579,7 @@ class O8GameController
                     $return['transactions'][] = [
                         'txid' => $refPtxid,
                         'ptxid' => $order['refptxid'],
-                        'bal' => (float)$currentBalance,
+                        'bal' => round((float)$currentBalance, 2),
                         'cur' => 'TWD',
                         'dup' => true,
                         'err' => self::API_CODE_TRANSACTION_ALREADY_CANCELLED,
@@ -623,7 +623,7 @@ class O8GameController
                         $return['transactions'][] = [
                             'txid' => $refPtxid,
                             'ptxid' => $order['refptxid'],
-                            'bal' => (float)$result['balance'],
+                            'bal' => round((float)$result['balance'], 2),
                             'cur' => 'TWD',
                             'dup' => true
                         ];
@@ -654,7 +654,7 @@ class O8GameController
                 $return['transactions'][] = [
                     'txid' => $refPtxid,
                     'ptxid' => $order['refptxid'],
-                    'bal' => (float)$result['balance'],
+                    'bal' => round((float)$result['balance'], 2),
                     'cur' => 'TWD',
                     'dup' => false
                 ];
