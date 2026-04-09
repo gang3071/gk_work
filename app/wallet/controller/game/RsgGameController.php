@@ -128,7 +128,25 @@ class RsgGameController
             }
             $this->service->player = $player;
 
-            $orderNo = (string)($data['SequenNumber'] ?? '');
+            // ✅ 严格验证 SequenNumber（必填字段）
+            if (empty($data['SequenNumber'])) {
+                $this->logger->error('RSG下注失败：SequenNumber为空', [
+                    'user_id' => $data['UserId'] ?? '',
+                    'data' => $data,
+                ]);
+                return $this->error(self::API_CODE_INVALID_PARAM, 'SequenNumber is required');
+            }
+
+            $orderNo = (string)$data['SequenNumber'];
+
+            // ✅ 验证 Amount > 0
+            if (!isset($data['Amount']) || $data['Amount'] <= 0) {
+                $this->logger->error('RSG下注失败：Amount无效', [
+                    'amount' => $data['Amount'] ?? null,
+                    'order_no' => $orderNo,
+                ]);
+                return $this->error(self::API_CODE_INVALID_PARAM, 'Invalid Amount');
+            }
 
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
@@ -141,7 +159,8 @@ class RsgGameController
                 'platform_id' => $this->service->platform->id,
                 'amount' => $data['Amount'],
                 'game_code' => $data['GameId'] ?? '',
-                'game_type' => $data['GameType'] ?? '',
+                // ✅ 修复：使用 SubGameType（文档字段名）
+                'game_type' => $data['SubGameType'] ?? $data['GameType'] ?? '',
                 'transaction_type' => TransactionType::BET,
                 'original_data' => $data,
             ];
@@ -161,8 +180,9 @@ class RsgGameController
 
             // 处理返回结果
             if ($result['ok'] === 0) {
-                // 失败场景
-                if ($result['error'] === 'duplicate_order') {
+                $error = $result['error'] ?? 'unknown';
+
+                if ($error === 'duplicate_order') {
                     // 幂等性：重复订单返回当前余额
                     $this->logger->warning('RSG重复订单（Lua检测）', [
                         'order_no' => $orderNo,
@@ -173,8 +193,7 @@ class RsgGameController
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'Balance' => round((float)$result['balance'], 2)
                     ]);
-
-                } elseif ($result['error'] === 'insufficient_balance') {
+                } elseif ($error === 'insufficient_balance') {
                     // 余额不足
                     $this->logger->warning('RSG余额不足（Lua检测）', [
                         'order_no' => $orderNo,
@@ -183,14 +202,30 @@ class RsgGameController
                     ]);
 
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+                } else {
+                    // ✅ 新增：处理未知错误
+                    $this->logger->error('RSG下注失败：Lua未知错误', [
+                        'order_no' => $orderNo,
+                        'error' => $error,
+                        'result' => $result,
+                        'amount' => $data['Amount'],
+                    ]);
+
+                    $this->sendTelegramAlert('RSG', '下注Lua未知错误', new \Exception($error), [
+                        'order_no' => $orderNo,
+                        'error' => $error,
+                        'result' => $result,
+                    ]);
+
+                    return $this->error(self::API_CODE_INVALID_PARAM, 'Bet failed: ' . $error);
                 }
             }
 
-            // 成功场景
+            // 成功场景（只有 ok=1 时才会执行到这里）
             $this->logger->info('RSG下注成功（Lua原子）', [
                 'username' => $data['UserId'],
                 'order_no' => $orderNo,
-                'balance_before' => $result['old_balance'],
+                'balance_before' => $result['old_balance'] ?? 0,  // ✅ 防御性访问
                 'balance_after' => $result['balance'],
                 'amount' => $data['Amount'],
             ]);
@@ -203,7 +238,8 @@ class RsgGameController
                     'platform_id' => $this->service->platform->id,
                     'amount' => $data['Amount'],
                     'game_code' => $data['GameId'] ?? '',
-                    'game_type' => $data['GameType'] ?? '',
+                    // ✅ 修复：使用 SubGameType（与 Lua 参数保持一致）
+                    'game_type' => $data['SubGameType'] ?? $data['GameType'] ?? '',
                     'original_data' => $data,
                     // ✅ 传入余额数据供 Worker 推送
                     'balance_before' => $result['old_balance'] ?? 0,
@@ -366,7 +402,16 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = (string)($data['SequenNumber'] ?? '');
+            // ✅ 严格验证 SequenNumber
+            if (empty($data['SequenNumber'])) {
+                $this->logger->error('RSG结算失败：SequenNumber为空', [
+                    'user_id' => $data['UserId'] ?? '',
+                    'data' => $data,
+                ]);
+                return $this->error(self::API_CODE_INVALID_PARAM, 'SequenNumber is required');
+            }
+
+            $orderNo = (string)$data['SequenNumber'];
             $winAmount = $data['Amount'] ?? 0;
 
             // ========== 核心：Lua 原子结算 ==========
@@ -396,7 +441,9 @@ class RsgGameController
 
             // 处理返回结果
             if ($result['ok'] === 0) {
-                if ($result['error'] === 'duplicate_settle') {
+                $error = $result['error'] ?? 'unknown';
+
+                if ($error === 'duplicate_settle') {
                     // 幂等性：重复结算返回当前余额
                     $this->logger->warning('RSG重复结算（Lua检测）', [
                         'order_no' => $orderNo,
@@ -407,13 +454,36 @@ class RsgGameController
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'Balance' => round((float)$result['balance'], 2)
                     ]);
+                } elseif ($error === 'order_not_found') {
+                    // 订单不存在
+                    $this->logger->warning('RSG结算失败：订单不存在', [
+                        'order_no' => $orderNo,
+                        'balance' => $result['balance'],
+                    ]);
+
+                    return $this->error(self::API_CODE_ORDER_NOT_EXIST, 'Order not found');
+                } else {
+                    // ✅ 新增：处理未知错误
+                    $this->logger->error('RSG结算失败：Lua未知错误', [
+                        'order_no' => $orderNo,
+                        'error' => $error,
+                        'result' => $result,
+                    ]);
+
+                    $this->sendTelegramAlert('RSG', '结算Lua未知错误', new \Exception($error), [
+                        'order_no' => $orderNo,
+                        'error' => $error,
+                        'result' => $result,
+                    ]);
+
+                    return $this->error(self::API_CODE_INVALID_PARAM, 'Settle failed: ' . $error);
                 }
             }
 
             $this->logger->info('RSG结算成功（Lua原子）', [
                 'order_no' => $orderNo,
                 'win_amount' => $winAmount,
-                'balance_before' => $result['old_balance'],
+                'balance_before' => $result['old_balance'] ?? 0,  // ✅ 防御性访问
                 'balance_after' => $result['balance'],
             ]);
 
@@ -557,7 +627,16 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = (string)($data['SequenNumber'] ?? '');
+            // ✅ 严格验证 SequenNumber
+            if (empty($data['SequenNumber'])) {
+                $this->logger->error('RSG Jackpot失败：SequenNumber为空', [
+                    'user_id' => $data['UserId'] ?? '',
+                    'data' => $data,
+                ]);
+                return $this->error(self::API_CODE_INVALID_PARAM, 'SequenNumber is required');
+            }
+
+            $orderNo = (string)$data['SequenNumber'];
             $jackpotAmount = $data['Amount'] ?? 0;
 
             // ========== 核心：Lua 原子 Jackpot ==========
@@ -584,11 +663,30 @@ class RsgGameController
             // 审计日志
             logLuaScriptCall('settle', 'RSG', $player->id, $luaParams);
 
-            if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
-                $this->logger->info('RSG重复Jackpot（Lua检测）', ['order_no' => $orderNo]);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'Balance' => round((float)$result['balance'], 2)
-                ]);
+            // ✅ 完善错误处理
+            if ($result['ok'] === 0) {
+                $error = $result['error'] ?? 'unknown';
+
+                if ($error === 'duplicate_settle') {
+                    $this->logger->info('RSG重复Jackpot（Lua检测）', ['order_no' => $orderNo]);
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                        'Balance' => round((float)$result['balance'], 2)
+                    ]);
+                } else {
+                    $this->logger->error('RSG Jackpot失败：Lua未知错误', [
+                        'order_no' => $orderNo,
+                        'error' => $error,
+                        'result' => $result,
+                    ]);
+
+                    $this->sendTelegramAlert('RSG', 'Jackpot Lua未知错误', new \Exception($error), [
+                        'order_no' => $orderNo,
+                        'error' => $error,
+                        'result' => $result,
+                    ]);
+
+                    return $this->error(self::API_CODE_INVALID_PARAM, 'Jackpot failed: ' . $error);
+                }
             }
 
             $this->logger->info('RSG Jackpot成功（Lua原子）', [
@@ -637,7 +735,16 @@ class RsgGameController
             }
             $this->service->player = $player;
 
-            $orderNo = (string)($data['SessionId'] ?? '');  // prepay使用SessionId作为订单号
+            // ✅ 严格验证 SessionId（prepay 使用 SessionId 作为订单号）
+            if (empty($data['SessionId'])) {
+                $this->logger->error('RSG预扣失败：SessionId为空', [
+                    'user_id' => $data['UserId'] ?? '',
+                    'data' => $data,
+                ]);
+                return $this->error(self::API_CODE_INVALID_PARAM, 'SessionId is required');
+            }
+
+            $orderNo = (string)$data['SessionId'];
             $requestAmount = $data['Amount'] ?? 0;
 
             //判断当前设备是否爆机
@@ -671,14 +778,16 @@ class RsgGameController
 
             // 处理返回结果
             if ($result['ok'] === 0) {
-                if ($result['error'] === 'duplicate_order') {
+                $error = $result['error'] ?? 'unknown';
+
+                if ($error === 'duplicate_order') {
                     // 重复请求，返回当前余额和0扣款
                     $this->logger->warning('RSG重复预扣请求（Lua检测）', ['session_id' => $orderNo]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'Balance' => round((float)$result['balance'], 2),
                         'Amount' => 0
                     ]);
-                } elseif ($result['error'] === 'insufficient_balance') {
+                } elseif ($error === 'insufficient_balance') {
                     // prepay 特殊处理：余额不足时扣除所有余额
                     $actualDeductAmount = $result['balance'];  // 当前全部余额
 
@@ -722,6 +831,21 @@ class RsgGameController
                             'Amount' => 0
                         ]);
                     }
+                } else {
+                    // ✅ 新增：处理未知错误
+                    $this->logger->error('RSG预扣失败：Lua未知错误', [
+                        'session_id' => $orderNo,
+                        'error' => $error,
+                        'result' => $result,
+                    ]);
+
+                    $this->sendTelegramAlert('RSG', '预扣Lua未知错误', new \Exception($error), [
+                        'session_id' => $orderNo,
+                        'error' => $error,
+                        'result' => $result,
+                    ]);
+
+                    return $this->error(self::API_CODE_DENY_PREPAY, 'Prepay failed: ' . $error);
                 }
             }
 
@@ -770,7 +894,16 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            $orderNo = (string)($data['SessionId'] ?? '');
+            // ✅ 严格验证 SessionId
+            if (empty($data['SessionId'])) {
+                $this->logger->error('RSG退款失败：SessionId为空', [
+                    'user_id' => $data['UserId'] ?? '',
+                    'data' => $data,
+                ]);
+                return $this->error(self::API_CODE_INVALID_PARAM, 'SessionId is required');
+            }
+
+            $orderNo = (string)$data['SessionId'];
             $refundAmount = $data['Amount'] ?? 0;
 
             // ========== 核心：Lua 原子退款 ==========
@@ -800,13 +933,30 @@ class RsgGameController
 
             // 处理返回结果
             if ($result['ok'] === 0) {
-                if ($result['error'] === 'duplicate_settle') {
+                $error = $result['error'] ?? 'unknown';
+
+                if ($error === 'duplicate_settle') {
                     // 重复退款请求
                     $this->logger->warning('RSG重复退款请求（Lua检测）', ['session_id' => $orderNo]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'Balance' => round((float)$result['balance'], 2),
                         'Amount' => 0
                     ]);
+                } else {
+                    // ✅ 新增：处理未知错误
+                    $this->logger->error('RSG退款失败：Lua未知错误', [
+                        'session_id' => $orderNo,
+                        'error' => $error,
+                        'result' => $result,
+                    ]);
+
+                    $this->sendTelegramAlert('RSG', '退款Lua未知错误', new \Exception($error), [
+                        'session_id' => $orderNo,
+                        'error' => $error,
+                        'result' => $result,
+                    ]);
+
+                    return $this->error(self::API_CODE_INVALID_PARAM, 'Refund failed: ' . $error);
                 }
             }
 
