@@ -142,8 +142,6 @@ class O8GameController
             // 1. 批量查询玩家（1 次数据库查询）
             $players = Player::query()->whereIn('uuid', $userIds)->get()->keyBy('uuid');
 
-            $this->logger->info('O8余额查询:玩家数据', ['players' => $players]);
-
             // 2. 批量查询余额（使用 WalletService::getBatchBalance）
             $playerIds = $players->pluck('id')->toArray();
             $balances = \app\service\WalletService::getBatchBalance($playerIds);
@@ -297,7 +295,7 @@ class O8GameController
                 ];
             }
 
-            $this->logger->info('O8下注成功（Lua原子）', ['count' => count($orders)]);
+            $this->logger->info('O8下注成功（Lua原子）', ['count' => count($orders),'return'=>$return]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
@@ -551,7 +549,7 @@ class O8GameController
                 ];
             }
 
-            $this->logger->info('O8结算成功（Lua原子）', ['count' => count($orders)]);
+            $this->logger->info('O8结算成功（Lua原子）', ['count' => count($orders),'return'=>$return]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
@@ -804,7 +802,7 @@ class O8GameController
                 ];
             }
 
-            $this->logger->info('O8取消交易批量完成（Lua原子）', ['count' => count($orders)]);
+            $this->logger->info('O8取消交易批量完成（Lua原子）', ['count' => count($orders),'return'=>$return]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
         } catch (Exception $e) {
