@@ -563,7 +563,8 @@ class QTGameController
                     'amount' => $amount,
                 ]);
 
-                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
+                    // ✅ 修复：atomicSettle 返回的是 'duplicate_settle'
                     $this->logger->info('QT结算重复请求（Lua检测）', ['txnId' => $txnId]);
                 }
 
@@ -825,7 +826,8 @@ class QTGameController
                     'balance' => round($result['balance'], 2),
                     'referenceId' => (string)$playerDeliveryRecord->id
                 ]));
-            } elseif ($result['error'] === 'duplicate_order') {
+            } elseif ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
+                // ✅ 修复：atomicSettle 返回的幂等性错误是 'duplicate_settle'，而不是 'duplicate_order'
                 // 重复订单（幂等性）
                 $this->logger->info('QT奖金发放重复请求（Lua检测）', ['txnId' => $txnId]);
 
