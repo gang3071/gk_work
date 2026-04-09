@@ -337,7 +337,151 @@ class O8GameController
                 $winAmount = $order['turnover'] - $order['ggr'];
                 $txtype = $order['txtype'];
 
-                // 确定实际派彩金额：txtype=510 且 winAmount>0 才加钱
+                // ✅ 根据 txtype 区分 settle 和 cancel 操作
+                if ($txtype == 560) {
+                    // Cancel 操作：从 Redis 读取原始下注金额
+                    $betRecordKey = "game:record:bet:O8:{$orderNo}";
+                    if (!\support\Redis::exists($betRecordKey)) {
+                        $this->logger->warning('O8取消交易失败：交易不存在', ['refptxid' => $orderNo]);
+                        $currentBalance = \app\service\WalletService::getBalance($player->id);
+                        $return['transactions'][] = [
+                            'txid' => $orderNo,
+                            'ptxid' => $order['ptxid'],
+                            'bal' => round((float)$currentBalance, 2),
+                            'cur' => 'TWD',
+                            'dup' => false,
+                            'err' => self::API_CODE_TRANSACTION_NOT_EXIST,
+                            'errdesc' => self::API_CODE_MAP[self::API_CODE_TRANSACTION_NOT_EXIST]
+                        ];
+                        continue;
+                    }
+
+                    // 从 Redis 读取原始下注金额
+                    $originalBetAmount = (float)\support\Redis::hGet($betRecordKey, 'amount');
+                    if ($originalBetAmount <= 0) {
+                        $this->logger->error('O8取消交易失败：无法读取原始下注金额', [
+                            'refptxid' => $orderNo,
+                            'redis_key' => $betRecordKey
+                        ]);
+                        $currentBalance = \app\service\WalletService::getBalance($player->id);
+                        $return['transactions'][] = [
+                            'txid' => $orderNo,
+                            'ptxid' => $order['ptxid'],
+                            'bal' => round((float)$currentBalance, 2),
+                            'cur' => 'TWD',
+                            'dup' => false,
+                            'err' => self::API_CODE_DATABASE_ERROR,
+                            'errdesc' => self::API_CODE_MAP[self::API_CODE_DATABASE_ERROR]
+                        ];
+                        continue;
+                    }
+
+                    // 验证平台传入的金额是否一致
+                    $platformAmt = $order['amt'] ?? 0;
+                    if (abs($platformAmt - $originalBetAmount) > 0.01) {
+                        $this->logger->warning('O8取消交易：平台传入金额与原始下注金额不一致', [
+                            'refptxid' => $orderNo,
+                            'platform_amt' => $platformAmt,
+                            'original_bet_amount' => $originalBetAmount,
+                            'diff' => $platformAmt - $originalBetAmount
+                        ]);
+                    }
+
+                    // 使用原始下注金额作为退款金额
+                    $refundAmount = $originalBetAmount;
+
+                    // Lua 原子取消
+                    $luaParams = [
+                        'order_no' => $orderNo,
+                        'platform_id' => $this->service->platform->id,
+                        'refund_amount' => $refundAmount,
+                        'transaction_type' => TransactionType::CANCEL_REFUND,
+                        'original_data' => $order,
+                    ];
+
+                    // 参数验证
+                    validateLuaScriptParams($luaParams, [
+                        'order_no' => ['required', 'string'],
+                        'refund_amount' => ['required', 'numeric', 'min:0'],
+                        'platform_id' => ['required', 'integer'],
+                        'transaction_type' => ['required', 'string'],
+                    ], 'atomicCancel');
+
+                    $result = RedisLuaScripts::atomicCancel($player->id, 'O8', $luaParams);
+
+                    // 审计日志
+                    logLuaScriptCall('cancel', 'O8', $player->id, $luaParams);
+
+                    // 处理 Lua 返回的错误
+                    if ($result['ok'] === 0) {
+                        $currentBalance = $result['balance'] ?? \app\service\WalletService::getBalance($player->id);
+
+                        if ($result['error'] === 'order_not_found') {
+                            $this->logger->warning('O8取消交易失败：订单不存在', ['refptxid' => $orderNo]);
+                            $return['transactions'][] = [
+                                'txid' => $orderNo,
+                                'ptxid' => $order['ptxid'],
+                                'bal' => round((float)$currentBalance, 2),
+                                'cur' => 'TWD',
+                                'dup' => false,
+                                'err' => self::API_CODE_TRANSACTION_NOT_EXIST,
+                                'errdesc' => self::API_CODE_MAP[self::API_CODE_TRANSACTION_NOT_EXIST]
+                            ];
+                            continue;
+                        }
+
+                        if ($result['error'] === 'duplicate_cancel') {
+                            $this->logger->info('O8取消交易重复请求（Lua检测）', ['refptxid' => $orderNo]);
+                            $return['transactions'][] = [
+                                'txid' => $orderNo,
+                                'ptxid' => $order['ptxid'],
+                                'bal' => round((float)$currentBalance, 2),
+                                'cur' => 'TWD',
+                                'dup' => true
+                            ];
+                            continue;
+                        }
+
+                        // 其他错误
+                        $this->logger->error('O8取消交易失败', ['refptxid' => $orderNo, 'error' => $result['error']]);
+                        $return['transactions'][] = [
+                            'txid' => $orderNo,
+                            'ptxid' => $order['ptxid'],
+                            'bal' => round((float)$currentBalance, 2),
+                            'cur' => 'TWD',
+                            'dup' => false,
+                            'err' => self::API_CODE_DATABASE_ERROR,
+                            'errdesc' => self::API_CODE_MAP[self::API_CODE_DATABASE_ERROR]
+                        ];
+                        continue;
+                    }
+
+                    // 保存取消记录到 Redis
+                    if ($result['ok'] === 1) {
+                        \app\service\GameRecordCacheService::saveCancel('O8', [
+                            'order_no' => $orderNo,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'refund_amount' => $refundAmount,
+                            'original_data' => $order,
+                            'balance_before' => $result['old_balance'] ?? 0,
+                            'balance_after' => $result['balance'],
+                        ]);
+                    }
+
+                    $this->logger->info('O8取消交易成功（Lua原子）', ['refptxid' => $orderNo]);
+
+                    $return['transactions'][] = [
+                        'txid' => $orderNo,
+                        'ptxid' => $order['ptxid'],
+                        'bal' => round((float)$result['balance'], 2),
+                        'cur' => 'TWD',
+                        'dup' => false
+                    ];
+                    continue;
+                }
+
+                // Settle 操作：确定实际派彩金额：txtype=510 且 winAmount>0 才加钱
                 $actualAmount = ($txtype == 510 && $winAmount > 0) ? $winAmount : 0;
 
                 // Lua 原子结算

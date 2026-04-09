@@ -245,12 +245,19 @@ LUA;
     public const LUA_ATOMIC_CANCEL = <<<'LUA'
 -- 1. 幂等性检查（先检查记录，再检查锁）
 local betExists = redis.call('EXISTS', KEYS[2])
-if betExists == 1 then
-    local transactionType = redis.call('HGET', KEYS[2], 'transaction_type') or ''
-    if transactionType == 'cancel' or transactionType == 'refund' then
-        local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
-        return cjson.encode({ok = 0, error = 'duplicate_cancel', balance = currentBalance})
-    end
+
+-- ✅ 安全检查：订单必须存在才能取消
+if betExists == 0 then
+    local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
+    return cjson.encode({ok = 0, error = 'order_not_found', balance = currentBalance})
+end
+
+-- 检查是否已取消（检查所有 CANCEL 类型，不包括 SETTLE_REFUND）
+local transactionType = redis.call('HGET', KEYS[2], 'transaction_type') or ''
+-- 使用 string.match 检查是否以 'cancel' 开头
+if transactionType == 'cancel' or transactionType == 'refund' or string.match(transactionType, '^cancel_') then
+    local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
+    return cjson.encode({ok = 0, error = 'duplicate_cancel', balance = currentBalance})
 end
 
 local lockExists = redis.call('EXISTS', KEYS[5])
