@@ -276,7 +276,9 @@ class RsgGameController
 
             // 处理返回结果
             if ($result['ok'] === 0) {
-                if ($result['error'] === 'duplicate_cancel') {
+                $error = $result['error'] ?? 'unknown';
+
+                if ($error === 'duplicate_cancel') {
                     // 幂等性：重复取消返回当前余额
                     $this->logger->info('RSG重复取消（Lua检测）', [
                         'order_no' => $orderNo,
@@ -286,13 +288,30 @@ class RsgGameController
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'Balance' => round((float)$result['balance'], 2)
                     ]);
+                } elseif ($error === 'order_not_found') {
+                    // 订单不存在，返回错误
+                    $this->logger->warning('RSG取消失败：订单不存在', [
+                        'order_no' => $orderNo,
+                        'balance' => $result['balance'],
+                    ]);
+
+                    return $this->error(self::API_CODE_MAP[self::API_CODE_BET_NOT_EXISTS], 'Order not found');
+                } else {
+                    // 其他错误
+                    $this->logger->error('RSG取消失败', [
+                        'order_no' => $orderNo,
+                        'error' => $error,
+                        'balance' => $result['balance'],
+                    ]);
+
+                    return $this->error(self::API_CODE_MAP[self::API_CODE_FAILED], 'Cancel failed: ' . $error);
                 }
             }
 
             $this->logger->info('RSG取消下注成功（Lua原子）', [
                 'order_no' => $orderNo,
                 'refund_amount' => $refundAmount,
-                'balance_before' => $result['old_balance'],
+                'balance_before' => $result['old_balance'] ?? 0,
                 'balance_after' => $result['balance'],
             ]);
 
