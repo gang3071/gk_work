@@ -295,7 +295,7 @@ class RsgGameController
                         'balance' => $result['balance'],
                     ]);
 
-                    return $this->error(self::API_CODE_MAP[self::API_CODE_BET_NOT_EXISTS], 'Order not found');
+                    return $this->error(self::API_CODE_MAP[self::API_CODE_ORDER_NOT_EXIST], 'Order not found');
                 } else {
                     // 其他错误
                     $this->logger->error('RSG取消失败', [
@@ -304,7 +304,7 @@ class RsgGameController
                         'balance' => $result['balance'],
                     ]);
 
-                    return $this->error(self::API_CODE_MAP[self::API_CODE_FAILED], 'Cancel failed: ' . $error);
+                    return $this->error(self::API_CODE_MAP[self::API_CODE_INVALID_PARAM], 'Cancel failed: ' . $error);
                 }
             }
 
