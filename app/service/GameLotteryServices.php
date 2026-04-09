@@ -50,7 +50,7 @@ class GameLotteryServices
     // 其他配置
     const MAX_BET_AMOUNT = 1000000000;           // 最大下注金额
     const BURST_DURATION_BUFFER = 3;          // 爆彩缓冲时间（分钟），用于Redis自动过期的兜底机制
-    const MAX_PARTICIPATE_TIMES = 100;        // 最大参与派彩次数（性能优化：防止大额下注导致循环过多）
+    const MAX_PARTICIPATE_TIMES = 10000;        // 最大参与派彩次数（性能优化：防止大额下注导致循环过多）
 
     /**
      * Lua 脚本：批量累积多个彩金池（性能优化）
