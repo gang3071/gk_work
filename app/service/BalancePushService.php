@@ -62,22 +62,16 @@ class BalancePushService
             // 使用系统统一的推送函数
             $result = sendSocketMessage('player-' . $playerId, $pushData);
 
-            if ($result) {
-                Log::debug('游戏余额推送成功', [
-                    'player_id' => $playerId,
-                    'reason' => $reason,
-                    'platform' => $extra['platform'] ?? '',
-                    'amount_before' => $oldBalance,
-                    'amount_after' => $newBalance,
-                ]);
-                return true;
-            } else {
+            if (!$result) {
                 Log::warning('游戏余额推送失败', [
                     'player_id' => $playerId,
                     'reason' => $reason,
+                    'platform' => $extra['platform'] ?? '',
                 ]);
                 return false;
             }
+
+            return true;
 
         } catch (\Throwable $e) {
             Log::error('游戏余额推送异常', [

@@ -314,24 +314,13 @@ LUA;
 
                 // ✅ 修复：检查 EVALSHA 返回值，false 表示脚本不存在或执行失败
                 if ($result === false) {
-                    $lastError = $redis->getLastError();
-                    \support\Log::warning('EVALSHA 返回 false，脚本可能已失效，降级到 EVAL', [
-                        'sha' => substr($sha, 0, 8),
-                        'last_error' => $lastError,
-                    ]);
-                    // 清除 SHA 缓存，强制降级到 EVAL
+                    // 清除 SHA 缓存，强制降级到 EVAL（正常流程，不记录日志）
                     unset(self::$scriptShas[$sha]);
                     // 不返回 false，继续执行下面的 EVAL
                 } else {
-                    // 🔍 调试：记录 EVALSHA 返回值类型
-                    \support\Log::debug('EVALSHA 执行完成', [
-                        'sha' => substr($sha, 0, 8),
-                        'result_type' => gettype($result),
-                    ]);
-
-                    // 记录执行时间
+                    // 记录慢脚本（只记录异常慢的）
                     $duration = (microtime(true) - $start) * 1000;
-                    if ($duration > 10) {
+                    if ($duration > 50) {  // 超过 50ms 才记录
                         \support\Log::warning('慢 Lua 脚本 (EVALSHA)', [
                             'duration_ms' => round($duration, 2),
                             'keys_count' => count($keys),
@@ -342,11 +331,7 @@ LUA;
                     return $result;
                 }
             } catch (\RedisException $e) {
-                // SHA 可能已过期（Redis 重启或脚本被清除），重新加载
-                \support\Log::warning('Redis Lua 脚本 SHA 失效，降级到 EVAL', [
-                    'sha' => substr($sha, 0, 8),
-                    'error' => $e->getMessage(),
-                ]);
+                // SHA 可能已过期（正常流程，不记录日志）
                 unset(self::$scriptShas[$sha]);
             }
         }
@@ -355,25 +340,16 @@ LUA;
         try {
             $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
 
-            // 🔍 调试：记录 EVAL 返回值类型
-            \support\Log::debug('EVAL 执行完成', [
-                'sha' => substr($sha, 0, 8),
-                'result_type' => gettype($result),
-                'result_is_false' => $result === false,
-                'result_is_null' => $result === null,
-            ]);
-
             // 标记为已加载
             self::$scriptShas[$sha] = true;
 
-            // 记录执行时间
+            // 记录慢脚本（只记录异常慢的）
             $duration = (microtime(true) - $start) * 1000;
-            if ($duration > 10) {
+            if ($duration > 50) {  // 超过 50ms 才记录
                 \support\Log::warning('慢 Lua 脚本 (EVAL)', [
                     'duration_ms' => round($duration, 2),
                     'keys_count' => count($keys),
                     'sha' => substr($sha, 0, 8),
-                    'script_loaded' => true,
                 ]);
             }
 
@@ -449,16 +425,6 @@ LUA;
         // ✅ 性能优化：使用 EVALSHA 代替 EVAL，减少网络传输 70%
         $redis = Redis::connection('work');
         $result = self::evalScript($redis, self::LUA_ATOMIC_BET, $keys, $argv);
-
-        // 🔍 调试日志：记录实际返回值
-        \support\Log::info('[atomicBet] Redis Lua 返回值', [
-            'player_id' => $playerId,
-            'platform' => $platform,
-            'order_no' => $orderNo,
-            'result_type' => gettype($result),
-            'result_value' => is_string($result) ? substr($result, 0, 200) : var_export($result, true),
-            'bet_amount' => $betAmount,
-        ]);
 
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
@@ -568,16 +534,6 @@ LUA;
         // ✅ 性能优化：使用 EVALSHA 代替 EVAL，减少网络传输 70%
         $redis = Redis::connection('work');
         $result = self::evalScript($redis, self::LUA_ATOMIC_SETTLE, $keys, $argv);
-
-        // 🔍 调试日志：记录实际返回值
-        \support\Log::info('[atomicSettle] Redis Lua 返回值', [
-            'player_id' => $playerId,
-            'platform' => $platform,
-            'order_no' => $orderNo,
-            'result_type' => gettype($result),
-            'result_value' => is_string($result) ? substr($result, 0, 200) : var_export($result, true),
-            'win_amount' => $winAmount,
-        ]);
 
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
@@ -704,16 +660,6 @@ LUA;
         $redis = Redis::connection('work');
         $result = self::evalScript($redis, self::LUA_ATOMIC_CANCEL, $keys, $argv);
 
-        // 🔍 调试日志：记录实际返回值
-        \support\Log::info('[atomicCancel] Redis Lua 返回值', [
-            'player_id' => $playerId,
-            'platform' => $platform,
-            'order_no' => $orderNo,
-            'result_type' => gettype($result),
-            'result_value' => is_string($result) ? substr($result, 0, 200) : var_export($result, true),
-            'refund_amount' => $refundAmount,
-        ]);
-
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
             throw new \RuntimeException(
@@ -796,12 +742,21 @@ LUA;
     private static function publishBalanceChange(int $playerId, string $platform, array $data): void
     {
         try {
+            // ✅ 性能优化：余额没有变化时不推送（避免无意义的推送）
+            $oldBalance = (float)($data['old_balance'] ?? 0);
+            $newBalance = (float)($data['new_balance'] ?? 0);
+
+            if (abs($newBalance - $oldBalance) < 0.01) {
+                // 余额变化小于 0.01，视为无变化，不推送
+                return;
+            }
+
             $message = json_encode([
                 'player_id' => $playerId,
                 'platform' => $platform,
                 'reason' => $data['reason'],
-                'old_balance' => $data['old_balance'],
-                'new_balance' => $data['new_balance'],
+                'old_balance' => $oldBalance,
+                'new_balance' => $newBalance,
                 'order_no' => $data['order_no'] ?? '',
                 'amount' => $data['amount'] ?? 0,
                 'timestamp' => time(),

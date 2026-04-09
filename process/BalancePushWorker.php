@@ -113,19 +113,13 @@ class BalancePushWorker
                 ]
             );
 
-            $duration = round((microtime(true) - $startTime) * 1000, 2);
-
-            if ($result) {
-                $this->log->debug("实时推送成功", [
-                    'player_id' => $data['player_id'],
-                    'reason' => $data['reason'],
-                    'platform' => $data['platform'] ?? '',
-                    'duration_ms' => $duration,
-                ]);
-            } else {
+            // 只记录失败日志，减少 I/O
+            if (!$result) {
+                $duration = round((microtime(true) - $startTime) * 1000, 2);
                 $this->log->warning("实时推送失败", [
                     'player_id' => $data['player_id'],
                     'reason' => $data['reason'],
+                    'platform' => $data['platform'] ?? '',
                     'duration_ms' => $duration,
                 ]);
             }
