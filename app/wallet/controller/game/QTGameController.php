@@ -563,7 +563,8 @@ class QTGameController
                     'amount' => $amount,
                 ]);
 
-                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
+                    // ✅ 修复：atomicSettle 返回的是 'duplicate_settle'
                     $this->logger->info('QT结算重复请求（Lua检测）', ['txnId' => $txnId]);
                 }
 
@@ -825,7 +826,8 @@ class QTGameController
                     'balance' => round($result['balance'], 2),
                     'referenceId' => (string)$playerDeliveryRecord->id
                 ]));
-            } elseif ($result['error'] === 'duplicate_order') {
+            } elseif ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
+                // ✅ 修复：atomicSettle 返回的幂等性错误是 'duplicate_settle'，而不是 'duplicate_order'
                 // 重复订单（幂等性）
                 $this->logger->info('QT奖金发放重复请求（Lua检测）', ['txnId' => $txnId]);
 
@@ -916,12 +918,17 @@ class QTGameController
             $this->service->player = $player;
 
             // ========== Lua 原子操作处理 ==========
-            $txnId = (string)($params['txnId'] ?? '');
+            $betId = (string)($params['betId'] ?? '');  // ✅ 原始下注ID
+            $txnId = (string)($params['txnId'] ?? '');  // 新的回滚交易ID
             $amount = (float)$params['amount'];
 
-            // 回滚（Lua 原子操作）
+            // ✅ 修复：回滚时使用原始下注ID（betId），而不是新的回滚ID（txnId）
+            // QT Rollback API 说明：
+            // - betId: 需要回滚的原始下注交易ID
+            // - txnId: 本次回滚操作的新交易ID（用于幂等性）
+            // atomicCancel 需要使用 betId 来查找原始下注记录
             $luaParams = [
-                'order_no' => $txnId,
+                'order_no' => $betId,  // ✅ 使用原始下注ID
                 'platform_id' => $this->service->platform->id,
                 'refund_amount' => $amount,
                 'transaction_type' => TransactionType::CANCEL_ROLLBACK,
@@ -944,7 +951,8 @@ class QTGameController
             // 保存取消记录到 Redis
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveCancel('QT', [
-                    'order_no' => $txnId,
+                    'order_no' => $betId,  // ✅ 使用原始下注ID
+                    'rollback_txn_id' => $txnId,  // 记录回滚交易ID（用于追溯）
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $amount,
@@ -954,13 +962,16 @@ class QTGameController
                 ]);
             }
 
-            if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
-                $this->logger->info('QT回滚重复请求（Lua检测）', ['txnId' => $txnId]);
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_cancel') {
+                $this->logger->info('QT回滚重复请求（Lua检测）', [
+                    'betId' => $betId,
+                    'txnId' => $txnId
+                ]);
             }
 
             $this->logger->info('QT回滚成功（Lua原子）', [
-                'betId' => $params['betId'],
-                'txnId' => $txnId,
+                'betId' => $betId,  // 原始下注ID
+                'txnId' => $txnId,  // 回滚交易ID
                 'balance' => $result['balance'],
             ]);
 
