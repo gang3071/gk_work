@@ -50,7 +50,7 @@ class GameLotteryServices
     // 其他配置
     const MAX_BET_AMOUNT = 1000000000;           // 最大下注金额
     const BURST_DURATION_BUFFER = 3;          // 爆彩缓冲时间（分钟），用于Redis自动过期的兜底机制
-    const MAX_PARTICIPATE_TIMES = 10000;        // 最大参与派彩次数（性能优化：防止大额下注导致循环过多）
+    const MAX_PARTICIPATE_TIMES = 100;        // 最大参与派彩次数（性能优化：防止大额下注导致循环过多）
 
     /**
      * Lua 脚本：批量累积多个彩金池（性能优化）
@@ -74,7 +74,6 @@ class GameLotteryServices
      * 返回：JSON 编码的结果
      */
     private const LUA_BATCH_ADD_LOTTERY = <<<'LUA'
--- ✅ 错误处理：安全解析 JSON
 local ok, pools = pcall(cjson.decode, ARGV[1])
 if not ok then
     return redis.error_reply("Invalid JSON: " .. tostring(pools))
@@ -84,19 +83,15 @@ local current_date = ARGV[2]
 local processed = 0
 
 for i, pool in ipairs(pools) do
-    -- ✅ 显式转换类型，确保安全
     local lottery_id = tostring(pool.id)
     local add_amount = tonumber(pool.add_amount) or 0
     local stat_increment = tonumber(pool.stat_increment) or 0
 
-    -- ✅ 跳过无效数据
     if add_amount > 0 then
-        -- 1. 累积金额（原子操作）
         redis.call('INCRBYFLOAT', 'game_lottery_amount:' .. lottery_id, add_amount)
         processed = processed + 1
     end
 
-    -- 2. 更新统计（批量）
     if stat_increment > 0 then
         redis.call('INCRBY', 'game_lottery_stats:total:' .. lottery_id, stat_increment)
         redis.call('INCRBY', 'game_lottery_stats:daily:total:' .. lottery_id .. ':' .. current_date, stat_increment)
@@ -104,9 +99,14 @@ for i, pool in ipairs(pools) do
     end
 end
 
--- 返回处理数量
 return processed
 LUA;
+
+    /**
+     * Lua 脚本的 SHA1 缓存（EVALSHA 优化）
+     * @var string|null
+     */
+    private static ?string $luaScriptSha = null;
 
     private Player $player;
     private $log;
@@ -1646,12 +1646,6 @@ LUA;
         foreach ($lotteryList as $lottery) {
             // 检查是否达到最大彩池限制
             if ($lottery->max_pool_amount > 0 && $lottery->amount >= $lottery->max_pool_amount) {
-                $this->log->info('彩金池已达上限，跳过累积', [
-                    'lottery_id' => $lottery->id,
-                    'name' => $lottery->name,
-                    'amount' => $lottery->amount,
-                    'max_pool_amount' => $lottery->max_pool_amount,
-                ]);
                 continue;
             }
 
@@ -1666,12 +1660,6 @@ LUA;
                     $refillAmount = bcsub($lottery->auto_refill_amount, $lottery->amount, 4);
                     $lottery->amount = $lottery->auto_refill_amount;
                     $lottery->save();
-
-                    $this->log->info('彩金池自动补充保底金额', [
-                        'lottery_id' => $lottery->id,
-                        'refill_amount' => $refillAmount,
-                        'player_id' => $this->player->id,
-                    ]);
                 }
             }
 
@@ -1687,14 +1675,6 @@ LUA;
                 'add_amount' => (float)$addAmount,
                 'stat_increment' => (int)bcmul($bet, 1, 0), // 下注金额作为统计权重
             ];
-
-            $this->log->info('彩金池累积', [
-                'lottery_id' => $lottery->id,
-                'name' => $lottery->name,
-                'player_id' => $this->player->id,
-                'bet' => $bet,
-                'add_amount' => $addAmount,
-            ]);
         }
 
         // 如果有需要累积的彩金池，使用 Lua 脚本批量处理
@@ -1702,18 +1682,29 @@ LUA;
             try {
                 $redis = \support\Redis::connection()->client();
 
-                // 执行 Lua 脚本（keys数量为0，只用ARGV传参）
-                $processed = $redis->eval(
-                    self::LUA_BATCH_ADD_LOTTERY,
-                    [json_encode($poolsData), $today],
-                    0
-                );
+                // ✅ 性能优化：使用 EVALSHA 替代 EVAL（减少 95% 网络传输）
+                if (self::$luaScriptSha === null) {
+                    self::$luaScriptSha = $redis->script('load', self::LUA_BATCH_ADD_LOTTERY);
+                }
 
-                $this->log->debug('批量累积彩金完成', [
-                    'pools_count' => count($poolsData),
-                    'processed' => $processed,
-                    'total_bet' => $bet,
-                ]);
+                try {
+                    $processed = $redis->evalSha(
+                        self::$luaScriptSha,
+                        [json_encode($poolsData), $today],
+                        0
+                    );
+                } catch (\RedisException $e) {
+                    if (strpos($e->getMessage(), 'NOSCRIPT') !== false) {
+                        self::$luaScriptSha = $redis->script('load', self::LUA_BATCH_ADD_LOTTERY);
+                        $processed = $redis->evalSha(
+                            self::$luaScriptSha,
+                            [json_encode($poolsData), $today],
+                            0
+                        );
+                    } else {
+                        throw $e;
+                    }
+                }
 
             } catch (\Exception $e) {
                 // Lua 脚本失败，降级到逐个处理
