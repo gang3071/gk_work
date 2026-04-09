@@ -341,36 +341,72 @@ class SAGameController
 
             $player = $this->service->player;
 
-            // 解析批量结算列表
+            // ✅ 使用外层 amount 作为实际派彩金额（SA 平台规范）
+            $payoutAmount = (float)($data['amount'] ?? 0);
+            $txnId = (string)($data['txnid'] ?? '');
+
+            // 解析批量结算列表（用于关联下注记录和审计）
             $detail = json_decode($data['payoutdetails'], true);
             $betList = $detail['betlist'] ?? [];
 
-            $processedCount = 0;
-            $duplicateCount = 0;
-            $notFoundCount = 0;
-            $lastBalance = null;
-
-            // 批量处理结算（每个订单一次 Lua 原子操作）
+            // ✅ 判断是单次结算还是批量结算：统计 betlist 里唯一的下注订单号数量
+            $uniqueBetTxnIds = [];
             foreach ($betList as $betInfo) {
-                $orderNo = (string)($betInfo['txnid'] ?? '');
-                $resultAmount = max($betInfo['resultamount'], 0);
-
-                // ✅ 检查对应的 bet 订单是否存在
-                $betRecordKey = "game:record:bet:SA:{$orderNo}";
-                if (!\support\Redis::exists($betRecordKey)) {
-                    Log::channel('sa_server')->warning('SA结算失败：下注订单不存在', ['order_no' => $orderNo]);
-                    $notFoundCount++;
-                    continue;
+                $betTxnId = (string)($betInfo['txnid'] ?? '');
+                if (!empty($betTxnId) && !in_array($betTxnId, $uniqueBetTxnIds)) {
+                    $uniqueBetTxnIds[] = $betTxnId;
                 }
+            }
+            $isSingleSettle = count($uniqueBetTxnIds) === 1;
+
+            // ✅ 单次结算：betlist 里只有一个下注订单
+            if (!empty($txnId) && $payoutAmount > 0 && $isSingleSettle) {
+                // ✅ 从 betlist 提取下注订单号（用于关联 bet 记录）
+                $betOrderNo = null;
+                if (!empty($betList)) {
+                    // 提取第一个 betlist 项的 txnid（通常整个 betlist 共用一个下注单号）
+                    $betOrderNo = (string)($betList[0]['txnid'] ?? '');
+
+                    if (empty($betOrderNo)) {
+                        Log::channel('sa_server')->warning('SA结算失败：betlist中没有下注订单号', [
+                            'settle_txnid' => $txnId
+                        ]);
+                        $currentBalance = WalletService::getBalance($player->id);
+                        return $this->error(self::API_CODE_GENERAL_ERROR, [
+                            'username' => $data['username'],
+                            'currency' => $data['currency'],
+                            'amount' => round((float)$currentBalance, 2),
+                        ]);
+                    }
+
+                    // 检查下注订单是否存在
+                    $betRecordKey = "game:record:bet:SA:{$betOrderNo}";
+                    if (!\support\Redis::exists($betRecordKey)) {
+                        Log::channel('sa_server')->warning('SA结算失败：下注订单不存在', [
+                            'settle_txnid' => $txnId,
+                            'bet_txnid' => $betOrderNo
+                        ]);
+                        $currentBalance = WalletService::getBalance($player->id);
+                        return $this->error(self::API_CODE_GENERAL_ERROR, [
+                            'username' => $data['username'],
+                            'currency' => $data['currency'],
+                            'amount' => round((float)$currentBalance, 2),
+                        ]);
+                    }
+                }
+
+                // ✅ 单次派彩处理：使用 betlist 里的下注订单号，这样可以关联更新 bet 记录
+                $orderNo = $betOrderNo ?? $txnId;  // 优先使用 betlist 的 txnid
+                $resultAmount = $payoutAmount;
 
                 // Lua 原子结算
                 $luaParams = [
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $resultAmount,
-                    'diff' => $betInfo['resultamount'], // 保留原始值
+                    'diff' => $payoutAmount, // 使用外层 amount 作为 diff
                     'transaction_type' => TransactionType::SETTLE,
-                    'original_data' => $betInfo,
+                    'original_data' => $data, // 使用完整的请求数据
                 ];
 
                 // 参数验证
@@ -394,9 +430,9 @@ class SAGameController
                         'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
                         'amount' => $resultAmount,
-                        'diff' => $betInfo['resultamount'],
-                        'game_code' => $betInfo['hostid'] ?? '',
-                        'original_data' => $betInfo,
+                        'diff' => $payoutAmount,
+                        'game_code' => $data['hostid'] ?? '',
+                        'original_data' => $data,
                         'balance_before' => $result['old_balance'] ?? 0,
                         'balance_after' => $result['balance'],
                     ]);
@@ -408,42 +444,141 @@ class SAGameController
                         $result['old_balance'] ?? null
                     );
 
-                    $processedCount++;
-                    $lastBalance = $result['balance'];
+                    $finalBalance = $result['balance'];
                 } elseif ($result['error'] === 'duplicate_order' || $result['error'] === 'duplicate_settle') {
-                    // 重复订单计数
-                    $duplicateCount++;
+                    // ✅ 重复派彩请求，返回错误码 1005
                     Log::channel('sa_server')->warning('SA结算订单重复（Lua检测）', ['order_no' => $orderNo]);
-                    if (isset($result['balance'])) {
+                    $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                } else {
+                    // 结算失败，返回当前余额
+                    $finalBalance = WalletService::getBalance($player->id);
+                }
+            } else {
+                // PlayerLost 或批量处理（使用 betlist）
+                $processedCount = 0;
+                $duplicateCount = 0;
+                $notFoundCount = 0;
+                $lastBalance = null;
+
+                // ✅ PlayerLost 场景：外层有 txnId 但没有 amount，需要检查 betlist
+                if (!empty($txnId) && empty($betList)) {
+                    // PlayerLost 但 betlist 为空，无法验证下注订单，返回错误
+                    Log::channel('sa_server')->warning('SA结算失败：PlayerLost场景但betlist为空', [
+                        'txnid' => $txnId
+                    ]);
+                    $currentBalance = WalletService::getBalance($player->id);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
+                foreach ($betList as $betInfo) {
+                    $orderNo = (string)($betInfo['txnid'] ?? '');
+                    $resultAmount = max($betInfo['resultamount'], 0);
+
+                    // ✅ 检查对应的 bet 订单是否存在
+                    $betRecordKey = "game:record:bet:SA:{$orderNo}";
+                    if (!\support\Redis::exists($betRecordKey)) {
+                        Log::channel('sa_server')->warning('SA批量结算跳过：下注订单不存在', ['order_no' => $orderNo]);
+                        $notFoundCount++;
+                        continue;
+                    }
+
+                    // Lua 原子结算
+                    $luaParams = [
+                        'order_no' => $orderNo,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $resultAmount,
+                        'diff' => $betInfo['resultamount'],
+                        'transaction_type' => TransactionType::SETTLE,
+                        'original_data' => $betInfo,
+                    ];
+
+                    // 参数验证
+                    validateLuaScriptParams($luaParams, [
+                        'order_no' => ['required', 'string'],
+                        'amount' => ['required', 'numeric'],
+                        'diff' => ['required', 'numeric'],
+                        'platform_id' => ['required', 'integer'],
+                        'transaction_type' => ['required', 'string'],
+                    ], 'atomicSettle');
+
+                    $result = RedisLuaScripts::atomicSettle($player->id, 'SA', $luaParams);
+
+                    // 审计日志
+                    logLuaScriptCall('settle', 'SA', $player->id, $luaParams);
+
+                    if ($result['ok'] === 1) {
+                        // 保存结算记录到 Redis
+                        \app\service\GameRecordCacheService::saveSettle('SA', [
+                            'order_no' => $orderNo,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $resultAmount,
+                            'diff' => $betInfo['resultamount'],
+                            'game_code' => $data['hostid'] ?? '',
+                            'original_data' => $betInfo,
+                            'balance_before' => $result['old_balance'] ?? 0,
+                            'balance_after' => $result['balance'],
+                        ]);
+
+                        // 结算成功后检查爆机
+                        WalletService::checkMachineCrashAfterTransaction(
+                            $player->id,
+                            $result['balance'],
+                            $result['old_balance'] ?? null
+                        );
+
+                        $processedCount++;
                         $lastBalance = $result['balance'];
+                    } elseif ($result['error'] === 'duplicate_order' || $result['error'] === 'duplicate_settle') {
+                        // 重复订单计数
+                        $duplicateCount++;
+                        Log::channel('sa_server')->warning('SA结算订单重复（Lua检测）', ['order_no' => $orderNo]);
+                        if (isset($result['balance'])) {
+                            $lastBalance = $result['balance'];
+                        }
                     }
                 }
-            }
 
-            // ✅ 检查是否所有订单都失败了（重复或不存在）
-            if ($processedCount === 0 && ($duplicateCount > 0 || $notFoundCount > 0)) {
-                // 所有订单都失败了，返回错误
-                $currentBalance = $lastBalance ?? WalletService::getBalance($player->id);
-                Log::channel('sa_server')->warning('SA批量结算全部失败', [
+                // ✅ 检查是否所有订单都失败了（重复或不存在）
+                if ($processedCount === 0 && ($duplicateCount > 0 || $notFoundCount > 0)) {
+                    // 所有订单都失败了，返回错误
+                    $currentBalance = $lastBalance ?? WalletService::getBalance($player->id);
+                    Log::channel('sa_server')->warning('SA批量结算全部失败', [
+                        'total' => count($betList),
+                        'duplicates' => $duplicateCount,
+                        'not_found' => $notFoundCount,
+                    ]);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
+                // 获取最终余额
+                $finalBalance = $lastBalance ?? WalletService::getBalance($player->id);
+
+                Log::channel('sa_server')->info('SA批量结算成功（Lua原子）', [
                     'total' => count($betList),
+                    'processed' => $processedCount,
                     'duplicates' => $duplicateCount,
                     'not_found' => $notFoundCount,
                 ]);
-                return $this->error(self::API_CODE_GENERAL_ERROR, [
-                    'username' => $data['username'],
-                    'currency' => $data['currency'],
-                    'amount' => round((float)$currentBalance, 2),
-                ]);
             }
 
-            // 获取最终余额：优先使用Lua返回的余额，如果没有则从钱包服务获取
-            $finalBalance = $lastBalance ?? WalletService::getBalance($player->id);
-
             Log::channel('sa_server')->info('SA结算成功（Lua原子）', [
-                'total' => count($betList),
-                'processed' => $processedCount,
-                'duplicates' => $duplicateCount,
-                'not_found' => $notFoundCount,
+                'txnid' => $txnId ?? 'batch',
+                'amount' => $payoutAmount,
+                'final_balance' => $finalBalance,
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
@@ -546,10 +681,79 @@ class SAGameController
                 ]);
             } elseif ($adjustmentType == 3) {
                 // 类型3: 取消奖赏（退回余额）
+                // ✅ 从 adjustmentdetails 提取要取消的订单号
+                $adjustmentDetails = json_decode($data['adjustmentdetails'] ?? '{}', true);
+                $cancelTxnId = (string)($adjustmentDetails['canceltxnid'] ?? '');
+
+                if (empty($cancelTxnId)) {
+                    Log::channel('sa_server')->warning('SA调整取消失败：缺少 canceltxnid', ['txnid' => $orderNo]);
+                    $currentBalance = WalletService::getBalance($player->id);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
+                // ✅ 检查订单是否存在
+                $betRecordKey = "game:record:bet:SA:{$cancelTxnId}";
+                if (!\support\Redis::exists($betRecordKey)) {
+                    Log::channel('sa_server')->warning('SA调整取消失败：订单不存在', ['cancel_txnid' => $cancelTxnId]);
+                    $currentBalance = WalletService::getBalance($player->id);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
+                // ✅ 检查是否已经被取消过
+                $transactionType = \support\Redis::hGet($betRecordKey, 'transaction_type');
+                if (!empty($transactionType) && (strpos($transactionType, 'cancel') === 0 || strpos($transactionType, 'refund') === 0)) {
+                    Log::channel('sa_server')->info('SA调整取消重复请求（应用层检测）', [
+                        'cancel_txnid' => $cancelTxnId,
+                        'transaction_type' => $transactionType
+                    ]);
+                    $currentBalance = WalletService::getBalance($player->id);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
+                // ✅ 从 Redis 读取原始金额
+                $originalAmount = (float)\support\Redis::hGet($betRecordKey, 'amount');
+                if ($originalAmount <= 0) {
+                    Log::channel('sa_server')->error('SA调整取消失败：无法读取原始金额', [
+                        'cancel_txnid' => $cancelTxnId,
+                        'redis_key' => $betRecordKey
+                    ]);
+                    $currentBalance = WalletService::getBalance($player->id);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
+                // ✅ 验证平台传入的金额是否一致
+                if (abs($amount - $originalAmount) > 0.01) {
+                    Log::channel('sa_server')->warning('SA调整取消：平台传入金额与原始金额不一致', [
+                        'cancel_txnid' => $cancelTxnId,
+                        'platform_amt' => $amount,
+                        'original_amount' => $originalAmount,
+                        'diff' => $amount - $originalAmount
+                    ]);
+                }
+
+                // ✅ 使用原始金额作为退款金额
+                $refundAmount = $originalAmount;
+
                 $luaParams = [
-                    'order_no' => $orderNo,
+                    'order_no' => $cancelTxnId,  // ✅ 使用要取消的订单号
                     'platform_id' => $this->service->platform->id,
-                    'refund_amount' => $amount,
+                    'refund_amount' => $refundAmount,
                     'transaction_type' => TransactionType::CANCEL_REFUND,
                     'original_data' => $data,
                 ];
@@ -567,13 +771,44 @@ class SAGameController
                 // 审计日志
                 logLuaScriptCall('adjustment_cancel', 'SA', $player->id, $luaParams);
 
+                // 处理 Lua 返回的错误
+                if ($result['ok'] === 0) {
+                    $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
+
+                    if ($result['error'] === 'order_not_found') {
+                        Log::channel('sa_server')->warning('SA调整取消失败：订单不存在', ['cancel_txnid' => $cancelTxnId]);
+                        return $this->error(self::API_CODE_GENERAL_ERROR, [
+                            'username' => $data['username'],
+                            'currency' => $data['currency'],
+                            'amount' => round((float)$currentBalance, 2),
+                        ]);
+                    }
+
+                    if ($result['error'] === 'duplicate_cancel') {
+                        Log::channel('sa_server')->info('SA调整取消重复请求（Lua检测）', ['cancel_txnid' => $cancelTxnId]);
+                        return $this->error(self::API_CODE_GENERAL_ERROR, [
+                            'username' => $data['username'],
+                            'currency' => $data['currency'],
+                            'amount' => round((float)$currentBalance, 2),
+                        ]);
+                    }
+
+                    // 其他错误
+                    Log::channel('sa_server')->error('SA调整取消失败', ['cancel_txnid' => $cancelTxnId, 'error' => $result['error']]);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
                 // 保存取消记录到 Redis
                 if ($result['ok'] === 1) {
                     \app\service\GameRecordCacheService::saveCancel('SA', [
-                        'order_no' => $orderNo,
+                        'order_no' => $cancelTxnId,
                         'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
-                        'refund_amount' => $amount,
+                        'refund_amount' => $refundAmount,
                         'original_data' => $data,
                         'balance_before' => $result['old_balance'] ?? 0,
                         'balance_after' => $result['balance'],
@@ -581,18 +816,7 @@ class SAGameController
                     ]);
                 }
 
-                // 处理重复订单
-                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
-                    Log::channel('sa_server')->info('SA调整取消重复请求（Lua检测）', ['order_no' => $orderNo]);
-                    $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
-                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'username' => $data['username'],
-                        'currency' => $data['currency'],
-                        'amount' => round((float)$currentBalance, 2),
-                    ]);
-                }
-
-                Log::channel('sa_server')->info('SA调整取消成功（Lua原子）', ['order_no' => $orderNo]);
+                Log::channel('sa_server')->info('SA调整取消成功（Lua原子）', ['cancel_txnid' => $cancelTxnId]);
 
                 return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                     'username' => $data['username'],
@@ -645,17 +869,15 @@ class SAGameController
                         $result['balance'],
                         $result['old_balance'] ?? null
                     );
-                } elseif ($result['error'] === 'duplicate_order') {
-                    Log::channel('sa_server')->info('SA调整奖励重复订单（Lua检测）', ['order_no' => $orderNo]);
-                    // 重复订单也要更新余额
-                    if (isset($result['balance'])) {
-                        $currentBalance = $result['balance'];
-                        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                            'username' => $data['username'],
-                            'currency' => $data['currency'],
-                            'amount' => round((float)$currentBalance, 2),
-                        ]);
-                    }
+                } elseif ($result['error'] === 'duplicate_order' || $result['error'] === 'duplicate_settle') {
+                    // ✅ 重复订单返回错误
+                    Log::channel('sa_server')->warning('SA调整奖励重复订单（Lua检测）', ['order_no' => $orderNo]);
+                    $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
                 }
 
                 Log::channel('sa_server')->info('SA调整奖励成功（Lua原子）', [
