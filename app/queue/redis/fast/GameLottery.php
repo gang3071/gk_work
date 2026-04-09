@@ -16,34 +16,29 @@ class GameLottery implements Consumer
     // 连接名，对应 plugin/webman/redis-queue/redis.php 里的连接`
     public $connection = 'default';
 
+    /**
+     * 日志通道（复用，避免重复创建）
+     * @var \Monolog\Logger
+     */
+    private $log;
+
+    public function __construct()
+    {
+        $this->log = Log::channel('game_lottery');
+    }
+
     // 消费
     public function consume($data)
     {
-        $log = Log::channel('game_lottery');
-        $log->info('🎲 开始处理游戏抽奖', [
-            'play_game_record_id' => $data['play_game_record_id'] ?? 0,
-            'player_id' => $data['player_id'],
-            'bet' => $data['bet'],
-        ]);
-
         try {
             /** @var Player $player */
             $player = Player::query()->find($data['player_id']);
 
             if (empty($player)) {
-                $log->warning('玩家不存在', [
-                    'player_id' => $data['player_id'],
-                    'play_game_record_id' => $data['play_game_record_id'] ?? 0,
-                ]);
                 return;
             }
 
             if ($player->channel->lottery_status == 0) {
-                $log->info('渠道抽奖功能未开启', [
-                    'player_id' => $data['player_id'],
-                    'play_game_record_id' => $data['play_game_record_id'] ?? 0,
-                    'channel_id' => $player->channel->id
-                ]);
                 return;
             }
 
@@ -57,24 +52,14 @@ class GameLottery implements Consumer
                 $lockResult = $redis->set($cacheKey, time(), ['NX', 'EX' => 3600]); // 1小时过期
 
                 if (!$lockResult) {
-                    $log->warning('该下注记录已处理过，跳过重复检查', [
-                        'play_game_record_id' => $playGameRecordId,
-                        'player_id' => $data['player_id']
-                    ]);
                     return;
                 }
             }
 
             $gameLotteryServices = new GameLotteryServices();
             $gameLotteryServices->setPlayer($player)->setLog()->setLotteryList()->addLotteryPool($data['bet'])->checkLottery($data['bet'], $data['play_game_record_id']);
-
-            $log->info('游戏抽奖处理完成', [
-                'player_id' => $data['player_id'],
-                'bet' => $data['bet'],
-                'play_game_record_id' => $data['play_game_record_id']
-            ]);
         } catch (Exception $e) {
-            $log->error('游戏抽奖处理失败', [
+            $this->log->error('游戏抽奖处理失败', [
                 'data' => $data,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
@@ -94,7 +79,6 @@ class GameLottery implements Consumer
      */
     public function onConsumeFailure(\Throwable $exception, $package)
     {
-        $log = Log::channel('game_lottery');
 
         $playerId = $package['data']['player_id'] ?? 'unknown';
         $bet = $package['data']['bet'] ?? 0;
@@ -104,7 +88,7 @@ class GameLottery implements Consumer
         $isFinalAttempt = $attempts >= $maxAttempts;
 
         // 记录失败日志
-        $log->error('🔴 彩金检查失败' . ($isFinalAttempt ? '（已达最大重试次数）' : ''), [
+        $this->log->error('🔴 彩金检查失败' . ($isFinalAttempt ? '（已达最大重试次数）' : ''), [
             'message_id' => $package['id'] ?? null,
             'queue' => $package['queue'] ?? 'unknown',
             'player_id' => $playerId,
