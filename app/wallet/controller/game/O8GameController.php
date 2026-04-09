@@ -332,7 +332,6 @@ class O8GameController
                 }
 
                 $orderNo = $order['refptxid'];
-                $winAmount = $order['turnover'] - $order['ggr'];
                 $txtype = $order['txtype'];
 
                 // ✅ 根据 txtype 区分 settle 和 cancel 操作
@@ -479,15 +478,27 @@ class O8GameController
                     continue;
                 }
 
-                // Settle 操作：确定实际派彩金额：txtype=510 且 winAmount>0 才加钱
-                $actualAmount = ($txtype == 510 && $winAmount > 0) ? $winAmount : 0;
+                // ✅ 修复：Settle 操作应直接使用 O8 传入的 amt 字段（派彩金额）
+                // O8 API 字段含义：
+                // - amt: 派彩金额（返还给玩家的总金额，包括本金）
+                // - turnover: 累计流水（统计用）
+                // - ggr: 累计GGR（统计用）
+                $settleAmount = $order['amt'] ?? 0;  // 派彩金额
+
+                // 计算实际变化金额（用于统计）
+                // diff = 派彩金额 - 下注金额 = amt - (从Redis读取的原始下注金额)
+                $betRecordKey = "game:record:bet:O8:{$orderNo}";
+                $originalBetAmount = \support\Redis::exists($betRecordKey)
+                    ? (float)\support\Redis::hGet($betRecordKey, 'amount')
+                    : 0;
+                $diffAmount = bcsub($settleAmount, $originalBetAmount, 2);
 
                 // Lua 原子结算
                 $luaParams = [
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
-                    'amount' => $actualAmount,
-                    'diff' => $winAmount, // 保留原始值用于统计
+                    'amount' => $settleAmount,  // ✅ 使用派彩金额
+                    'diff' => $diffAmount,      // ✅ 派彩 - 下注
                     'transaction_type' => TransactionType::SETTLE,
                     'original_data' => $order,
                 ];
@@ -524,8 +535,8 @@ class O8GameController
                         'order_no' => $orderNo,
                         'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
-                        'amount' => $actualAmount,
-                        'diff' => $winAmount,
+                        'amount' => $settleAmount,  // ✅ 使用派彩金额
+                        'diff' => $diffAmount,      // ✅ 使用计算的差值
                         'game_code' => $order['gamecode'] ?? '',
                         'original_data' => $order,
                         'balance_before' => $result['old_balance'] ?? 0,
