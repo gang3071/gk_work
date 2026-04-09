@@ -157,7 +157,7 @@ class SPGameController
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'username' => $data['username'],
                         'currency' => $data['currency'],
-                        'amount' => (float)$currentBalance,
+                        'amount' => round((float)$currentBalance, 2),
                     ]);
                 } elseif ($result['error'] === 'insufficient_balance') {
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE, [
@@ -199,7 +199,47 @@ class SPGameController
 
             $player = $this->service->player;
             $orderNo = (string)($data['txn_reverse_id'] ?? '');
-            $refundAmount = $data['amount'];
+            $platformAmt = (float)($data['amount'] ?? 0);
+
+            // ✅ 检查订单是否存在
+            $betRecordKey = "game:record:bet:SP:{$orderNo}";
+            if (!\support\Redis::exists($betRecordKey)) {
+                Log::channel('sp_server')->warning('SP取消下注失败：订单不存在', ['order_no' => $orderNo]);
+                $currentBalance = \app\service\WalletService::getBalance($player->id);
+                return $this->error(self::API_CODE_GENERAL_ERROR, [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => round((float)$currentBalance, 2),
+                ]);
+            }
+
+            // ✅ 从 Redis 读取原始下注金额
+            $originalBetAmount = (float)\support\Redis::hGet($betRecordKey, 'amount');
+            if ($originalBetAmount <= 0) {
+                Log::channel('sp_server')->error('SP取消下注失败：无法读取原始下注金额', [
+                    'order_no' => $orderNo,
+                    'redis_key' => $betRecordKey
+                ]);
+                $currentBalance = \app\service\WalletService::getBalance($player->id);
+                return $this->error(self::API_CODE_GENERAL_ERROR, [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => round((float)$currentBalance, 2),
+                ]);
+            }
+
+            // ✅ 验证平台传入的金额是否一致
+            if (abs($platformAmt - $originalBetAmount) > 0.01) {
+                Log::channel('sp_server')->warning('SP取消下注：平台传入金额与原始下注金额不一致', [
+                    'order_no' => $orderNo,
+                    'platform_amt' => $platformAmt,
+                    'original_bet_amount' => $originalBetAmount,
+                    'diff' => $platformAmt - $originalBetAmount
+                ]);
+            }
+
+            // ✅ 使用原始下注金额作为退款金额
+            $refundAmount = $originalBetAmount;
 
             // Lua 原子取消
             $luaParams = [
@@ -223,6 +263,39 @@ class SPGameController
             // 审计日志
             logLuaScriptCall('cancel', 'SP', $player->id, $luaParams);
 
+            // 处理 Lua 返回的错误
+            if ($result['ok'] === 0) {
+                $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
+
+                // ✅ 订单不存在
+                if ($result['error'] === 'order_not_found') {
+                    Log::channel('sp_server')->warning('SP取消下注失败：订单不存在', ['order_no' => $orderNo]);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
+                // 重复取消
+                if ($result['error'] === 'duplicate_cancel') {
+                    Log::channel('sp_server')->info('SP取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
+                // 其他错误
+                Log::channel('sp_server')->error('SP取消下注失败', ['order_no' => $orderNo, 'error' => $result['error']]);
+                return $this->error(self::API_CODE_GENERAL_ERROR, [
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => round((float)$currentBalance, 2),
+                ]);
+            }
+
             // 保存取消记录到 Redis
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveCancel('SP', [
@@ -233,18 +306,6 @@ class SPGameController
                     'original_data' => $data,
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
-                ]);
-            }
-
-            // 处理重复订单
-            if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
-                Log::channel('sp_server')->info('SP取消下注重复请求（Lua检测）', ['order_no' => $orderNo]);
-                // 重复订单返回当前余额
-                $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'username' => $data['username'],
-                    'currency' => $data['currency'],
-                    'amount' => (float)$currentBalance,
                 ]);
             }
 
@@ -279,26 +340,75 @@ class SPGameController
 
             $player = $this->service->player;
 
-            // 解析批量结算列表
+            // ✅ 使用外层 amount 作为实际派彩金额（SP 平台规范）
+            $payoutAmount = (float)($data['amount'] ?? 0);
+            $txnId = (string)($data['txnid'] ?? '');
+
+            // 解析批量结算列表（用于关联下注记录和审计）
             $detail = json_decode($data['payoutdetails'], true);
             $betList = $detail['betlist'] ?? [];
 
-            $processedCount = 0;
-            $lastBalance = null;
+            // ✅ PlayerWin/PlayerLost 使用外层 amount 和 txnid 进行单次结算
+            if (!empty($txnId) && $payoutAmount > 0) {
+                // ✅ 检查 betlist 中的下注订单是否存在
+                if (!empty($betList)) {
+                    foreach ($betList as $betInfo) {
+                        // 优先检查 transferlist（捕鱼游戏等多人游戏）
+                        if (isset($betInfo['transferlist']) && is_array($betInfo['transferlist'])) {
+                            foreach ($betInfo['transferlist'] as $transfer) {
+                                $betOrderNo = (string)($transfer['txnid'] ?? '');
+                                if (empty($betOrderNo)) {
+                                    continue;
+                                }
+                                $betRecordKey = "game:record:bet:SP:{$betOrderNo}";
+                                if (!\support\Redis::exists($betRecordKey)) {
+                                    Log::channel('sp_server')->warning('SP结算失败：transferlist中的下注订单不存在', [
+                                        'settle_txnid' => $txnId,
+                                        'bet_txnid' => $betOrderNo
+                                    ]);
+                                    $currentBalance = WalletService::getBalance($player->id);
+                                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                                        'username' => $data['username'],
+                                        'currency' => $data['currency'],
+                                        'amount' => round((float)$currentBalance, 2),
+                                    ]);
+                                }
+                            }
+                        } else {
+                            // 普通游戏，检查 betlist 中的 txnid
+                            $betOrderNo = (string)($betInfo['txnid'] ?? '');
+                            if (empty($betOrderNo)) {
+                                continue;
+                            }
+                            $betRecordKey = "game:record:bet:SP:{$betOrderNo}";
+                            if (!\support\Redis::exists($betRecordKey)) {
+                                Log::channel('sp_server')->warning('SP结算失败：下注订单不存在', [
+                                    'settle_txnid' => $txnId,
+                                    'bet_txnid' => $betOrderNo
+                                ]);
+                                $currentBalance = WalletService::getBalance($player->id);
+                                return $this->error(self::API_CODE_GENERAL_ERROR, [
+                                    'username' => $data['username'],
+                                    'currency' => $data['currency'],
+                                    'amount' => round((float)$currentBalance, 2),
+                                ]);
+                            }
+                        }
+                    }
+                }
 
-            // 批量处理结算（每个订单一次 Lua 原子操作）
-            foreach ($betList as $betInfo) {
-                $orderNo = (string)($betInfo['txnid'] ?? '');
-                $resultAmount = max($betInfo['resultamount'], 0);
+                // 单次派彩处理（使用外层 txnid 作为结算订单号）
+                $orderNo = $txnId;
+                $resultAmount = $payoutAmount;
 
                 // Lua 原子结算
                 $luaParams = [
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $resultAmount,
-                    'diff' => $betInfo['resultamount'], // 保留原始值（可能为负）
+                    'diff' => $payoutAmount, // 使用外层 amount 作为 diff
                     'transaction_type' => TransactionType::SETTLE,
-                    'original_data' => $betInfo,
+                    'original_data' => $data, // 使用完整的请求数据
                 ];
 
                 // 参数验证
@@ -322,9 +432,9 @@ class SPGameController
                         'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
                         'amount' => $resultAmount,
-                        'diff' => $betInfo['resultamount'],
-                        'game_code' => $betInfo['gamecode'] ?? '',
-                        'original_data' => $betInfo,
+                        'diff' => $payoutAmount,
+                        'game_code' => $data['gamecode'] ?? '',
+                        'original_data' => $data,
                         'balance_before' => $result['old_balance'] ?? 0,
                         'balance_after' => $result['balance'],
                     ]);
@@ -336,29 +446,169 @@ class SPGameController
                         $result['old_balance'] ?? null
                     );
 
-                    $processedCount++;
-                    $lastBalance = $result['balance'];
-                } elseif ($result['error'] === 'duplicate_order') {
-                    Log::channel('sp_server')->info('SP结算订单重复（Lua检测）', ['order_no' => $orderNo]);
-                    // 重复订单也要更新余额
-                    if (isset($result['balance'])) {
+                    $finalBalance = $result['balance'];
+                } elseif ($result['error'] === 'duplicate_order' || $result['error'] === 'duplicate_settle') {
+                    // ✅ 重复派彩请求，返回错误码 1005
+                    Log::channel('sp_server')->warning('SP结算订单重复（Lua检测）', ['order_no' => $orderNo]);
+                    $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                } else {
+                    // 结算失败，返回当前余额
+                    $finalBalance = WalletService::getBalance($player->id);
+                }
+            } else {
+                // PlayerLost 或批量处理（使用 betlist）
+                $processedCount = 0;
+                $duplicateCount = 0;
+                $notFoundCount = 0;
+                $lastBalance = null;
+
+                // ✅ PlayerLost 场景：外层有 txnId 但没有 amount，需要检查 betlist
+                if (!empty($txnId) && empty($betList)) {
+                    // PlayerLost 但 betlist 为空，无法验证下注订单，返回错误
+                    Log::channel('sp_server')->warning('SP结算失败：PlayerLost场景但betlist为空', [
+                        'txnid' => $txnId
+                    ]);
+                    $currentBalance = WalletService::getBalance($player->id);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
+                foreach ($betList as $betInfo) {
+                    $orderNo = (string)($betInfo['txnid'] ?? '');
+                    $resultAmount = max($betInfo['resultamount'], 0);
+
+                    // ✅ 检查对应的 bet 订单是否存在
+                    // 优先检查 transferlist（捕鱼游戏等多人游戏）
+                    $hasValidBet = false;
+                    if (isset($betInfo['transferlist']) && is_array($betInfo['transferlist'])) {
+                        foreach ($betInfo['transferlist'] as $transfer) {
+                            $betOrderNo = (string)($transfer['txnid'] ?? '');
+                            if (empty($betOrderNo)) {
+                                continue;
+                            }
+                            $betRecordKey = "game:record:bet:SP:{$betOrderNo}";
+                            if (\support\Redis::exists($betRecordKey)) {
+                                $hasValidBet = true;
+                                break;
+                            }
+                        }
+                        if (!$hasValidBet) {
+                            Log::channel('sp_server')->warning('SP批量结算跳过：transferlist中的下注订单不存在', ['settle_order_no' => $orderNo]);
+                            $notFoundCount++;
+                            continue;
+                        }
+                    } else {
+                        // 普通游戏，检查 betlist 中的 txnid
+                        $betRecordKey = "game:record:bet:SP:{$orderNo}";
+                        if (!\support\Redis::exists($betRecordKey)) {
+                            Log::channel('sp_server')->warning('SP批量结算跳过：下注订单不存在', ['order_no' => $orderNo]);
+                            $notFoundCount++;
+                            continue;
+                        }
+                    }
+
+                    // Lua 原子结算
+                    $luaParams = [
+                        'order_no' => $orderNo,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $resultAmount,
+                        'diff' => $betInfo['resultamount'],
+                        'transaction_type' => TransactionType::SETTLE,
+                        'original_data' => $betInfo,
+                    ];
+
+                    // 参数验证
+                    validateLuaScriptParams($luaParams, [
+                        'order_no' => ['required', 'string'],
+                        'amount' => ['required', 'numeric'],
+                        'diff' => ['required', 'numeric'],
+                        'platform_id' => ['required', 'integer'],
+                        'transaction_type' => ['required', 'string'],
+                    ], 'atomicSettle');
+
+                    $result = RedisLuaScripts::atomicSettle($player->id, 'SP', $luaParams);
+
+                    // 审计日志
+                    logLuaScriptCall('settle', 'SP', $player->id, $luaParams);
+
+                    if ($result['ok'] === 1) {
+                        // 保存结算记录到 Redis
+                        \app\service\GameRecordCacheService::saveSettle('SP', [
+                            'order_no' => $orderNo,
+                            'player_id' => $player->id,
+                            'platform_id' => $this->service->platform->id,
+                            'amount' => $resultAmount,
+                            'diff' => $betInfo['resultamount'],
+                            'game_code' => $betInfo['gamecode'] ?? '',
+                            'original_data' => $betInfo,
+                            'balance_before' => $result['old_balance'] ?? 0,
+                            'balance_after' => $result['balance'],
+                        ]);
+
+                        // 结算成功后检查爆机
+                        WalletService::checkMachineCrashAfterTransaction(
+                            $player->id,
+                            $result['balance'],
+                            $result['old_balance'] ?? null
+                        );
+
+                        $processedCount++;
                         $lastBalance = $result['balance'];
+                    } elseif ($result['error'] === 'duplicate_order' || $result['error'] === 'duplicate_settle') {
+                        // 重复订单计数
+                        $duplicateCount++;
+                        Log::channel('sp_server')->warning('SP结算订单重复（Lua检测）', ['order_no' => $orderNo]);
+                        if (isset($result['balance'])) {
+                            $lastBalance = $result['balance'];
+                        }
                     }
                 }
+
+                // ✅ 检查是否所有订单都失败了（重复或不存在）
+                if ($processedCount === 0 && ($duplicateCount > 0 || $notFoundCount > 0)) {
+                    // 所有订单都失败了，返回错误
+                    $currentBalance = $lastBalance ?? WalletService::getBalance($player->id);
+                    Log::channel('sp_server')->warning('SP批量结算全部失败', [
+                        'total' => count($betList),
+                        'duplicates' => $duplicateCount,
+                        'not_found' => $notFoundCount,
+                    ]);
+                    return $this->error(self::API_CODE_GENERAL_ERROR, [
+                        'username' => $data['username'],
+                        'currency' => $data['currency'],
+                        'amount' => round((float)$currentBalance, 2),
+                    ]);
+                }
+
+                // 获取最终余额
+                $finalBalance = $lastBalance ?? WalletService::getBalance($player->id);
+
+                Log::channel('sp_server')->info('SP批量结算成功（Lua原子）', [
+                    'total' => count($betList),
+                    'processed' => $processedCount,
+                    'duplicates' => $duplicateCount,
+                    'not_found' => $notFoundCount,
+                ]);
             }
 
-            // 获取最终余额：优先使用Lua返回的余额，如果没有则从钱包服务获取
-            $finalBalance = $lastBalance ?? WalletService::getBalance($player->id);
-
             Log::channel('sp_server')->info('SP结算成功（Lua原子）', [
-                'total' => count($betList),
-                'processed' => $processedCount,
+                'txnid' => $txnId ?? 'batch',
+                'amount' => $payoutAmount,
+                'final_balance' => $finalBalance,
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'username' => $data['username'],
                 'currency' => $data['currency'],
-                'amount' => (float)$finalBalance,
+                'amount' => round((float)$finalBalance, 2),
             ]);
         } catch (Exception $e) {
             Log::error('SP betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -383,9 +633,17 @@ class SPGameController
             if (is_array($value)) {
                 $child = $xml->addChild($key);
                 foreach ($value as $k => $v) {
+                    // ✅ 格式化金额字段为2位小数
+                    if ($k === 'amount' && is_numeric($v)) {
+                        $v = number_format((float)$v, 2, '.', '');
+                    }
                     $child->addChild($k, htmlspecialchars($v));
                 }
             } else {
+                // ✅ 格式化金额字段为2位小数
+                if ($key === 'amount' && is_numeric($value)) {
+                    $value = number_format((float)$value, 2, '.', '');
+                }
                 $xml->addChild($key, htmlspecialchars($value));
             }
         }
@@ -416,9 +674,17 @@ class SPGameController
             if (is_array($value)) {
                 $child = $xml->addChild($key);
                 foreach ($value as $k => $v) {
+                    // ✅ 格式化金额字段为2位小数
+                    if ($k === 'amount' && is_numeric($v)) {
+                        $v = number_format((float)$v, 2, '.', '');
+                    }
                     $child->addChild($k, htmlspecialchars($v));
                 }
             } else {
+                // ✅ 格式化金额字段为2位小数
+                if ($key === 'amount' && is_numeric($value)) {
+                    $value = number_format((float)$value, 2, '.', '');
+                }
                 $xml->addChild($key, htmlspecialchars($value));
             }
         }
