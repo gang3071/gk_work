@@ -523,7 +523,7 @@ class MTServiceInterface extends GameServiceFactory implements GameServiceInterf
     public function getWebId()
     {
         //TODO 后期优化增加webid未注册的报错提示
-        return 'yjbtest31';
+        return $this->config['web_id'];
     }
 
 
