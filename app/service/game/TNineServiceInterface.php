@@ -130,8 +130,8 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
             'MemberAccount' => $this->player->uuid,
             'MemberPassword' => $this->player->uuid,
             'NickName' => $this->player->uuid,
-            'MiniBetLimit' => 1,
-            'MaxBetLimit' => 1000000,
+            'MiniBetLimit' => 100,
+            'MaxBetLimit' => 20000,
         ];
         $response = $this->doCurl('/api/create_account', $params);
         $this->log->info('createPlayer', [$response]);

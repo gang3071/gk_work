@@ -125,6 +125,13 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             'username' => $this->player->uuid,
         ]);
         if ($res['codeId'] != $this->successCode) {
+            Log::channel('dg_server')->error('getBalance失败', [
+                'player_id' => $this->player->id,
+                'player_uuid' => $this->player->uuid,
+                'response' => $res,
+                'error_code' => $res['codeId'],
+                'error_msg' => $this->failCode[$res['codeId']] ?? '未知错误'
+            ]);
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
@@ -195,6 +202,14 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
         ];
         $res = $this->doCurl($this->createUrl('createPlayer'), $params);
         if ($res['codeId'] != $this->successCode && $res['codeId'] != '116') {
+            Log::channel('dg_server')->error('createPlayer失败', [
+                'player_id' => $this->player->id,
+                'player_uuid' => $this->player->uuid,
+                'params' => $params,
+                'response' => $res,
+                'error_code' => $res['codeId'],
+                'error_msg' => $this->failCode[$res['codeId']] ?? '未知错误'
+            ]);
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
@@ -241,6 +256,13 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             ->withBody(json_encode($params), 'application/json')
             ->post($url);
         if (!$response->ok()) {
+            Log::channel('dg_server')->error('DG接口请求失败', [
+                'url' => $url,
+                'params' => $params,
+                'status_code' => $response->status(),
+                'response_body' => $response->body(),
+                'player_id' => $this->player->id ?? null,
+            ]);
             throw new GameException(trans('system_busy', [], 'message'));
         }
 
@@ -288,6 +310,14 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
         $res = $this->doCurl($this->createUrl('lobbyLogin'), $params);
         Log::channel('dg_server')->info('lobbyLogin_response', [$res]);
         if ($res['codeId'] != $this->successCode) {
+            Log::channel('dg_server')->error('lobbyLogin失败', [
+                'player_id' => $this->player->id,
+                'player_uuid' => $this->player->uuid,
+                'params' => $params,
+                'response' => $res,
+                'error_code' => $res['codeId'],
+                'error_msg' => $this->failCode[$res['codeId']] ?? '未知错误'
+            ]);
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
@@ -310,6 +340,15 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             'serial' => $data['order_no'] ?? '',
         ]);
         if ($res['codeId'] != $this->successCode) {
+            Log::channel('dg_server')->error('depositAmount失败', [
+                'player_id' => $this->player->id,
+                'player_uuid' => $this->player->uuid,
+                'amount' => $data['amount'],
+                'order_no' => $data['order_no'] ?? '',
+                'response' => $res,
+                'error_code' => $res['codeId'],
+                'error_msg' => $this->failCode[$res['codeId']] ?? '未知错误'
+            ]);
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
         Cache::set('depositAmount_' . $this->player->id, $this->platform->id, 3 * 24 * 60 * 60);
@@ -333,6 +372,15 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             'serial' => $data['order_no'] ?? '',
         ]);
         if ($res['codeId'] != $this->successCode) {
+            Log::channel('dg_server')->error('withdrawAmount失败', [
+                'player_id' => $this->player->id,
+                'player_uuid' => $this->player->uuid,
+                'amount' => $data['amount'],
+                'order_no' => $data['order_no'] ?? '',
+                'response' => $res,
+                'error_code' => $res['codeId'],
+                'error_msg' => $this->failCode[$res['codeId']] ?? '未知错误'
+            ]);
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
         Cache::set('withdrawAmount_' . $this->player->id, $this->platform->id, 3 * 24 * 60 * 60);
@@ -356,6 +404,12 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             'list' => $data,
         ]);
         if ($res['codeId'] != $this->successCode) {
+            Log::channel('dg_server')->error('markGameHistories失败', [
+                'data_count' => count($data),
+                'response' => $res,
+                'error_code' => $res['codeId'],
+                'error_msg' => $this->failCode[$res['codeId']] ?? '未知错误'
+            ]);
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
@@ -397,6 +451,13 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
                 }
             }
         } catch (Exception $e) {
+            Log::channel('dg_server')->error('handleGameHistories异常', [
+                'error_message' => $e->getMessage(),
+                'error_code' => $e->getCode(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]);
             return [];
         }
 
@@ -412,6 +473,11 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
     {
         $res = $this->doCurl($this->createUrl('getGameHistories'));
         if ($res['codeId'] != $this->successCode) {
+            Log::channel('dg_server')->error('getGameHistories失败', [
+                'response' => $res,
+                'error_code' => $res['codeId'],
+                'error_msg' => $this->failCode[$res['codeId']] ?? '未知错误'
+            ]);
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
@@ -446,14 +512,23 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
             ];
         }
 
-        Log::channel('dg_server')->info('lobbyLogin', ['params'=>$params]);
+        Log::channel('dg_server')->info('gameLogin', ['params'=>$params]);
 
         $res = $this->doCurl($this->createUrl('lobbyLogin'), $params);
         if ($res['codeId'] != $this->successCode) {
+            Log::channel('dg_server')->error('gameLogin失败', [
+                'player_id' => $this->player->id,
+                'player_uuid' => $this->player->uuid,
+                'game_code' => $game->game_extend->code,
+                'params' => $params,
+                'response' => $res,
+                'error_code' => $res['codeId'],
+                'error_msg' => $this->failCode[$res['codeId']] ?? '未知错误'
+            ]);
             throw new GameException($this->failCode[$res['codeId']] ?? '未知错误', 0);
         }
 
-        Log::channel('dg_server')->info('ss', [$res]);
+        Log::channel('dg_server')->info('gameLogin_response', [$res]);
         return $res['list'][1] . '&showapp=off' . '&isapp=1' . '&tableId=' . $game->game_extend->code;
     }
 
