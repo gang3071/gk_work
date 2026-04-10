@@ -996,7 +996,7 @@ class QTGameController
      * @param int $httpCode
      * @return Response
      */
-    private function errorResponse(string $code, string $message, int $httpCode = 400): Response
+    private function errorResponse(string $code, string $message, int $httpCode = 200): Response
     {
         $response = [
             'code' => $code,
