@@ -287,6 +287,8 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         } else {
             $response = $request->get($url . '?' . http_build_query($params));
         }
+
+        $this->log->info('test',['params'=>$params]);
         if (!$response->ok()) {
             $res = $response->json();
             if ($res['status'] == '400' && $res['message'] == 'user exists') {
