@@ -38,6 +38,7 @@ class O8GameController
     public const API_CODE_DATABASE_ERROR = 12;
     public const API_CODE_TRANSACTION_NOT_EXIST = 600;
     public const API_CODE_TRANSACTION_ALREADY_CANCELLED = 610;
+    public const API_CODE_WAGER_TOO_EXPENSIVE = 1006;
 
 
     // 2. 将状态码映射移到私有常量或属性
@@ -56,6 +57,7 @@ class O8GameController
         self::API_CODE_DATABASE_ERROR => '數據庫錯誤',
         self::API_CODE_TRANSACTION_NOT_EXIST => 'Transaction does not exist',
         self::API_CODE_TRANSACTION_ALREADY_CANCELLED => 'Transaction has already been cancelled',
+        self::API_CODE_WAGER_TOO_EXPENSIVE => 'Wager too expensive',
     ];
 
     /** 排除签名验证的接口 */
@@ -268,8 +270,21 @@ class O8GameController
                         ];
                         continue;
                     } elseif ($result['error'] === 'insufficient_balance') {
-                        return $this->error(self::API_CODE_AMOUNT_OVER_BALANCE);
+                        $this->logger->warning('O8下注失败：余额不足', [
+                            'order_no' => $orderNo,
+                            'bet_amount' => $bet,
+                            'balance' => $result['balance']
+                        ]);
+                        return $this->error(self::API_CODE_WAGER_TOO_EXPENSIVE);
                     }
+
+                    // ✅ 未知错误：记录日志并返回数据库错误
+                    $this->logger->error('O8下注失败：未知错误', [
+                        'order_no' => $orderNo,
+                        'error' => $result['error'],
+                        'result' => $result
+                    ]);
+                    return $this->error(self::API_CODE_DATABASE_ERROR);
                 }
 
                 // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
