@@ -259,16 +259,12 @@ class O8GameController
 
 
                 if ($result['ok'] === 0) {
-                    // 获取当前余额（用于错误响应）
-                    $currentBalance = $result['balance'] ?? \app\service\WalletService::getBalance($player->id);
-
                     if ($result['error'] === 'duplicate_order') {
                         $this->logger->info('O8下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                        // ✅ 重复订单不是错误：返回 dup: true
                         $return['transactions'][] = [
                             'txid' => $orderNo,
                             'ptxid' => $order['ptxid'],
-                            'bal' => round((float)$currentBalance, 2),
-                            'cur' => 'TWD',
                             'dup' => true
                         ];
                         continue;
@@ -278,22 +274,19 @@ class O8GameController
                         $this->logger->warning('O8下注失败：余额不足', [
                             'order_no' => $orderNo,
                             'bet_amount' => $bet,
-                            'balance' => $currentBalance
+                            'balance' => $result['balance']
                         ]);
-                        // ✅ 部分失败：在单个 transaction 中返回错误
+                        // ✅ 部分失败：在该 transaction 中返回 err（不包括 bal, cur, dup）
                         $return['transactions'][] = [
                             'txid' => $orderNo,
                             'ptxid' => $order['ptxid'],
-                            'bal' => round((float)$currentBalance, 2),
-                            'cur' => 'TWD',
-                            'dup' => false,
                             'err' => self::API_CODE_WAGER_TOO_EXPENSIVE,
                             'errdesc' => self::API_CODE_MAP[self::API_CODE_WAGER_TOO_EXPENSIVE]
                         ];
                         continue;
                     }
 
-                    // ✅ 未知错误：在单个 transaction 中返回错误
+                    // ✅ 未知错误：在该 transaction 中返回 err
                     $this->logger->error('O8下注失败：未知错误', [
                         'order_no' => $orderNo,
                         'error' => $result['error'],
@@ -302,9 +295,6 @@ class O8GameController
                     $return['transactions'][] = [
                         'txid' => $orderNo,
                         'ptxid' => $order['ptxid'],
-                        'bal' => round((float)$currentBalance, 2),
-                        'cur' => 'TWD',
-                        'dup' => false,
                         'err' => self::API_CODE_DATABASE_ERROR,
                         'errdesc' => self::API_CODE_MAP[self::API_CODE_DATABASE_ERROR]
                     ];
@@ -610,106 +600,6 @@ class O8GameController
     }
 
     /**
-     * 重新結算
-     * @param Request $request
-     * @return Response
-     */
-    public function reBetResult(Request $request): Response
-    {
-        try {
-            $params = $request->post();
-
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('rsg_live余额查询记录', ['params' => $data]);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-            $balance = $this->service->reBetResulet($data);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-            // 3. 使用常量获取状态码描述
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
-        } catch (Exception $e) {
-            Log::error('O8 reBetResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
-            $this->sendTelegramAlert('O8', '重新结算异常', $e, ['params' => $request->post()]);
-            return $this->error(self::API_CODE_DATABASE_ERROR);
-        }
-    }
-
-    /**
-     * 打鱼机预扣金额
-     * @param Request $request
-     * @return Response
-     */
-    public function refund(Request $request): Response
-    {
-        try {
-            $params = $request->post();
-
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('O8打鱼退款请求（Lua原子）', ['params' => $data]);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-
-            $player = $this->service->player;
-            $orderNo = (string)($data['externalroundid'] ?? $data['TxID'] ?? '');
-            $refundAmount = $data['amt'] ?? $data['Amount'] ?? 0;
-
-            // Lua 原子退款
-            $luaParams = [
-                'order_no' => $orderNo,
-                'platform_id' => $this->service->platform->id,
-                'refund_amount' => $refundAmount,
-                'transaction_type' => TransactionType::CANCEL_REFUND,
-                'original_data' => $data,
-            ];
-
-            // 参数验证
-            validateLuaScriptParams($luaParams, [
-                'order_no' => ['required', 'string'],
-                'refund_amount' => ['required', 'numeric', 'min:0'],
-                'platform_id' => ['required', 'integer'],
-                'transaction_type' => ['required', 'string'],
-            ], 'atomicCancel');
-
-            $result = RedisLuaScripts::atomicCancel($player->id, 'O8', $luaParams);
-
-            // 审计日志
-            logLuaScriptCall('cancel', 'O8', $player->id, $luaParams);
-
-            // 处理结果
-            if ($result['ok'] === 0 && $result['error'] === 'duplicate_cancel') {
-                $this->logger->info('O8退款重复请求（Lua检测）', ['order_no' => $orderNo]);
-            }
-
-            // 保存取消记录到 Redis
-            if ($result['ok'] === 1) {
-                \app\service\GameRecordCacheService::saveCancel('O8', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'refund_amount' => $refundAmount,
-                    'original_data' => $data,
-                    'balance_before' => $result['old_balance'] ?? 0,
-                    'balance_after' => $result['balance'],
-                ]);
-            }
-
-            $this->logger->info('O8退款成功（Lua原子）', ['order_no' => $orderNo]);
-
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => round((float)$result['balance'], 2)
-            ]);
-        } catch (Exception $e) {
-            Log::error('O8 refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
-            $this->sendTelegramAlert('O8', '退款异常', $e, ['params' => $request->post()]);
-            return $this->error(self::API_CODE_DATABASE_ERROR);
-        }
-    }
-
-    /**
      * UGS Cancel接口 - 取消失败的Debit操作
      * @param Request $request
      * @return Response
@@ -884,10 +774,9 @@ class O8GameController
      *
      * @param int $code 错误码
      * @param string|null $message 自定义错误信息
-     * @param int $httpCode HTTP状态码（默认200，符合O8规范）
      * @return Response
      */
-    public function error(int $code, ?string $message = null, int $httpCode = 200): Response
+    public function error(int $code, ?string $message = null): Response
     {
         $responseData = [
             'err' => $code,
@@ -900,7 +789,7 @@ class O8GameController
         ]);
 
         return (new Response(
-            $httpCode,
+            200,  // ✅ O8 规范：失败响应也返回 HTTP 200
             ['Content-Type' => 'application/json'],
             json_encode($responseData)
         ));
