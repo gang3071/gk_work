@@ -263,7 +263,7 @@ class GamePlatformProxyController
                 return $this->fail('游戏平台已禁用');
             }
 
-            $lang = $request->header('Accept-Language', 'zh-CN');
+            $lang = $request->header('Accept-Language', 'zh-TW');
             $lang = Str::replace('_', '-', $lang);
 
             // 记录进入游戏

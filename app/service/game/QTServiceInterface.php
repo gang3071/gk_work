@@ -194,6 +194,12 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                         'balance' => true,
                         'language' => true
                     ]
+                ],
+                'filters' => [
+                    'gameTypes'=>[
+                        'SLOT',
+                        'INSTANTWIN'
+                    ]
                 ]
             ];
 
