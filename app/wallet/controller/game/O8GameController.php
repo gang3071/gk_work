@@ -273,7 +273,7 @@ class O8GameController
                         $this->logger->warning('O8下注失败：余额不足', [
                             'order_no' => $orderNo,
                             'bet_amount' => $bet,
-                            'balance' => $result['balance']
+                            'balance' => $result['balance'],
                         ]);
                         return $this->error(self::API_CODE_WAGER_TOO_EXPENSIVE);
                     }
@@ -870,6 +870,10 @@ class O8GameController
             'err' => $code,
             'errdesc' => $message ?: (self::API_CODE_MAP[$code] ?? '未知错误'),
         ];
+
+        $this->logger->warning('O8下注失败：余额不足', [
+            'return' => json_encode($responseData),
+        ]);
 
         return (new Response(
             $httpCode,
