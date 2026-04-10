@@ -644,6 +644,20 @@ class SAGameController
             $amount = $data['amount'] ?? 0;
             $adjustmentType = $data['adjustmenttype'] ?? 0;
 
+            // ✅ 验证 adjustmenttype：只支持 1、2、3
+            if (!in_array($adjustmentType, [1, 2, 3], true)) {
+                Log::channel('sa_server')->warning('SA余额调整失败：未知的adjustmenttype', [
+                    'adjustmenttype' => $adjustmentType,
+                    'txnid' => $orderNo
+                ]);
+                $currentBalance = WalletService::getBalance($player->id);
+                return $this->error(self::API_CODE_MAINTENANCE, [  // 9999
+                    'username' => $data['username'],
+                    'currency' => $data['currency'],
+                    'amount' => round((float)$currentBalance, 2),
+                ]);
+            }
+
             // adjustmenttype: 1=奖励(加钱), 2=赠送奖赏(扣钱), 3=取消奖赏(退钱)
             if ($adjustmentType == 2) {
                 // 类型2: 赠送奖赏（扣款，玩家送礼物出去）
