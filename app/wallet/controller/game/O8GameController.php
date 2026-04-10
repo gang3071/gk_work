@@ -864,7 +864,7 @@ class O8GameController
      * @param int $httpCode HTTP状态码
      * @return Response
      */
-    public function error(string $code, ?string $message = null, array $data = [], int $httpCode = 400): Response
+    public function error(int $code, ?string $message = null, array $data = [], int $httpCode = 400): Response
     {
         $responseData = [
             'err' => $code,
