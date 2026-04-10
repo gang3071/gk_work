@@ -867,10 +867,8 @@ class O8GameController
     public function error(string $code, ?string $message = null, array $data = [], int $httpCode = 400): Response
     {
         $responseData = [
-            'msgId' => $code,
-            'message' => $message ?: (self::API_CODE_MAP[$code] ?? '未知错误'),
-            'timestamp' => time(),
-            'Data' => null,
+            'err' => $code,
+            'errdesc' => $message ?: (self::API_CODE_MAP[$code] ?? '未知错误'),
         ];
 
         return (new Response(
