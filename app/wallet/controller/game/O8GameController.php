@@ -858,13 +858,11 @@ class O8GameController
     /**
      * 失败响应方法
      *
-     * @param string $code 错误码
+     * @param int $code 错误码
      * @param string|null $message 自定义错误信息
-     * @param array $data 额外数据
-     * @param int $httpCode HTTP状态码
      * @return Response
      */
-    public function error(int $code, ?string $message = null, array $data = [], int $httpCode = 400): Response
+    public function error(int $code, ?string $message = null): Response
     {
         $responseData = [
             'err' => $code,
@@ -872,11 +870,11 @@ class O8GameController
         ];
 
         $this->logger->warning('O8下注失败：余额不足', [
-            'return' => json_encode($responseData),
+            'return' => $responseData,
         ]);
 
         return (new Response(
-            $httpCode,
+            200,
             ['Content-Type' => 'application/json'],
             json_encode($responseData)
         ));
