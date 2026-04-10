@@ -44,22 +44,22 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
     private $lang = [
         'zh-CN' => 'zh-TW',
         'zh-TW' => 'zh-TW',
-        'en' => 'en-US',
-        'th' => 'th-TH',
-        'vi' => 'vi-VN',
-        'jp' => 'ja-JP',
+        'en'    => 'en-US',
+        'th'    => 'th-TH',
+        'vi'    => 'vi-VN',
+        'jp'    => 'ja-JP',
         'kr_ko' => 'ko-KR',
-        'my' => 'en-MY',
-        'id' => 'id-ID',
+        'my'    => 'en-MY',
+        'id'    => 'id-ID',
     ];
     private $path = [
-        'createPlayer' => '/SingleWallet/Player/CreatePlayer',
-        'userLogout' => '/SingleWallet/Player/Kickout',
+        'createPlayer'     => '/SingleWallet/Player/CreatePlayer',
+        'userLogout'       => '/SingleWallet/Player/Kickout',
         'getGameHistories' => '/SingleWallet/History/GetGameDetail',
-        'lobbyLogin' => '/SingleWallet/Player/GetLobbyURLToken',
-        'getGameList' => '/SingleWallet/Game/GameList',
-        'gameLogin' => '/SingleWallet/Player/GetURLToken',
-        'replay' => '/SingleWallet/Player/GetSlotGameRecordURLToken',
+        'lobbyLogin'       => '/SingleWallet/Player/GetLobbyURLToken',
+        'getGameList'      => '/SingleWallet/Game/GameList',
+        'gameLogin'        => '/SingleWallet/Player/GetURLToken',
+        'replay'           => '/SingleWallet/Player/GetSlotGameRecordURLToken',
     ];
 
     private $currency = [
@@ -123,9 +123,9 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
     {
         $params = [
             'SystemCode' => $this->systemCode,
-            'WebId' => $this->getWebId(),
-            'UserId' => $this->player->uuid,
-            'Currency' => $this->currency[$this->player->currency],
+            'WebId'      => $this->getWebId(),
+            'UserId'     => $this->player->uuid,
+            'Currency'   => $this->currency[$this->player->currency],
         ];
         $res = $this->doCurl($this->createUrl('createPlayer'), $params);
         if ($res['ErrorCode'] != $this->successCode) {
@@ -155,8 +155,8 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         $timestamp = time();
         $response = Http::timeout(7)
             ->withHeaders([
-                'Content-Type' => 'application/x-www-form-urlencoded',
-                'X-API-ClientID' => $config['app_id'],
+                'Content-Type'    => 'application/x-www-form-urlencoded',
+                'X-API-ClientID'  => $config['app_id'],
                 'X-API-Signature' => md5($config['app_id'] . $config['app_secret'] . $timestamp . $reqBase64),
                 'X-API-Timestamp' => $timestamp
             ])
@@ -164,7 +164,13 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             ->post($url);
 
         if (!$response->ok()) {
-            Log::channel('rsg_server')->error($url, ['config' => $config, 'params' => $params, 'response' => $response->body()]);
+            Log::channel('rsg_server')->error($url, [
+                'config'   => $config,
+                'params'   => $params,
+                'response' => $response->body(),
+                'status'   => $response->status(),
+                'data'     => openssl_decrypt(base64_decode($response->body()), 'DES-CBC', $config['DesKey'], OPENSSL_RAW_DATA, $config['DesIV'])
+            ]);
             throw new GameException(trans('system_busy', [], 'message'));
         }
         $data = openssl_decrypt(base64_decode($response->body()), 'DES-CBC', $config['DesKey'], OPENSSL_RAW_DATA,
@@ -198,11 +204,11 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         $this->checkPlayer();
         $params = [
             'SystemCode' => $this->systemCode,
-            'WebId' => $this->getWebId(),
-            'UserId' => $this->player->uuid,
-            'UserName' => $this->player->uuid,
-            'Currency' => $this->currency[$this->player->currency],
-            'Language' => $this->lang[$data['lang']],
+            'WebId'      => $this->getWebId(),
+            'UserId'     => $this->player->uuid,
+            'UserName'   => $this->player->uuid,
+            'Currency'   => $this->currency[$this->player->currency],
+            'Language'   => $this->lang[$data['lang']],
         ];
         $res = $this->doCurl($this->createUrl('lobbyLogin'), $params);
         $this->log->info('lobbyLogin', ['params' => $params, $res]);
@@ -243,10 +249,10 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
     {
         $params = [
             'SystemCode' => $this->systemCode,
-            'WebId' => $this->getWebId(),
-            'GameType' => $gameType,
-            'TimeStart' => date('Y-m-d H:i', strtotime('-7 minutes')),
-            'TimeEnd' => date('Y-m-d H:i', strtotime('-3 minutes')),
+            'WebId'      => $this->getWebId(),
+            'GameType'   => $gameType,
+            'TimeStart'  => date('Y-m-d H:i', strtotime('-7 minutes')),
+            'TimeEnd'    => date('Y-m-d H:i', strtotime('-3 minutes')),
         ];
         $res = $this->doCurl($this->createUrl('getGameHistories'), $params);
         $this->log->info('getGameHistories', [$res]);
@@ -269,19 +275,19 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             $player = Player::withTrashed()->with('recommend_promoter')->where('uuid', $item['UserId'])->first();
             if (!empty($player)) {
                 $list[] = [
-                    'player_id' => $player->id,
-                    'parent_player_id' => $player->recommend_id ?? 0,
-                    'agent_player_id' => $player->recommend_promoter->recommend_id ?? 0,
-                    'player_uuid' => $player->uuid,
-                    'platform_id' => $this->platform->id,
-                    'game_code' => $item['GameId'],
-                    'department_id' => $player->department_id,
-                    'bet' => $item['BetAmt'],
-                    'win' => $item['WinAmt'],
-                    'diff' => ($item['WinAmt']) - ($item['BetAmt']),
-                    'reward' => $item['JackpotContribution'],
-                    'order_no' => $item['SequenNumber'],
-                    'original_data' => json_encode($item),
+                    'player_id'          => $player->id,
+                    'parent_player_id'   => $player->recommend_id ?? 0,
+                    'agent_player_id'    => $player->recommend_promoter->recommend_id ?? 0,
+                    'player_uuid'        => $player->uuid,
+                    'platform_id'        => $this->platform->id,
+                    'game_code'          => $item['GameId'],
+                    'department_id'      => $player->department_id,
+                    'bet'                => $item['BetAmt'],
+                    'win'                => $item['WinAmt'],
+                    'diff'               => ($item['WinAmt']) - ($item['BetAmt']),
+                    'reward'             => $item['JackpotContribution'],
+                    'order_no'           => $item['SequenNumber'],
+                    'original_data'      => json_encode($item),
                     'platform_action_at' => $item['PlayTime'],
                 ];
             }
@@ -310,14 +316,14 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         if (!empty($res['Data']['GameList'])) {
             foreach ($res['Data']['GameList'] as $item) {
                 $insertData[] = [
-                    'game_id' => $item['GameId'],
+                    'game_id'     => $item['GameId'],
                     'platform_id' => $this->platform->id,
-                    'cate_id' => 7,
-                    'name' => $item['GameName'][$langKey],
-                    'code' => $item['GameId'],
-                    'logo' => $item['GamePicUrl'],
-                    'status' => $item['GameStatus'] == 2 ? 0 : 1,
-                    'org_data' => json_encode($item),
+                    'cate_id'     => 7,
+                    'name'        => $item['GameName'][$langKey],
+                    'code'        => $item['GameId'],
+                    'logo'        => $item['GamePicUrl'],
+                    'status'      => $item['GameStatus'] == 2 ? 0 : 1,
+                    'org_data'    => json_encode($item),
                 ];
             }
         }
@@ -370,12 +376,12 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         $this->checkPlayer();
         $params = [
             'SystemCode' => $this->systemCode,
-            'WebId' => $this->getWebId(),
-            'UserId' => $this->player->uuid,
-            'UserName' => $this->player->uuid,
-            'GameId' => (int)$game->game_extend->code,
-            'Currency' => $this->currency[$this->player->currency],
-            'Language' => $this->lang[$lang],
+            'WebId'      => $this->getWebId(),
+            'UserId'     => $this->player->uuid,
+            'UserName'   => $this->player->uuid,
+            'GameId'     => (int)$game->game_extend->code,
+            'Currency'   => $this->currency[$this->player->currency],
+            'Language'   => $this->lang[$lang],
             'ExitAction' => '',
         ];
 
@@ -384,9 +390,9 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         if ($limitConfig) {
             $params = array_merge($params, $limitConfig);
             $this->log->info('RSG应用限红配置', [
-                'player_id' => $this->player->id,
+                'player_id'      => $this->player->id,
                 'store_admin_id' => $this->player->store_admin_id,
-                'limit_config' => $limitConfig
+                'limit_config'   => $limitConfig
             ]);
         }
 
@@ -419,15 +425,15 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
     {
         $origin = json_decode($data['original_data'], true);
         $params = [
-            'SystemCode' => $this->systemCode,
-            'WebId' => $origin['WebId'],
-            'UserId' => $origin['UserId'],
-            'Currency' => $origin['Currency'],
-            'GameId' => $origin['GameId'],
+            'SystemCode'   => $this->systemCode,
+            'WebId'        => $origin['WebId'],
+            'UserId'       => $origin['UserId'],
+            'Currency'     => $origin['Currency'],
+            'GameId'       => $origin['GameId'],
             'SequenNumber' => $origin['SequenNumber'],
-            'Language' => 'zh-TW',
+            'Language'     => 'zh-TW',
         ];
-        $this->log->info('replay',$params);
+        $this->log->info('replay', $params);
         $res = $this->doCurl($this->createUrl('replay'), $params);
         $this->log->info('replay', [$res]);
         if ($res['ErrorCode'] != $this->successCode) {
@@ -506,19 +512,15 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     /**
      * 送礼
-     * @deprecated RSG 平台不支持送礼功能
      * @param $data
      * @return mixed
+     * @deprecated RSG 平台不支持送礼功能
      */
     public function gift($data): mixed
     {
         // RSG 平台不支持送礼功能
         throw new \RuntimeException('RSG 平台不支持 gift() 功能');
     }
-
-
-
-
 
 
     /**
@@ -537,15 +539,15 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
         $originData = json_decode($data['OriginData'], true);
 
         return [
-            'TransactionId' => $data['TransactionId'],
+            'TransactionId'   => $data['TransactionId'],
             'TransactionTime' => Carbon::now()->toDateTimeString(),
-            'WebId' => $originData['WebId'],
-            'UserId' => $originData['UserId'],
-            'GameId' => $originData['GameId'],
-            'Currency' => $originData['Currency'],
-            'Action' => $record->type == PlayGameRecord::TYPE_PREPAY ? 1 : 2,
-            'Amount' => $originData['Amount'],
-            'AfterBalance' => $data['AfterBalance'] ?? 0,
+            'WebId'           => $originData['WebId'],
+            'UserId'          => $originData['UserId'],
+            'GameId'          => $originData['GameId'],
+            'Currency'        => $originData['Currency'],
+            'Action'          => $record->type == PlayGameRecord::TYPE_PREPAY ? 1 : 2,
+            'Amount'          => $originData['Amount'],
+            'AfterBalance'    => $data['AfterBalance'] ?? 0,
         ];
     }
 
