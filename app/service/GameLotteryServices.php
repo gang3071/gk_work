@@ -52,6 +52,10 @@ class GameLotteryServices
     const BURST_DURATION_BUFFER = 3;          // 爆彩缓冲时间（分钟），用于Redis自动过期的兜底机制
     const MAX_PARTICIPATE_TIMES = 100;        // 最大参与派彩次数（性能优化：防止大额下注导致循环过多）
 
+    // 冷却期配置
+    const COOLDOWN_DURATION = 1800;           // 冷却期时长（秒），30分钟
+    const REDIS_KEY_LOTTERY_COOLDOWN = 'game_lottery_cooldown:';  // 彩金冷却期键
+
     /**
      * Lua 脚本：批量累积多个彩金池（性能优化）
      *
@@ -580,6 +584,18 @@ LUA;
         int         $playGameRecordId
     ): void
     {
+        // 冷却期检查：该彩金中奖后半小时内不再触发中奖
+        if ($this->isInCooldown($lottery->id)) {
+            $remainingTime = $this->getCooldownRemainingTime($lottery->id);
+            $this->log->info('彩金在冷却期内，跳过中奖检查', [
+                'lottery_id' => $lottery->id,
+                'lottery_name' => $lottery->name,
+                'remaining_seconds' => $remainingTime,
+                'remaining_minutes' => round($remainingTime / 60, 1),
+            ]);
+            return;
+        }
+
         // 应用爆彩概率倍数到中奖检查
         $adjustedWinRatio = bcmul($lottery->win_ratio, $burstInfo['multiplier'], 8);
 
@@ -799,7 +815,7 @@ LUA;
      * @param int $attemptIndex
      * @param int $totalAttempts
      * @param bool $isDoubled
-     * @return void
+     * @return bool 派发成功返回 true，失败返回 false
      * @throws Exception
      * @throws PushException
      */
@@ -813,13 +829,13 @@ LUA;
         int         $attemptIndex,
         int         $totalAttempts,
         bool        $isDoubled = false
-    ): void
+    ): bool
     {
         // 增加业务锁
         $actionLockerKey = 'game_lottery_pool_random_locker_' . $lottery->id;
         $lock = Locker::lock($actionLockerKey, 2, true);
         if (!$lock->acquire()) {
-            return;
+            return false;
         }
 
         DB::beginTransaction();
@@ -840,7 +856,7 @@ LUA;
             $lottery->refresh();
             if ($lottery->amount < $amount) {
                 DB::rollback();
-                return;
+                return false;
             }
 
             // 创建派彩记录
@@ -864,7 +880,7 @@ LUA;
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
             if (!$machineWallet) {
                 DB::rollback();
-                return;
+                return false;
             }
             $machineWallet->money = $newBalance;
             $machineWallet->saveWithoutEvents();
@@ -913,6 +929,9 @@ LUA;
 
             DB::commit();
 
+            // 设置冷却期：中奖后30分钟内不再触发中奖
+            $this->setCooldown($lottery->id);
+
             // 清除彩金缓存（事务提交后）
             self::clearLotteryPoolCache();
             self::clearLotteryListCache();
@@ -923,7 +942,7 @@ LUA;
             // 发送派彩和通知消息
             $this->sendWinningMessages($playerLotteryRecord, $lottery, $notice, $burstInfo, $isDoubled);
 
-            return;
+            return true;
         } catch (\Exception $e) {
             DB::rollback();
             $this->log->error('派发彩金失败', [
@@ -932,7 +951,7 @@ LUA;
                 'player_id' => $this->player->id,
                 'trace' => $e->getTraceAsString(),
             ]);
-            return;
+            return false;
         }
     }
 
@@ -1716,6 +1735,74 @@ LUA;
         }
 
         return $result;
+    }
+
+    /**
+     * 检查彩金是否在冷却期内
+     * @param int $lotteryId
+     * @return bool
+     */
+    private function isInCooldown(int $lotteryId): bool
+    {
+        try {
+            $redis = \support\Redis::connection()->client();
+            $key = self::REDIS_KEY_LOTTERY_COOLDOWN . $lotteryId;
+            return $redis->exists($key) > 0;
+        } catch (\Exception $e) {
+            $this->log->error('检查彩金冷却期失败', [
+                'lottery_id' => $lotteryId,
+                'error' => $e->getMessage(),
+            ]);
+            // 出错时保守处理，不阻止中奖检查
+            return false;
+        }
+    }
+
+    /**
+     * 获取彩金剩余冷却时间（秒）
+     * @param int $lotteryId
+     * @return int
+     */
+    private function getCooldownRemainingTime(int $lotteryId): int
+    {
+        try {
+            $redis = \support\Redis::connection()->client();
+            $key = self::REDIS_KEY_LOTTERY_COOLDOWN . $lotteryId;
+            $ttl = $redis->ttl($key);
+            return $ttl > 0 ? $ttl : 0;
+        } catch (\Exception $e) {
+            $this->log->error('获取彩金冷却期剩余时间失败', [
+                'lottery_id' => $lotteryId,
+                'error' => $e->getMessage(),
+            ]);
+            return 0;
+        }
+    }
+
+    /**
+     * 设置彩金冷却期（中奖后30分钟内不再触发中奖）
+     * @param int $lotteryId
+     * @return void
+     */
+    private function setCooldown(int $lotteryId): void
+    {
+        try {
+            $redis = \support\Redis::connection()->client();
+            $key = self::REDIS_KEY_LOTTERY_COOLDOWN . $lotteryId;
+            $redis->setex($key, self::COOLDOWN_DURATION, time());
+
+            $this->log->info('设置彩金冷却期', [
+                'lottery_id' => $lotteryId,
+                'duration_seconds' => self::COOLDOWN_DURATION,
+                'duration_minutes' => self::COOLDOWN_DURATION / 60,
+                'cooldown_until' => date('Y-m-d H:i:s', time() + self::COOLDOWN_DURATION),
+            ]);
+        } catch (\Exception $e) {
+            $this->log->error('设置彩金冷却期失败', [
+                'lottery_id' => $lotteryId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
 }
