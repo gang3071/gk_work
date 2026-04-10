@@ -259,32 +259,56 @@ class O8GameController
 
 
                 if ($result['ok'] === 0) {
+                    // 获取当前余额（用于错误响应）
+                    $currentBalance = $result['balance'] ?? \app\service\WalletService::getBalance($player->id);
+
                     if ($result['error'] === 'duplicate_order') {
                         $this->logger->info('O8下注重复请求（Lua检测）', ['order_no' => $orderNo]);
                         $return['transactions'][] = [
                             'txid' => $orderNo,
                             'ptxid' => $order['ptxid'],
-                            'bal' => round((float)$result['balance'], 2),
+                            'bal' => round((float)$currentBalance, 2),
                             'cur' => 'TWD',
                             'dup' => true
                         ];
                         continue;
-                    } elseif ($result['error'] === 'insufficient_balance') {
+                    }
+
+                    if ($result['error'] === 'insufficient_balance') {
                         $this->logger->warning('O8下注失败：余额不足', [
                             'order_no' => $orderNo,
                             'bet_amount' => $bet,
-                            'balance' => $result['balance'],
+                            'balance' => $currentBalance
                         ]);
-                        return $this->error(self::API_CODE_WAGER_TOO_EXPENSIVE);
+                        // ✅ 部分失败：在单个 transaction 中返回错误
+                        $return['transactions'][] = [
+                            'txid' => $orderNo,
+                            'ptxid' => $order['ptxid'],
+                            'bal' => round((float)$currentBalance, 2),
+                            'cur' => 'TWD',
+                            'dup' => false,
+                            'err' => self::API_CODE_WAGER_TOO_EXPENSIVE,
+                            'errdesc' => self::API_CODE_MAP[self::API_CODE_WAGER_TOO_EXPENSIVE]
+                        ];
+                        continue;
                     }
 
-                    // ✅ 未知错误：记录日志并返回数据库错误
+                    // ✅ 未知错误：在单个 transaction 中返回错误
                     $this->logger->error('O8下注失败：未知错误', [
                         'order_no' => $orderNo,
                         'error' => $result['error'],
                         'result' => $result
                     ]);
-                    return $this->error(self::API_CODE_DATABASE_ERROR);
+                    $return['transactions'][] = [
+                        'txid' => $orderNo,
+                        'ptxid' => $order['ptxid'],
+                        'bal' => round((float)$currentBalance, 2),
+                        'cur' => 'TWD',
+                        'dup' => false,
+                        'err' => self::API_CODE_DATABASE_ERROR,
+                        'errdesc' => self::API_CODE_MAP[self::API_CODE_DATABASE_ERROR]
+                    ];
+                    continue;
                 }
 
                 // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
@@ -856,25 +880,27 @@ class O8GameController
     }
 
     /**
-     * 失败响应方法
+     * 失败响应方法（整个操作失败时使用）
      *
      * @param int $code 错误码
      * @param string|null $message 自定义错误信息
+     * @param int $httpCode HTTP状态码（默认200，符合O8规范）
      * @return Response
      */
-    public function error(int $code, ?string $message = null): Response
+    public function error(int $code, ?string $message = null, int $httpCode = 200): Response
     {
         $responseData = [
             'err' => $code,
             'errdesc' => $message ?: (self::API_CODE_MAP[$code] ?? '未知错误'),
         ];
 
-        $this->logger->warning('O8下注失败：余额不足', [
-            'return' => $responseData,
+        $this->logger->error('O8操作失败', [
+            'error_code' => $code,
+            'error_message' => $responseData['errdesc'],
         ]);
 
         return (new Response(
-            200,
+            $httpCode,
             ['Content-Type' => 'application/json'],
             json_encode($responseData)
         ));
