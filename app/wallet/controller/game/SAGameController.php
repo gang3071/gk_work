@@ -396,7 +396,7 @@ class SAGameController
                 }
 
                 // ✅ 单次派彩处理：使用 betlist 里的下注订单号，这样可以关联更新 bet 记录
-                $orderNo = $betOrderNo ?? $txnId;  // 优先使用 betlist 的 txnid
+                $orderNo = (string)($betOrderNo ?? $txnId);  // 优先使用 betlist 的 txnid，强制转换为字符串
                 $resultAmount = $payoutAmount;
 
                 // Lua 原子结算
@@ -500,6 +500,9 @@ class SAGameController
 
                 // ✅ 对每个唯一的 txnid 进行一次结算
                 foreach ($groupedByTxnId as $orderNo => $group) {
+                    // ✅ 强制转换为字符串（PHP 会将纯数字字符串键自动转为 int）
+                    $orderNo = (string)$orderNo;
+
                     // ✅ 派彩金额 = 总本金 + 总净输赢
                     $totalPayout = $group['total_betamount'] + $group['total_resultamount'];
                     $totalDiff = $group['total_resultamount'];

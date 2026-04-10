@@ -38,7 +38,7 @@ class O8GameController
     public const API_CODE_DATABASE_ERROR = 12;
     public const API_CODE_TRANSACTION_NOT_EXIST = 600;
     public const API_CODE_TRANSACTION_ALREADY_CANCELLED = 610;
-    public const API_CODE_WAGER_TOO_EXPENSIVE = 1006;
+    public const API_CODE_WAGER_TOO_EXPENSIVE = 100;
 
 
     // 2. 将状态码映射移到私有常量或属性
@@ -57,7 +57,7 @@ class O8GameController
         self::API_CODE_DATABASE_ERROR => '數據庫錯誤',
         self::API_CODE_TRANSACTION_NOT_EXIST => 'Transaction does not exist',
         self::API_CODE_TRANSACTION_ALREADY_CANCELLED => 'Transaction has already been cancelled',
-        self::API_CODE_WAGER_TOO_EXPENSIVE => 'Wager too expensive',
+        self::API_CODE_WAGER_TOO_EXPENSIVE => 'Insufficient funds to perform the operation',
     ];
 
     /** 排除签名验证的接口 */
@@ -277,13 +277,7 @@ class O8GameController
                             'balance' => $result['balance']
                         ]);
                         // ✅ 部分失败：在该 transaction 中返回 err（不包括 bal, cur, dup）
-                        $return['transactions'][] = [
-                            'txid' => $orderNo,
-                            'ptxid' => $order['ptxid'],
-                            'err' => self::API_CODE_WAGER_TOO_EXPENSIVE,
-                            'errdesc' => self::API_CODE_MAP[self::API_CODE_WAGER_TOO_EXPENSIVE]
-                        ];
-                        continue;
+                        return $this->error(self::API_CODE_WAGER_TOO_EXPENSIVE);
                     }
 
                     // ✅ 未知错误：在该 transaction 中返回 err
