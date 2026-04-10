@@ -642,7 +642,7 @@ class SAGameController
             $player = $this->service->player;
             $orderNo = (string)($data['txnid'] ?? '');
             $amount = $data['amount'] ?? 0;
-            $adjustmentType = $data['adjustmenttype'] ?? 0;
+            $adjustmentType = (int)($data['adjustmenttype'] ?? 0);  // ✅ 转换为整数
 
             // ✅ 验证 adjustmenttype：只支持 1、2、3
             if (!in_array($adjustmentType, [1, 2, 3], true)) {
