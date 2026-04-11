@@ -4,7 +4,7 @@ name: Work
 on:
   push:
     branches:
-      - main
+      - super9-main
       # 如果你的后台项目是 master，就把上面那行改成 - master
 
 jobs:
