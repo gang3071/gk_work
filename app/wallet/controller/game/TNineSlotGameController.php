@@ -127,88 +127,27 @@ class TNineSlotGameController
             $this->service->player = Player::query()->where('uuid', $userId)->first();
             $player = $this->service->player;
 
-            $orderNo = (string)($params['gameOrderNumber'] ?? '');
-            $betKind = $params['betKind'] ?? 0;
+            // ✅ 使用 transactionId 作为唯一订单号（而不是 gameOrderNumber）
+            // gameOrderNumber 是主订单号，多个子订单共享
+            // transactionId 才是唯一识别（如 177591489311845257117010_1, _2）
+            $orderNo = (string)($params['transactionId'] ?? '');
+            $gameOrderNumber = (string)($params['gameOrderNumber'] ?? '');
             $betAmount = $params['betAmount'] ?? 0;
-            $winAmount = $params['winlose'] ?? $params['payoutAmount'] ?? 0;
 
-            // betKind == 3：免费游戏，只结算不扣款（Lua 原子操作）
-            if ($betKind == 3) {
-                // Lua 原子结算（免费游戏）
-                $luaParams = [
-                    'order_no' => $orderNo,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => max($winAmount, 0),
-                    'diff' => $winAmount,
-                    'transaction_type' => TransactionType::SETTLE_FREEGAME,
-                    'original_data' => $params,
-                ];
-
-                // 参数验证
-                validateLuaScriptParams($luaParams, [
-                    'order_no' => ['required', 'string'],
-                    'amount' => ['required', 'numeric'],
-                    'diff' => ['required', 'numeric'],
-                    'platform_id' => ['required', 'integer'],
-                    'transaction_type' => ['required', 'string'],
-                ], 'atomicSettle');
-
-                $result = RedisLuaScripts::atomicSettle($player->id, 'T9SLOT', $luaParams);
-
-                // 审计日志
-                logLuaScriptCall('settle', 'T9SLOT', $player->id, $luaParams);
-
-                // 保存结算记录到 Redis（免费游戏）
-                if ($result['ok'] === 1) {
-                    \app\service\GameRecordCacheService::saveSettle('T9SLOT', [
-                        'order_no' => $orderNo,
-                        'player_id' => $player->id,
-                        'platform_id' => $this->service->platform->id,
-                        'amount' => max($winAmount, 0),
-                        'diff' => $winAmount,
-                        'game_code' => $this->extractGameCode($params),
-                        'original_data' => $params,
-                        'balance_before' => $result['old_balance'] ?? 0,
-                        'balance_after' => $result['balance'],
-                    ]);
-
-                    // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
-                    WalletService::checkMachineCrashAfterTransaction(
-                        $player->id,
-                        $result['balance'],
-                        $result['old_balance'] ?? null
-                    );
-                }
-
-                // 游戏交互日志
-                logGameInteraction('T9SLOT', 'settle', $params, [
-                    'ok' => $result['ok'],
-                    'balance' => $result['balance'],
-                    'order_no' => $orderNo,
-                    'win_amount' => $winAmount,
-                ]);
-
-                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
-                    $this->logger->info('TNineSlot免费游戏重复请求（Lua检测）', ['order_no' => $orderNo]);
-                }
-
-                $afterBalance = $result['balance'];
-                $beforeBalance = $afterBalance - $winAmount;
-
-                $this->logger->info('t9电子免费游戏成功（Lua原子）', ['order_no' => $orderNo]);
-
-                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                    'afterBalance' => (float)$afterBalance,
-                    'beforeBalance' => (float)$beforeBalance,
-                ]);
-            }
+            // T9 字段说明：
+            // - betAmount: 投注金额
+            // - winlose: 输赢金额 (win - bet，负数=输，正数=赢)
+            // - actualWin: 实际赢的金额 = betAmount + winlose
+            $winLose = $params['winlose'] ?? 0;
+            $actualWinAmount = bcadd($betAmount, $winLose, 2);  // 实际 win = bet + winlose
 
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
                 return $this->error($this->service->error);
             }
 
-            // 普通下注：Lua 原子下注（扣款）
+            // ========== 统一的下注流程 ==========
+            // betAmount 可能是 0（子订单/免费游戏）或 >0（主订单）
             $luaParams = [
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
@@ -242,6 +181,7 @@ class TNineSlotGameController
                     'original_data' => $params,
                     'balance_before' => $betResult['old_balance'] ?? 0,
                     'balance_after' => $betResult['balance'],
+                    'game_order_number' => $gameOrderNumber,
                 ]);
             }
 
@@ -269,11 +209,15 @@ class TNineSlotGameController
 
             // T9Slot 总是下注后立即结算（Lua 原子操作）
             // 使用相同订单号，通过 transaction_type 区分 bet 和 settle
+            // amount: 实际 win 金额（用于变更余额 balance += amount）
+            // diff: 净盈亏（win - bet，用于记录）
+            $diff = bcsub($actualWinAmount, $betAmount, 2);  // win - bet
+
             $settleLuaParams = [
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
-                'amount' => max($winAmount, 0),
-                'diff' => $winAmount,
+                'amount' => max($actualWinAmount, 0),  // 实际 win 金额
+                'diff' => $diff,  // 净盈亏 (win - bet)
                 'transaction_type' => TransactionType::SETTLE,
                 'original_data' => $params,
             ];
@@ -298,12 +242,13 @@ class TNineSlotGameController
                     'order_no' => $orderNo,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
-                    'amount' => max($winAmount, 0),
-                    'diff' => $winAmount,
+                    'amount' => max($actualWinAmount, 0),  // 实际 win 金额
+                    'diff' => $diff,  // 净盈亏 (win - bet)
                     'game_code' => $this->extractGameCode($params),
                     'original_data' => $params,
                     'balance_before' => $settleResult['old_balance'] ?? 0,
                     'balance_after' => $settleResult['balance'],
+                    'game_order_number' => $gameOrderNumber,  // 记录主订单号
                 ]);
 
                 // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
@@ -324,10 +269,19 @@ class TNineSlotGameController
                 'ok' => $settleResult['ok'],
                 'balance' => $settleResult['balance'],
                 'order_no' => $orderNo,
-                'win_amount' => $winAmount,
+                'actual_win_amount' => $actualWinAmount,
+                'diff' => $diff,
             ]);
 
-            $this->logger->info('t9电子下注成功（Lua原子）', ['order_no' => $orderNo]);
+            $this->logger->info('t9电子下注成功（Lua原子）', [
+                'order_no' => $orderNo,
+                'game_order_number' => $gameOrderNumber,
+                'transaction_id' => $params['transactionId'] ?? '',
+                'bet_amount' => $betAmount,
+                'actual_win_amount' => $actualWinAmount,
+                'diff' => $diff,
+                'winlose' => $winLose,
+            ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'afterBalance' => (float)$afterBalance,
