@@ -114,7 +114,7 @@ class RsgGameController
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG下注请求（Lua原子）', ['data' => $data ?? '']);
+            $this->logger->info('RSG下注请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -138,6 +138,20 @@ class RsgGameController
             }
 
             $orderNo = (string)$data['SequenNumber'];
+            $belongOrderNo = (string)($data['BelongSequenNumber'] ?? $orderNo);
+            $isSubOrder = ($orderNo !== $belongOrderNo);  // 是否子订单
+
+            // ✅ 子订单识别：子订单不扣款（Amount = 0），从主订单扣款
+            $betAmount = $isSubOrder ? 0 : ($data['Amount'] ?? 0);
+
+            // ✅ 验证 Amount（主订单必须 > 0，子订单允许 = 0）
+            if (!$isSubOrder && (!isset($data['Amount']) || $data['Amount'] <= 0)) {
+                $this->logger->error('RSG下注失败：Amount无效', [
+                    'amount' => $data['Amount'] ?? null,
+                    'order_no' => $orderNo,
+                ]);
+                return $this->error(self::API_CODE_INVALID_PARAM, 'Invalid Amount');
+            }
 
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
@@ -148,12 +162,14 @@ class RsgGameController
             $luaParams = [
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
-                'amount' => $data['Amount'],
+                'amount' => $betAmount,  // ✅ 子订单传 0，主订单传实际金额
                 'game_code' => $data['GameId'] ?? '',
                 // ✅ 修复：使用 SubGameType（文档字段名）
                 'game_type' => $data['SubGameType'] ?? $data['GameType'] ?? '',
                 'transaction_type' => TransactionType::BET,
                 'original_data' => $data,
+                'belong_order_no' => $belongOrderNo,  // 记录主订单号（用于查询关联）
+                'is_sub_order' => $isSubOrder,  // 标记是否子订单
             ];
 
             // 参数验证
@@ -216,9 +232,12 @@ class RsgGameController
             $this->logger->info('RSG下注成功（Lua原子）', [
                 'username' => $data['UserId'],
                 'order_no' => $orderNo,
+                'belong_order_no' => $belongOrderNo,
+                'is_sub_order' => $isSubOrder,
                 'balance_before' => $result['old_balance'] ?? 0,  // ✅ 防御性访问
                 'balance_after' => $result['balance'],
-                'amount' => $data['Amount'],
+                'amount' => $betAmount,  // ✅ 使用实际扣款金额（子订单 = 0）
+                'original_amount' => $data['Amount'],  // 原始 Amount 字段
             ]);
 
             // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
@@ -227,7 +246,7 @@ class RsgGameController
                     'order_no' => $orderNo,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
-                    'amount' => $data['Amount'],
+                    'amount' => $betAmount,  // ✅ 使用实际扣款金额（子订单 = 0）
                     'game_code' => $data['GameId'] ?? '',
                     // ✅ 修复：使用 SubGameType（与 Lua 参数保持一致）
                     'game_type' => $data['SubGameType'] ?? $data['GameType'] ?? '',
@@ -235,6 +254,8 @@ class RsgGameController
                     // ✅ 传入余额数据供 Worker 推送
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
+                    'belong_order_no' => $belongOrderNo,  // 记录主订单号
+                    'is_sub_order' => $isSubOrder,  // 标记是否子订单
                 ]);
             }
 
@@ -277,13 +298,17 @@ class RsgGameController
             }
 
             $orderNo = (string)($data['SequenNumber'] ?? '');
-            $refundAmount = $data['BetAmount'] ?? 0;
+
+            // ✅ 从 Redis 读取实际的下注金额（子订单实际 bet = 0，应退 0）
+            $redisKey = "game:record:bet:RSG:{$orderNo}";
+            $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
+            $actualRefundAmount = $cachedBet !== false ? (float)$cachedBet : 0;
 
             // ========== 核心：Lua 原子取消 ==========
             $luaParams = [
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
-                'refund_amount' => $refundAmount,
+                'refund_amount' => $actualRefundAmount,  // ✅ 使用实际的退款金额
                 'transaction_type' => TransactionType::CANCEL,
                 'original_data' => $data,
             ];
@@ -337,7 +362,7 @@ class RsgGameController
 
             $this->logger->info('RSG取消下注成功（Lua原子）', [
                 'order_no' => $orderNo,
-                'refund_amount' => $refundAmount,
+                'refund_amount' => $actualRefundAmount,  // ✅ 修复：使用 $actualRefundAmount（第305行定义的变量）
                 'balance_before' => $result['old_balance'] ?? 0,
                 'balance_after' => $result['balance'],
             ]);
@@ -348,7 +373,7 @@ class RsgGameController
                     'order_no' => $orderNo,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
-                    'refund_amount' => $refundAmount,
+                    'refund_amount' => $actualRefundAmount,  // ✅ 修复：使用 $actualRefundAmount
                     'original_data' => $data,
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
@@ -405,12 +430,23 @@ class RsgGameController
             $orderNo = (string)$data['SequenNumber'];
             $winAmount = $data['Amount'] ?? 0;
 
+            // ✅ 从 Redis 读取实际的下注金额（而不是使用 BetAmount 字段）
+            // 原因：子订单的 BetAmount 是主订单的投注额，但子订单实际 bet amount = 0
+            $redisKey = "game:record:bet:RSG:{$orderNo}";
+            $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
+            $actualBetAmount = $cachedBet !== false ? (float)$cachedBet : 0;
+
+            // ✅ 使用实际的下注金额计算 diff
+            // 主订单：diff = winAmount - actualBetAmount（如 300 - 125 = 175）
+            // 子订单：diff = winAmount - 0（如 25 - 0 = 25，纯赢）
+            $diff = bcsub($winAmount, $actualBetAmount, 2);
+
             // ========== 核心：Lua 原子结算 ==========
             $luaParams = [
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
                 'amount' => $winAmount,
-                'diff' => bcsub($winAmount, $data['BetAmount'] ?? 0, 2),
+                'diff' => $diff,  // ✅ 使用实际的 diff
                 'transaction_type' => TransactionType::SETTLE,
                 'game_code' => $data['GameId'] ?? '',
                 'original_data' => $data,
@@ -474,6 +510,9 @@ class RsgGameController
             $this->logger->info('RSG结算成功（Lua原子）', [
                 'order_no' => $orderNo,
                 'win_amount' => $winAmount,
+                'actual_bet_amount' => $actualBetAmount,  // ✅ 实际下注金额（子订单 = 0）
+                'platform_bet_amount' => $data['BetAmount'] ?? 0,  // 平台传的 BetAmount（子订单 = 主订单金额）
+                'diff' => $diff,  // ✅ 实际盈亏
                 'balance_before' => $result['old_balance'] ?? 0,  // ✅ 防御性访问
                 'balance_after' => $result['balance'],
             ]);
@@ -485,7 +524,7 @@ class RsgGameController
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $winAmount,
-                    'diff' => bcsub($winAmount, $data['BetAmount'] ?? 0, 2),
+                    'diff' => $diff,  // ✅ 使用实际的 diff
                     'game_code' => $data['GameId'] ?? '',
                     'original_data' => $data,
                     'balance_before' => $result['old_balance'] ?? 0,
@@ -540,14 +579,22 @@ class RsgGameController
             }
 
             $orderNo = (string)($data['SequenNumber'] ?? '');
-            $winAmount = ($data['Amount'] ?? 0) - ($data['BetAmount'] ?? 0);
+
+            // ✅ 从 Redis 读取实际的下注金额
+            $redisKey = "game:record:bet:RSG:{$orderNo}";
+            $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
+            $actualBetAmount = $cachedBet !== false ? (float)$cachedBet : 0;
+
+            // ✅ 使用实际的下注金额计算 diff
+            $totalWin = $data['Amount'] ?? 0;
+            $diff = bcsub($totalWin, $actualBetAmount, 2);
 
             // ========== 核心：Lua 原子重新结算 ==========
             $luaParams = [
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
-                'amount' => $data['Amount'] ?? 0,
-                'diff' => $winAmount,
+                'amount' => $totalWin,
+                'diff' => $diff,  // ✅ 使用实际的 diff
                 'transaction_type' => TransactionType::SETTLE_ADJUST,  // 重新结算标记为调整
                 'original_data' => $data,
             ];
@@ -575,7 +622,8 @@ class RsgGameController
 
             $this->logger->info('RSG重新结算成功（Lua原子）', [
                 'order_no' => $orderNo,
-                'win_amount' => $winAmount,
+                'win_amount' => $totalWin,  // ✅ 修复：使用 $totalWin（第589行定义的变量）
+                'diff' => $diff,
                 'balance_after' => $result['balance'],
             ]);
 
@@ -885,16 +933,7 @@ class RsgGameController
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
 
-            // ✅ 严格验证 SessionId
-            if (empty($data['SessionId'])) {
-                $this->logger->error('RSG退款失败：SessionId为空', [
-                    'user_id' => $data['UserId'] ?? '',
-                    'data' => $data,
-                ]);
-                return $this->error(self::API_CODE_INVALID_PARAM, 'SessionId is required');
-            }
-
-            $orderNo = (string)$data['SessionId'];
+            $orderNo = (string)($data['SessionId'] ?? '');
             $refundAmount = $data['Amount'] ?? 0;
 
             // ========== 核心：Lua 原子退款 ==========
@@ -924,30 +963,13 @@ class RsgGameController
 
             // 处理返回结果
             if ($result['ok'] === 0) {
-                $error = $result['error'] ?? 'unknown';
-
-                if ($error === 'duplicate_settle') {
+                if ($result['error'] === 'duplicate_settle') {
                     // 重复退款请求
                     $this->logger->warning('RSG重复退款请求（Lua检测）', ['session_id' => $orderNo]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'Balance' => round((float)$result['balance'], 2),
                         'Amount' => 0
                     ]);
-                } else {
-                    // ✅ 新增：处理未知错误
-                    $this->logger->error('RSG退款失败：Lua未知错误', [
-                        'session_id' => $orderNo,
-                        'error' => $error,
-                        'result' => $result,
-                    ]);
-
-                    $this->sendTelegramAlert('RSG', '退款Lua未知错误', new \Exception($error), [
-                        'session_id' => $orderNo,
-                        'error' => $error,
-                        'result' => $result,
-                    ]);
-
-                    return $this->error(self::API_CODE_INVALID_PARAM, 'Refund failed: ' . $error);
                 }
             }
 
