@@ -114,7 +114,7 @@ class RsgGameController
 
             // 1. 解密和验证
             $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG下注请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
+            $this->logger->info('RSG下注请求（Lua原子）', ['data' => $data ?? '']);
 
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -138,15 +138,6 @@ class RsgGameController
             }
 
             $orderNo = (string)$data['SequenNumber'];
-
-            // ✅ 验证 Amount > 0
-            if (!isset($data['Amount']) || $data['Amount'] <= 0) {
-                $this->logger->error('RSG下注失败：Amount无效', [
-                    'amount' => $data['Amount'] ?? null,
-                    'order_no' => $orderNo,
-                ]);
-                return $this->error(self::API_CODE_INVALID_PARAM, 'Invalid Amount');
-            }
 
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
