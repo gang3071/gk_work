@@ -130,10 +130,6 @@ class RsgGameController
 
             // ✅ 严格验证 SequenNumber（必填字段）
             if (empty($data['SequenNumber'])) {
-                $this->logger->error('RSG下注失败：SequenNumber为空', [
-                    'user_id' => $data['UserId'] ?? '',
-                    'data' => $data,
-                ]);
                 return $this->error(self::API_CODE_INVALID_PARAM, 'SequenNumber is required');
             }
 
@@ -146,10 +142,6 @@ class RsgGameController
 
             // ✅ 验证 Amount（主订单必须 > 0，子订单允许 = 0）
             if (!$isSubOrder && (!isset($data['Amount']) || $data['Amount'] <= 0)) {
-                $this->logger->error('RSG下注失败：Amount无效', [
-                    'amount' => $data['Amount'] ?? null,
-                    'order_no' => $orderNo,
-                ]);
                 return $this->error(self::API_CODE_INVALID_PARAM, 'Invalid Amount');
             }
 
@@ -201,45 +193,11 @@ class RsgGameController
                         'Balance' => round((float)$result['balance'], 2)
                     ]);
                 } elseif ($error === 'insufficient_balance') {
-                    // 余额不足
-                    $this->logger->warning('RSG余额不足（Lua检测）', [
-                        'order_no' => $orderNo,
-                        'amount' => $data['Amount'],
-                        'balance' => $result['balance'],
-                    ]);
-
                     return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
                 } else {
-                    // ✅ 新增：处理未知错误
-                    $this->logger->error('RSG下注失败：Lua未知错误', [
-                        'order_no' => $orderNo,
-                        'error' => $error,
-                        'result' => $result,
-                        'amount' => $data['Amount'],
-                    ]);
-
-                    $this->sendTelegramAlert('RSG', '下注Lua未知错误', new \Exception($error), [
-                        'order_no' => $orderNo,
-                        'error' => $error,
-                        'result' => $result,
-                    ]);
-
                     return $this->error(self::API_CODE_INVALID_PARAM, 'Bet failed: ' . $error);
                 }
             }
-
-            // 成功场景（只有 ok=1 时才会执行到这里）
-            $this->logger->info('RSG下注成功（Lua原子）', [
-                'username' => $data['UserId'],
-                'order_no' => $orderNo,
-                'belong_order_no' => $belongOrderNo,
-                'is_sub_order' => $isSubOrder,
-                'balance_before' => $result['old_balance'] ?? 0,  // ✅ 防御性访问
-                'balance_after' => $result['balance'],
-                'amount' => $betAmount,  // ✅ 使用实际扣款金额（子订单 = 0）
-                'original_amount' => $data['Amount'],  // 原始 Amount 字段
-            ]);
-
             // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveBet('RSG', [
@@ -268,7 +226,6 @@ class RsgGameController
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
-            $this->sendTelegramAlert('RSG', '下注异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
     }
