@@ -16,6 +16,8 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
 
 class TNineServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
+    use LimitGroupTrait;
+
     public string $method = 'POST';
     public string $successCode = '0';
     private mixed $apiDomain;
@@ -119,6 +121,36 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
     }
 
     /**
+     * 获取玩家的限红配置
+     * @return array|null 返回限红配置数组，包含MiniBetLimit和MaxBetLimit，如果没有配置则返回null
+     */
+    private function getLimitRedConfig(): ?array
+    {
+        // 使用 Trait 中的通用方法获取限红组配置
+        $limitGroupConfig = $this->getLimitGroupConfig('tnine_server');
+
+        // 如果没有配置数据，返回null
+        if (!$this->hasLimitGroupConfigData($limitGroupConfig)) {
+            return null;
+        }
+
+        $configData = $limitGroupConfig->config_data;
+
+        // 构建限红参数（TNINE支持MiniBetLimit和MaxBetLimit）
+        $limitConfig = [];
+
+        if (isset($configData['min_bet_limit']) && $configData['min_bet_limit'] > 0) {
+            $limitConfig['MiniBetLimit'] = $configData['min_bet_limit'];
+        }
+
+        if (isset($configData['max_bet_limit']) && $configData['max_bet_limit'] > 0) {
+            $limitConfig['MaxBetLimit'] = $configData['max_bet_limit'];
+        }
+
+        return !empty($limitConfig) ? $limitConfig : null;
+    }
+
+    /**
      * 注册玩家
      * @return array
      * @throws GameException
@@ -130,9 +162,27 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
             'MemberAccount' => $this->player->uuid,
             'MemberPassword' => $this->player->uuid,
             'NickName' => $this->player->uuid,
-            'MiniBetLimit' => 100,
-            'MaxBetLimit' => 20000,
         ];
+
+        // 获取并应用限红配置
+        $limitConfig = $this->getLimitRedConfig();
+        if ($limitConfig) {
+            $params = array_merge($params, $limitConfig);
+            $this->log->info('TNINE应用限红配置', [
+                'player_id' => $this->player->id,
+                'store_admin_id' => $this->player->store_admin_id,
+                'limit_config' => $limitConfig
+            ]);
+        } else {
+            // 如果没有配置限红组，使用默认值
+            $params['MiniBetLimit'] = 100;
+            $params['MaxBetLimit'] = 20000;
+            $this->log->info('TNINE使用默认限红配置', [
+                'player_id' => $this->player->id,
+                'store_admin_id' => $this->player->store_admin_id
+            ]);
+        }
+
         $response = $this->doCurl('/api/create_account', $params);
         $this->log->info('createPlayer', [$response]);
         return $response;
