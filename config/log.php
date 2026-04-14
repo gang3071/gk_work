@@ -189,6 +189,22 @@ $handlers = [
             ]
         ],
     ],
+    'rsglive_server' => [
+        'handlers' => [
+            [
+                'class' => Monolog\Handler\RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/rsg_live_server.log',
+                    2, //$maxFiles
+                    Monolog\Logger::DEBUG,
+                ],
+                'formatter' => [
+                    'class' => Monolog\Formatter\LineFormatter::class,
+                    'constructor' => [null, 'Y-m-d H:i:s', true],
+                ],
+            ]
+        ],
+    ],
     'o8_server' => [
         'handlers' => [
             [
