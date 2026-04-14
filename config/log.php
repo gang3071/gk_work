@@ -184,6 +184,7 @@ $handlers = [
                 ],
                 'formatter' => [
                     'class' => Monolog\Formatter\LineFormatter::class,
+
                     'constructor' => [null, 'Y-m-d H:i:s', true],
                 ],
             ]
