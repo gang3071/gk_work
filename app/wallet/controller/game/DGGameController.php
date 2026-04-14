@@ -132,6 +132,7 @@ class DGGameController
                     'game_code' => $detail['gameId'] ?? '',
                     'transaction_type' => $type == 5 ? TransactionType::SETTLE_REWARD : TransactionType::SETTLE,
                     'original_data' => $params,
+                    'allow_duplicate_settle' => false,  // 派彩和红包不允许二次结算
                 ];
 
                 // 参数验证
@@ -311,7 +312,125 @@ class DGGameController
             $beforeBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
 
             // 根据 type 分流处理
-            if ($type == 4) {
+            // type in (1,6): 回滚转账
+            if (in_array($type, [1, 6])) {
+                // type=1: 下注回滚, type=6: 小费回滚 → Lua 原子取消
+                $luaParams = [
+                    'order_no' => $orderNo,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $amount,
+                    'transaction_type' => TransactionType::CANCEL,  // type in (1,6) 回滚转账
+                    'game_code' => $detail['gameId'] ?? '',
+                    'original_data' => $params,
+                ];
+
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'refund_amount' => ['required', 'numeric', 'min:0'],
+                    'platform_id' => ['required', 'integer'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicCancel');
+
+                $result = RedisLuaScripts::atomicCancel($player->id, 'DG', $luaParams);
+
+                // 审计日志
+                logLuaScriptCall('cancel', 'DG', $player->id, $luaParams);
+
+                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                    Log::channel('dg_server')->info('DG回滚重复请求（Lua检测）', ['order_no' => $orderNo, 'type' => $type]);
+                }
+
+                // 保存取消记录到 Redis
+                if ($result['ok'] === 1) {
+                    \app\service\GameRecordCacheService::saveCancel('DG', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'refund_amount' => $amount,
+                        'original_data' => $params,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
+                    ]);
+                }
+
+            } elseif (in_array($type, [2, 3, 5])) {
+                // type in (2,3,5): 继续完成转账（派彩/补单/红包，根据接口文档）
+                // ✅ 修复：区分派彩和红包的 diff 计算
+                if ($type == 2) {
+                    // type=2 派彩：需要计算 diff = win - bet
+                    $betAmount = getBetAmountWithFallback('DG', $orderNo, $player->id, $this->service->platform->id);
+                    $diff = bcsub($amount, $betAmount, 2);
+                } else {
+                    // type=3 补单, type=5 红包：额外奖励，diff = amount
+                    $diff = $amount;
+                }
+
+                // type=2:派彩 type=3:补单 type=5:红包 → Lua 原子结算
+                $luaParams = [
+                    'order_no' => $orderNo,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $amount,
+                    'diff' => $diff,
+                    'game_code' => $detail['gameId'] ?? '',
+                    'transaction_type' => $type == 2 ? TransactionType::SETTLE : TransactionType::SETTLE_REWARD,
+                    'original_data' => $params,
+                    'allow_duplicate_settle' => ($type == 3),  // ✅ 补单允许二次结算
+                ];
+
+                // 参数验证
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'amount' => ['required', 'numeric'],
+                    'diff' => ['required', 'numeric'],
+                    'platform_id' => ['required', 'integer'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicSettle');
+
+                $result = RedisLuaScripts::atomicSettle($player->id, 'DG', $luaParams);
+
+                // 审计日志
+                logLuaScriptCall('settle', 'DG', $player->id, $luaParams);
+
+                // ✅ 修复：清理重复日志，只记录正确的结算日志
+                logGameInteraction('DG', 'settle', $params, [
+                    'ok' => $result['ok'],
+                    'balance' => $result['balance'],
+                    'type' => $type,
+                ]);
+
+                if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+                    Log::channel('dg_server')->info('DG结算重复请求（Lua检测）', ['order_no' => $orderNo, 'type' => $type]);
+                }
+
+                // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
+                if ($result['ok'] === 1) {
+                    // ✅ 补单场景：使用 Lua 重新计算的 diff
+                    $finalDiff = $type == 3 && isset($result['recalculated_diff'])
+                        ? $result['recalculated_diff']
+                        : $diff;
+
+                    \app\service\GameRecordCacheService::saveSettle('DG', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $amount,
+                        'diff' => $finalDiff,  // ✅ 使用 Lua 计算的 diff（补单场景）
+                        'game_code' => $params['gameId'] ?? '',
+                        'original_data' => $params,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
+                    ]);
+
+                    // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
+                    WalletService::checkMachineCrashAfterTransaction(
+                        $player->id,
+                        $result['balance'],
+                        $result['old_balance'] ?? null
+                    );
+                }
+
+            } elseif ($type == 4) {
                 // type=4: 取消投注 → Lua 原子取消
                 $luaParams = [
                     'order_no' => $orderNo,
@@ -362,6 +481,7 @@ class DGGameController
                     'transaction_type' => TransactionType::SETTLE_REWARD,  // type=7 补偿标记为奖励
                     'game_code' => $detail['gameId'] ?? '',
                     'original_data' => $params,
+                    'allow_duplicate_settle' => false,  // 补偿不允许二次结算
                 ];
 
                 // 参数验证

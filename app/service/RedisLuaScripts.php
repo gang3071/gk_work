@@ -133,6 +133,7 @@ LUA;
      * ARGV[10] = 平台代码（用于独立结算）
      * ARGV[11] = 订单号（用于独立结算）
      * ARGV[12] = 游戏代码（用于独立结算）
+     * ARGV[13] = 允许二次结算标记 ('1' 表示允许，用于补单场景)
      *
      * 返回值：
      * - success: {ok: 1, balance: 新余额, old_balance: 旧余额}
@@ -140,10 +141,12 @@ LUA;
      */
     public const LUA_ATOMIC_SETTLE = <<<'LUA'
 -- 1. 幂等性检查（先检查记录，再检查锁）
+local allowDuplicateSettle = ARGV[13] == '1'
 local betExists = redis.call('EXISTS', KEYS[2])
 if betExists == 1 then
     local settlementStatus = tonumber(redis.call('HGET', KEYS[2], 'settlement_status') or 0)
-    if settlementStatus == 1 then
+    -- ✅ 补单场景：允许二次结算，跳过 settlement_status 检查
+    if settlementStatus == 1 and not allowDuplicateSettle then
         local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
         return cjson.encode({ok = 0, error = 'duplicate_settle', balance = currentBalance})
     end
@@ -164,24 +167,34 @@ end
 -- 2. 获取当前余额（防御性：确保即使 Redis 数据损坏也能得到有效数字）
 local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
 local winAmount = tonumber(ARGV[1]) or 0
+local diffAmount = tonumber(ARGV[2]) or 0
 
--- 3. 更新余额（加钱）
-local newBalance = currentBalance
-if winAmount > 0 then
-    newBalance = currentBalance + winAmount
-    redis.call('SETEX', KEYS[1], ARGV[6], newBalance)
+-- 3. 补单场景：重新结算逻辑
+local balanceChange = winAmount
+if allowDuplicateSettle and betExists == 1 then
+    -- ✅ 补单：获取原结算金额，计算调整差额
+    local originalWin = tonumber(redis.call('HGET', KEYS[2], 'win') or 0)
+    balanceChange = winAmount - originalWin  -- 调整差额（可正可负）
+
+    -- 重新计算 diff（基于原下注金额）
+    local originalBet = tonumber(redis.call('HGET', KEYS[2], 'amount') or 0)
+    diffAmount = winAmount - originalBet
 end
 
--- 4. 设置幂等性锁
+-- 4. 更新余额（支持加钱和扣钱）
+local newBalance = currentBalance + balanceChange
+redis.call('SETEX', KEYS[1], ARGV[6], newBalance)
+
+-- 5. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
 
--- 5. 根据之前检查的结果，更新相应记录
+-- 6. 根据之前检查的结果，更新相应记录
 
 if betExists == 1 then
     -- 更新 bet 记录 - ✅ 优化：不再存储 action_data，减少内存占用
     redis.call('HMSET', KEYS[2],
         'win', ARGV[1],
-        'diff', ARGV[2],
+        'diff', diffAmount,  -- ✅ 使用重新计算的 diff
         'settlement_status', 1,
         'transaction_type', ARGV[3],
         'settle_time', ARGV[4],
@@ -217,11 +230,11 @@ else
     redis.call('ZADD', KEYS[3], ARGV[4], KEYS[6])
 end
 
--- 6. 统计计数
+-- 7. 统计计数
 redis.call('INCR', KEYS[4])
 
--- 7. 返回成功
-return cjson.encode({ok = 1, balance = newBalance, old_balance = currentBalance})
+-- 8. 返回成功（补单时返回调整差额和重新计算的 diff）
+return cjson.encode({ok = 1, balance = newBalance, old_balance = currentBalance, balance_change = balanceChange, recalculated_diff = diffAmount})
 LUA;
 
     /**
@@ -490,6 +503,7 @@ LUA;
      *   - game_code: 游戏代码（可选）
      *   - transaction_type: 交易类型（必需）
      *   - original_data: 原始数据（可选）
+     *   - allow_duplicate_settle: 允许二次结算（可选，布尔值，用于补单场景）
      * @return array
      * @throws \InvalidArgumentException 参数验证失败时抛出
      */
@@ -535,6 +549,7 @@ LUA;
             $platform,                                       // ARGV[10] - 平台代码（独立结算用）
             $orderNo,                                        // ARGV[11] - 订单号（独立结算用）
             $data['game_code'] ?? '',                        // ARGV[12] - 游戏代码（独立结算用）
+            ($data['allow_duplicate_settle'] ?? false) ? '1' : '0',  // ARGV[13] - 允许二次结算（补单场景）
         ];
 
         // 执行 Lua 脚本（使用 work 连接池，确保 igaming 核心业务稳定）
