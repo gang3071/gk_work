@@ -109,7 +109,7 @@ class DGGameController
             $detail = json_decode($params['detail'], true);
 
             // 获取操作前余额（DG 特性：返回操作前余额）
-            $beforeBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+            $beforeBalance = $this->service->balance();
 
             //转账类型(1:下注 2:派彩 3:补单 5:红包 6:小费)
             if (in_array($type, [2, 5])) {
@@ -309,7 +309,7 @@ class DGGameController
             $detail = json_decode($params['detail'], true);
 
             // 获取操作前余额（DG 特性：返回操作前余额）
-            $beforeBalance = \app\service\GameRecordCacheService::getCachedBalance($player->id);
+            $beforeBalance = $this->service->balance();
 
             // 根据 type 分流处理
             // type in (1,6): 回滚转账
