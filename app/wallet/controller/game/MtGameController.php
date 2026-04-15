@@ -370,6 +370,7 @@ class MtGameController
 
             $orderNo = (string)($data['bet_sn'] ?? '');
             $winMoney = $data['win_money'] ?? 0;
+            $diff = $data['profit'] ?? 0;
             $status = $data['status'] ?? null;
 
             // 3. Lua 原子结算
@@ -377,7 +378,7 @@ class MtGameController
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
                 'amount' => $winMoney,
-                'diff' => $winMoney,  // MT的win_money就是输赢金额
+                'diff' => $diff,  // MT的win_money就是输赢金额
                 'transaction_type' => TransactionType::SETTLE,
                 'original_data' => $data,
             ];
@@ -411,7 +412,7 @@ class MtGameController
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $winMoney,
-                    'diff' => $winMoney,
+                    'diff' => $diff,
                     'game_code' => $data['game_code'] ?? '',
                     'original_data' => $data,
                     // ✅ 传入余额数据供 Worker 推送
