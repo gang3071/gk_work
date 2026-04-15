@@ -1,17 +1,55 @@
 name: Work
 
-# 1. 触发条件：只有当 push 到 main 分支时才触发work
+# 触发条件：支持正式线和测试线的自动部署
 on:
   push:
     branches:
-      - super9-main
-      # 如果你的后台项目是 master，就把上面那行改成 - master
+      - super9-main  # 正式线
+      - fix/**       # 测试线（所有 fix 开头的分支）
+      - feature/**   # 测试线（所有 feature 开头的分支）
+      - test/**      # 测试线（所有 test 开头的分支）
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Baota WebHook
-        # 2. 这里的 URL 替换成你从宝塔 WebHook 插件里复制出来的那个完整链接
+      - name: Extract branch name
+        shell: bash
+        run: echo "BRANCH_NAME=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
+
+      - name: Deploy to production or test environment
         run: |
-          curl -k -X GET "https://34.80.234.173:35812/hook?access_key=ZbVfTXP8aMvRvlGW08F58fyxDpjQwCik2V2tMRhJSPAgNkkt&param=aaa"
+          echo "=================================================="
+          echo "📦 准备部署"
+          echo "   源分支: ${{ env.BRANCH_NAME }}"
+          echo "=================================================="
+
+          # 将分支名中的 / 替换为 - (URL 安全)
+          # 例如: fix/4.14 → fix-4.14
+          BRANCH_PARAM=$(echo "${{ env.BRANCH_NAME }}" | sed 's/\//-/g')
+          echo "   URL参数: $BRANCH_PARAM"
+
+          # 根据分支名判断环境
+          if [ "${{ env.BRANCH_NAME }}" == "super9-main" ]; then
+            echo ""
+            echo "🚀 目标环境: 正式线 (Production)"
+            echo "   服务器: 34.80.234.173"
+            WEBHOOK_URL="https://34.80.234.173:35812/hook?access_key=rMlbPzdFL295OEzGrgLIkTEvEoxqgMln1ZoN0JTY8VBZghzA&param=$BRANCH_PARAM"
+          else
+            echo ""
+            echo "🧪 目标环境: 测试线 (Test)"
+            echo "   服务器: 34.81.124.226"
+            WEBHOOK_URL="https://34.81.124.226:14842/hook?access_key=VA7Uj5LdFuBkmsnUB4bdw64ji89fffYF9Yb1N71i4OLpCPEE&param=$BRANCH_PARAM"
+          fi
+
+          echo ""
+          echo "📡 触发 Webhook..."
+          if curl -k -X GET "$WEBHOOK_URL" -w "\n状态码: %{http_code}\n"; then
+            echo ""
+            echo "✅ Webhook 触发成功！"
+          else
+            echo ""
+            echo "❌ Webhook 触发失败！"
+            exit 1
+          fi
+          echo "=================================================="
