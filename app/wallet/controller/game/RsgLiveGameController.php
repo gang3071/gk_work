@@ -11,6 +11,7 @@ use app\service\game\SingleWalletServiceInterface;
 use app\service\RedisLuaScripts;
 use app\service\WalletService;
 use Exception;
+use support\Cache;
 use support\Log;
 use support\Request;
 use support\Response;
@@ -85,6 +86,10 @@ class RsgLiveGameController
 
             $this->logger->info('rsg_live檢查使用者', ['params' => $params]);
             $account = $params['account'];
+            $token = strtolower($params['token']);
+            if($token != Cache::get('rsg_live_user_token_'.$account)){
+                return $this->error(self::API_CODE_TOKEN_DOES_NOT_EXIST);
+            }
 
             $player = Player::query()->where('uuid', $account)->first();
 
@@ -94,8 +99,8 @@ class RsgLiveGameController
 
             // 3. 使用常量获取状态码描述
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'authToken' => $this->service->getToken('authToken', $account),
-                'sessionToken' => $this->service->getToken('sessionToken', $account, 86400),
+                'authToken' => $this->service->getToken('authToken', $account,86400),
+                'sessionToken' => $this->service->getToken('sessionToken', $account),
                 'requestId' => $params['requestId'],
                 'account' => $params['account'],
             ]);
@@ -408,7 +413,7 @@ class RsgLiveGameController
      * @param int $httpCode HTTP状态码
      * @return Response
      */
-    public function error(string $code, ?string $message = null, array $data = [], int $httpCode = 200): Response
+    public function error(string $code, ?string $message = null, array $data = [], int $httpCode = 400): Response
     {
         $responseData = [
             'msgId' => $code,
