@@ -193,7 +193,9 @@ class RsgLiveGameController
             }
 
             $player = $this->service->player;
-            $orderNo = (string)($params['transaction']['id'] ?? '');
+            // ✅ 修复：使用 referenceId 作为订单号（下注和结算关联同一局）
+            $transactionId = (string)($params['transaction']['id'] ?? '');
+            $orderNo = (string)($params['transaction']['referenceId'] ?? $transactionId);
             $betAmount = $params['transaction']['amount'] ?? 0;
 
             //判断当前设备是否爆机
@@ -203,12 +205,13 @@ class RsgLiveGameController
 
             // Lua 原子下注
             $luaParams = [
-                'order_no' => $orderNo,
+                'order_no' => $orderNo,  // 使用 referenceId
                 'platform_id' => $this->service->platform->id,
                 'amount' => $betAmount,
                 'game_code' => $params['transaction']['gameCode'] ?? '',
                 'transaction_type' => TransactionType::BET,
                 'original_data' => $params,
+                'transaction_id' => $transactionId,  // 记录原始 transaction.id
             ];
 
             // 参数验证
@@ -227,14 +230,15 @@ class RsgLiveGameController
             // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveBet('RSGLIVE', [
-                    'order_no' => $orderNo,
+                    'order_no' => $orderNo,  // referenceId（关联订单号）
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $betAmount,
                     'game_code' => $params['transaction']['gameCode'] ?? '',
-                    'original_data' => $params,
+                    'original_data' => $params,  // 包含 transaction.id 和 referenceId
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
+                    'transaction_id' => $transactionId,  // 记录原始 transaction.id
                 ]);
             }
 
@@ -249,10 +253,10 @@ class RsgLiveGameController
             // 处理下注结果
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
-                    $this->logger->info('RSGLive下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                    $this->logger->info('RSGLive下注重复请求（Lua检测）', ['order_no' => $orderNo, 'transaction_id' => $transactionId]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'transaction' => [
-                            'id' => $orderNo,
+                            'id' => $transactionId,  // ✅ 返回原始 transaction.id
                             'balance' => round((float)$result['balance'], 2),
                         ],
                         'requestId' => $params['requestId'],
@@ -263,11 +267,11 @@ class RsgLiveGameController
                 }
             }
 
-            $this->logger->info('rsg_live下注成功（Lua原子）', ['order_no' => $orderNo]);
+            $this->logger->info('rsg_live下注成功（Lua原子）', ['order_no' => $orderNo, 'transaction_id' => $transactionId]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'transaction' => [
-                    'id' => $orderNo,
+                    'id' => $transactionId,  // ✅ 返回原始 transaction.id
                     'balance' => round((float)$result['balance'], 2),
                 ],
                 'requestId' => $params['requestId'],
@@ -298,23 +302,33 @@ class RsgLiveGameController
             }
 
             $player = $this->service->player;
-            $orderNo = (string)($params['transaction']['id'] ?? '');
-            $winAmount = $params['transaction']['winAmount'] ?? 0;
+            // ✅ 修复：使用 referenceId 作为订单号（与下注关联）
+            $transactionId = (string)($params['transaction']['id'] ?? '');
+            $orderNo = (string)($params['transaction']['referenceId'] ?? $transactionId);
+            $winAmount = $params['transaction']['amount'] ?? 0;
 
-            // ✅ 问题3修复：使用降级方案获取下注金额（传入 platform_id 优化性能）
-            $betAmount = getBetAmountWithFallback('RSGLIVE', $orderNo, $player->id, $this->service->platform->id);
+            // ✅ 优化：从 Redis 读取实际下注金额（referenceId 关联）
+            $redisKey = "game:record:bet:RSGLIVE:{$orderNo}";
+            $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
+            $betAmount = $cachedBet !== false ? (float)$cachedBet : 0;
+
+            // ✅ Redis 未命中，从数据库降级获取
+            if ($betAmount == 0 && $cachedBet === false) {
+                $betAmount = getBetAmountWithFallback('RSGLIVE', $orderNo, $player->id, $this->service->platform->id);
+            }
 
             // 计算 diff = win - bet
             $diff = bcsub($winAmount, $betAmount, 2);
 
             // Lua 原子结算
             $luaParams = [
-                'order_no' => $orderNo,
+                'order_no' => $orderNo,  // 使用 referenceId
                 'platform_id' => $this->service->platform->id,
                 'amount' => max($winAmount, 0),
                 'diff' => $diff,  // ✅ 修正：diff = win - bet
                 'transaction_type' => TransactionType::SETTLE,
                 'original_data' => $params,
+                'transaction_id' => $transactionId,  // 记录原始 transaction.id
             ];
 
             // 参数验证
@@ -334,15 +348,16 @@ class RsgLiveGameController
             // 保存结算记录到 Redis
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveSettle('RSGLIVE', [
-                    'order_no' => $orderNo,
+                    'order_no' => $orderNo,  // referenceId（关联订单号）
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($winAmount, 0),
                     'diff' => $diff,
                     'game_code' => $params['transaction']['gameCode'] ?? '',
-                    'original_data' => $params,
+                    'original_data' => $params,  // 包含 transaction.id 和 referenceId
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
+                    'transaction_id' => $transactionId,  // 记录原始 transaction.id
                 ]);
 
                 // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
@@ -355,14 +370,14 @@ class RsgLiveGameController
 
             // 处理结算结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
-                $this->logger->info('RSGLive结算重复请求（Lua检测）', ['order_no' => $orderNo]);
+                $this->logger->info('RSGLive结算重复请求（Lua检测）', ['order_no' => $orderNo, 'transaction_id' => $transactionId]);
             }
 
-            $this->logger->info('rsg_live结算成功（Lua原子）', ['order_no' => $orderNo]);
+            $this->logger->info('rsg_live结算成功（Lua原子）', ['order_no' => $orderNo, 'transaction_id' => $transactionId, 'diff' => $diff]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'transaction' => [
-                    'id' => $orderNo,
+                    'id' => $transactionId,  // ✅ 返回原始 transaction.id
                     'balance' => round((float)$result['balance'], 2),
                 ],
                 'requestId' => $params['requestId'],
