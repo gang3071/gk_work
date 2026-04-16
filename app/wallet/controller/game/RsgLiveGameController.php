@@ -159,6 +159,12 @@ class RsgLiveGameController
             }
 
             $balance = $this->service->balance();
+            $this->logger->info('balance',[
+                'balance' => $balance,
+                'status' => 0,
+                'requestId' => $params['requestId'],
+                'account' => $data['memberaccount'],
+            ]);
             // 3. 使用常量获取状态码描述
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'balance' => $balance,
