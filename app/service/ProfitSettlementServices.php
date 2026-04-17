@@ -33,145 +33,141 @@ class ProfitSettlementServices
             }
             $yesterdayStart = $yesterday . ' 00:00:00';
             $yesterdayEnd = $yesterday . ' 23:59:59';
-            $perPage = 100;
-            $page = 1;
-            do {
-                // 分页获取玩家列表
-                $playerList = Player::query()
-                    ->whereHas('machine_wallet', function ($query) use ($yesterday) {
-                        $query->where('updated_at', '>=', $yesterday . ' 00:00:00');
-                    })
-                    ->whereHas('channel', function ($query) {
-                        $query->where('is_offline', 0);
-                    })
-                    ->whereNotNull('recommend_id')
-                    ->where('recommend_id', '!=', 0)
-                    ->orderBy('id', 'desc')
-                    ->paginate($perPage, ['*'], 'page', $page);
+            $chunkSize = 100;
 
-                if ($playerList->isEmpty()) {
-                    Log::info('代理分润结算: ' . date('Y-m-d H:i:s') . '未产生分润');
-                    break; // 如果没有玩家，退出循环
-                }
-                $playerIds = $playerList->pluck('id')->toArray();
-                // 账变记录
-                $playerDeliveryRecord = PlayerDeliveryRecord::query()
-                    ->where('updated_at', '>=', $yesterdayStart)
-                    ->where('updated_at', '<=', $yesterdayEnd)
-                    ->whereIn('type', [
-                        PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_ADD,
-                        PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_DEDUCT,
-                        PlayerDeliveryRecord::TYPE_REGISTER_PRESENT,
-                        PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS,
-                        PlayerDeliveryRecord::TYPE_MACHINE_UP,
-                        PlayerDeliveryRecord::TYPE_MACHINE_DOWN,
-                        PlayerDeliveryRecord::TYPE_RECHARGE,
-                        PlayerDeliveryRecord::TYPE_LOTTERY,
-                        PlayerDeliveryRecord::TYPE_MACHINE,
-                        PlayerDeliveryRecord::TYPE_REVERSE_WATER,
-                    ])
-                    ->selectRaw("
-                player_id,
-                SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_ADD . " THEN `amount` ELSE 0 END) AS admin_add_amount,
-                SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_DEDUCT . " THEN `amount` ELSE 0 END) AS admin_deduct_amount,
-                SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_REGISTER_PRESENT . " THEN `amount` ELSE 0 END) AS present_amount,
-                SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS . " THEN `amount` ELSE 0 END) AS bonus_amount,
-                SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MACHINE_UP . " THEN `amount` ELSE 0 END) AS machine_up_amount,
-                SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MACHINE_DOWN . " THEN `amount` ELSE 0 END) AS machine_down_amount,
-                SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_RECHARGE . " THEN `amount` ELSE 0 END) AS recharge_amount,
-                SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_LOTTERY . " THEN `amount` ELSE 0 END) AS lottery_amount,
-                SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_REVERSE_WATER . " THEN `amount` ELSE 0 END) AS water_amount
-            ")
-                    ->whereIn('player_id', $playerIds)
-                    ->groupBy('player_id')
-                    ->get()
-                    ->keyBy('player_id')
-                    ->toArray();
+            // 使用 chunk 方法批量处理,避免内存溢出
+            Player::query()
+                ->whereHas('machine_wallet', function ($query) use ($yesterday) {
+                    $query->where('updated_at', '>=', $yesterday . ' 00:00:00');
+                })
+                ->whereHas('channel', function ($query) {
+                    $query->where('is_offline', 0);
+                })
+                ->whereNotNull('recommend_id')
+                ->where('recommend_id', '!=', 0)
+                ->orderBy('id', 'desc')
+                ->chunk($chunkSize, function ($playerList) use ($yesterday, $yesterdayStart, $yesterdayEnd) {
+                    if ($playerList->isEmpty()) {
+                        Log::info('代理分润结算: ' . date('Y-m-d H:i:s') . '未产生分润');
+                        return false; // 停止处理
+                    }
+                    $playerIds = $playerList->pluck('id')->toArray();
+                    // 账变记录
+                    $playerDeliveryRecord = PlayerDeliveryRecord::query()
+                        ->where('updated_at', '>=', $yesterdayStart)
+                        ->where('updated_at', '<=', $yesterdayEnd)
+                        ->whereIn('type', [
+                            PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_ADD,
+                            PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_DEDUCT,
+                            PlayerDeliveryRecord::TYPE_REGISTER_PRESENT,
+                            PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS,
+                            PlayerDeliveryRecord::TYPE_MACHINE_UP,
+                            PlayerDeliveryRecord::TYPE_MACHINE_DOWN,
+                            PlayerDeliveryRecord::TYPE_RECHARGE,
+                            PlayerDeliveryRecord::TYPE_LOTTERY,
+                            PlayerDeliveryRecord::TYPE_MACHINE,
+                            PlayerDeliveryRecord::TYPE_REVERSE_WATER,
+                        ])
+                        ->selectRaw("
+                    player_id,
+                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_ADD . " THEN `amount` ELSE 0 END) AS admin_add_amount,
+                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_DEDUCT . " THEN `amount` ELSE 0 END) AS admin_deduct_amount,
+                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_REGISTER_PRESENT . " THEN `amount` ELSE 0 END) AS present_amount,
+                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS . " THEN `amount` ELSE 0 END) AS bonus_amount,
+                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MACHINE_UP . " THEN `amount` ELSE 0 END) AS machine_up_amount,
+                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MACHINE_DOWN . " THEN `amount` ELSE 0 END) AS machine_down_amount,
+                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_RECHARGE . " THEN `amount` ELSE 0 END) AS recharge_amount,
+                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_LOTTERY . " THEN `amount` ELSE 0 END) AS lottery_amount,
+                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_REVERSE_WATER . " THEN `amount` ELSE 0 END) AS water_amount
+                ")
+                        ->whereIn('player_id', $playerIds)
+                        ->groupBy('player_id')
+                        ->get()
+                        ->keyBy('player_id')
+                        ->toArray();
 
-                // 提现记录
-                $playerWithdrawRecord = PlayerWithdrawRecord::query()
-                    ->where('updated_at', '>=', $yesterdayStart)
-                    ->where('updated_at', '<=', $yesterdayEnd)
-                    ->where('status', PlayerWithdrawRecord::STATUS_SUCCESS)
-                    ->whereIn('player_id', $playerIds)
-                    ->selectRaw('player_id, SUM(`point`) as withdraw_amount')
-                    ->groupBy('player_id')
-                    ->get()
-                    ->keyBy('player_id')
-                    ->toArray();
+                    // 提现记录
+                    $playerWithdrawRecord = PlayerWithdrawRecord::query()
+                        ->where('updated_at', '>=', $yesterdayStart)
+                        ->where('updated_at', '<=', $yesterdayEnd)
+                        ->where('status', PlayerWithdrawRecord::STATUS_SUCCESS)
+                        ->whereIn('player_id', $playerIds)
+                        ->selectRaw('player_id, SUM(`point`) as withdraw_amount')
+                        ->groupBy('player_id')
+                        ->get()
+                        ->keyBy('player_id')
+                        ->toArray();
 
-                // 电子游戏记录
-                $playGameRecord = PlayGameRecord::query()
-                    ->where('created_at', '>=', $yesterdayStart)
-                    ->where('created_at', '<=', $yesterdayEnd)
-                    ->where('settlement_status', PlayGameRecord::SETTLEMENT_STATUS_SETTLED)
-                    ->selectRaw('player_id, platform_id, SUM(`diff`) as total_diff, SUM(`bet`) as total_bet, SUM(`win`) as total_win, SUM(`reward`) as total_reward')
-                    ->whereIn('player_id', $playerIds)
-                    ->groupBy('player_id', 'platform_id')
-                    ->with(['player', 'gamePlatform'])
-                    ->get()
-                    ->toArray();
+                    // 电子游戏记录
+                    $playGameRecord = PlayGameRecord::query()
+                        ->where('created_at', '>=', $yesterdayStart)
+                        ->where('created_at', '<=', $yesterdayEnd)
+                        ->where('settlement_status', PlayGameRecord::SETTLEMENT_STATUS_SETTLED)
+                        ->selectRaw('player_id, platform_id, SUM(`diff`) as total_diff, SUM(`bet`) as total_bet, SUM(`win`) as total_win, SUM(`reward`) as total_reward')
+                        ->whereIn('player_id', $playerIds)
+                        ->groupBy('player_id', 'platform_id')
+                        ->with(['player', 'gamePlatform'])
+                        ->get()
+                        ->toArray();
 
-                $promoterProfitGameInsertData = [];
-                $playGameRecordData = [];
-                foreach ($playGameRecord as $item) {
-                    if (!empty($item['player']['recommend_id'])) {
-                        $totalDiff = -$item['total_diff'];
-                        $gameAmount = bcsub($totalDiff,
-                            bcmul($totalDiff, bcdiv($item['game_platform']['ratio'], 100, 4), 4), 4);
-                        $promoterProfitGameInsertData[] = [
-                            'player_id' => $item['player_id'],
-                            'department_id' => $item['player']['department_id'],
-                            'promoter_player_id' => $item['player']['recommend_id'],
-                            'platform_id' => $item['platform_id'],
-                            'total_bet' => $item['total_bet'],
-                            'total_win' => $item['total_win'],
-                            'total_reward' => $item['total_reward'],
-                            'total_diff' => $totalDiff,
-                            'game_amount' => $gameAmount,
-                            'game_platform_ratio' => $item['game_platform']['ratio'],
+                    $promoterProfitGameInsertData = [];
+                    $playGameRecordData = [];
+                    foreach ($playGameRecord as $item) {
+                        if (!empty($item['player']['recommend_id'])) {
+                            $totalDiff = -$item['total_diff'];
+                            $gameAmount = bcsub($totalDiff,
+                                bcmul($totalDiff, bcdiv($item['game_platform']['ratio'], 100, 4), 4), 4);
+                            $promoterProfitGameInsertData[] = [
+                                'player_id' => $item['player_id'],
+                                'department_id' => $item['player']['department_id'],
+                                'promoter_player_id' => $item['player']['recommend_id'],
+                                'platform_id' => $item['platform_id'],
+                                'total_bet' => $item['total_bet'],
+                                'total_win' => $item['total_win'],
+                                'total_reward' => $item['total_reward'],
+                                'total_diff' => $totalDiff,
+                                'game_amount' => $gameAmount,
+                                'game_platform_ratio' => $item['game_platform']['ratio'],
+                                'date' => $yesterday,
+                                'created_at' => date('Y-m-d H:i:s'),
+                                'updated_at' => date('Y-m-d H:i:s')
+                            ];
+                            $playGameRecordData[$item['player_id']] = bcadd($gameAmount,
+                                $playGameRecordData[$item['player_id']] ?? 0, 4);
+                        }
+                    }
+
+                    if (!empty($promoterProfitGameInsertData)) {
+                        PromoterProfitGameRecord::query()->insert($promoterProfitGameInsertData);
+                    }
+
+                    /** @var Player $player */
+                    foreach ($playerList as $player) {
+                        $data = [
+                            'machine_up_amount' => $playerDeliveryRecord[$player->id]['machine_up_amount'] ?? 0,
+                            'machine_down_amount' => $playerDeliveryRecord[$player->id]['machine_down_amount'] ?? 0,
+                            'recharge_amount' => $playerDeliveryRecord[$player->id]['recharge_amount'] ?? 0,
+                            'admin_add_amount' => $playerDeliveryRecord[$player->id]['admin_add_amount'] ?? 0,
+                            'admin_deduct_amount' => $playerDeliveryRecord[$player->id]['admin_deduct_amount'] ?? 0,
+                            'present_amount' => $playerDeliveryRecord[$player->id]['present_amount'] ?? 0,
+                            'bonus_amount' => $playerDeliveryRecord[$player->id]['bonus_amount'] ?? 0,
+                            'lottery_amount' => $playerDeliveryRecord[$player->id]['lottery_amount'] ?? 0,
+                            'water_amount' => $playerDeliveryRecord[$player->id]['water_amount'] ?? 0,
+                            'withdraw_amount' => $playerWithdrawRecord[$player->id]['withdraw_amount'] ?? 0,
+                            'game_amount' => $playGameRecordData[$player->id] ?? 0,
                             'date' => $yesterday,
-                            'created_at' => date('Y-m-d H:i:s'),
-                            'updated_at' => date('Y-m-d H:i:s')
                         ];
-                        $playGameRecordData[$item['player_id']] = bcadd($gameAmount,
-                            $playGameRecordData[$item['player_id']] ?? 0, 4);
+                        //当前玩家渠道未开通推广员功能
+                        if ($player->channel->promotion_status == 0) {
+                            continue;
+                        }
+                        try {
+                            self::calculation($player->recommend_id, $player->id, $player->department_id, $data);
+                        } catch (\Exception $e) {
+                            Log::info($e->getMessage());
+                        }
                     }
-                }
-
-                if (!empty($promoterProfitGameInsertData)) {
-                    PromoterProfitGameRecord::query()->insert($promoterProfitGameInsertData);
-                }
-
-                /** @var Player $player */
-                foreach ($playerList as $player) {
-                    $data = [
-                        'machine_up_amount' => $playerDeliveryRecord[$player->id]['machine_up_amount'] ?? 0,
-                        'machine_down_amount' => $playerDeliveryRecord[$player->id]['machine_down_amount'] ?? 0,
-                        'recharge_amount' => $playerDeliveryRecord[$player->id]['recharge_amount'] ?? 0,
-                        'admin_add_amount' => $playerDeliveryRecord[$player->id]['admin_add_amount'] ?? 0,
-                        'admin_deduct_amount' => $playerDeliveryRecord[$player->id]['admin_deduct_amount'] ?? 0,
-                        'present_amount' => $playerDeliveryRecord[$player->id]['present_amount'] ?? 0,
-                        'bonus_amount' => $playerDeliveryRecord[$player->id]['bonus_amount'] ?? 0,
-                        'lottery_amount' => $playerDeliveryRecord[$player->id]['lottery_amount'] ?? 0,
-                        'water_amount' => $playerDeliveryRecord[$player->id]['water_amount'] ?? 0,
-                        'withdraw_amount' => $playerWithdrawRecord[$player->id]['withdraw_amount'] ?? 0,
-                        'game_amount' => $playGameRecordData[$player->id] ?? 0,
-                        'date' => $yesterday,
-                    ];
-                    //当前玩家渠道未开通推广员功能
-                    if ($player->channel->promotion_status == 0) {
-                        continue;
-                    }
-                    try {
-                        self::calculation($player->recommend_id, $player->id, $player->department_id, $data);
-                    } catch (\Exception $e) {
-                        Log::info($e->getMessage());
-                    }
-                }
-
-                $page++; // 增加页码以获取下一页的玩家
-            } while ($playerList->hasMorePages());
+                });
 
             Cache::set('doProfitSettlement_' . $yesterday, $yesterday, 60 * 60 * 12);
         }
@@ -297,33 +293,29 @@ class ProfitSettlementServices
         if (config('app.profit', 'task') == 'task') {
             ini_set('memory_limit', '512M');
             $yesterday = date('Y-m-d', strtotime('-1 day'));
-            $perPage = 50;
-            $page = 1;
-            do {
-                // 分页获取玩家列表
-                $playerList = Player::query()
-                    ->whereHas('machine_wallet', function ($query) use ($yesterday) {
-                        $query->where('updated_at', '>=', $yesterday . ' 00:00:00');
-                    })
-                    ->orWhereHas('game_record', function ($query) use ($yesterday) {
-                        $query->where('updated_at', '>=', $yesterday . ' 00:00:00');
-                    })
-                    ->paginate($perPage, ['*'], 'page', $page);
+            $chunkSize = 50;
 
-                if ($playerList->isEmpty()) {
-                    Log::info('代理分润结算: ' . date('Y-m-d H:i:s') . '未产生分润');
-                    break;
-                }
-                /** @var Player $player */
-                foreach ($playerList as $player) {
-                    if ($player->channel->promotion_status == 0) {
-                        continue;
+            // 使用 chunk 方法批量处理
+            Player::query()
+                ->whereHas('machine_wallet', function ($query) use ($yesterday) {
+                    $query->where('updated_at', '>=', $yesterday . ' 00:00:00');
+                })
+                ->orWhereHas('game_record', function ($query) use ($yesterday) {
+                    $query->where('updated_at', '>=', $yesterday . ' 00:00:00');
+                })
+                ->chunk($chunkSize, function ($playerList) use ($yesterday) {
+                    if ($playerList->isEmpty()) {
+                        Log::info('代理分润结算: ' . date('Y-m-d H:i:s') . '未产生分润');
+                        return false; // 停止处理
                     }
-                    Client::send('day_profit_settlement', ['day' => $yesterday, 'player_id' => $player->id]);
-                }
-
-                $page++; // 增加页码以获取下一页的玩家
-            } while ($playerList->hasMorePages()); // 继续处理直到没有更多页面
+                    /** @var Player $player */
+                    foreach ($playerList as $player) {
+                        if ($player->channel->promotion_status == 0) {
+                            continue;
+                        }
+                        Client::send('day_profit_settlement', ['day' => $yesterday, 'player_id' => $player->id]);
+                    }
+                });
         }
     }
 }

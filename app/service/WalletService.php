@@ -58,7 +58,7 @@ class WalletService
             if (!$forceRefresh) {
                 $cached = Redis::get($cacheKey);
                 if ($cached !== null && $cached !== false) {
-                    return (float)$cached;
+                    return round((float)$cached, 2);
                 }
             }
 
@@ -68,7 +68,7 @@ class WalletService
             // 写入缓存
             Redis::setex($cacheKey, self::CACHE_TTL, $balance);
 
-            return $balance;
+            return round($balance, 2);
 
         } catch (\Throwable $e) {
             Log::error('WalletService::getBalance 异常', [
@@ -105,15 +105,15 @@ class WalletService
             if ($result['ok'] == 0) {
                 return [
                     'success' => false,
-                    'balance' => (float)$result['balance'],
-                    'old_balance' => (float)$result['balance'],
+                    'balance' => round((float)$result['balance'], 2),
+                    'old_balance' => round((float)$result['balance'], 2),
                     'error' => $result['error'] ?? '余额不足'
                 ];
             }
 
             return [
                 'success' => true,
-                'balance' => (float)$result['balance'],
+                'balance' => round((float)$result['balance'], 2),
                 'old_balance' => 0, // Lua 脚本未返回旧余额
             ];
 
@@ -157,7 +157,7 @@ class WalletService
 
             return [
                 'success' => true,
-                'balance' => (float)$newBalance,
+                'balance' => round($newBalance, 2),
                 'old_balance' => 0, // Lua 脚本未返回旧余额
             ];
 
@@ -299,7 +299,7 @@ class WalletService
             ->where('platform_id', $platformId)
             ->value('money');
 
-        return (float)($balance ?? 0);
+        return round((float)($balance ?? 0), 2);
     }
 
     /**
@@ -348,7 +348,7 @@ class WalletService
 
             foreach ($playerIds as $index => $playerId) {
                 if (isset($cached[$index]) && $cached[$index] !== false) {
-                    $result[$playerId] = (float)$cached[$index];
+                    $result[$playerId] = round((float)$cached[$index], 2);
                 } else {
                     $missingPlayerIds[] = $playerId;
                 }
@@ -362,7 +362,7 @@ class WalletService
 
                 $foundPlayerIds = [];
                 foreach ($wallets as $wallet) {
-                    $balance = (float)$wallet->money;
+                    $balance = round((float)$wallet->money, 2);
                     $result[$wallet->player_id] = $balance;
                     $foundPlayerIds[] = $wallet->player_id;
 
@@ -373,9 +373,9 @@ class WalletService
                 // 补充数据库中不存在的玩家（余额为0）
                 $notFoundPlayerIds = array_diff($missingPlayerIds, $foundPlayerIds);
                 foreach ($notFoundPlayerIds as $playerId) {
-                    $result[$playerId] = 0.0;
+                    $result[$playerId] = 0.00;
                     // 缓存不存在的玩家（避免缓存穿透）
-                    self::updateCache($playerId, $platformId, 0.0);
+                    self::updateCache($playerId, $platformId, 0.00);
                 }
             }
 
@@ -536,8 +536,8 @@ LUA;
 
             // 解析返回的 JSON：{old: 旧余额, new: 新余额}
             $balanceData = json_decode($result, true);
-            $oldBalance = (float)($balanceData['old'] ?? 0);
-            $newBalance = (float)($balanceData['new'] ?? 0);
+            $oldBalance = round((float)($balanceData['old'] ?? 0), 2);
+            $newBalance = round((float)($balanceData['new'] ?? 0), 2);
 
             // ✅ 异步同步数据库（Redis 是实时标准，数据库用于持久化）
             self::asyncUpdateDB($playerId, $newBalance);
@@ -601,8 +601,8 @@ LUA;
             $result = json_decode($resultJson, true);
 
             if ($result['ok'] == 1) {
-                $oldBalance = (float)($result['old'] ?? 0);
-                $newBalance = (float)($result['new'] ?? 0);
+                $oldBalance = round((float)($result['old'] ?? 0), 2);
+                $newBalance = round((float)($result['new'] ?? 0), 2);
 
                 // ✅ 异步同步数据库（仅在扣款成功时）
                 self::asyncUpdateDB($playerId, $newBalance);
@@ -611,9 +611,16 @@ LUA;
                     'player_id' => $playerId,
                     'amount' => $amount,
                     'old_balance' => $oldBalance,
-                    'new_balance' => $result['balance'],
+                    'new_balance' => $newBalance,
                 ]);
+
+                // 格式化返回值
+                $result['balance'] = $newBalance;
+                $result['old'] = $oldBalance;
             } else {
+                // 余额不足时也格式化
+                $result['balance'] = round((float)($result['balance'] ?? 0), 2);
+
                 Log::warning('WalletService::atomicDecrement 失败 - 余额不足', [
                     'player_id' => $playerId,
                     'amount' => $amount,

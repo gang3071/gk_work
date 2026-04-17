@@ -464,6 +464,14 @@ LUA;
                 ]);
             }
 
+            // ✅ 格式化余额精度（避免科学计数法传递给第三方）
+            if (isset($decoded['balance'])) {
+                $decoded['balance'] = round((float)$decoded['balance'], 2);
+            }
+            if (isset($decoded['old_balance'])) {
+                $decoded['old_balance'] = round((float)$decoded['old_balance'], 2);
+            }
+
             // ✅ 实时推送：发布余额变化消息到 Redis Pub/Sub
             self::publishBalanceChange($playerId, $platform, [
                 'reason' => 'bet',
@@ -472,6 +480,11 @@ LUA;
                 'order_no' => $orderNo,
                 'amount' => -$betAmount,
             ]);
+        } else {
+            // 失败时也格式化余额
+            if (isset($decoded['balance'])) {
+                $decoded['balance'] = round((float)$decoded['balance'], 2);
+            }
         }
 
         return $decoded ?? [];
@@ -581,6 +594,14 @@ LUA;
                 ]);
             }
 
+            // ✅ 格式化余额精度（避免科学计数法传递给第三方）
+            if (isset($decoded['balance'])) {
+                $decoded['balance'] = round((float)$decoded['balance'], 2);
+            }
+            if (isset($decoded['old_balance'])) {
+                $decoded['old_balance'] = round((float)$decoded['old_balance'], 2);
+            }
+
             // ✅ 实时推送：发布余额变化消息
             self::publishBalanceChange($playerId, $platform, [
                 'reason' => 'settle',
@@ -589,6 +610,11 @@ LUA;
                 'order_no' => $orderNo,
                 'amount' => $winAmount,
             ]);
+        } else {
+            // 失败时也格式化余额
+            if (isset($decoded['balance'])) {
+                $decoded['balance'] = round((float)$decoded['balance'], 2);
+            }
         }
 
         return $decoded ?? [];
@@ -702,6 +728,14 @@ LUA;
                 ]);
             }
 
+            // ✅ 格式化余额精度（避免科学计数法传递给第三方）
+            if (isset($decoded['balance'])) {
+                $decoded['balance'] = round((float)$decoded['balance'], 2);
+            }
+            if (isset($decoded['old_balance'])) {
+                $decoded['old_balance'] = round((float)$decoded['old_balance'], 2);
+            }
+
             // ✅ 实时推送：发布余额变化消息
             self::publishBalanceChange($playerId, $platform, [
                 'reason' => 'cancel',
@@ -710,6 +744,11 @@ LUA;
                 'order_no' => $orderNo,
                 'amount' => $data['refund_amount'] ?? 0,
             ]);
+        } else {
+            // 失败时也格式化余额
+            if (isset($decoded['balance'])) {
+                $decoded['balance'] = round((float)$decoded['balance'], 2);
+            }
         }
 
         return $decoded ?? [];
@@ -732,7 +771,7 @@ LUA;
 
         $result = [];
         foreach ($playerIds as $index => $playerId) {
-            $result[$playerId] = (float)($balances[$index] ?? 0);
+            $result[$playerId] = round((float)($balances[$index] ?? 0), 2);
         }
 
         return $result;
