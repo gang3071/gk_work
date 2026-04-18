@@ -25,9 +25,9 @@ jobs:
           echo "   源分支: ${{ env.BRANCH_NAME }}"
           echo "=================================================="
 
-          # 将分支名中的 / 替换为 - (URL 安全)
-          # 例如: fix/4.14 → fix-4.14
-          BRANCH_PARAM=$(echo "${{ env.BRANCH_NAME }}" | sed 's/\//-/g')
+          # 将分支名进行 URL 编码（/ → %2F）
+          # 例如: release/1.0.0.1 → release%2F1.0.0.1
+          BRANCH_PARAM=$(echo "${{ env.BRANCH_NAME }}" | sed 's/\//%2F/g')
           echo "   URL参数: $BRANCH_PARAM"
 
           # 根据分支名判断环境
