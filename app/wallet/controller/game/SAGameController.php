@@ -399,12 +399,20 @@ class SAGameController
                 $orderNo = (string)($betOrderNo ?? $txnId);  // 优先使用 betlist 的 txnid，强制转换为字符串
                 $resultAmount = $payoutAmount;
 
+                // ✅ 从 betlist 提取 resultamount 作为 diff（净输赢）
+                $diff = 0;
+                if (!empty($betList)) {
+                    foreach ($betList as $betInfo) {
+                        $diff += (float)($betInfo['resultamount'] ?? 0);
+                    }
+                }
+
                 // Lua 原子结算
                 $luaParams = [
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $resultAmount,
-                    'diff' => $payoutAmount, // 使用外层 amount 作为 diff
+                    'diff' => $diff, // ✅ 修复：使用 betlist 的 resultamount 作为 diff（净输赢）
                     'transaction_type' => TransactionType::SETTLE,
                     'original_data' => $data, // 使用完整的请求数据
                 ];
@@ -430,7 +438,7 @@ class SAGameController
                         'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
                         'amount' => $resultAmount,
-                        'diff' => $payoutAmount,
+                        'diff' => $diff,  // ✅ 修复：使用计算的 diff（净输赢）
                         'game_code' => $data['hostid'] ?? '',
                         'original_data' => $data,
                         'balance_before' => $result['old_balance'] ?? 0,

@@ -16,6 +16,7 @@ use Exception;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use Illuminate\Support\Str;
+use support\Cache;
 use support\Log;
 use WebmanTech\LaravelHttpClient\Facades\Http;
 
@@ -226,6 +227,9 @@ class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceI
         if ($res['msgId'] != $this->successCode) {
             throw new GameException($this->failCode[$res['msgId']], 0);
         }
+
+        //处理用户token 保证检查用户时的token准确性
+        Cache::set('rsg_live_user_token_'.$this->player->uuid,strtolower($res['data']['token']??''));
 
         return $res['data']['url'] ?? '';
     }
