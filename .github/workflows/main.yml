@@ -8,6 +8,7 @@ on:
       - fix/**       # 测试线（所有 fix 开头的分支）
       - feature/**   # 测试线（所有 feature 开头的分支）
       - test/**      # 测试线（所有 test 开头的分支）
+      - release/**   # 发布分支（所有 release 开头的分支）
 
 jobs:
   deploy:
