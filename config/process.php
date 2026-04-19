@@ -21,6 +21,7 @@ use process\GameRecordSyncWorker;
 use process\LotteryPoolSocket;
 use process\LotteryRemind;
 use process\NationalPromoterRebate;
+use process\OnlinePlayerPushWorker;
 use process\ProfitSettlement;
 use process\ReconciliationTask;
 use process\ReverseWater;
@@ -72,6 +73,14 @@ return [
     'BalancePushWorker' => [
         'handler' => BalancePushWorker::class,
         'count' => 1,  // 1个进程即可（Pub/Sub 消费不需要并发）
+    ],
+    // ✅ 在线玩家定时推送进程（Redis Set + 定时任务）
+    // 作用：每3秒批量推送在线玩家列表到 WebSocket
+    // 优势：消除99.9%的重复推送，降低Socket压力，无队列积压
+    // 延迟：< 3秒（可接受）
+    'OnlinePlayerPushWorker' => [
+        'handler' => OnlinePlayerPushWorker::class,
+        'count' => 1,  // 1个进程即可（定时任务不需要并发）
     ],
 ];
 

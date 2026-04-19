@@ -207,6 +207,9 @@ LUA;
 
         // 记录统计
         self::redis()->incr("game:stats:{$platform}:bet:count");
+
+        // 记录在线玩家（用于定时推送，去重）
+        self::recordOnlinePlayer($platform, $data);
     }
 
     /**
@@ -487,5 +490,93 @@ LUA;
             'cancel_count' => Redis::get("game:stats:{$platform}:cancel:count") ?? 0,
             'pending_sync' => Redis::zCard(self::PREFIX_SYNC_QUEUE),
         ];
+    }
+
+    /**
+     * 记录在线玩家信息（用于定时推送）
+     *
+     * @param string $platform 平台代码
+     * @param array $data 下注数据
+     * @return void
+     */
+    private static function recordOnlinePlayer(string $platform, array $data): void
+    {
+        try {
+            $playerId = $data['player_id'] ?? 0;
+            $platformId = $data['platform_id'] ?? 0;
+
+            if (!$playerId || !$platformId) {
+                return;
+            }
+
+            // 1. 将玩家ID加入在线集合（自动去重）
+            self::redis()->sAdd('online_players:game', $playerId);
+            self::redis()->expire('online_players:game', 60);
+
+            // 2. 更新累计押注统计（5分钟内）
+            $betStatKey = "player_bet_stat:{$playerId}";
+            $currentTotal = self::redis()->get($betStatKey) ?? 0;
+            $newTotal = bcadd($currentTotal, $data['amount'], 2);
+            self::redis()->setex($betStatKey, 300, $newTotal);  // 5分钟过期
+
+            // 3. 保存玩家当前游戏信息（用于推送详情）
+            $gameInfo = [
+                'platform_id' => $platformId,
+                'platform_name' => self::getPlatformName($platformId),
+                'game_code' => $data['game_code'] ?? '',
+                'last_bet' => number_format($data['amount'], 2),
+                'last_bet_time' => date('Y-m-d H:i:s'),
+            ];
+
+            self::redis()->setex(
+                "player_current_game:{$playerId}",
+                60,
+                json_encode($gameInfo)
+            );
+
+        } catch (\Exception $e) {
+            // 记录失败不影响主流程，仅记录日志
+            \support\Log::warning('记录在线玩家信息失败', [
+                'platform' => $platform,
+                'player_id' => $data['player_id'] ?? 0,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * 获取平台名称（带缓存）
+     *
+     * @param int $platformId
+     * @return string
+     */
+    private static function getPlatformName(int $platformId): string
+    {
+        if (!$platformId) {
+            return '';
+        }
+
+        $cacheKey = "platform_name_cache:{$platformId}";
+        $cached = self::redis()->get($cacheKey);
+
+        if ($cached) {
+            return $cached;
+        }
+
+        try {
+            $platform = \app\model\GamePlatform::find($platformId);
+            $name = $platform->name ?? '';
+
+            // 缓存1小时
+            self::redis()->setex($cacheKey, 3600, $name);
+
+            return $name;
+        } catch (\Exception $e) {
+            \support\Log::warning('获取平台名称失败', [
+                'platform_id' => $platformId,
+                'error' => $e->getMessage(),
+            ]);
+            return '';
+        }
     }
 }
