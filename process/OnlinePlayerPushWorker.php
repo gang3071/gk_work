@@ -128,7 +128,13 @@ class OnlinePlayerPushWorker
                 $players[] = $playerData;
             }
 
-            // 3. 推送Socket消息
+            // 3. 排序玩家列表（保证推送顺序稳定，避免前端列表跳动）
+            usort($players, function ($a, $b) {
+                // 按最后押注时间倒序（最近押注的在前面）
+                return $b['bet_seconds_ago'] <=> $a['bet_seconds_ago'];
+            });
+
+            // 4. 推送Socket消息
             if (!empty($players)) {
                 sendSocketMessage('group-online-players-game', [
                     'msg_type' => 'online_players_update',
