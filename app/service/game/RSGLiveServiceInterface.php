@@ -3,6 +3,7 @@
 namespace app\service\game;
 
 use app\exception\GameException;
+use app\model\ChannelGameWeb;
 use app\model\Game;
 use app\model\GameExtend;
 use app\model\GamePlatform;
@@ -583,6 +584,11 @@ class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceI
 
         $key = $this->config['client_id'] . $this->config['client_secret'];
         return JWT::encode($SessionTokenPayload, $key, 'HS256');
+    }
+
+    public function getWebId()
+    {
+        return ChannelGameWeb::query()->where('channel_id', $this->player->channel->id)->where('platform_id', $this->platform->id)->value('web_id') ?: 'super9';
     }
 
 }
