@@ -143,7 +143,7 @@ class SPServiceInterface extends GameServiceFactory implements GameServiceInterf
         ];
         $res = $this->doCurl('RegUserInfo', $params);
         if ($res['ErrorMsgId'] != '0') {
-            $this->log->info('createPlayer', [$res]);
+            $this->log->info('createPlayer', [$res,$params]);
             throw new GameException($res['ErrorMsg'], 0);
         }
 
@@ -168,7 +168,7 @@ class SPServiceInterface extends GameServiceFactory implements GameServiceInterf
         ];
         $res = $this->doCurl('LoginRequest', $params);
         if ($res['ErrorMsgId'] != '0') {
-            $this->log->info('lobbyLogin', [$res]);
+            $this->log->info('lobbyLogin', [$res,$params]);
             throw new GameException($res['ErrorMsg'], 0);
         }
 
@@ -187,7 +187,7 @@ class SPServiceInterface extends GameServiceFactory implements GameServiceInterf
         ];
         $res = $this->doCurl('GetActiveGameList ', $params);
         if ($res['ErrorMsgId'] != '0') {
-            $this->log->info('lobbyLogin', [$res]);
+            $this->log->info('lobbyLogin', [$res,$params]);
             throw new GameException($res['ErrorMsg'], 0);
         }
 
@@ -239,7 +239,7 @@ class SPServiceInterface extends GameServiceFactory implements GameServiceInterf
         ];
         $res = $this->doCurl('LoginRequest', $params);
         if ($res['ErrorMsgId'] != '0') {
-            $this->log->info('lobbyLogin', [$res]);
+            $this->log->info('lobbyLogin', [$res,$params]);
             throw new GameException($res['ErrorMsg'], 0);
         }
 
@@ -276,7 +276,7 @@ class SPServiceInterface extends GameServiceFactory implements GameServiceInterf
         ];
         $res = $this->doCurl('GetGameDetailsURL', $params);
         if ($res['ErrorMsgId'] != '0') {
-            $this->log->info('replay', [$res]);
+            $this->log->info('replay', [$res,$params]);
             throw new GameException($res['ErrorMsg'], 0);
         }
 
