@@ -558,12 +558,6 @@ class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceI
         return $data;
     }
 
-    public function getWebId()
-    {
-        //todo 后续需要去后台手动创建每个渠道各自的webid  暂时写死方便测试
-        return 'gk198';
-    }
-
     /**
      * 加密
      * @param $data

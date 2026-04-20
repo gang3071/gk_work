@@ -122,7 +122,7 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
             'ipaddress' => request()->getRemoteIp(),
             'username' => $this->player->uuid,
             'userid' => $this->player->uuid,
-            'lang' => 'zh-TW',
+            'lang' => 'en-US',
             'cur' => $this->currency[$this->player->currency],
             'betlimitid' => 1,
             'platformtype' => 'Mobile',

@@ -144,7 +144,7 @@ class GameServiceFactory
 
     public function getWebId()
     {
-        return ChannelGameWeb::query()->where('channel_id', $this->player->channel->id)->where('platform_id', $this->platform->id)->value('web_id') ?? '';
+        return ChannelGameWeb::query()->where('channel_id', $this->player->channel->id)->where('platform_id', $this->platform->id)->value('web_id') ?? 'super9';
     }
 
     /**
