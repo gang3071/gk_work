@@ -90,6 +90,8 @@ class SPServiceInterface extends GameServiceFactory implements GameServiceInterf
             ->asForm()
             ->post($this->config['api_domain'], ['q' => $requestStr, 's' => $md5]);
 
+        $this->log->info('sp_params',['params'=>$params,'q'=>$requestStr,'s'=>$md5]);
+
         if (!$response->ok()) {
             $this->log->error($this->config['api_domain'] . "/$url", ['params' => $params, 'body' => ['q' => $requestStr, 's' => $md5], 'response' => $response->body()]);
             throw new GameException(trans('system_busy', [], 'message'));
