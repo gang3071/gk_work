@@ -9,6 +9,7 @@ use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\RedisLuaScripts;
 use app\service\WalletService;
+use app\service\DGMergedBetHandler;
 use support\Log;
 use support\Request;
 use support\Response;
@@ -184,38 +185,42 @@ class DGGameController
                 }
 
             } else {
-                // type=1:下注 type=3:补单 type=6:小费 → Lua 原子下注
+                // type=1:下注 type=3:补单 type=6:小费 → 使用合并下注处理器
                 if ($amount > 0) {
                     //判断当前设备是否爆机
                     if ($this->service->checkAndHandleMachineCrash()) {
                         return $this->error($this->service->error);
                     }
 
-                    $luaParams = [
-                        'order_no' => $orderNo,
-                        'platform_id' => $this->service->platform->id,
-                        'amount' => $amount,
-                        'game_code' => $detail['gameId'] ?? '',
-                        'transaction_type' => $type == 3 ? TransactionType::BET_ADJUST : TransactionType::BET,
-                        'original_data' => $params,
-                    ];
-
-                    // 参数验证
-                    validateLuaScriptParams($luaParams, [
-                        'order_no' => ['required', 'string'],
-                        'amount' => ['required', 'numeric', 'min:0'],
-                        'platform_id' => ['required', 'integer'],
-                        'transaction_type' => ['required', 'string'],
-                    ], 'atomicBet');
-
-                    $result = RedisLuaScripts::atomicBet($player->id, 'DG', $luaParams);
+                    // ✅ 使用 DGMergedBetHandler 处理多次下注合并
+                    $result = DGMergedBetHandler::handleMergedBet(
+                        $player->id,
+                        $params,
+                        $this->service->platform->id
+                    );
 
                     // 审计日志
-                    logLuaScriptCall('bet', 'DG', $player->id, $luaParams);
+                    Log::channel('dg_server')->info('[Lua审计] DG合并下注', [
+                        'operation' => 'merged_bet',
+                        'platform' => 'DG',
+                        'player_id' => $player->id,
+                        'order_no' => $orderNo,
+                        'transfer_no' => $params['data'] ?? '',
+                        'amount' => $amount,
+                        'is_first_bet' => $result['is_first_bet'] ?? false,
+                        'total_amount' => $result['total_amount'] ?? $amount,
+                        'platform_id' => $this->service->platform->id,
+                        'game_code' => $detail['gameId'] ?? '',
+                        'transaction_type' => $type == 3 ? TransactionType::BET_ADJUST : TransactionType::BET,
+                    ]);
 
                     if ($result['ok'] === 0) {
-                        if ($result['error'] === 'duplicate_order') {
-                            Log::channel('dg_server')->info('DG下注重复请求（Lua检测）', ['order_no' => $orderNo, 'type' => $type]);
+                        if ($result['error'] === 'duplicate_transfer') {
+                            Log::channel('dg_server')->info('DG转账流水号重复（Lua检测）', [
+                                'order_no' => $orderNo,
+                                'transfer_no' => $params['data'] ?? '',
+                                'type' => $type
+                            ]);
                         } elseif ($result['error'] === 'insufficient_balance') {
                             return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
                         }
@@ -227,11 +232,13 @@ class DGGameController
                             'order_no' => $orderNo,
                             'player_id' => $player->id,
                             'platform_id' => $this->service->platform->id,
-                            'amount' => $amount,
+                            'amount' => $result['total_amount'] ?? $amount,  // ✅ 使用累计金额
                             'game_code' => $detail['gameId'] ?? '',
                             'original_data' => $params,
                             'balance_before' => $result['old_balance'] ?? 0,
                             'balance_after' => $result['balance'],
+                            'transfer_no' => $params['data'] ?? '',  // ✅ 记录转账流水号
+                            'is_first_bet' => $result['is_first_bet'] ?? false,  // ✅ 标记是否首次下注
                         ]);
                     }
                 } else {
@@ -242,7 +249,9 @@ class DGGameController
 
             Log::channel('dg_server')->info('DG操作成功（Lua原子）', [
                 'order_no' => $orderNo,
+                'transfer_no' => $params['data'] ?? '',
                 'type' => $type,
+                'is_merged' => in_array($type, [1, 3, 6]),  // 下注/补单/小费使用合并逻辑
             ]);
 
             $return = [
