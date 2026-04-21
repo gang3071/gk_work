@@ -247,7 +247,13 @@ LUA;
                 'args' => $args
             ]);
 
-            $result = Redis::eval($lua, array_merge($keys, $args), count($keys));
+            // ✅ 修复：Redis::eval 参数应该是展开的，不是数组
+            $result = Redis::eval(
+                $lua,
+                count($keys),  // KEYS 数量
+                $keys[0], $keys[1], $keys[2], $keys[3], $keys[4],  // KEYS
+                ...$args  // ARGV（展开数组）
+            );
 
             Log::channel('dg_server')->info('[DGMergedBetHandler] Lua脚本执行完成', [
                 'ticketId' => $ticketId,
