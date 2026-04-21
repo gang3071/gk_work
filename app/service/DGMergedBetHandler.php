@@ -200,7 +200,8 @@ else
     redis.call('HMSET', mainOrderKey,
         'amount', currentAmount + betAmount,
         'bet_count', currentBetCount + 1,
-        'bet_points', betPoints
+        'bet_points', betPoints,
+        'status', 'pending'  -- ✅ 重置状态，确保累加后的金额能同步到数据库
     )
 
     -- 更新同步队列优先级

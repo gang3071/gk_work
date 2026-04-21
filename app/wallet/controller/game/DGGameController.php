@@ -276,20 +276,30 @@ class DGGameController
                         }
                     }
 
-                    // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步和推送）
+                    // ✅ DG 合并下注：Lua 脚本已维护完整记录，补充额外字段
+                    // 注意：Lua 脚本在 game:record:bet:DG:{ticketId} 中已经：
+                    // 1. 创建/更新了订单记录
+                    // 2. 正确累加了 amount
+                    // 3. 加入了同步队列
+                    // 这里只补充 Lua 脚本中没有的字段，不能覆盖 amount
+
                     if ($result['ok'] === 1) {
-                        \app\service\GameRecordCacheService::saveBet('DG', [
-                            'order_no' => $orderNo,
-                            'player_id' => $player->id,
-                            'platform_id' => $this->service->platform->id,
-                            'amount' => $result['total_amount'] ?? $amount,  // ✅ 使用累计金额
-                            'game_code' => $detail['gameId'] ?? '',
-                            'original_data' => $params,
-                            'balance_before' => $result['old_balance'] ?? 0,
-                            'balance_after' => $result['balance'],
-                            'transfer_no' => $params['data'] ?? '',  // ✅ 记录转账流水号
-                            'is_first_bet' => $result['is_first_bet'] ?? false,  // ✅ 标记是否首次下注
-                        ]);
+                        $betKey = "game:record:bet:DG:{$orderNo}";
+
+                        // 首次下注：补充完整字段
+                        if ($result['is_first_bet'] ?? false) {
+                            \support\Redis::hMSet($betKey, [
+                                'game_type' => '',
+                                'game_name' => '',
+                                'bet_type' => 'bet',
+                                'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
+                                'balance_before' => $result['old_balance'] ?? 0,
+                                'balance_after' => $result['balance'],
+                            ]);
+                        } else {
+                            // 追加下注：只更新 balance_after（余额在变化）
+                            \support\Redis::hSet($betKey, 'balance_after', $result['balance']);
+                        }
                     }
                 } else {
                     // amount = 0 的特殊情况，直接返回
