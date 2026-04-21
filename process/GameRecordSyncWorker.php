@@ -361,6 +361,7 @@ class GameRecordSyncWorker
         foreach ($records as $record) {
             $orderNo = $record['order_no'];
             $settlementStatus = $record['settlement_status'] ?? 0;
+            $platform = $record['platform'] ?? '';
 
             /** @var PlayGameRecord $existing */
             $existing = $existingRecords[$orderNo] ?? null;
@@ -371,13 +372,15 @@ class GameRecordSyncWorker
 
             $needUpdate = false;
 
-            // ✅ 更新下注金额（DG合并下注会累加amount）
-            if (isset($record['amount']) && $record['amount'] != $existing->bet) {
-                $existing->bet = $record['amount'];
-                $needUpdate = true;
+            // ✅ DG平台特殊处理：允许未结算状态下更新bet（合并下注累加）
+            if ($platform === 'DG' && $settlementStatus == 0) {
+                if (isset($record['amount']) && $record['amount'] != $existing->bet) {
+                    $existing->bet = $record['amount'];
+                    $needUpdate = true;
+                }
             }
 
-            // ✅ 更新结算状态（如果已结算）
+            // ✅ 更新结算状态（所有平台）
             if ($settlementStatus == 1) {
                 $existing->win = $record['win'] ?? 0;
                 $existing->diff = $record['diff'] ?? 0;
@@ -579,21 +582,24 @@ class GameRecordSyncWorker
             if ($existing) {
                 // 已存在，更新
                 $needUpdate = false;
+                $platform = $record['platform'] ?? '';
 
-                // ✅ 更新下注金额（DG合并下注会累加amount）
-                if (isset($record['amount']) && $record['amount'] != $existing->bet) {
-                    $existing->bet = $record['amount'];
-                    $needUpdate = true;
+                // ✅ DG平台特殊处理：允许未结算状态下更新bet（合并下注累加）
+                if ($platform === 'DG' && $settlementStatus == 0) {
+                    if (isset($record['amount']) && $record['amount'] != $existing->bet) {
+                        $existing->bet = $record['amount'];
+                        $needUpdate = true;
 
-                    $this->log->info("更新下注金额", [
-                        'order_no' => $orderNo,
-                        'old_bet' => $existing->bet,
-                        'new_bet' => $record['amount'],
-                        'record_id' => $existing->id,
-                    ]);
+                        $this->log->info("DG合并下注：更新累计金额", [
+                            'order_no' => $orderNo,
+                            'old_bet' => $existing->bet,
+                            'new_bet' => $record['amount'],
+                            'record_id' => $existing->id,
+                        ]);
+                    }
                 }
 
-                // ✅ 更新结算状态（如果已结算）
+                // ✅ 更新结算状态（所有平台）
                 if ($settlementStatus == 1) {
                     $existing->win = $record['win'] ?? 0;
                     $existing->diff = $record['diff'] ?? 0;
