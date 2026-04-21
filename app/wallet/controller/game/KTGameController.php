@@ -229,7 +229,7 @@ class KTGameController
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $balanceChange,
-                    'diff' => $balanceChange,
+                    'diff' => $win,  // ✅ 使用Win保持与saveBetForKT一致
                     'transaction_type' => TransactionType::SETTLE,
                     'original_data' => $params,
                 ];
@@ -358,40 +358,103 @@ class KTGameController
             $params = $request->post();
             $hash = $request->get('Hash');
 
-            $this->logger->info('KT取消投注请求（Lua原子）', ['params' => $params, 'get' => $hash]);
+            $this->logger->info('KT取消投注请求', ['params' => $params, 'hash' => $hash]);
 
             $this->service->verifyToken($params, $hash);
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
 
+            // 必填字段验证
+            $requiredFields = ['Username', 'Currency', 'GameID', 'MainTxID', 'SubTxID'];
+            foreach ($requiredFields as $field) {
+                if (!isset($params[$field])) {
+                    $this->logger->error('KT取消缺少必填字段', ['field' => $field]);
+                    return $this->error(self::API_CODE_OTHER_ERROR, "缺少必填字段: {$field}");
+                }
+            }
+
             $this->service->player = \app\model\Player::query()->where('uuid', $params['Username'])->first();
             $player = $this->service->player;
 
-            $orderNo = $params['MainTxID'];
-            $subTxID = (string)($data['SubTxID'] ?? '');
-            $refundAmount = $params['Amount'] ?? 0;
+            if (!$player) {
+                $this->logger->error('KT玩家不存在', ['username' => $params['Username']]);
+                return $this->error(self::API_CODE_TOKEN_DOES_NOT_EXIST, '玩家不存在');
+            }
+
+            $mainTxID = $params['MainTxID'];
+            $subTxID = $params['SubTxID'];
+
+            // ✅ 订单号规则：SubTxID=0不加后缀
+            $orderNo = ($subTxID == 0) ? $mainTxID : $mainTxID . '_' . $subTxID;
+
+            // ✅ 从Redis查找原始订单，获取退款金额
+            $redis = \support\Redis::connection();
+            $betKey = "game:bet:KT:{$orderNo}";
+            $betRecord = $redis->hGetAll($betKey);
+
+            if (empty($betRecord)) {
+                $this->logger->error('KT取消投注-原始订单不存在', ['order_no' => $orderNo]);
+                // 订单不存在也返回成功（幂等性）
+                $balance = WalletService::getBalance($player->id);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                    'Balance' => (float)$balance
+                ]);
+            }
+
+            // ✅ 计算退款金额：balance_before - balance_after
+            // - 正数：原交易扣了钱，取消时要返还（+）
+            // - 负数：原交易加了钱，取消时要扣回（-）
+            $balanceBefore = (float)($betRecord['balance_before'] ?? 0);
+            $balanceAfter = (float)($betRecord['balance_after'] ?? 0);
+            $refundAmount = bcsub($balanceBefore, $balanceAfter, 2);
+
+            // ⚠️ 注意：atomicCancel的Lua脚本是 newBalance = currentBalance + refundAmount
+            // 所以传入的refundAmount可以是正数（返还）或负数（扣回）
+
+            // ✅ 余额不足保护：需要扣回时，如果余额不足则只扣到0
+            if (bccomp($refundAmount, '0', 2) < 0) {
+                $currentBalance = WalletService::getBalance($player->id);
+                $expectedBalance = bcadd($currentBalance, $refundAmount, 2);
+
+                if (bccomp($expectedBalance, '0', 2) < 0) {
+                    // 余额不足，调整退款金额为当前余额（扣完所有余额）
+                    $originalRefundAmount = $refundAmount;
+                    $refundAmount = bcmul($currentBalance, '-1', 2);  // 负数（扣除全部余额）
+
+                    $this->logger->warning('KT取消投注-余额不足，扣到0', [
+                        'order_no' => $orderNo,
+                        'current_balance' => $currentBalance,
+                        'original_refund_amount' => $originalRefundAmount,
+                        'adjusted_refund_amount' => $refundAmount,
+                    ]);
+                }
+            }
+
+            $this->logger->info('KT取消投注-退款金额', [
+                'order_no' => $orderNo,
+                'refund_amount' => $refundAmount,
+                'balance_before' => $balanceBefore,
+                'balance_after' => $balanceAfter,
+            ]);
 
             // Lua 原子取消
             $luaParams = [
-                'order_no' => $orderNo . '_' . $subTxID,
+                'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
                 'refund_amount' => $refundAmount,
                 'transaction_type' => TransactionType::CANCEL,
                 'original_data' => $params,
             ];
 
-            // 参数验证
             validateLuaScriptParams($luaParams, [
                 'order_no' => ['required', 'string'],
-                'refund_amount' => ['required', 'numeric', 'min:0'],
+                'refund_amount' => ['required', 'numeric'],  // 允许负数（扣回场景）
                 'platform_id' => ['required', 'integer'],
                 'transaction_type' => ['required', 'string'],
             ], 'atomicCancel');
 
             $result = RedisLuaScripts::atomicCancel($player->id, 'KT', $luaParams);
-
-            // 审计日志
             logLuaScriptCall('cancel', 'KT', $player->id, $luaParams);
 
             // 保存取消记录到 Redis
@@ -408,11 +471,15 @@ class KTGameController
             }
 
             // 处理结果
-            if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
-                $this->logger->info('KT取消投注重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
+            if ($result['ok'] === 0 && ($result['error'] === 'duplicate_order' || $result['error'] === 'duplicate_cancel')) {
+                $this->logger->info('KT取消投注重复请求', ['order_no' => $orderNo]);
+                $balance = WalletService::getBalance($player->id);
+                return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                    'Balance' => (float)$balance
+                ]);
             }
 
-            $this->logger->info('KT取消投注成功（Lua原子）', ['order_no' => $orderNo . '_' . $subTxID]);
+            $this->logger->info('KT取消投注成功', ['order_no' => $orderNo, 'balance' => $result['balance']]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => round((float)$result['balance'], 2)
