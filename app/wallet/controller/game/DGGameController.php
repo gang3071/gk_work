@@ -216,13 +216,40 @@ class DGGameController
 
                     if ($result['ok'] === 0) {
                         if ($result['error'] === 'duplicate_transfer') {
+                            // 转账流水号重复 → 幂等性保护，返回成功（使用当前余额）
                             Log::channel('dg_server')->info('DG转账流水号重复（Lua检测）', [
                                 'order_no' => $orderNo,
                                 'transfer_no' => $params['data'] ?? '',
-                                'type' => $type
+                                'type' => $type,
+                                'balance' => $result['balance'] ?? 0
                             ]);
+                            // ✅ 幂等性：返回成功，使用当前余额
+                            $return = [
+                                'member' => [
+                                    'username' => $params['member']['username'],
+                                    'balance' => round((float)$beforeBalance, 2),
+                                    'amount' => $params['member']['amount'],
+                                ]
+                            ];
+                            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], $return);
                         } elseif ($result['error'] === 'insufficient_balance') {
+                            // 余额不足
+                            Log::channel('dg_server')->warning('DG下注失败：余额不足', [
+                                'order_no' => $orderNo,
+                                'player_id' => $player->id,
+                                'amount' => $amount,
+                                'balance' => $result['balance'] ?? 0
+                            ]);
                             return $this->error(self::API_CODE_INSUFFICIENT_BALANCE);
+                        } else {
+                            // 其他错误（Lua执行失败等）
+                            Log::error('DG下注失败：未知错误', [
+                                'order_no' => $orderNo,
+                                'player_id' => $player->id,
+                                'error' => $result['error'] ?? 'unknown',
+                                'result' => $result
+                            ]);
+                            return $this->error(self::API_CODE_DECRYPT_ERROR);
                         }
                     }
 
