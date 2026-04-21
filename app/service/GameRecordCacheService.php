@@ -614,8 +614,9 @@ LUA;
         $exists = self::redis()->exists($key);
 
         if ($exists) {
-            // 记录已存在，只更新必要字段
+            // 记录已存在，更新必要字段（包括amount，确保存储的是原始Bet值）
             self::redis()->hMSet($key, [
+                'amount' => $data['amount'],  // ✅ 更新为KT的原始Bet值
                 'win' => $data['win'] ?? 0,
                 'diff' => $data['diff'] ?? 0,
                 'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
