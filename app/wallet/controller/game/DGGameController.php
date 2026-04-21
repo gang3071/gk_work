@@ -187,17 +187,40 @@ class DGGameController
             } else {
                 // type=1:下注 type=3:补单 type=6:小费 → 使用合并下注处理器
                 if ($amount > 0) {
+                    Log::channel('dg_server')->info('DG准备调用合并下注处理器', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'amount' => $amount,
+                        'transfer_no' => $params['data'] ?? ''
+                    ]);
+
                     //判断当前设备是否爆机
                     if ($this->service->checkAndHandleMachineCrash()) {
+                        Log::channel('dg_server')->warning('DG下注失败：设备爆机', [
+                            'order_no' => $orderNo,
+                            'player_id' => $player->id,
+                            'error' => $this->service->error
+                        ]);
                         return $this->error($this->service->error);
                     }
 
                     // ✅ 使用 DGMergedBetHandler 处理多次下注合并
+                    Log::channel('dg_server')->info('DG调用handleMergedBet', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id
+                    ]);
+
                     $result = DGMergedBetHandler::handleMergedBet(
                         $player->id,
                         $params,
                         $this->service->platform->id
                     );
+
+                    Log::channel('dg_server')->info('DG handleMergedBet返回结果', [
+                        'order_no' => $orderNo,
+                        'result' => $result
+                    ]);
 
                     // 审计日志
                     Log::channel('dg_server')->info('[Lua审计] DG合并下注', [

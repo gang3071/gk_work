@@ -35,6 +35,14 @@ class DGMergedBetHandler
         $detail = json_decode($params['detail'], true);
         $type = $params['type'];
 
+        Log::channel('dg_server')->info('[DGMergedBetHandler] 开始处理', [
+            'player_id' => $playerId,
+            'ticketId' => $ticketId,
+            'data' => $data,
+            'amount' => $amount,
+            'type' => $type
+        ]);
+
         // 1. 幂等性检查：转账流水号是否已处理
         $transferKey = "dg:transfer:{$data}";
         if (Redis::exists($transferKey)) {
@@ -232,7 +240,20 @@ LUA;
                 $detail['betPoints'] ?? 0
             ];
 
+            Log::channel('dg_server')->info('[DGMergedBetHandler] 准备执行Lua脚本', [
+                'ticketId' => $ticketId,
+                'data' => $data,
+                'keys' => $keys,
+                'args' => $args
+            ]);
+
             $result = Redis::eval($lua, array_merge($keys, $args), count($keys));
+
+            Log::channel('dg_server')->info('[DGMergedBetHandler] Lua脚本执行完成', [
+                'ticketId' => $ticketId,
+                'data' => $data,
+                'raw_result' => $result
+            ]);
             $decoded = json_decode($result, true);
 
             // 记录审计日志
