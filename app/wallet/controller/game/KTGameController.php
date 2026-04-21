@@ -264,16 +264,21 @@ class KTGameController
                 $lockKey = "order:kt:lock:{$orderNo}";
                 $redis = \support\Redis::connection();
 
+                $this->logger->info('KT零余额变化-设置幂等锁', ['lock_key' => $lockKey]);
+
                 if (!$redis->set($lockKey, '1', ['NX', 'EX' => 300])) {
                     // 重复请求
+                    $this->logger->info('KT零余额变化-重复请求', ['order_no' => $orderNo]);
                     $balance = \app\service\WalletService::getBalance($player->id);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'Balance' => (float)$balance
                     ]);
                 }
 
+                $this->logger->info('KT零余额变化-获取余额', ['order_no' => $orderNo]);
                 $finalBalance = \app\service\WalletService::getBalance($player->id);
                 $result = ['ok' => 1, 'balance' => $finalBalance, 'old_balance' => $finalBalance];
+                $this->logger->info('KT零余额变化-余额获取完成', ['balance' => $finalBalance]);
             }
 
             // ✅ 关键：始终保存游戏记录（无论余额是否变化）
@@ -292,6 +297,7 @@ class KTGameController
 
             if ($takeWin == 1) {
                 // TakeWin=1：批量结算所有相同MainTxID的子订单
+                $this->logger->info('KT开始批量结算', ['main_tx_id' => $mainTxID, 'order_no' => $orderNo]);
                 $settledCount = \app\service\GameRecordCacheService::settleAllSubOrdersForKT('KT', $mainTxID, $recordData);
 
                 $this->logger->info('KT批量结算完成', [
@@ -301,7 +307,9 @@ class KTGameController
                 ]);
             } else {
                 // TakeWin=0：保存为未结算
+                $this->logger->info('KT保存未结算订单', ['order_no' => $orderNo, 'data' => $recordData]);
                 \app\service\GameRecordCacheService::saveBetForKT('KT', $recordData);
+                $this->logger->info('KT保存完成', ['order_no' => $orderNo]);
             }
 
             logGameInteraction('KT', 'bet', $params, [
@@ -320,6 +328,15 @@ class KTGameController
             ]);
 
         } catch (Exception $e) {
+            $this->logger->error('KT交易异常', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+                'order_no' => $orderNo ?? 'unknown',
+                'params' => $params ?? []
+            ]);
+
             logGameInteraction('KT', 'bet', $params ?? [], [
                 'error' => $e->getMessage(),
                 'ok' => 0,
