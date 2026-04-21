@@ -223,7 +223,7 @@ class KTGameController
                 'platform_id' => $this->service->platform->id,
                 'amount' => $bet,  // 数据库bet字段 = KT的Bet（押注金额）
                 'win' => $win,     // 数据库win字段 = KT的Win（派彩金额）
-                'diff' => $win,    // 数据库diff字段 = KT的Win（派彩金额，不扣除Bet）
+                'diff' => bcsub($win, $bet, 2),  // 数据库diff字段 = Win - Bet（输赢金额）
                 'game_code' => $params['GameID'] ?? '',
                 'original_data' => $params,
                 'balance_before' => $oldBalance,
