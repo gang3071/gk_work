@@ -644,14 +644,6 @@ class QTGameController
                     'promo_code' => $params['promoCode'] ?? null,
                     'validity_days' => $params['validityDays'] ?? null,
                 ]);
-
-                // TODO: 根据业务需求，将活动状态保存到数据库
-                // 例如：创建或更新 player_bonus_promotions 表
-                // 状态变化：PROMOTED -> CLAIMED -> IN_PROGRESS -> COMPLETED
-                //          PROMOTED -> CLAIMED -> EXPIRED
-                //          PROMOTED -> DELETED
-                //          PROMOTED -> CANCELLED
-                //          PROMOTED -> CLAIMED -> FAILED
             } else {
                 $this->logger->warning('QT活动状态通知：玩家不存在（静默处理）', [
                     'playerId' => $params['playerId'] ?? ''

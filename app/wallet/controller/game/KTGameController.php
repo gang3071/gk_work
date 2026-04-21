@@ -142,11 +142,10 @@ class KTGameController
             $this->service->player = Player::query()->where('uuid', $params['Username'])->first();
             $player = $this->service->player;
 
-            $orderNo = $params['MainTxID'];
             $subTxID = $params['SubTxID'];
             $bet = $params['Bet'];
             $takeWin = $params['TakeWin'] ?? 0;
-
+            $orderNo = $params['MainTxID'] . '_' . $subTxID;
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
                 return $this->error($this->service->error);
@@ -154,7 +153,7 @@ class KTGameController
 
             // Lua 原子下注
             $luaParams = [
-                'order_no' => $orderNo . '_' . $subTxID,
+                'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
                 'amount' => $bet,
                 'game_code' => $params['GameCode'] ?? '',
@@ -199,7 +198,7 @@ class KTGameController
             // 处理下注结果
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
-                    $this->logger->info('KT下注重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
+                    $this->logger->info('KT下注重复请求（Lua检测）', ['order_no' => $orderNo]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'Balance' => round((float)$result['balance'], 2),
                     ]);
@@ -267,13 +266,13 @@ class KTGameController
 
                     $finalBalance = $settleResult['balance'];
                 } elseif ($settleResult['error'] === 'duplicate_order') {
-                    $this->logger->info('KT立即结算重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
+                    $this->logger->info('KT立即结算重复请求（Lua检测）', ['order_no' => $orderNo]);
                     $finalBalance = $settleResult['balance'];
                 }
             }
 
             $this->logger->info('KT下注成功（Lua原子）', [
-                'order_no' => $orderNo . '_' . $subTxID,
+                'order_no' => $orderNo,
                 'take_win' => $takeWin,
             ]);
 
@@ -289,138 +288,6 @@ class KTGameController
 
             Log::error('KT bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('KT', '下注异常', $e, ['params' => $request->post()]);
-            return $this->error(self::API_CODE_OTHER_ERROR);
-        }
-    }
-
-    /**
-     * 結算（Lua 原子操作版本 - 延迟结算）
-     * @param $params
-     * @return Response
-     */
-    public function betResult($params)
-    {
-        try {
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('KT延迟结算请求（Lua原子）', ['data' => $data]);
-
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-
-            $player = $this->service->player;
-            $orderNo = (string)($data['MainTxID'] ?? '');
-            $subTxID = (string)($data['SubTxID'] ?? '');
-            $winAmount = $data['Win'] ?? 0;
-
-            // ✅ 问题3修复：使用降级方案获取下注金额（传入 platform_id 优化性能）
-            $betAmount = getBetAmountWithFallback('KT', $orderNo, $player->id, $this->service->platform->id);
-
-            // 计算 diff = win - bet
-            $diff = bcsub($winAmount, $betAmount, 2);
-
-            // Lua 原子结算
-            $luaParams = [
-                'order_no' => $orderNo . '_' . $subTxID,
-                'platform_id' => $this->service->platform->id,
-                'amount' => $winAmount,
-                'diff' => $diff,  // ✅ 修正：diff = win - bet
-                'transaction_type' => TransactionType::SETTLE,
-                'original_data' => $data,
-            ];
-
-            // 参数验证
-            validateLuaScriptParams($luaParams, [
-                'order_no' => ['required', 'string'],
-                'amount' => ['required', 'numeric', 'min:0'],
-                'diff' => ['required', 'numeric'],
-                'platform_id' => ['required', 'integer'],
-                'transaction_type' => ['required', 'string'],
-            ], 'atomicSettle');
-
-            $result = RedisLuaScripts::atomicSettle($player->id, 'KT', $luaParams);
-
-            // 审计日志
-            logLuaScriptCall('settle', 'KT', $player->id, $luaParams);
-
-            // 保存结算记录到 Redis
-            if ($result['ok'] === 1) {
-                \app\service\GameRecordCacheService::saveSettle('KT', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $winAmount,
-                    'diff' => $diff,
-                    'game_code' => $data['GameID'] ?? '',
-                    'original_data' => $data,
-                    'balance_before' => $result['old_balance'] ?? 0,
-                    'balance_after' => $result['balance'],
-                ]);
-
-                // ✅ 延迟结算成功后检查是否爆机，如果爆机则更新状态
-                WalletService::checkMachineCrashAfterTransaction(
-                    $player->id,
-                    $result['balance'],
-                    $result['old_balance'] ?? null
-                );
-            }
-
-            // 游戏交互日志
-            logGameInteraction('KT', 'settle', $data, [
-                'ok' => $result['ok'],
-                'balance' => $result['balance'],
-                'order_no' => $orderNo,
-                'win_amount' => $winAmount,
-            ]);
-
-            // 处理返回结果
-            if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
-                $this->logger->info('KT延迟结算重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
-            }
-
-            $this->logger->info('KT延迟结算成功（Lua原子）', ['order_no' => $orderNo . '_' . $subTxID]);
-
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => round((float)$result['balance'], 2)
-            ]);
-
-        } catch (Exception $e) {
-            // 游戏交互日志
-            logGameInteraction('KT', 'settle', $data ?? [], [
-                'error' => $e->getMessage(),
-                'ok' => 0,
-            ]);
-
-            Log::error('KT betResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
-            $this->sendTelegramAlert('KT', '延迟结算异常', $e, ['params' => $params]);
-            return $this->error(self::API_CODE_OTHER_ERROR);
-        }
-    }
-
-    /**
-     * 重新結算
-     * @param Request $request
-     * @return Response
-     */
-    public function reBetResult(Request $request): Response
-    {
-        try {
-            $params = $request->post();
-
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('rsg_live余额查询记录', ['params' => $data]);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-            $balance = $this->service->reBetResulet($data);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-            // 3. 使用常量获取状态码描述
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['bet_sn' => $data['bet_sn'], 'balance' => $balance]);
-        } catch (Exception $e) {
-            Log::error('KT reBetResult failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
-            $this->sendTelegramAlert('KT', '重新结算异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_OTHER_ERROR);
         }
     }
@@ -446,13 +313,12 @@ class KTGameController
             $this->service->player = \app\model\Player::query()->where('uuid', $params['Username'])->first();
             $player = $this->service->player;
 
-            $orderNo = $params['MainTxID'];
-            $subTxID = (string)($data['SubTxID'] ?? '');
+            $subTxID = (string)($params['SubTxID'] ?? '');
             $refundAmount = $params['Amount'] ?? 0;
-
+            $orderNo = $params['MainTxID'] . '_' . $subTxID;
             // Lua 原子取消
             $luaParams = [
-                'order_no' => $orderNo . '_' . $subTxID,
+                'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
                 'refund_amount' => $refundAmount,
                 'transaction_type' => TransactionType::CANCEL,
@@ -487,10 +353,10 @@ class KTGameController
 
             // 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
-                $this->logger->info('KT取消投注重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
+                $this->logger->info('KT取消投注重复请求（Lua检测）', ['order_no' => $orderNo]);
             }
 
-            $this->logger->info('KT取消投注成功（Lua原子）', ['order_no' => $orderNo . '_' . $subTxID]);
+            $this->logger->info('KT取消投注成功（Lua原子）', ['order_no' => $orderNo]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => round((float)$result['balance'], 2)
@@ -498,79 +364,6 @@ class KTGameController
         } catch (Exception $e) {
             Log::error('KT cancelBet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('KT', '取消投注异常', $e, ['params' => $request->post()]);
-            return $this->error(self::API_CODE_OTHER_ERROR);
-        }
-    }
-
-    /**
-     * 退款（Lua 原子操作版本）
-     * @param Request $request
-     * @return Response
-     */
-    public function refund(Request $request): Response
-    {
-        try {
-            $params = $request->post();
-
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('KT打鱼退款请求（Lua原子）', ['params' => $data]);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
-            }
-
-            $player = $this->service->player;
-            $orderNo = (string)($data['MainTxID'] ?? $data['TxID'] ?? '');
-            $subTxID = $params['SubTxID'];
-            $refundAmount = $data['Amount'] ?? 0;
-
-            // Lua 原子退款
-            $luaParams = [
-                'order_no' => $orderNo . '_' . $subTxID,
-                'platform_id' => $this->service->platform->id,
-                'refund_amount' => $refundAmount,
-                'transaction_type' => TransactionType::CANCEL_REFUND,
-                'original_data' => $data,
-            ];
-
-            // 参数验证
-            validateLuaScriptParams($luaParams, [
-                'order_no' => ['required', 'string'],
-                'refund_amount' => ['required', 'numeric', 'min:0'],
-                'platform_id' => ['required', 'integer'],
-                'transaction_type' => ['required', 'string'],
-            ], 'atomicCancel');
-
-            $result = RedisLuaScripts::atomicCancel($player->id, 'KT', $luaParams);
-
-            // 审计日志
-            logLuaScriptCall('cancel', 'KT', $player->id, $luaParams);
-
-            // 保存取消记录到 Redis
-            if ($result['ok'] === 1) {
-                \app\service\GameRecordCacheService::saveCancel('KT', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'refund_amount' => $refundAmount,
-                    'original_data' => $data,
-                    'balance_before' => $result['old_balance'] ?? 0,
-                    'balance_after' => $result['balance'],
-                ]);
-            }
-
-            // 处理结果
-            if ($result['ok'] === 0 && $result['error'] === 'duplicate_cancel') {
-                $this->logger->info('KT退款重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
-            }
-
-            $this->logger->info('KT退款成功（Lua原子）', ['order_no' => $orderNo . '_' . $subTxID]);
-
-            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'Balance' => round((float)$result['balance'], 2)
-            ]);
-        } catch (Exception $e) {
-            Log::error('KT refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
-            $this->sendTelegramAlert('KT', '退款异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_OTHER_ERROR);
         }
     }
