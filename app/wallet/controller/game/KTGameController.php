@@ -143,6 +143,7 @@ class KTGameController
             $player = $this->service->player;
 
             $orderNo = $params['MainTxID'];
+            $subTxID = $params['SubTxID'];
             $bet = $params['Bet'];
             $takeWin = $params['TakeWin'] ?? 0;
 
@@ -153,7 +154,7 @@ class KTGameController
 
             // Lua 原子下注
             $luaParams = [
-                'order_no' => $orderNo,
+                'order_no' => $orderNo . '_' . $subTxID,
                 'platform_id' => $this->service->platform->id,
                 'amount' => $bet,
                 'game_code' => $params['GameCode'] ?? '',
@@ -198,7 +199,7 @@ class KTGameController
             // 处理下注结果
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
-                    $this->logger->info('KT下注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                    $this->logger->info('KT下注重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'Balance' => round((float)$result['balance'], 2),
                     ]);
@@ -266,13 +267,13 @@ class KTGameController
 
                     $finalBalance = $settleResult['balance'];
                 } elseif ($settleResult['error'] === 'duplicate_order') {
-                    $this->logger->info('KT立即结算重复请求（Lua检测）', ['order_no' => $orderNo]);
+                    $this->logger->info('KT立即结算重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
                     $finalBalance = $settleResult['balance'];
                 }
             }
 
             $this->logger->info('KT下注成功（Lua原子）', [
-                'order_no' => $orderNo,
+                'order_no' => $orderNo . '_' . $subTxID,
                 'take_win' => $takeWin,
             ]);
 
@@ -309,6 +310,7 @@ class KTGameController
 
             $player = $this->service->player;
             $orderNo = (string)($data['MainTxID'] ?? '');
+            $subTxID = (string)($data['SubTxID'] ?? '');
             $winAmount = $data['Win'] ?? 0;
 
             // ✅ 问题3修复：使用降级方案获取下注金额（传入 platform_id 优化性能）
@@ -319,7 +321,7 @@ class KTGameController
 
             // Lua 原子结算
             $luaParams = [
-                'order_no' => $orderNo,
+                'order_no' => $orderNo . '_' . $subTxID,
                 'platform_id' => $this->service->platform->id,
                 'amount' => $winAmount,
                 'diff' => $diff,  // ✅ 修正：diff = win - bet
@@ -373,10 +375,10 @@ class KTGameController
 
             // 处理返回结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
-                $this->logger->info('KT延迟结算重复请求（Lua检测）', ['order_no' => $orderNo]);
+                $this->logger->info('KT延迟结算重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
             }
 
-            $this->logger->info('KT延迟结算成功（Lua原子）', ['order_no' => $orderNo]);
+            $this->logger->info('KT延迟结算成功（Lua原子）', ['order_no' => $orderNo . '_' . $subTxID]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => round((float)$result['balance'], 2)
@@ -445,11 +447,12 @@ class KTGameController
             $player = $this->service->player;
 
             $orderNo = $params['MainTxID'];
+            $subTxID = (string)($data['SubTxID'] ?? '');
             $refundAmount = $params['Amount'] ?? 0;
 
             // Lua 原子取消
             $luaParams = [
-                'order_no' => $orderNo,
+                'order_no' => $orderNo . '_' . $subTxID,
                 'platform_id' => $this->service->platform->id,
                 'refund_amount' => $refundAmount,
                 'transaction_type' => TransactionType::CANCEL,
@@ -484,10 +487,10 @@ class KTGameController
 
             // 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
-                $this->logger->info('KT取消投注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                $this->logger->info('KT取消投注重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
             }
 
-            $this->logger->info('KT取消投注成功（Lua原子）', ['order_no' => $orderNo]);
+            $this->logger->info('KT取消投注成功（Lua原子）', ['order_no' => $orderNo . '_' . $subTxID]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => round((float)$result['balance'], 2)
@@ -499,11 +502,6 @@ class KTGameController
         }
     }
 
-    /**
-     * 打鱼机预扣金额
-     * @param Request $request
-     * @return Response
-     */
     /**
      * 退款（Lua 原子操作版本）
      * @param Request $request
@@ -522,11 +520,12 @@ class KTGameController
 
             $player = $this->service->player;
             $orderNo = (string)($data['MainTxID'] ?? $data['TxID'] ?? '');
+            $subTxID = $params['SubTxID'];
             $refundAmount = $data['Amount'] ?? 0;
 
             // Lua 原子退款
             $luaParams = [
-                'order_no' => $orderNo,
+                'order_no' => $orderNo . '_' . $subTxID,
                 'platform_id' => $this->service->platform->id,
                 'refund_amount' => $refundAmount,
                 'transaction_type' => TransactionType::CANCEL_REFUND,
@@ -561,10 +560,10 @@ class KTGameController
 
             // 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_cancel') {
-                $this->logger->info('KT退款重复请求（Lua检测）', ['order_no' => $orderNo]);
+                $this->logger->info('KT退款重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
             }
 
-            $this->logger->info('KT退款成功（Lua原子）', ['order_no' => $orderNo]);
+            $this->logger->info('KT退款成功（Lua原子）', ['order_no' => $orderNo . '_' . $subTxID]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => round((float)$result['balance'], 2)
