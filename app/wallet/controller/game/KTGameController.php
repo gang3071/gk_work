@@ -18,7 +18,7 @@ use support\Response;
 /**
  * O8平台
  */
-class KtGameController
+class KTGameController
 {
     use TelegramAlertTrait;
 

@@ -9,7 +9,7 @@ use app\model\GamePlatform;
 use app\model\GameType;
 use app\model\Player;
 use app\model\PlayerGamePlatform;
-use app\wallet\controller\game\KtGameController;
+use app\wallet\controller\game\KTGameController;
 use app\wallet\controller\game\TNineGameController;
 use Exception;
 use support\Log;
@@ -258,7 +258,7 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
      */
     protected function getInsufficientBalanceError(): mixed
     {
-        return KtGameController::API_CODE_AMOUNT_OVER_BALANCE;
+        return KTGameController::API_CODE_AMOUNT_OVER_BALANCE;
     }
 
     /**
@@ -364,7 +364,7 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
         $verify = hash_hmac("sha256", json_encode($params), $key);
 
         if ($verify !== $hash) {
-            return $this->error = KtGameController::API_CODE_TOKEN_DOES_NOT_EXIST;
+            return $this->error = KTGameController::API_CODE_TOKEN_DOES_NOT_EXIST;
         }
 
         return true;
