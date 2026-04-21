@@ -362,10 +362,6 @@ class GameRecordSyncWorker
             $orderNo = $record['order_no'];
             $settlementStatus = $record['settlement_status'] ?? 0;
 
-            if ($settlementStatus != 1) {
-                continue;  // 只更新已结算的记录
-            }
-
             /** @var PlayGameRecord $existing */
             $existing = $existingRecords[$orderNo] ?? null;
 
@@ -373,20 +369,34 @@ class GameRecordSyncWorker
                 continue;
             }
 
-            // 更新结算状态
-            $existing->win = $record['win'] ?? 0;
-            $existing->diff = $record['diff'] ?? 0;
-            $existing->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
+            $needUpdate = false;
 
-            if (isset($record['platform_action_at'])) {
-                $existing->platform_action_at = $record['platform_action_at'];
-            }
-            if (isset($record['action_data'])) {
-                $existing->action_data = $record['action_data'];
+            // ✅ 更新下注金额（DG合并下注会累加amount）
+            if (isset($record['amount']) && $record['amount'] != $existing->bet) {
+                $existing->bet = $record['amount'];
+                $needUpdate = true;
             }
 
-            $existing->save();
-            $updated++;
+            // ✅ 更新结算状态（如果已结算）
+            if ($settlementStatus == 1) {
+                $existing->win = $record['win'] ?? 0;
+                $existing->diff = $record['diff'] ?? 0;
+                $existing->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
+
+                if (isset($record['platform_action_at'])) {
+                    $existing->platform_action_at = $record['platform_action_at'];
+                }
+                if (isset($record['action_data'])) {
+                    $existing->action_data = $record['action_data'];
+                }
+
+                $needUpdate = true;
+            }
+
+            if ($needUpdate) {
+                $existing->save();
+                $updated++;
+            }
         }
 
         return $updated;
@@ -568,6 +578,22 @@ class GameRecordSyncWorker
 
             if ($existing) {
                 // 已存在，更新
+                $needUpdate = false;
+
+                // ✅ 更新下注金额（DG合并下注会累加amount）
+                if (isset($record['amount']) && $record['amount'] != $existing->bet) {
+                    $existing->bet = $record['amount'];
+                    $needUpdate = true;
+
+                    $this->log->info("更新下注金额", [
+                        'order_no' => $orderNo,
+                        'old_bet' => $existing->bet,
+                        'new_bet' => $record['amount'],
+                        'record_id' => $existing->id,
+                    ]);
+                }
+
+                // ✅ 更新结算状态（如果已结算）
                 if ($settlementStatus == 1) {
                     $existing->win = $record['win'] ?? 0;
                     $existing->diff = $record['diff'] ?? 0;
@@ -578,7 +604,7 @@ class GameRecordSyncWorker
                     if (isset($record['action_data'])) {
                         $existing->action_data = $record['action_data'];
                     }
-                    $existing->save();
+                    $needUpdate = true;
 
                     $this->log->info("更新结算记录", [
                         'order_no' => $orderNo,
@@ -587,6 +613,10 @@ class GameRecordSyncWorker
 
                     // ✅ 触发彩金检查
                     $this->triggerLotteryCheck($existing);
+                }
+
+                if ($needUpdate) {
+                    $existing->save();
                 }
 
                 // 标记为已同步
