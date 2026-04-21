@@ -135,160 +135,269 @@ class KTGameController
             $params = $request->post();
             $hash = $request->get('Hash');
 
-            $this->logger->info('KT下注请求（Lua原子）', ['params' => $params, 'get' => $hash]);
+            $this->logger->info('KT交易请求', ['params' => $params, 'hash' => $hash]);
 
             $this->service->verifyToken($params, $hash);
+
+            // 必填字段验证
+            $requiredFields = ['Username', 'Currency', 'GameID', 'MainTxID', 'SubTxID', 'Bet', 'Win', 'BetType', 'TakeWin', 'Reserved'];
+            foreach ($requiredFields as $field) {
+                if (!isset($params[$field])) {
+                    $this->logger->error('KT缺少必填字段', ['field' => $field]);
+                    return $this->error(self::API_CODE_OTHER_ERROR, "缺少必填字段: {$field}");
+                }
+            }
 
             $this->service->player = Player::query()->where('uuid', $params['Username'])->first();
             $player = $this->service->player;
 
-            $subTxID = $params['SubTxID'];
-            $bet = $params['Bet'];
-            $takeWin = $params['TakeWin'] ?? 0;
-            $orderNo = $params['MainTxID'] . '_' . $subTxID;
-            //判断当前设备是否爆机
+            if (!$player) {
+                $this->logger->error('KT玩家不存在', ['username' => $params['Username']]);
+                return $this->error(self::API_CODE_TOKEN_DOES_NOT_EXIST, '玩家不存在');
+            }
+
+            // 判断设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
                 return $this->error($this->service->error);
             }
 
-            // Lua 原子下注
-            $luaParams = [
+            $mainTxID = $params['MainTxID'];
+            $subTxID = $params['SubTxID'];
+            $bet = $params['Bet'];
+            $win = $params['Win'];
+            $reserved = $params['Reserved'];
+            $takeWin = $params['TakeWin'];
+            $orderNo = $mainTxID . '_' . $subTxID;
+
+            // ✅ KT核心逻辑：余额变化 = Win - Bet + Reserved
+            // Reserved为负数表示预留（扣除），正数表示归还
+            $balanceChange = bcadd(bcsub($win, $bet, 2), $reserved, 2);
+
+            $this->logger->info('KT交易计算', [
                 'order_no' => $orderNo,
-                'platform_id' => $this->service->platform->id,
-                'amount' => $bet,
-                'game_code' => $params['GameCode'] ?? '',
-                'transaction_type' => TransactionType::BET,
-                'original_data' => $params,
-            ];
-
-            // 参数验证
-            validateLuaScriptParams($luaParams, [
-                'order_no' => ['required', 'string'],
-                'amount' => ['required', 'numeric', 'min:0'],
-                'platform_id' => ['required', 'integer'],
-                'transaction_type' => ['required', 'string'],
-            ], 'atomicBet');
-
-            $result = RedisLuaScripts::atomicBet($player->id, 'KT', $luaParams);
-
-            // 审计日志
-            logLuaScriptCall('bet', 'KT', $player->id, $luaParams);
-
-            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
-            if ($result['ok'] === 1) {
-                \app\service\GameRecordCacheService::saveBet('KT', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $bet,
-                    'game_code' => $params['GameID'] ?? '',
-                    'original_data' => $params,
-                    'balance_before' => $result['old_balance'] ?? 0,
-                    'balance_after' => $result['balance'],
-                ]);
-            }
-
-            // 游戏交互日志
-            logGameInteraction('KT', 'bet', $params, [
-                'ok' => $result['ok'],
-                'balance' => $result['balance'],
-                'order_no' => $orderNo,
+                'bet' => $bet,
+                'win' => $win,
+                'reserved' => $reserved,
+                'balance_change' => $balanceChange,
+                'take_win' => $takeWin,
             ]);
 
-            // 处理下注结果
-            if ($result['ok'] === 0) {
-                if ($result['error'] === 'duplicate_order') {
-                    $this->logger->info('KT下注重复请求（Lua检测）', ['order_no' => $orderNo]);
-                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'Balance' => round((float)$result['balance'], 2),
-                    ]);
-                } elseif ($result['error'] === 'insufficient_balance') {
-                    return $this->error(self::API_CODE_AMOUNT_OVER_BALANCE);
-                }
-            }
+            $finalBalance = null;
+            $result = null;
 
-            $finalBalance = $result['balance'];
+            // 根据余额变化方向选择操作
+            if (bccomp($balanceChange, '0', 2) < 0) {
+                // 余额减少：使用atomicBet
+                $deductAmount = bcmul($balanceChange, '-1', 2); // 转为正数
 
-            // TakeWin=1 表示立即结算
-            if ($takeWin == 1) {
-                $winAmount = $params['Win'] ?? 0;
-
-                // ✅ 问题3修复：使用降级方案获取下注金额（传入 platform_id 优化性能）
-                $betAmount = getBetAmountWithFallback('KT', $orderNo, $player->id, $this->service->platform->id);
-
-                // 计算 diff = win - bet
-                $diff = bcsub($winAmount, $betAmount, 2);
-
-                // Lua 原子结算（使用独立的结算订单号避免冲突）
-                $settleLuaParams = [
+                $luaParams = [
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
-                    'amount' => $winAmount,
-                    'diff' => $diff,  // ✅ 修正：diff = win - bet
+                    'amount' => $deductAmount,
+                    'game_code' => $params['GameID'] ?? '',
+                    'transaction_type' => TransactionType::BET,
+                    'original_data' => $params,
+                ];
+
+                validateLuaScriptParams($luaParams, [
+                    'order_no' => ['required', 'string'],
+                    'amount' => ['required', 'numeric', 'min:0'],
+                    'platform_id' => ['required', 'integer'],
+                    'transaction_type' => ['required', 'string'],
+                ], 'atomicBet');
+
+                $result = RedisLuaScripts::atomicBet($player->id, 'KT', $luaParams);
+                logLuaScriptCall('bet', 'KT', $player->id, $luaParams);
+
+                if ($result['ok'] === 0) {
+                    if ($result['error'] === 'duplicate_order') {
+                        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                            'Balance' => (float)$result['balance']
+                        ]);
+                    } elseif ($result['error'] === 'insufficient_balance') {
+                        return $this->error(self::API_CODE_AMOUNT_OVER_BALANCE);
+                    }
+                    return $this->error(self::API_CODE_OTHER_ERROR, $result['error'] ?? '操作失败');
+                }
+
+                $finalBalance = $result['balance'];
+
+            } elseif (bccomp($balanceChange, '0', 2) > 0) {
+                // 余额增加：使用atomicSettle
+                $luaParams = [
+                    'order_no' => $orderNo,
+                    'platform_id' => $this->service->platform->id,
+                    'amount' => $balanceChange,
+                    'diff' => $balanceChange,
                     'transaction_type' => TransactionType::SETTLE,
                     'original_data' => $params,
                 ];
 
-                // 参数验证
-                validateLuaScriptParams($settleLuaParams, [
+                validateLuaScriptParams($luaParams, [
                     'order_no' => ['required', 'string'],
                     'amount' => ['required', 'numeric', 'min:0'],
-                    'diff' => ['required', 'numeric'],
                     'platform_id' => ['required', 'integer'],
                     'transaction_type' => ['required', 'string'],
                 ], 'atomicSettle');
 
-                $settleResult = RedisLuaScripts::atomicSettle($player->id, 'KT', $settleLuaParams);
+                $result = RedisLuaScripts::atomicSettle($player->id, 'KT', $luaParams);
+                logLuaScriptCall('settle', 'KT', $player->id, $luaParams);
 
-                // 审计日志
-                logLuaScriptCall('settle', 'KT', $player->id, $settleLuaParams);
-
-                // 保存结算记录到 Redis
-                if ($settleResult['ok'] === 1) {
-                    \app\service\GameRecordCacheService::saveSettle('KT', [
-                        'order_no' => $orderNo,
-                        'player_id' => $player->id,
-                        'platform_id' => $this->service->platform->id,
-                        'amount' => $winAmount,
-                        'diff' => $diff,
-                        'game_code' => $params['GameID'] ?? '',
-                        'original_data' => $params,
-                        'balance_before' => $settleResult['old_balance'] ?? 0,
-                        'balance_after' => $settleResult['balance'],
-                    ]);
-
-                    // ✅ 立即结算成功后检查是否爆机，如果爆机则更新状态
-                    WalletService::checkMachineCrashAfterTransaction(
-                        $player->id,
-                        $settleResult['balance'],
-                        $settleResult['old_balance'] ?? null
-                    );
-
-                    $finalBalance = $settleResult['balance'];
-                } elseif ($settleResult['error'] === 'duplicate_order') {
-                    $this->logger->info('KT立即结算重复请求（Lua检测）', ['order_no' => $orderNo]);
-                    $finalBalance = $settleResult['balance'];
+                if ($result['ok'] === 0) {
+                    if ($result['error'] === 'duplicate_order') {
+                        return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                            'Balance' => (float)$result['balance']
+                        ]);
+                    }
+                    return $this->error(self::API_CODE_OTHER_ERROR, $result['error'] ?? '操作失败');
                 }
+
+                WalletService::checkMachineCrashAfterTransaction(
+                    $player->id,
+                    $result['balance'],
+                    $result['old_balance'] ?? null
+                );
+
+                $finalBalance = $result['balance'];
+
+            } else {
+                // 余额无变化：使用幂等性锁
+                $lockKey = "order:kt:lock:{$orderNo}";
+                $redis = \support\Redis::connection();
+
+                if (!$redis->set($lockKey, '1', ['NX', 'EX' => 300])) {
+                    // 重复请求
+                    $balance = \app\service\WalletService::getBalance($player->id);
+                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                        'Balance' => (float)$balance
+                    ]);
+                }
+
+                $finalBalance = \app\service\WalletService::getBalance($player->id);
+                $result = ['ok' => 1, 'balance' => $finalBalance, 'old_balance' => $finalBalance];
             }
 
-            $this->logger->info('KT下注成功（Lua原子）', [
+            // 保存游戏记录
+            $recordData = [
                 'order_no' => $orderNo,
-                'take_win' => $takeWin,
+                'player_id' => $player->id,
+                'platform_id' => $this->service->platform->id,
+                'amount' => $bet,  // 数据库bet字段 = KT的Bet
+                'win' => $win,     // 数据库win字段 = KT的Win
+                'diff' => bcsub($win, $bet, 2),  // 数据库diff字段 = Win - Bet
+                'game_code' => $params['GameID'] ?? '',
+                'original_data' => $params,
+                'balance_before' => $result['old_balance'] ?? 0,
+                'balance_after' => $result['balance'],
+            ];
+
+            if ($takeWin == 1) {
+                // ✅ TakeWin=1：结算所有相同MainTxID的子订单
+                $this->settleAllSubOrders($mainTxID, $player->id, $this->service->platform->id, $recordData);
+            } else {
+                // TakeWin=0：保存为未结算
+                \app\service\GameRecordCacheService::saveBetForKT('KT', $recordData);
+            }
+
+            logGameInteraction('KT', 'bet', $params, [
+                'ok' => 1,
+                'balance' => $finalBalance,
+                'order_no' => $orderNo,
+            ]);
+
+            $this->logger->info('KT交易成功', [
+                'order_no' => $orderNo,
+                'final_balance' => $finalBalance,
             ]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => (float)$finalBalance
             ]);
+
         } catch (Exception $e) {
-            // 游戏交互日志
             logGameInteraction('KT', 'bet', $params ?? [], [
                 'error' => $e->getMessage(),
                 'ok' => 0,
             ]);
 
-            Log::error('KT bet failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
-            $this->sendTelegramAlert('KT', '下注异常', $e, ['params' => $request->post()]);
+            Log::error('KT交易失败', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('KT', '交易异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_OTHER_ERROR);
+        }
+    }
+
+    /**
+     * 结算所有相同MainTxID的子订单
+     *
+     * @param string $mainTxID 主交易ID
+     * @param int $playerId 玩家ID
+     * @param int $platformId 平台ID
+     * @param array $currentRecordData 当前交易的记录数据
+     * @return void
+     */
+    private function settleAllSubOrders(string $mainTxID, int $playerId, int $platformId, array $currentRecordData): void
+    {
+        try {
+            $redis = \support\Redis::connection('work');
+
+            // 查找所有相同MainTxID的订单（game:record:bet:KT:MainTxID_*）
+            $pattern = "game:record:bet:KT:{$mainTxID}_*";
+            $keys = $redis->keys($pattern);
+
+            if (empty($keys)) {
+                $this->logger->warning('KT结算：未找到子订单', [
+                    'main_tx_id' => $mainTxID,
+                    'pattern' => $pattern,
+                ]);
+            }
+
+            $settledCount = 0;
+            foreach ($keys as $key) {
+                // 读取订单数据
+                $record = $redis->hGetAll($key);
+
+                if (empty($record)) {
+                    continue;
+                }
+
+                // 只结算未结算的订单（避免重复结算）
+                if (isset($record['settlement_status']) && $record['settlement_status'] == 1) {
+                    continue;
+                }
+
+                // 更新为已结算状态
+                $redis->hMSet($key, [
+                    'settlement_status' => 1,
+                    'settle_type' => 'settle',
+                    'settle_time' => time(),
+                    'platform_action_at' => date('Y-m-d H:i:s'),
+                    'status' => 'pending',  // 重新标记待同步
+                ]);
+
+                // 更新同步队列优先级
+                $redis->zAdd('game:sync:queue', time(), $key);
+
+                $settledCount++;
+            }
+
+            // 保存当前这笔记录
+            \app\service\GameRecordCacheService::saveSettleForKT('KT', $currentRecordData);
+
+            $this->logger->info('KT结算完成', [
+                'main_tx_id' => $mainTxID,
+                'settled_count' => $settledCount,
+                'current_order' => $currentRecordData['order_no'],
+            ]);
+
+        } catch (\Throwable $e) {
+            $this->logger->error('KT结算子订单失败', [
+                'main_tx_id' => $mainTxID,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            // 即使批量结算失败，也要保存当前记录
+            \app\service\GameRecordCacheService::saveSettleForKT('KT', $currentRecordData);
         }
     }
 
