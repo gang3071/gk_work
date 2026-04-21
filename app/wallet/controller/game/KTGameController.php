@@ -167,7 +167,9 @@ class KTGameController
             $win = $params['Win'];
             $reserved = $params['Reserved'];
             $takeWin = $params['TakeWin'];
-            $orderNo = $mainTxID . '_' . $subTxID;
+
+            // ✅ 订单号规则：SubTxID=0（单次游戏）不加后缀，SubTxID>0（多次游戏）加后缀
+            $orderNo = ($subTxID == 0) ? $mainTxID : $mainTxID . '_' . $subTxID;
 
             // ✅ KT核心逻辑：余额变化 = Win - Bet + Reserved
             $balanceChange = bcadd(bcsub($win, $bet, 2), $reserved, 2);
@@ -181,10 +183,10 @@ class KTGameController
                 'take_win' => $takeWin,
             ]);
 
+            // ✅ 使用Lua脚本保证原子性，然后用saveBetForKT统一记录格式
             $finalBalance = null;
             $result = null;
 
-            // 根据余额变化方向调用Lua
             if (bccomp($balanceChange, '0', 2) < 0) {
                 // 余额减少：使用atomicBet
                 $deductAmount = bcmul($balanceChange, '-1', 2);
@@ -222,7 +224,7 @@ class KTGameController
                 $finalBalance = $result['balance'];
 
             } elseif (bccomp($balanceChange, '0', 2) > 0) {
-                // 余额增加：使用atomicSettle
+                // 余额增加：使用atomicSettle（会创建settle记录，稍后由saveBetForKT清理）
                 $luaParams = [
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
@@ -243,7 +245,7 @@ class KTGameController
                 logLuaScriptCall('settle', 'KT', $player->id, $luaParams);
 
                 if ($result['ok'] === 0) {
-                    if ($result['error'] === 'duplicate_order') {
+                    if ($result['error'] === 'duplicate_order' || $result['error'] === 'duplicate_settle') {
                         return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                             'Balance' => (float)$result['balance']
                         ]);
@@ -264,40 +266,36 @@ class KTGameController
                 $lockKey = "order:kt:lock:{$orderNo}";
                 $redis = \support\Redis::connection();
 
-                // 使用SETNX + EXPIRE 替代SET NX EX（更兼容）
                 $lockSet = $redis->setnx($lockKey, '1');
-                $this->logger->info('KT零余额变化-幂等锁结果', ['lock_key' => $lockKey, 'lock_result' => $lockSet]);
-
                 if (!$lockSet) {
                     // 重复请求
-                    $this->logger->info('KT零余额变化-重复请求', ['order_no' => $orderNo]);
-                    $balance = \app\service\WalletService::getBalance($player->id);
+                    $balance = WalletService::getBalance($player->id);
                     return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                         'Balance' => (float)$balance
                     ]);
                 }
-
                 $redis->expire($lockKey, 300);
 
-                $this->logger->info('KT零余额变化-获取余额', ['order_no' => $orderNo]);
-                $finalBalance = \app\service\WalletService::getBalance($player->id);
+                $finalBalance = WalletService::getBalance($player->id);
                 $result = ['ok' => 1, 'balance' => $finalBalance, 'old_balance' => $finalBalance];
-                $this->logger->info('KT零余额变化-余额获取完成', ['balance' => $finalBalance]);
             }
 
-            // ✅ 关键：始终保存游戏记录（无论余额是否变化）
+            // ✅ KT专用：统一使用 saveBetForKT 保存（绕过Lua创建的settle记录）
             $recordData = [
                 'order_no' => $orderNo,
                 'player_id' => $player->id,
                 'platform_id' => $this->service->platform->id,
-                'amount' => $bet,  // 数据库bet字段 = KT的Bet
-                'win' => $win,     // 数据库win字段 = KT的Win
-                'diff' => bcsub($win, $bet, 2),  // 数据库diff字段 = Win - Bet
+                'amount' => $bet,  // 数据库bet字段 = KT的Bet（押注金额）
+                'win' => $win,     // 数据库win字段 = KT的Win（派彩金额）
+                'diff' => $win,    // 数据库diff字段 = KT的Win（派彩金额，不扣除Bet）
                 'game_code' => $params['GameID'] ?? '',
                 'original_data' => $params,
                 'balance_before' => $result['old_balance'] ?? $finalBalance,
                 'balance_after' => $result['balance'] ?? $finalBalance,
             ];
+
+            // ✅ 先保存/更新bet记录（覆盖Lua可能创建的settle记录）
+            \app\service\GameRecordCacheService::saveBetForKT('KT', $recordData);
 
             if ($takeWin == 1) {
                 // TakeWin=1：批量结算所有相同MainTxID的子订单
@@ -310,10 +308,7 @@ class KTGameController
                     'current_order' => $orderNo,
                 ]);
             } else {
-                // TakeWin=0：保存为未结算
-                $this->logger->info('KT保存未结算订单', ['order_no' => $orderNo, 'data' => $recordData]);
-                \app\service\GameRecordCacheService::saveBetForKT('KT', $recordData);
-                $this->logger->info('KT保存完成', ['order_no' => $orderNo]);
+                $this->logger->info('KT保存未结算订单完成', ['order_no' => $orderNo]);
             }
 
             logGameInteraction('KT', 'bet', $params, [

@@ -670,17 +670,32 @@ LUA;
         $redis = self::redis();
         $currentOrderNo = $currentRecordData['order_no'];
 
-        // ✅ KT专用：同时清理可能存在的settle记录
-        $settlePattern = "game:record:settle:{$platform}:{$mainTxID}_*";
-        $settleKeys = $redis->keys($settlePattern);
-        foreach ($settleKeys as $settleKey) {
-            $redis->zRem(self::PREFIX_SYNC_QUEUE, $settleKey);
-            $redis->del($settleKey);
+        // ✅ KT专用：清理可能存在的settle记录（包括SubTxID=0和SubTxID>0）
+        $settlePatterns = [
+            "game:record:settle:{$platform}:{$mainTxID}",      // SubTxID=0
+            "game:record:settle:{$platform}:{$mainTxID}_*",    // SubTxID>0
+        ];
+        foreach ($settlePatterns as $pattern) {
+            $settleKeys = $redis->keys($pattern);
+            foreach ($settleKeys as $settleKey) {
+                $redis->zRem(self::PREFIX_SYNC_QUEUE, $settleKey);
+                $redis->del($settleKey);
+            }
         }
 
-        // 查找所有相同MainTxID的bet订单
-        $pattern = self::PREFIX_BET . "{$platform}:{$mainTxID}_*";
-        $keys = $redis->keys($pattern);
+        // ✅ 查找所有相同MainTxID的bet订单（包括SubTxID=0和SubTxID>0）
+        $keys = [];
+
+        // 查找 SubTxID=0 的订单（订单号 = MainTxID）
+        $key0 = self::PREFIX_BET . "{$platform}:{$mainTxID}";
+        if ($redis->exists($key0)) {
+            $keys[] = $key0;
+        }
+
+        // 查找 SubTxID>0 的订单（订单号 = MainTxID_SubTxID）
+        $patternN = self::PREFIX_BET . "{$platform}:{$mainTxID}_*";
+        $keysN = $redis->keys($patternN);
+        $keys = array_merge($keys, $keysN);
 
         $settledCount = 0;
         foreach ($keys as $key) {
