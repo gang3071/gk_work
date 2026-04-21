@@ -509,9 +509,13 @@ class QTGameController
                 }
 
             } elseif ($txnType === 'CREDIT') {
+                // ✅ 修复：使用 betId 关联下注记录，如果没有则使用 roundId
+                $betId = $params['betId'] ?? null;
+                $orderNo = $betId ?: ($params['roundId'] ?? $txnId);  // 优先使用betId，其次roundId，最后txnId
+
                 // 结算派彩（Lua 原子操作）
                 $luaParams = [
-                    'order_no' => $txnId,
+                    'order_no' => $orderNo,  // ✅ 使用关联的下注订单号
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($amount, 0),  // 派彩金额不能为负
                     'diff' => $amount,
@@ -531,12 +535,15 @@ class QTGameController
                 $result = RedisLuaScripts::atomicSettle($player->id, 'QT', $luaParams);
 
                 // 审计日志
-                logLuaScriptCall('settle', 'QT', $player->id, $luaParams);
+                logLuaScriptCall('settle', 'QT', $player->id, array_merge($luaParams, [
+                    'txnId' => $txnId,  // ✅ 记录CREDIT的txnId
+                    'betId' => $betId,  // ✅ 记录关联的betId
+                ]));
 
                 // 保存结算记录到 Redis
                 if ($result['ok'] === 1) {
                     \app\service\GameRecordCacheService::saveSettle('QT', [
-                        'order_no' => $txnId,
+                        'order_no' => $orderNo,  // ✅ 使用关联的下注订单号
                         'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
                         'amount' => max($amount, 0),
@@ -560,12 +567,18 @@ class QTGameController
                     'ok' => $result['ok'],
                     'balance' => $result['balance'],
                     'txnId' => $txnId,
+                    'betId' => $betId,  // ✅ 记录关联的下注ID
+                    'orderNo' => $orderNo,  // ✅ 记录实际使用的订单号
                     'amount' => $amount,
                 ]);
 
                 if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
                     // ✅ 修复：atomicSettle 返回的是 'duplicate_settle'
-                    $this->logger->info('QT结算重复请求（Lua检测）', ['txnId' => $txnId]);
+                    $this->logger->info('QT结算重复请求（Lua检测）', [
+                        'txnId' => $txnId,
+                        'betId' => $betId,
+                        'orderNo' => $orderNo
+                    ]);
                 }
 
             } else {
