@@ -170,7 +170,6 @@ class KTGameController
             $orderNo = $mainTxID . '_' . $subTxID;
 
             // ✅ KT核心逻辑：余额变化 = Win - Bet + Reserved
-            // Reserved为负数表示预留（扣除），正数表示归还
             $balanceChange = bcadd(bcsub($win, $bet, 2), $reserved, 2);
 
             $this->logger->info('KT交易计算', [
@@ -185,10 +184,10 @@ class KTGameController
             $finalBalance = null;
             $result = null;
 
-            // 根据余额变化方向选择操作
+            // 根据余额变化方向调用Lua
             if (bccomp($balanceChange, '0', 2) < 0) {
                 // 余额减少：使用atomicBet
-                $deductAmount = bcmul($balanceChange, '-1', 2); // 转为正数
+                $deductAmount = bcmul($balanceChange, '-1', 2);
 
                 $luaParams = [
                     'order_no' => $orderNo,
@@ -277,7 +276,7 @@ class KTGameController
                 $result = ['ok' => 1, 'balance' => $finalBalance, 'old_balance' => $finalBalance];
             }
 
-            // 保存游戏记录
+            // ✅ 关键：始终保存游戏记录（无论余额是否变化）
             $recordData = [
                 'order_no' => $orderNo,
                 'player_id' => $player->id,
@@ -287,13 +286,19 @@ class KTGameController
                 'diff' => bcsub($win, $bet, 2),  // 数据库diff字段 = Win - Bet
                 'game_code' => $params['GameID'] ?? '',
                 'original_data' => $params,
-                'balance_before' => $result['old_balance'] ?? 0,
-                'balance_after' => $result['balance'],
+                'balance_before' => $result['old_balance'] ?? $finalBalance,
+                'balance_after' => $result['balance'] ?? $finalBalance,
             ];
 
             if ($takeWin == 1) {
-                // ✅ TakeWin=1：结算所有相同MainTxID的子订单
-                $this->settleAllSubOrders($mainTxID, $player->id, $this->service->platform->id, $recordData);
+                // TakeWin=1：批量结算所有相同MainTxID的子订单
+                $settledCount = \app\service\GameRecordCacheService::settleAllSubOrdersForKT('KT', $mainTxID, $recordData);
+
+                $this->logger->info('KT批量结算完成', [
+                    'main_tx_id' => $mainTxID,
+                    'settled_count' => $settledCount,
+                    'current_order' => $orderNo,
+                ]);
             } else {
                 // TakeWin=0：保存为未结算
                 \app\service\GameRecordCacheService::saveBetForKT('KT', $recordData);
@@ -327,81 +332,6 @@ class KTGameController
     }
 
     /**
-     * 结算所有相同MainTxID的子订单
-     *
-     * @param string $mainTxID 主交易ID
-     * @param int $playerId 玩家ID
-     * @param int $platformId 平台ID
-     * @param array $currentRecordData 当前交易的记录数据
-     * @return void
-     */
-    private function settleAllSubOrders(string $mainTxID, int $playerId, int $platformId, array $currentRecordData): void
-    {
-        try {
-            $redis = \support\Redis::connection('work');
-
-            // 查找所有相同MainTxID的订单（game:record:bet:KT:MainTxID_*）
-            $pattern = "game:record:bet:KT:{$mainTxID}_*";
-            $keys = $redis->keys($pattern);
-
-            if (empty($keys)) {
-                $this->logger->warning('KT结算：未找到子订单', [
-                    'main_tx_id' => $mainTxID,
-                    'pattern' => $pattern,
-                ]);
-            }
-
-            $settledCount = 0;
-            foreach ($keys as $key) {
-                // 读取订单数据
-                $record = $redis->hGetAll($key);
-
-                if (empty($record)) {
-                    continue;
-                }
-
-                // 只结算未结算的订单（避免重复结算）
-                if (isset($record['settlement_status']) && $record['settlement_status'] == 1) {
-                    continue;
-                }
-
-                // 更新为已结算状态
-                $redis->hMSet($key, [
-                    'settlement_status' => 1,
-                    'settle_type' => 'settle',
-                    'settle_time' => time(),
-                    'platform_action_at' => date('Y-m-d H:i:s'),
-                    'status' => 'pending',  // 重新标记待同步
-                ]);
-
-                // 更新同步队列优先级
-                $redis->zAdd('game:sync:queue', time(), $key);
-
-                $settledCount++;
-            }
-
-            // 保存当前这笔记录
-            \app\service\GameRecordCacheService::saveSettleForKT('KT', $currentRecordData);
-
-            $this->logger->info('KT结算完成', [
-                'main_tx_id' => $mainTxID,
-                'settled_count' => $settledCount,
-                'current_order' => $currentRecordData['order_no'],
-            ]);
-
-        } catch (\Throwable $e) {
-            $this->logger->error('KT结算子订单失败', [
-                'main_tx_id' => $mainTxID,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            // 即使批量结算失败，也要保存当前记录
-            \app\service\GameRecordCacheService::saveSettleForKT('KT', $currentRecordData);
-        }
-    }
-
-    /**
      * 投注与结算取消（Lua原子操作）
      * @param Request $request
      * @return Response
@@ -422,12 +352,13 @@ class KTGameController
             $this->service->player = \app\model\Player::query()->where('uuid', $params['Username'])->first();
             $player = $this->service->player;
 
-            $subTxID = (string)($params['SubTxID'] ?? '');
+            $orderNo = $params['MainTxID'];
+            $subTxID = (string)($data['SubTxID'] ?? '');
             $refundAmount = $params['Amount'] ?? 0;
-            $orderNo = $params['MainTxID'] . '_' . $subTxID;
+
             // Lua 原子取消
             $luaParams = [
-                'order_no' => $orderNo,
+                'order_no' => $orderNo . '_' . $subTxID,
                 'platform_id' => $this->service->platform->id,
                 'refund_amount' => $refundAmount,
                 'transaction_type' => TransactionType::CANCEL,
@@ -462,10 +393,10 @@ class KTGameController
 
             // 处理结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
-                $this->logger->info('KT取消投注重复请求（Lua检测）', ['order_no' => $orderNo]);
+                $this->logger->info('KT取消投注重复请求（Lua检测）', ['order_no' => $orderNo . '_' . $subTxID]);
             }
 
-            $this->logger->info('KT取消投注成功（Lua原子）', ['order_no' => $orderNo]);
+            $this->logger->info('KT取消投注成功（Lua原子）', ['order_no' => $orderNo . '_' . $subTxID]);
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => round((float)$result['balance'], 2)
