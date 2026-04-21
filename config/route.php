@@ -118,10 +118,10 @@ Route::group('/single-wallet', function () {
         Route::post('SeamlessGameHub/CancelBet', [\app\wallet\controller\game\TNineSlotGameController::class, 'cancelBet']); //商戶會員餘額查詢
     });
     Route::group('/kt-channel', function () {
-        Route::post('/auth', [\app\wallet\controller\game\KTGameController::class, 'auth']);
-        Route::post('/balance', [\app\wallet\controller\game\KTGameController::class, 'balance']);
-        Route::post('/bet', [\app\wallet\controller\game\KTGameController::class, 'bet']);
-        Route::post('/cancelBet', [\app\wallet\controller\game\KTGameController::class, 'cancelBet']);
+        Route::post('/auth', [\app\wallet\controller\game\KtGameController::class, 'auth']);
+        Route::post('/balance', [\app\wallet\controller\game\KtGameController::class, 'balance']);
+        Route::post('/bet', [\app\wallet\controller\game\KtGameController::class, 'bet']);
+        Route::post('/cancelBet', [\app\wallet\controller\game\KtGameController::class, 'cancelBet']);
     });
     Route::group('/dg-channel', function () {
         Route::post('/v2/specification/user/getBalance/{agentName}', [\app\wallet\controller\game\DGGameController::class, 'balance']);
