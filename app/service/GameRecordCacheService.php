@@ -601,7 +601,16 @@ LUA;
         $orderNo = $data['order_no'];
         $key = self::PREFIX_BET . "{$platform}:{$orderNo}";
 
-        // ✅ 检查记录是否已存在（由 Lua 脚本创建）
+        // ✅ KT专用：清理可能由Lua创建的settle记录（防止重复）
+        $settleKey = "game:record:settle:{$platform}:{$orderNo}";
+        if (self::redis()->exists($settleKey)) {
+            // 从同步队列移除settle记录
+            self::redis()->zRem(self::PREFIX_SYNC_QUEUE, $settleKey);
+            // 删除settle记录
+            self::redis()->del($settleKey);
+        }
+
+        // ✅ 检查bet记录是否已存在
         $exists = self::redis()->exists($key);
 
         if ($exists) {
@@ -661,7 +670,15 @@ LUA;
         $redis = self::redis();
         $currentOrderNo = $currentRecordData['order_no'];
 
-        // 查找所有相同MainTxID的订单
+        // ✅ KT专用：同时清理可能存在的settle记录
+        $settlePattern = "game:record:settle:{$platform}:{$mainTxID}_*";
+        $settleKeys = $redis->keys($settlePattern);
+        foreach ($settleKeys as $settleKey) {
+            $redis->zRem(self::PREFIX_SYNC_QUEUE, $settleKey);
+            $redis->del($settleKey);
+        }
+
+        // 查找所有相同MainTxID的bet订单
         $pattern = self::PREFIX_BET . "{$platform}:{$mainTxID}_*";
         $keys = $redis->keys($pattern);
 
