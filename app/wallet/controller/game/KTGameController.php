@@ -264,9 +264,11 @@ class KTGameController
                 $lockKey = "order:kt:lock:{$orderNo}";
                 $redis = \support\Redis::connection();
 
-                $this->logger->info('KT零余额变化-设置幂等锁', ['lock_key' => $lockKey]);
+                // 使用SETNX + EXPIRE 替代SET NX EX（更兼容）
+                $lockSet = $redis->setnx($lockKey, '1');
+                $this->logger->info('KT零余额变化-幂等锁结果', ['lock_key' => $lockKey, 'lock_result' => $lockSet]);
 
-                if (!$redis->set($lockKey, '1', ['NX', 'EX' => 300])) {
+                if (!$lockSet) {
                     // 重复请求
                     $this->logger->info('KT零余额变化-重复请求', ['order_no' => $orderNo]);
                     $balance = \app\service\WalletService::getBalance($player->id);
@@ -274,6 +276,8 @@ class KTGameController
                         'Balance' => (float)$balance
                     ]);
                 }
+
+                $redis->expire($lockKey, 300);
 
                 $this->logger->info('KT零余额变化-获取余额', ['order_no' => $orderNo]);
                 $finalBalance = \app\service\WalletService::getBalance($player->id);
