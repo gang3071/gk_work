@@ -20,6 +20,19 @@ trait LimitGroupTrait
      */
     protected function getLimitGroupConfig(string $logChannel): ?PlatformLimitGroupConfig
     {
+        // ✅ 缓存优化：限红组配置缓存30分钟
+        $cacheKey = sprintf(
+            'limit_group_config:%d:%d:%s',
+            $this->platform->id,
+            $this->player->id,
+            $this->player->store_admin_id ?? '0'
+        );
+
+        $limitGroupConfig = \support\Cache::get($cacheKey);
+        if ($limitGroupConfig !== null) {
+            return $limitGroupConfig;
+        }
+
         /** @var PlatformLimitGroupConfig|null $limitGroupConfig */
         $limitGroupConfig = null;
 
@@ -63,6 +76,9 @@ trait LimitGroupTrait
                 ]);
             }
         }
+
+        // 缓存结果（包括null值，避免缓存穿透）
+        \support\Cache::set($cacheKey, $limitGroupConfig, 1800);
 
         return $limitGroupConfig;
     }

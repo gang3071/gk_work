@@ -288,7 +288,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             $response = $request->get($url . '?' . http_build_query($params));
         }
 
-        $this->log->info('test',['params'=>$params]);
         if (!$response->ok()) {
             $res = $response->json();
             if ($res['status'] == '400' && $res['message'] == 'user exists') {
@@ -619,8 +618,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
     {
         $token = $data['token'];
         $result = null;
-        $usedConfig = null;
-
         // 准备所有可能的配置
         $configsToTry = [];
 
@@ -633,11 +630,17 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             'source' => 'current',
         ];
 
-        // 2. 获取所有启用的ATG限红组配置
-        $limitGroupConfigs = PlatformLimitGroupConfig::query()
-            ->where('platform_id', $this->platform->id)
-            ->where('status', 1)
-            ->get();
+        // 2. 获取所有启用的限红组配置（✅ 缓存优化：30分钟）
+        $cacheKey = 'platform_limit_configs:' . $this->platform->id;
+        $limitGroupConfigs = \support\Cache::get($cacheKey);
+
+        if ($limitGroupConfigs === null) {
+            $limitGroupConfigs = PlatformLimitGroupConfig::query()
+                ->where('platform_id', $this->platform->id)
+                ->where('status', 1)
+                ->get();
+            \support\Cache::set($cacheKey, $limitGroupConfigs, 1800);
+        }
 
         foreach ($limitGroupConfigs as $limitGroupConfig) {
             if (!empty($limitGroupConfig->config_data)) {
@@ -691,17 +694,12 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             if (!empty($decryptResult)) {
                 // 解密成功
                 $result = $decryptResult;
-                $usedConfig = $config;
                 break;
             }
         }
 
         // 所有配置都尝试失败
         if (empty($result)) {
-            $this->log->error('❌ ATG解密失败', [
-                'tried_configs' => count($configsToTry),
-                'token_prefix' => substr($token, 0, 20) . '...',
-            ]);
             return $this->error = ATGGameController::API_CODE_DECRYPT_ERROR;
         }
 
@@ -718,10 +716,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         // 玩家必须有限红组配置
         if (!$playerLimitConfig || !isset($playerLimitConfig['operator']) || !isset($playerLimitConfig['key'])) {
-            $this->log->error('❌ ATG玩家未配置限红组', [
-                'player_id' => $player->id,
-                'store_admin_id' => $player->store_admin_id,
-            ]);
             return $this->error = ATGGameController::API_CODE_FAIL;
         }
 
@@ -735,11 +729,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         }
 
         if (!empty($missingFields)) {
-            $this->log->error('❌ ATG玩家限红组配置不完整', [
-                'player_id' => $player->id,
-                'missing_fields' => implode(', ', $missingFields),
-                'config' => $playerLimitConfig,
-            ]);
             return $this->error = ATGGameController::API_CODE_FAIL;
         }
 
