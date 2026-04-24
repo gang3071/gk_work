@@ -7,6 +7,7 @@ use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
 use app\service\RedisLuaScripts;
+use app\service\TimeoutMonitor;
 use Exception;
 use support\Log;
 use support\Request;
@@ -74,19 +75,42 @@ class ATGGameController
      */
     public function balance(Request $request): Response
     {
+        $requestStartTime = microtime(true);  // ✅ 记录请求开始时间
         try {
             $params = $request->post();
-            $this->log->info('atg余额查询记录', ['params' => $params]);
+
+            $decryptStart = microtime(true);
             $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-            $this->log->info('atg余额查询解密', ['data' => $data]);
+            $decryptDuration = round((microtime(true) - $decryptStart) * 1000, 2);
+
+            $this->log->info('atg余额查询记录', [
+                'params' => $params,
+                'decrypt_duration_ms' => $decryptDuration,
+            ]);
+
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
+
             $balance = $this->service->balance();
+
+            // ✅ 记录总耗时
+            $totalDuration = round((microtime(true) - $requestStartTime) * 1000, 2);
+            $this->log->info('ATG余额查询成功', [
+                'balance' => $balance,
+                'total_duration_ms' => $totalDuration,
+                'decrypt_duration_ms' => $decryptDuration,
+            ]);
+
+            // 🚀 新增：超时监控
+            TimeoutMonitor::record('ATG', 'balance', $totalDuration, true);
+
             return $this->success(['balance' => $balance]);
         } catch (Exception $e) {
+            $totalDuration = round((microtime(true) - $requestStartTime) * 1000, 2);
             Log::error('ATG balance failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '余额查询异常', $e, ['params' => $request->post()]);
+            TimeoutMonitor::record('ATG', 'balance', $totalDuration, false);
             return $this->error(self::API_CODE_FAIL);
         }
     }
@@ -99,10 +123,19 @@ class ATGGameController
      */
     public function bet(Request $request): Response
     {
+        $requestStartTime = microtime(true);  // ✅ 记录请求开始时间
         try {
             $params = $request->post();
+
+            $decryptStart = microtime(true);
             $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-            $this->log->info('ATG下注请求（Lua原子）', ['order_no' => $data['betId'] ?? '']);
+            $decryptDuration = round((microtime(true) - $decryptStart) * 1000, 2);
+
+            $this->log->info('ATG下注请求（Lua原子）', [
+                'order_no' => $data['betId'] ?? '',
+                'decrypt_duration_ms' => $decryptDuration,
+            ]);
+
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -182,15 +215,25 @@ class ATGGameController
                 }
             }
 
+            // ✅ 记录总耗时
+            $totalDuration = round((microtime(true) - $requestStartTime) * 1000, 2);
             $this->log->info('ATG下注成功（Lua原子）', [
                 'order_no' => $orderNo,
                 'balance_before' => $result['old_balance'],
                 'balance_after' => $result['balance'],
+                'total_duration_ms' => $totalDuration,
+                'decrypt_duration_ms' => $decryptDuration,
             ]);
+
+            // 🚀 新增：超时监控
+            TimeoutMonitor::record('ATG', 'bet', $totalDuration, true);
+
             return $this->success(['balanceOld' => $result['old_balance'], 'balance' => $result['balance']]);
         } catch (Exception $e) {
+            $totalDuration = round((microtime(true) - $requestStartTime) * 1000, 2);
             $this->log->error('ATG bet failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '下注异常', $e, ['params' => $request->post()]);
+            TimeoutMonitor::record('ATG', 'bet', $totalDuration, false);
             return $this->error(self::API_CODE_FAIL);
         }
     }
@@ -203,10 +246,19 @@ class ATGGameController
      */
     public function betResult(Request $request): Response
     {
+        $requestStartTime = microtime(true);  // ✅ 记录请求开始时间
         try {
             $params = $request->post();
+
+            $decryptStart = microtime(true);
             $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-            $this->log->info('ATG结算请求（Lua原子）', ['order_no' => $data['betId'] ?? '']);
+            $decryptDuration = round((microtime(true) - $decryptStart) * 1000, 2);
+
+            $this->log->info('ATG结算请求（Lua原子）', [
+                'order_no' => $data['betId'] ?? '',
+                'decrypt_duration_ms' => $decryptDuration,
+            ]);
+
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -279,17 +331,26 @@ class ATGGameController
                 }
             }
 
+            // ✅ 记录总耗时
+            $totalDuration = round((microtime(true) - $requestStartTime) * 1000, 2);
             $this->log->info('ATG结算成功（Lua原子）', [
                 'order_no' => $orderNo,
                 'win_amount' => $winAmount,
                 'balance_before' => $result['old_balance'],
                 'balance_after' => $result['balance'],
+                'total_duration_ms' => $totalDuration,
+                'decrypt_duration_ms' => $decryptDuration,
             ]);
+
+            // 🚀 新增：超时监控
+            TimeoutMonitor::record('ATG', 'betResult', $totalDuration, true);
 
             return $this->success(['balanceOld' => $result['old_balance'], 'balance' => $result['balance']]);
         } catch (Exception $e) {
+            $totalDuration = round((microtime(true) - $requestStartTime) * 1000, 2);
             $this->log->error('ATG betResult failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '结算异常', $e, ['params' => $request->post()]);
+            TimeoutMonitor::record('ATG', 'betResult', $totalDuration, false);
             return $this->error(self::API_CODE_FAIL);
         }
     }
@@ -302,10 +363,19 @@ class ATGGameController
      */
     public function refund(Request $request): Response
     {
+        $requestStartTime = microtime(true);  // ✅ 记录请求开始时间
         try {
             $params = $request->post();
+
+            $decryptStart = microtime(true);
             $data = $this->service->decrypt(array_merge(['token' => $request->header('token'), 'timestamp' => $request->header('timestamp')], $params));
-            $this->log->info('ATG退款请求（Lua原子）', ['order_no' => $data['betId'] ?? '']);
+            $decryptDuration = round((microtime(true) - $decryptStart) * 1000, 2);
+
+            $this->log->info('ATG退款请求（Lua原子）', [
+                'order_no' => $data['betId'] ?? '',
+                'decrypt_duration_ms' => $decryptDuration,
+            ]);
+
             if ($this->service->error) {
                 return $this->error($this->service->error);
             }
@@ -361,17 +431,26 @@ class ATGGameController
                 }
             }
 
+            // ✅ 记录总耗时
+            $totalDuration = round((microtime(true) - $requestStartTime) * 1000, 2);
             $this->log->info('ATG退款成功（Lua原子）', [
                 'order_no' => $orderNo,
                 'refund_amount' => $refundAmount,
                 'balance_before' => $result['old_balance'],
                 'balance_after' => $result['balance'],
+                'total_duration_ms' => $totalDuration,
+                'decrypt_duration_ms' => $decryptDuration,
             ]);
+
+            // 🚀 新增：超时监控
+            TimeoutMonitor::record('ATG', 'refund', $totalDuration, true);
 
             return $this->success(['balanceOld' => $result['old_balance'], 'balance' => $result['balance']]);
         } catch (Exception $e) {
+            $totalDuration = round((microtime(true) - $requestStartTime) * 1000, 2);
             Log::error('ATG refund failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '退款异常', $e, ['params' => $request->post()]);
+            TimeoutMonitor::record('ATG', 'refund', $totalDuration, false);
             return $this->error(self::API_CODE_FAIL);
         }
     }
