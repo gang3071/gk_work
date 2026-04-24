@@ -588,6 +588,7 @@ class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceI
 
     public function getWebId()
     {
+        return 'gk198';
         return ChannelGameWeb::query()->where('channel_id', $this->player->channel->id)->where('platform_id', $this->platform->id)->value('web_id') ?: 'super9';
     }
 
