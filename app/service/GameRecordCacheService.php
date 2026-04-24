@@ -213,74 +213,6 @@ LUA;
     }
 
     /**
-     * 保存KT平台下注记录到 Redis（支持win和diff字段）
-     *
-     * @param string $platform 平台代码
-     * @param array $data 下注数据
-     *   - order_no: 订单号（必需）
-     *   - player_id: 玩家ID（必需）
-     *   - platform_id: 平台ID（必需）
-     *   - amount: 下注金额（必需，对应Bet字段）
-     *   - win: 派彩金额（必需，对应Win字段）
-     *   - diff: 输赢金额（必需，Win-Bet）
-     *   - game_code: 游戏代码（可选）
-     *   - original_data: 原始请求数据（可选）
-     *   - balance_before: 变化前余额（可选）
-     *   - balance_after: 变化后余额（可选）
-     */
-    public static function saveBetForKT(string $platform, array $data): void
-    {
-        $orderNo = $data['order_no'];
-        $key = self::PREFIX_BET . "{$platform}:{$orderNo}";
-
-        // ✅ 检查记录是否已存在（由 Lua 脚本创建）
-        $exists = self::redis()->exists($key);
-
-        if ($exists) {
-            // 记录已存在，只更新必要字段
-            self::redis()->hMSet($key, [
-                'win' => $data['win'] ?? 0,
-                'diff' => $data['diff'] ?? 0,
-                'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
-            ]);
-        } else {
-            // 记录不存在，创建完整记录
-            $record = [
-                'platform' => $platform,
-                'order_no' => $orderNo,
-                'player_id' => $data['player_id'],
-                'platform_id' => $data['platform_id'],
-                'amount' => $data['amount'],
-                'game_code' => $data['game_code'] ?? '',
-                'game_type' => $data['game_type'] ?? '',
-                'game_name' => $data['game_name'] ?? '',
-                'bet_type' => $data['bet_type'] ?? 'bet',
-                'bet_time' => time(),
-                'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-                'status' => 'pending',
-                'settlement_status' => 0,
-                'win' => $data['win'] ?? 0,
-                'diff' => $data['diff'] ?? 0,
-                'created_at' => date('Y-m-d H:i:s'),
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
-            ];
-
-            self::redis()->hMSet($key, $record);
-            self::redis()->expire($key, self::TTL_RECORD);
-            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
-        }
-
-        // 记录统计
-        self::redis()->incr("game:stats:{$platform}:bet:count");
-
-        // 记录在线玩家
-        self::recordOnlinePlayer($platform, $data);
-    }
-
-    /**
      * 保存结算记录到 Redis
      *
      * @param string $platform 平台代码
@@ -345,83 +277,6 @@ LUA;
                 'status' => 'pending',
                 'created_at' => date('Y-m-d H:i:s'),
                 // ✅ 保存余额变化信息（统一字段名）
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
-            ];
-
-            self::redis()->hMSet($settleKey, $record);
-            self::redis()->expire($settleKey, self::TTL_RECORD);
-            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $settleKey);
-        }
-
-        // 记录统计
-        self::redis()->incr("game:stats:{$platform}:settle:count");
-    }
-
-    /**
-     * 保存KT平台结算记录到 Redis（支持win和diff字段）
-     *
-     * @param string $platform 平台代码
-     * @param array $data 结算数据
-     *   - order_no: 订单号（必需）
-     *   - player_id: 玩家ID（必需）
-     *   - platform_id: 平台ID（必需）
-     *   - amount: 下注金额（必需，对应Bet字段）
-     *   - win: 派彩金额（必需，对应Win字段）
-     *   - diff: 输赢金额（必需，Win-Bet）
-     *   - settle_type: 结算类型（可选，默认settle）
-     *   - original_data: 原始请求数据（可选）
-     *   - balance_before: 变化前余额（可选）
-     *   - balance_after: 变化后余额（可选）
-     */
-    public static function saveSettleForKT(string $platform, array $data): void
-    {
-        $orderNo = $data['order_no'];
-        $betKey = self::PREFIX_BET . "{$platform}:{$orderNo}";
-
-        // 检查是否存在 bet 记录
-        $betExists = self::redis()->exists($betKey);
-
-        if ($betExists) {
-            // 更新 bet 记录为已结算
-            self::redis()->hMSet($betKey, [
-                'win' => $data['win'] ?? 0,
-                'diff' => $data['diff'] ?? 0,
-                'settlement_status' => 1,  // 已结算
-                'settle_type' => $data['settle_type'] ?? 'settle',
-                'settle_time' => time(),
-                'platform_action_at' => date('Y-m-d H:i:s'),
-                'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-                'status' => 'pending',  // 重新标记待同步
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
-            ]);
-
-            // 更新同步队列（提升优先级）
-            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
-
-        } else {
-            // bet 记录不存在，创建独立 settle 记录
-            $settleKey = self::PREFIX_SETTLE . "{$platform}:{$orderNo}";
-
-            $record = [
-                'platform' => $platform,
-                'order_no' => $orderNo,  // 不加后缀
-                'player_id' => $data['player_id'],
-                'platform_id' => $data['platform_id'],
-                'amount' => $data['amount'] ?? 0,
-                'win' => $data['win'] ?? 0,
-                'diff' => $data['diff'] ?? 0,
-                'game_code' => $data['game_code'] ?? '',
-                'game_type' => $data['game_type'] ?? '',
-                'settlement_status' => 1,
-                'settle_type' => $data['settle_type'] ?? 'settle',
-                'settle_time' => time(),
-                'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-                'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-                'platform_action_at' => date('Y-m-d H:i:s'),
-                'status' => 'pending',
-                'created_at' => date('Y-m-d H:i:s'),
                 'balance_before' => $data['balance_before'] ?? '',
                 'balance_after' => $data['balance_after'] ?? '',
             ];
@@ -723,5 +578,175 @@ LUA;
             ]);
             return '';
         }
+    }
+
+    /**
+     * KT平台专用：保存未结算记录（支持win和diff字段）
+     *
+     * @param string $platform 平台代码
+     * @param array $data 下注数据
+     *   - order_no: 订单号（必需）
+     *   - player_id: 玩家ID（必需）
+     *   - platform_id: 平台ID（必需）
+     *   - amount: 下注金额（必需，对应Bet字段）
+     *   - win: 派彩金额（必需，对应Win字段）
+     *   - diff: 输赢金额（必需，Win-Bet）
+     *   - game_code: 游戏代码（可选）
+     *   - original_data: 原始请求数据（可选）
+     *   - balance_before: 变化前余额（可选）
+     *   - balance_after: 变化后余额（可选）
+     */
+    public static function saveBetForKT(string $platform, array $data): void
+    {
+        $orderNo = $data['order_no'];
+        $key = self::PREFIX_BET . "{$platform}:{$orderNo}";
+
+        // ✅ KT专用：清理可能由Lua创建的settle记录（防止重复）
+        $settleKey = "game:record:settle:{$platform}:{$orderNo}";
+        if (self::redis()->exists($settleKey)) {
+            // 从同步队列移除settle记录
+            self::redis()->zRem(self::PREFIX_SYNC_QUEUE, $settleKey);
+            // 删除settle记录
+            self::redis()->del($settleKey);
+        }
+
+        // ✅ 检查bet记录是否已存在
+        $exists = self::redis()->exists($key);
+
+        if ($exists) {
+            // 记录已存在，更新必要字段（包括amount，确保存储的是原始Bet值）
+            self::redis()->hMSet($key, [
+                'amount' => $data['amount'],  // ✅ 更新为KT的原始Bet值
+                'win' => $data['win'] ?? 0,
+                'diff' => $data['diff'] ?? 0,
+                'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
+                'balance_before' => $data['balance_before'] ?? '',
+                'balance_after' => $data['balance_after'] ?? '',
+            ]);
+        } else {
+            // 记录不存在，创建完整记录
+            $record = [
+                'platform' => $platform,
+                'order_no' => $orderNo,
+                'player_id' => $data['player_id'],
+                'platform_id' => $data['platform_id'],
+                'amount' => $data['amount'],
+                'game_code' => $data['game_code'] ?? '',
+                'game_type' => $data['game_type'] ?? '',
+                'game_name' => $data['game_name'] ?? '',
+                'bet_type' => $data['bet_type'] ?? 'bet',
+                'bet_time' => time(),
+                'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
+                'status' => 'pending',
+                'settlement_status' => 0,  // 未结算
+                'win' => $data['win'] ?? 0,
+                'diff' => $data['diff'] ?? 0,
+                'created_at' => date('Y-m-d H:i:s'),
+                'balance_before' => $data['balance_before'] ?? '',
+                'balance_after' => $data['balance_after'] ?? '',
+            ];
+
+            self::redis()->hMSet($key, $record);
+            self::redis()->expire($key, self::TTL_RECORD);
+            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
+        }
+
+        // 记录统计
+        self::redis()->incr("game:stats:{$platform}:bet:count");
+
+        // 记录在线玩家
+        self::recordOnlinePlayer($platform, $data);
+    }
+
+    /**
+     * KT平台专用：批量结算所有相同MainTxID的子订单
+     *
+     * @param string $platform 平台代码
+     * @param string $mainTxID 主交易ID
+     * @param array $currentRecordData 当前交易记录数据（TakeWin=1的那笔）
+     * @return int 已结算的订单数量
+     */
+    public static function settleAllSubOrdersForKT(string $platform, string $mainTxID, array $currentRecordData): int
+    {
+        $redis = self::redis();
+        $currentOrderNo = $currentRecordData['order_no'];
+
+        // ✅ KT专用：清理可能存在的settle记录（包括SubTxID=0和SubTxID>0）
+        $settlePatterns = [
+            "game:record:settle:{$platform}:{$mainTxID}",      // SubTxID=0
+            "game:record:settle:{$platform}:{$mainTxID}_*",    // SubTxID>0
+        ];
+        foreach ($settlePatterns as $pattern) {
+            $settleKeys = $redis->keys($pattern);
+            foreach ($settleKeys as $settleKey) {
+                $redis->zRem(self::PREFIX_SYNC_QUEUE, $settleKey);
+                $redis->del($settleKey);
+            }
+        }
+
+        // ✅ 查找所有相同MainTxID的bet订单（包括SubTxID=0和SubTxID>0）
+        $keys = [];
+
+        // 查找 SubTxID=0 的订单（订单号 = MainTxID）
+        $key0 = self::PREFIX_BET . "{$platform}:{$mainTxID}";
+        if ($redis->exists($key0)) {
+            $keys[] = $key0;
+        }
+
+        // 查找 SubTxID>0 的订单（订单号 = MainTxID_SubTxID）
+        $patternN = self::PREFIX_BET . "{$platform}:{$mainTxID}_*";
+        $keysN = $redis->keys($patternN);
+        $keys = array_merge($keys, $keysN);
+
+        $settledCount = 0;
+        foreach ($keys as $key) {
+            $record = $redis->hGetAll($key);
+
+            if (empty($record)) {
+                continue;
+            }
+
+            // 只结算未结算的订单
+            if (isset($record['settlement_status']) && $record['settlement_status'] == 1) {
+                continue;
+            }
+
+            $orderNo = $record['order_no'] ?? '';
+
+            // ✅ 如果是当前订单，使用完整的结算数据
+            if ($orderNo === $currentOrderNo) {
+                $redis->hMSet($key, [
+                    'win' => $currentRecordData['win'] ?? 0,
+                    'diff' => $currentRecordData['diff'] ?? 0,
+                    'settlement_status' => 1,
+                    'settle_type' => 'settle',
+                    'settle_time' => time(),
+                    'platform_action_at' => date('Y-m-d H:i:s'),
+                    'action_data' => json_encode($currentRecordData['original_data'] ?? [], JSON_UNESCAPED_UNICODE),
+                    'status' => 'pending',
+                    'balance_before' => $currentRecordData['balance_before'] ?? '',
+                    'balance_after' => $currentRecordData['balance_after'] ?? '',
+                ]);
+            } else {
+                // 其他子订单：只更新结算状态
+                $redis->hMSet($key, [
+                    'settlement_status' => 1,
+                    'settle_type' => 'settle',
+                    'settle_time' => time(),
+                    'platform_action_at' => date('Y-m-d H:i:s'),
+                    'status' => 'pending',
+                ]);
+            }
+
+            // 更新同步队列
+            $redis->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
+
+            $settledCount++;
+        }
+
+        // 记录统计
+        self::redis()->incr("game:stats:{$platform}:settle:count");
+
+        return $settledCount;
     }
 }
