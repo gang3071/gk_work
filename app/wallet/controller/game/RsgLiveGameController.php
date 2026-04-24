@@ -246,6 +246,10 @@ class RsgLiveGameController
                     'balance_after' => $result['balance'],
                     'transaction_id' => $transactionId,  // 记录原始 transaction.id
                 ]);
+
+                // ✅ 建立 transaction_id -> order_no 映射（供Cancel接口使用）
+                $txMapKey = "game:transaction_id:RSGLIVE:{$transactionId}";
+                \support\Redis::connection()->setex($txMapKey, 604800, $orderNo);  // 7天过期
             }
 
             // 游戏交互日志
@@ -260,14 +264,8 @@ class RsgLiveGameController
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
                     $this->logger->info('RSGLive下注重复请求（Lua检测）', ['order_no' => $orderNo, 'transaction_id' => $transactionId]);
-                    return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                        'transaction' => [
-                            'id' => $transactionId,  // ✅ 返回原始 transaction.id
-                            'balance' => round((float)$result['balance'], 2),
-                        ],
-                        'requestId' => $params['requestId'],
-                        'account' => $data['memberaccount'],
-                    ]);
+                    // ✅ 修复：重复交易ID应返回HTTP 400 + msgId=1
+                    return $this->error(self::API_CODE_TRANSACTIONID_DUPLICATE);
                 } elseif ($result['error'] === 'insufficient_balance') {
                     return $this->error(self::API_CODE_AMOUNT_OVER_BALANCE);
                 }
@@ -311,7 +309,13 @@ class RsgLiveGameController
             // ✅ 修复：使用 referenceId 作为订单号（与下注关联）
             $transactionId = (string)($params['transaction']['id'] ?? '');
             $orderNo = (string)($params['transaction']['referenceId'] ?? $transactionId);
-            $winAmount = $params['transaction']['amount'] ?? 0;
+            $winAmount = (float)($params['transaction']['amount'] ?? 0);
+
+            // ✅ 验证金额有效性（Credit接口amount应该>=0）
+            if ($winAmount < 0) {
+                $this->logger->error('RSGLive结算金额无效', ['order_no' => $orderNo, 'win_amount' => $winAmount]);
+                return $this->error(self::API_CODE_DATABASE_ERROR, '结算金额无效');
+            }
 
             // ✅ 优化：从 Redis 读取实际下注金额（referenceId 关联）
             $redisKey = "game:record:bet:RSGLIVE:{$orderNo}";
@@ -324,14 +328,14 @@ class RsgLiveGameController
             }
 
             // 计算 diff = win - bet
-            $diff = bcsub($winAmount, $betAmount, 2);
+            $diff = bcsub((string)$winAmount, (string)$betAmount, 2);
 
             // Lua 原子结算
             $luaParams = [
                 'order_no' => $orderNo,  // 使用 referenceId
                 'platform_id' => $this->service->platform->id,
-                'amount' => max($winAmount, 0),
-                'diff' => $diff,  // ✅ 修正：diff = win - bet
+                'amount' => $winAmount,  // ✅ 已验证>=0，直接使用
+                'diff' => (float)$diff,  // ✅ 修正：diff = win - bet
                 'transaction_type' => TransactionType::SETTLE,
                 'original_data' => $params,
                 'transaction_id' => $transactionId,  // 记录原始 transaction.id
@@ -377,6 +381,8 @@ class RsgLiveGameController
             // 处理结算结果
             if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
                 $this->logger->info('RSGLive结算重复请求（Lua检测）', ['order_no' => $orderNo, 'transaction_id' => $transactionId]);
+                // ✅ 修复：重复交易ID应返回HTTP 400 + msgId=1
+                return $this->error(self::API_CODE_TRANSACTIONID_DUPLICATE);
             }
 
             $this->logger->info('rsg_live结算成功（Lua原子）', ['order_no' => $orderNo, 'transaction_id' => $transactionId, 'diff' => $diff]);
@@ -396,6 +402,128 @@ class RsgLiveGameController
         }
     }
 
+
+    /**
+     * 取消注单（Lua原子操作）
+     * @param Request $request
+     * @return Response
+     */
+    public function cancel(Request $request): Response
+    {
+        try {
+            $params = $request->post();
+            $token = request()->header('authorization');
+            $this->logger->info('rsg_live取消注单请求（Lua原子）', ['params' => $params, 'token' => $token]);
+            $data = $this->service->decrypt($token);
+            $this->logger->info('rsg_live取消注单数据', ['params' => $data]);
+
+            if ($this->service->error) {
+                return $this->error($this->service->error);
+            }
+
+            $player = $this->service->player;
+            // ✅ 根据API文档：使用 targetId 查找要取消的交易
+            $transactionId = (string)($params['transaction']['id'] ?? '');  // 本次Cancel的交易ID
+            $targetId = (string)($params['transaction']['targetId'] ?? '');  // 要取消的Debit交易ID
+
+            if (empty($targetId)) {
+                $this->logger->error('RSGLive取消失败：targetId为空', ['params' => $params]);
+                return $this->error(self::API_CODE_REFERENCEID_NOT_FOUND);
+            }
+
+            // ✅ 通过 targetId 查找对应的 order_no
+            // 方案1：先尝试从 transaction_id 映射中查找
+            $txMapKey = "game:transaction_id:RSGLIVE:{$targetId}";
+            $orderNo = \support\Redis::connection()->get($txMapKey);
+
+            // 方案2：如果映射不存在，尝试直接使用 targetId 作为 order_no（兼容性处理）
+            if (!$orderNo) {
+                $this->logger->warning('RSGLive未找到transaction_id映射，尝试直接使用targetId', ['targetId' => $targetId]);
+                $orderNo = $targetId;
+            }
+
+            // 从 Redis 读取实际下注金额
+            $redisKey = "game:record:bet:RSGLIVE:{$orderNo}";
+            $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
+            $actualRefundAmount = $cachedBet !== false ? (float)$cachedBet : 0;
+
+            // Redis 未命中，从数据库降级获取
+            if ($actualRefundAmount == 0 && $cachedBet === false) {
+                $actualRefundAmount = getBetAmountWithFallback('RSGLIVE', $orderNo, $player->id, $this->service->platform->id);
+            }
+
+            // Lua 原子取消
+            $luaParams = [
+                'order_no' => $orderNo,
+                'platform_id' => $this->service->platform->id,
+                'refund_amount' => $actualRefundAmount,
+                'transaction_type' => TransactionType::CANCEL,
+                'original_data' => $params,
+                'transaction_id' => $transactionId,
+            ];
+
+            // 参数验证
+            validateLuaScriptParams($luaParams, [
+                'order_no' => ['required', 'string'],
+                'refund_amount' => ['required', 'numeric', 'min:0'],
+                'platform_id' => ['required', 'integer'],
+                'transaction_type' => ['required', 'string'],
+            ], 'atomicCancel');
+
+            $result = RedisLuaScripts::atomicCancel($player->id, 'RSGLIVE', $luaParams);
+
+            // 审计日志
+            logLuaScriptCall('cancel', 'RSGLIVE', $player->id, $luaParams);
+
+            // 处理取消结果
+            if ($result['ok'] === 0) {
+                $error = $result['error'] ?? 'unknown';
+
+                if ($error === 'duplicate_cancel') {
+                    // ✅ 订单已被取消，返回目标交易ID不存在（符合"相同targetId只可以取消一次"）
+                    $this->logger->info('RSGLive重复取消（Lua检测）', ['order_no' => $orderNo, 'targetId' => $targetId]);
+                    return $this->error(self::API_CODE_TARGET_ID_NOT_FOUND);
+                } elseif ($error === 'order_not_found') {
+                    // ✅ 订单不存在，返回目标交易ID不存在
+                    $this->logger->warning('RSGLive取消失败：订单不存在', ['order_no' => $orderNo, 'targetId' => $targetId]);
+                    return $this->error(self::API_CODE_TARGET_ID_NOT_FOUND);
+                } else {
+                    // 其他错误
+                    $this->logger->error('RSGLive取消失败', ['order_no' => $orderNo, 'error' => $error]);
+                    return $this->error(self::API_CODE_DATABASE_ERROR);
+                }
+            }
+
+            $this->logger->info('rsg_live取消注单成功（Lua原子）', ['order_no' => $orderNo, 'refund_amount' => $actualRefundAmount]);
+
+            // 保存取消记录到 Redis
+            if ($result['ok'] === 1) {
+                \app\service\GameRecordCacheService::saveCancel('RSGLIVE', [
+                    'order_no' => $orderNo,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->service->platform->id,
+                    'refund_amount' => $actualRefundAmount,
+                    'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
+                    'transaction_id' => $transactionId,
+                ]);
+            }
+
+            return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
+                'transaction' => [
+                    'id' => $transactionId,
+                    'balance' => round((float)$result['balance'], 2),
+                ],
+                'requestId' => $params['requestId'],
+                'account' => $data['memberaccount'],
+            ]);
+        } catch (Exception $e) {
+            Log::error('RSGLive cancel failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $this->sendTelegramAlert('RSG_LIVE', '取消注单异常', $e, ['params' => $request->post()]);
+            return $this->error(self::API_CODE_DATABASE_ERROR);
+        }
+    }
 
     /**
      * 成功响应方法

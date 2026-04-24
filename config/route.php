@@ -75,6 +75,7 @@ Route::group('/single-wallet', function () {
         Route::post('/api/Wallet/Balance', [\app\wallet\controller\game\RsgLiveGameController::class, 'balance']);
         Route::post('/api/Wallet/Debit', [\app\wallet\controller\game\RsgLiveGameController::class, 'bet']);
         Route::post('/api/Wallet/Credit', [\app\wallet\controller\game\RsgLiveGameController::class, 'betResult']);
+        Route::post('/api/Wallet/Cancel', [\app\wallet\controller\game\RsgLiveGameController::class, 'cancel']);
         Route::post('/api/Auth/CheckUser', [\app\wallet\controller\game\RsgLiveGameController::class, 'checkUser']);
         Route::post('/api/Auth/RequestExtendToken', [\app\wallet\controller\game\RsgLiveGameController::class, 'RequestExtendToken']);
     });
