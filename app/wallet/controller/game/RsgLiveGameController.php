@@ -159,15 +159,17 @@ class RsgLiveGameController
             }
 
             $balance = $this->service->balance();
+            $formattedBalance = round((float)$balance, 4);  // ✅ 统一格式化为4位小数
+
             $this->logger->info('balance',[
-                'balance' => $balance,
+                'balance' => $formattedBalance,
                 'status' => 0,
                 'requestId' => $params['requestId'],
                 'account' => $data['memberaccount'],
             ]);
             // 3. 使用常量获取状态码描述
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
-                'balance' => $balance,
+                'balance' => $formattedBalance,  // ✅ API文档要求小数4位
                 'status' => 0,
                 'requestId' => $params['requestId'],
                 'account' => $data['memberaccount'],
@@ -230,6 +232,14 @@ class RsgLiveGameController
 
             $result = RedisLuaScripts::atomicBet($player->id, 'RSGLIVE', $luaParams);
 
+            // ✅ 记录Lua脚本返回结果
+            $this->logger->info('rsg_live下注Lua结果', [
+                'order_no' => $orderNo,
+                'lua_result' => $result,
+                'balance_before' => $result['old_balance'] ?? null,
+                'balance_after' => $result['balance'] ?? null,
+            ]);
+
             // 审计日志
             logLuaScriptCall('bet', 'RSGLIVE', $player->id, $luaParams);
 
@@ -276,7 +286,7 @@ class RsgLiveGameController
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'transaction' => [
                     'id' => $transactionId,  // ✅ 返回原始 transaction.id
-                    'balance' => round((float)$result['balance'], 2),
+                    'balance' => round((float)$result['balance'], 4),  // ✅ API文档要求小数4位
                 ],
                 'requestId' => $params['requestId'],
                 'account' => $data['memberaccount'],
@@ -352,6 +362,14 @@ class RsgLiveGameController
 
             $result = RedisLuaScripts::atomicSettle($player->id, 'RSGLIVE', $luaParams);
 
+            // ✅ 记录Lua脚本返回结果
+            $this->logger->info('rsg_live结算Lua结果', [
+                'order_no' => $orderNo,
+                'lua_result' => $result,
+                'balance_before' => $result['old_balance'] ?? null,
+                'balance_after' => $result['balance'] ?? null,
+            ]);
+
             // 审计日志
             logLuaScriptCall('settle', 'RSGLIVE', $player->id, $luaParams);
 
@@ -390,7 +408,7 @@ class RsgLiveGameController
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'transaction' => [
                     'id' => $transactionId,  // ✅ 返回原始 transaction.id
-                    'balance' => round((float)$result['balance'], 2),
+                    'balance' => round((float)$result['balance'], 4),  // ✅ API文档要求小数4位
                 ],
                 'requestId' => $params['requestId'],
                 'account' => $data['memberaccount'],
@@ -472,6 +490,15 @@ class RsgLiveGameController
 
             $result = RedisLuaScripts::atomicCancel($player->id, 'RSGLIVE', $luaParams);
 
+            // ✅ 记录Lua脚本返回结果
+            $this->logger->info('rsg_live取消Lua结果', [
+                'order_no' => $orderNo,
+                'targetId' => $targetId,
+                'lua_result' => $result,
+                'balance_before' => $result['old_balance'] ?? null,
+                'balance_after' => $result['balance'] ?? null,
+            ]);
+
             // 审计日志
             logLuaScriptCall('cancel', 'RSGLIVE', $player->id, $luaParams);
 
@@ -513,7 +540,7 @@ class RsgLiveGameController
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'transaction' => [
                     'id' => $transactionId,
-                    'balance' => round((float)$result['balance'], 2),
+                    'balance' => round((float)$result['balance'], 4),  // ✅ API文档要求小数4位
                 ],
                 'requestId' => $params['requestId'],
                 'account' => $data['memberaccount'],
@@ -544,6 +571,12 @@ class RsgLiveGameController
             'data' => $data,
         ];
 
+        // ✅ 记录成功响应日志
+        $this->logger->info('rsg_live成功响应', [
+            'http_code' => $httpCode,
+            'response' => $responseData
+        ]);
+
 //        $reqBase64 = $this->service->encrypt(json_encode($responseData));
 
         return (new Response(
@@ -558,18 +591,23 @@ class RsgLiveGameController
      *
      * @param string $code 错误码
      * @param string|null $message 自定义错误信息
-     * @param array $data 额外数据
      * @param int $httpCode HTTP状态码
      * @return Response
      */
-    public function error(string $code, ?string $message = null, array $data = [], int $httpCode = 400): Response
+    public function error(string $code, ?string $message = null, int $httpCode = 400): Response
     {
         $responseData = [
             'msgId' => $code,
             'message' => $message ?: (self::API_CODE_MAP[$code] ?? '未知错误'),
             'timestamp' => time(),
-            'Data' => null,
+            'data' => null,  // ✅ 修复：按照API文档4.1使用小写 data
         ];
+
+        // ✅ 记录错误响应日志
+        $this->logger->warning('rsg_live错误响应', [
+            'http_code' => $httpCode,
+            'response' => $responseData
+        ]);
 
         return (new Response(
             $httpCode,
