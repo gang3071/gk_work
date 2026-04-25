@@ -744,11 +744,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $cachedResult = \support\Cache::get($tokenCacheKey);
 
         if ($cachedResult !== null) {
-            $this->log->info('ATG解密命中缓存', [
-                'token_hash' => substr(md5($token), 0, 10),
-                'cache_hit_time_ms' => round((microtime(true) - $decryptStartTime) * 1000, 2),
-            ]);
-
             // 恢复玩家和配置信息
             $this->player = Player::query()->find($cachedResult['player_id']);
             if ($this->player) {
