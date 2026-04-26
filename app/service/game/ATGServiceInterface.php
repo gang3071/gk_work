@@ -250,9 +250,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $token = Cache::get($cacheKey);
 
         // 记录实际使用的营运账号（仅在获取token时记录，避免日志过多）
-        $trace = debug_backtrace();
-        $test = $trace[1]['function'];
-
         if (empty($token)) {
             $tokenResponse = Http::timeout(7)
                 ->withHeaders([
@@ -261,18 +258,10 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                 ])
                 ->get($config['api_domain'] . '/token');
             if (!$tokenResponse->ok()) {
-                $this->log->info($test, ['params' => $params, 'response' => $tokenResponse,'url'=>$url,'header'=>[
-                    'X-Operator' => $config['operator'],
-                    'X-key' => $config['key'],
-                ]]);
                 throw new GameException(trans('system_busy', [], 'message'));
             }
             $data = $tokenResponse->json();
             if (empty($data['data']['token'])) {
-                $this->log->info($test, ['params' => $params, 'response' => $tokenResponse,'url'=>$url,'header'=>[
-                    'X-Operator' => $config['operator'],
-                    'X-key' => $config['key'],
-                ]]);
                 throw new GameException(trans('system_busy', [], 'message'));
             }
             $token = $data['data']['token'];
@@ -293,9 +282,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             if ($res['status'] == '400' && $res['message'] == 'user exists') {
                 return [];
             }
-            $this->log->info($test, ['params' => $params, 'response' => $response,'url'=>$url,'header'=>[
-                'X-Token' => $token,
-            ]]);
             throw new GameException(empty($res['message']) ? trans('system_busy', [], 'message') : $res['message']);
         }
 
@@ -730,11 +716,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         // ✅ 优化1: timestamp过期验证（根据API文档要求）
         if (!$timestamp || time() >= $timestamp) {
-            $this->log->warning('ATG请求timestamp过期', [
-                'timestamp' => $timestamp,
-                'current_time' => time(),
-                'diff_seconds' => time() - $timestamp,
-            ]);
             return $this->error = ATGGameController::API_CODE_DECRYPT_ERROR;
         }
 
@@ -762,13 +743,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         if ($usernameHint) {
             $operatorCacheKey = "atg:player_operator:{$usernameHint}";
             $cachedOperator = \support\Cache::get($operatorCacheKey);
-            if ($cachedOperator) {
-                // 从缓存获取该玩家对应的operator,优先尝试该配置
-                $this->log->debug('ATG命中username→operator映射', [
-                    'username' => $usernameHint,
-                    'operator' => $cachedOperator,
-                ]);
-            }
         }
 
         $result = null;
@@ -873,14 +847,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         // 所有配置都尝试失败
         if (empty($result)) {
-            $decryptDuration = round((microtime(true) - $decryptStartTime) * 1000, 2);
-            $this->log->error('❌ ATG解密失败', [
-                'total_configs' => count($configsToTry),
-                'try_count' => $tryCount,
-                'token_hash' => substr(md5($token), 0, 10),
-                'timestamp' => $timestamp,
-                'decrypt_duration_ms' => $decryptDuration,
-            ]);
             return $this->error = ATGGameController::API_CODE_DECRYPT_ERROR;
         }
 
@@ -946,18 +912,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         if (!empty($result['username']) && !empty($this->config['operator'])) {
             $this->cacheUsernameOperatorMapping($result['username'], $this->config['operator']);
         }
-
-        // ✅ 优化7: 记录解密性能日志
-        $decryptDuration = round((microtime(true) - $decryptStartTime) * 1000, 2);
-        $this->log->info('✅ ATG解密成功', [
-            'player_id' => $player->id,
-            'username' => $result['username'],
-            'total_configs' => count($configsToTry),
-            'success_index' => $successIndex,
-            'try_count' => $tryCount,
-            'decrypt_duration_ms' => $decryptDuration,
-            'operator' => $this->config['operator'],
-        ]);
 
         return $result;
     }
