@@ -509,9 +509,19 @@ class QTGameController
                 }
 
             } elseif ($txnType === 'CREDIT') {
-                // ✅ 修复：使用 betId 关联下注记录，如果没有则使用 roundId
+                // ✅ 修复：处理 completed 参数
+                // - completed=false: 中间步骤（如免费游戏每轮），使用独立txnId
+                // - completed=true 或未设置: 最终结算，使用betId关联下注记录
+                $completed = $params['completed'] ?? true;
                 $betId = $params['betId'] ?? null;
-                $orderNo = $betId ?: ($params['roundId'] ?? $txnId);  // 优先使用betId，其次roundId，最后txnId
+
+                if ($completed === false || $completed === 'false') {
+                    // 中间步骤：每次都使用独立的txnId，允许多次CREDIT
+                    $orderNo = $txnId;
+                } else {
+                    // 最终结算：使用betId关联下注记录，如果没有则使用roundId
+                    $orderNo = $betId ?: ($params['roundId'] ?? $txnId);
+                }
 
                 // 结算派彩（Lua 原子操作）
                 $luaParams = [
@@ -538,6 +548,7 @@ class QTGameController
                 logLuaScriptCall('settle', 'QT', $player->id, array_merge($luaParams, [
                     'txnId' => $txnId,  // ✅ 记录CREDIT的txnId
                     'betId' => $betId,  // ✅ 记录关联的betId
+                    'completed' => $completed,  // ✅ 记录是否为最终结算
                 ]));
 
                 // 保存结算记录到 Redis
@@ -552,6 +563,7 @@ class QTGameController
                         'original_data' => $params,
                         'balance_before' => $result['old_balance'] ?? 0,
                         'balance_after' => $result['balance'],
+                        'completed' => $completed,  // ✅ 记录是否为最终结算（用于数据分析）
                     ]);
 
                     // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
@@ -569,6 +581,7 @@ class QTGameController
                     'txnId' => $txnId,
                     'betId' => $betId,  // ✅ 记录关联的下注ID
                     'orderNo' => $orderNo,  // ✅ 记录实际使用的订单号
+                    'completed' => $completed,  // ✅ 记录是否为最终结算
                     'amount' => $amount,
                 ]);
 
@@ -577,7 +590,8 @@ class QTGameController
                     $this->logger->info('QT结算重复请求（Lua检测）', [
                         'txnId' => $txnId,
                         'betId' => $betId,
-                        'orderNo' => $orderNo
+                        'orderNo' => $orderNo,
+                        'completed' => $completed
                     ]);
                 }
 
