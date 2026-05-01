@@ -201,10 +201,15 @@ class RsgLiveGameController
             }
 
             $player = $this->service->player;
-            // ✅ 修复：使用 referenceId 作为订单号（下注和结算关联同一局）
+            // ✅ 修复：使用 transaction.id 作为订单号（每笔交易唯一，避免同局多次下注被误判为重复）
             $transactionId = (string)($params['transaction']['id'] ?? '');
-            $orderNo = (string)($params['transaction']['referenceId'] ?? $transactionId);
+            $orderNo = $transactionId;
+            $referenceId = (string)($params['transaction']['referenceId'] ?? '');
+            $gameName = (string)($params['game']['gameName'] ?? '');
             $betAmount = $params['transaction']['amount'] ?? 0;
+
+            // ✅ 聚合键：referenceId + gameName（同一局游戏按类型分别聚合）
+            $aggKey = $referenceId . ($gameName ? ":{$gameName}" : '');
 
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
@@ -213,7 +218,7 @@ class RsgLiveGameController
 
             // Lua 原子下注
             $luaParams = [
-                'order_no' => $orderNo,  // 使用 referenceId
+                'order_no' => $orderNo,  // 使用 transaction.id（每笔交易唯一）
                 'platform_id' => $this->service->platform->id,
                 'amount' => $betAmount,
                 'game_code' => $params['transaction']['gameCode'] ?? '',
@@ -243,23 +248,25 @@ class RsgLiveGameController
             // 审计日志
             logLuaScriptCall('bet', 'RSGLIVE', $player->id, $luaParams);
 
-            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            // 保存下注记录到 Redis（聚合版：按 referenceId:gameName 聚合，供 GameRecordSyncWorker 同步）
             if ($result['ok'] === 1) {
-                \app\service\GameRecordCacheService::saveBet('RSGLIVE', [
-                    'order_no' => $orderNo,  // referenceId（关联订单号）
+                \app\service\RSGLiveGameRecordHandler::saveBet([
+                    'referenceId' => $aggKey,
+                    'transactionId' => $transactionId,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $betAmount,
                     'game_code' => $params['transaction']['gameCode'] ?? '',
-                    'original_data' => $params,  // 包含 transaction.id 和 referenceId
+                    'game_name' => $gameName,
+                    'original_data' => $params,
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
-                    'transaction_id' => $transactionId,  // 记录原始 transaction.id
+                    'transaction_type' => TransactionType::BET,
                 ]);
 
-                // ✅ 建立 transaction_id -> order_no 映射（供Cancel接口使用）
-                $txMapKey = "game:transaction_id:RSGLIVE:{$transactionId}";
-                \support\Redis::connection()->setex($txMapKey, 604800, $orderNo);  // 7天过期
+                // ✅ 建立 transactionId -> aggKey 映射（供Cancel接口查找聚合记录）
+                $txMapKey = "game:tx_to_ref:RSGLIVE:{$transactionId}";
+                \support\Redis::connection()->setex($txMapKey, 604800, $aggKey);
             }
 
             // 游戏交互日志
@@ -316,9 +323,11 @@ class RsgLiveGameController
             }
 
             $player = $this->service->player;
-            // ✅ 修复：使用 referenceId 作为订单号（与下注关联）
+            // ✅ 修复：使用 referenceId:gameName 作为聚合键（与下注关联）
             $transactionId = (string)($params['transaction']['id'] ?? '');
-            $orderNo = (string)($params['transaction']['referenceId'] ?? $transactionId);
+            $referenceId = (string)($params['transaction']['referenceId'] ?? $transactionId);
+            $gameName = (string)($params['game']['gameName'] ?? '');
+            $orderNo = $referenceId . ($gameName ? ":{$gameName}" : '');
             $winAmount = (float)($params['transaction']['amount'] ?? 0);
 
             // ✅ 验证金额有效性（Credit接口amount应该>=0）
@@ -327,7 +336,7 @@ class RsgLiveGameController
                 return $this->error(self::API_CODE_DATABASE_ERROR, '结算金额无效');
             }
 
-            // ✅ 优化：从 Redis 读取实际下注金额（referenceId 关联）
+            // ✅ 优化：从 Redis 读取实际下注金额（聚合记录）
             $redisKey = "game:record:bet:RSGLIVE:{$orderNo}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
             $betAmount = $cachedBet !== false ? (float)$cachedBet : 0;
@@ -373,19 +382,18 @@ class RsgLiveGameController
             // 审计日志
             logLuaScriptCall('settle', 'RSGLIVE', $player->id, $luaParams);
 
-            // 保存结算记录到 Redis
+            // 保存结算记录到 Redis（聚合版：更新按 referenceId 聚合的记录）
             if ($result['ok'] === 1) {
-                \app\service\GameRecordCacheService::saveSettle('RSGLIVE', [
-                    'order_no' => $orderNo,  // referenceId（关联订单号）
+                \app\service\RSGLiveGameRecordHandler::saveSettle([
+                    'referenceId' => $orderNo,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($winAmount, 0),
                     'diff' => $diff,
                     'game_code' => $params['transaction']['gameCode'] ?? '',
-                    'original_data' => $params,  // 包含 transaction.id 和 referenceId
+                    'original_data' => $params,
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
-                    'transaction_id' => $transactionId,  // 记录原始 transaction.id
                 ]);
 
                 // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
@@ -449,14 +457,13 @@ class RsgLiveGameController
                 return $this->error(self::API_CODE_REFERENCEID_NOT_FOUND);
             }
 
-            // ✅ 通过 targetId 查找对应的 order_no
-            // 方案1：先尝试从 transaction_id 映射中查找
-            $txMapKey = "game:transaction_id:RSGLIVE:{$targetId}";
+            // ✅ 通过 targetId 查找对应的聚合键（referenceId:gameName）
+            $txMapKey = "game:tx_to_ref:RSGLIVE:{$targetId}";
             $orderNo = \support\Redis::connection()->get($txMapKey);
 
-            // 方案2：如果映射不存在，尝试直接使用 targetId 作为 order_no（兼容性处理）
+            // 兼容性处理：如果映射不存在，直接使用 targetId
             if (!$orderNo) {
-                $this->logger->warning('RSGLive未找到transaction_id映射，尝试直接使用targetId', ['targetId' => $targetId]);
+                $this->logger->warning('RSGLive未找到transactionId映射，尝试直接使用targetId', ['targetId' => $targetId]);
                 $orderNo = $targetId;
             }
 
@@ -589,12 +596,12 @@ class RsgLiveGameController
     /**
      * 失败响应方法
      *
-     * @param string $code 错误码
+     * @param int $code 错误码
      * @param string|null $message 自定义错误信息
      * @param int $httpCode HTTP状态码
      * @return Response
      */
-    public function error(string $code, ?string $message = null, int $httpCode = 400): Response
+    public function error(int $code, ?string $message = null, int $httpCode = 400): Response
     {
         $responseData = [
             'msgId' => $code,
