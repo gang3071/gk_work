@@ -64,7 +64,7 @@ class RSGLiveGameRecordHandler
                 'amount' => $data['amount'],
                 'game_code' => $data['game_code'] ?? '',
                 'game_type' => '',
-                'game_name' => '',
+                'game_name' => $data['game_name'] ?? '',
                 'transaction_type' => $data['transaction_type'] ?? 'bet',
                 'bet_time' => time(),
                 'original_data' => json_encode($data['original_data'] ?? [], JSON_UNESCAPED_UNICODE),

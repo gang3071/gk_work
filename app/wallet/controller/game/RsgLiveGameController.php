@@ -205,7 +205,11 @@ class RsgLiveGameController
             $transactionId = (string)($params['transaction']['id'] ?? '');
             $orderNo = $transactionId;
             $referenceId = (string)($params['transaction']['referenceId'] ?? '');
+            $gameName = (string)($params['game']['gameName'] ?? '');
             $betAmount = $params['transaction']['amount'] ?? 0;
+
+            // ✅ 聚合键：referenceId + gameName（同一局游戏按类型分别聚合）
+            $aggKey = $referenceId . ($gameName ? ":{$gameName}" : '');
 
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
@@ -244,20 +248,25 @@ class RsgLiveGameController
             // 审计日志
             logLuaScriptCall('bet', 'RSGLIVE', $player->id, $luaParams);
 
-            // 保存下注记录到 Redis（聚合版：按 referenceId 聚合，供 GameRecordSyncWorker 同步）
+            // 保存下注记录到 Redis（聚合版：按 referenceId:gameName 聚合，供 GameRecordSyncWorker 同步）
             if ($result['ok'] === 1) {
                 \app\service\RSGLiveGameRecordHandler::saveBet([
-                    'referenceId' => $referenceId,
+                    'referenceId' => $aggKey,
                     'transactionId' => $transactionId,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $betAmount,
                     'game_code' => $params['transaction']['gameCode'] ?? '',
+                    'game_name' => $gameName,
                     'original_data' => $params,
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
                     'transaction_type' => TransactionType::BET,
                 ]);
+
+                // ✅ 建立 transactionId -> aggKey 映射（供Cancel接口查找聚合记录）
+                $txMapKey = "game:tx_to_ref:RSGLIVE:{$transactionId}";
+                \support\Redis::connection()->setex($txMapKey, 604800, $aggKey);
             }
 
             // 游戏交互日志
@@ -314,9 +323,11 @@ class RsgLiveGameController
             }
 
             $player = $this->service->player;
-            // ✅ 修复：使用 referenceId 作为订单号（与下注关联）
+            // ✅ 修复：使用 referenceId:gameName 作为聚合键（与下注关联）
             $transactionId = (string)($params['transaction']['id'] ?? '');
-            $orderNo = (string)($params['transaction']['referenceId'] ?? $transactionId);
+            $referenceId = (string)($params['transaction']['referenceId'] ?? $transactionId);
+            $gameName = (string)($params['game']['gameName'] ?? '');
+            $orderNo = $referenceId . ($gameName ? ":{$gameName}" : '');
             $winAmount = (float)($params['transaction']['amount'] ?? 0);
 
             // ✅ 验证金额有效性（Credit接口amount应该>=0）
@@ -325,7 +336,7 @@ class RsgLiveGameController
                 return $this->error(self::API_CODE_DATABASE_ERROR, '结算金额无效');
             }
 
-            // ✅ 优化：从 Redis 读取实际下注金额（referenceId 关联）
+            // ✅ 优化：从 Redis 读取实际下注金额（聚合记录）
             $redisKey = "game:record:bet:RSGLIVE:{$orderNo}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
             $betAmount = $cachedBet !== false ? (float)$cachedBet : 0;
@@ -446,14 +457,13 @@ class RsgLiveGameController
                 return $this->error(self::API_CODE_REFERENCEID_NOT_FOUND);
             }
 
-            // ✅ 通过 targetId 查找对应的 order_no
-            // 方案1：先尝试从 transaction_id 映射中查找
-            $txMapKey = "game:transaction_id:RSGLIVE:{$targetId}";
+            // ✅ 通过 targetId 查找对应的聚合键（referenceId:gameName）
+            $txMapKey = "game:tx_to_ref:RSGLIVE:{$targetId}";
             $orderNo = \support\Redis::connection()->get($txMapKey);
 
-            // 方案2：如果映射不存在，尝试直接使用 targetId 作为 order_no（兼容性处理）
+            // 兼容性处理：如果映射不存在，直接使用 targetId
             if (!$orderNo) {
-                $this->logger->warning('RSGLive未找到transaction_id映射，尝试直接使用targetId', ['targetId' => $targetId]);
+                $this->logger->warning('RSGLive未找到transactionId映射，尝试直接使用targetId', ['targetId' => $targetId]);
                 $orderNo = $targetId;
             }
 
