@@ -244,27 +244,20 @@ class RsgLiveGameController
             // 审计日志
             logLuaScriptCall('bet', 'RSGLIVE', $player->id, $luaParams);
 
-            // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
+            // 保存下注记录到 Redis（聚合版：按 referenceId 聚合，供 GameRecordSyncWorker 同步）
             if ($result['ok'] === 1) {
-                \app\service\GameRecordCacheService::saveBet('RSGLIVE', [
-                    'order_no' => $orderNo,  // transaction.id（唯一订单号）
+                \app\service\RSGLiveGameRecordHandler::saveBet([
+                    'referenceId' => $referenceId,
+                    'transactionId' => $transactionId,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $betAmount,
                     'game_code' => $params['transaction']['gameCode'] ?? '',
-                    'original_data' => $params,  // 包含 transaction.id 和 referenceId
+                    'original_data' => $params,
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
-                    'transaction_id' => $transactionId,
-                    'reference_id' => $referenceId,  // 记录 referenceId（供结算关联）
+                    'transaction_type' => TransactionType::BET,
                 ]);
-
-                // ✅ 建立 referenceId -> bet 金额映射（供Settle接口查找下注金额）
-                if ($referenceId) {
-                    $refBetKey = "game:record:bet:RSGLIVE:{$referenceId}";
-                    \support\Redis::connection()->hSet($refBetKey, 'amount', $betAmount);
-                    \support\Redis::connection()->expire($refBetKey, 604800);  // 7天过期
-                }
             }
 
             // 游戏交互日志
@@ -378,19 +371,18 @@ class RsgLiveGameController
             // 审计日志
             logLuaScriptCall('settle', 'RSGLIVE', $player->id, $luaParams);
 
-            // 保存结算记录到 Redis
+            // 保存结算记录到 Redis（聚合版：更新按 referenceId 聚合的记录）
             if ($result['ok'] === 1) {
-                \app\service\GameRecordCacheService::saveSettle('RSGLIVE', [
-                    'order_no' => $orderNo,  // referenceId（关联订单号）
+                \app\service\RSGLiveGameRecordHandler::saveSettle([
+                    'referenceId' => $orderNo,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($winAmount, 0),
                     'diff' => $diff,
                     'game_code' => $params['transaction']['gameCode'] ?? '',
-                    'original_data' => $params,  // 包含 transaction.id 和 referenceId
+                    'original_data' => $params,
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
-                    'transaction_id' => $transactionId,  // 记录原始 transaction.id
                 ]);
 
                 // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
