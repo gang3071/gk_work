@@ -874,7 +874,8 @@ LUA;
             $beforeAmount = WalletService::getBalance($this->player->id);
 
             // 2. 使用 WalletService 原子性加款（Redis）
-            $newBalance = WalletService::atomicIncrement($this->player->id, $amount);
+            $incrementResult = WalletService::atomicIncrement($this->player->id, $amount);
+            $newBalance = $incrementResult['balance'];
 
             // 3. 同步到数据库（冷备份）
             $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();

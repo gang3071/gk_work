@@ -153,12 +153,12 @@ class WalletService
             }
 
             // 使用 Lua 原子脚本加款
-            $newBalance = self::atomicIncrement($playerId, $amount);
+            $incrementResult = self::atomicIncrement($playerId, $amount);
 
             return [
                 'success' => true,
-                'balance' => round($newBalance, 2),
-                'old_balance' => 0, // Lua 脚本未返回旧余额
+                'balance' => round($incrementResult['balance'], 2),
+                'old_balance' => round($incrementResult['old'] ?? 0, 2),
             ];
 
         } catch (\Throwable $e) {
