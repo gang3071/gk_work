@@ -201,9 +201,10 @@ class RsgLiveGameController
             }
 
             $player = $this->service->player;
-            // ✅ 修复：使用 referenceId 作为订单号（下注和结算关联同一局）
+            // ✅ 修复：使用 transaction.id 作为订单号（每笔交易唯一，避免同局多次下注被误判为重复）
             $transactionId = (string)($params['transaction']['id'] ?? '');
-            $orderNo = (string)($params['transaction']['referenceId'] ?? $transactionId);
+            $orderNo = $transactionId;
+            $referenceId = (string)($params['transaction']['referenceId'] ?? '');
             $betAmount = $params['transaction']['amount'] ?? 0;
 
             //判断当前设备是否爆机
@@ -213,7 +214,7 @@ class RsgLiveGameController
 
             // Lua 原子下注
             $luaParams = [
-                'order_no' => $orderNo,  // 使用 referenceId
+                'order_no' => $orderNo,  // 使用 transaction.id（每笔交易唯一）
                 'platform_id' => $this->service->platform->id,
                 'amount' => $betAmount,
                 'game_code' => $params['transaction']['gameCode'] ?? '',
@@ -246,7 +247,7 @@ class RsgLiveGameController
             // 保存下注记录到 Redis（供 GameRecordSyncWorker 同步）
             if ($result['ok'] === 1) {
                 \app\service\GameRecordCacheService::saveBet('RSGLIVE', [
-                    'order_no' => $orderNo,  // referenceId（关联订单号）
+                    'order_no' => $orderNo,  // transaction.id（唯一订单号）
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $betAmount,
@@ -254,12 +255,16 @@ class RsgLiveGameController
                     'original_data' => $params,  // 包含 transaction.id 和 referenceId
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
-                    'transaction_id' => $transactionId,  // 记录原始 transaction.id
+                    'transaction_id' => $transactionId,
+                    'reference_id' => $referenceId,  // 记录 referenceId（供结算关联）
                 ]);
 
-                // ✅ 建立 transaction_id -> order_no 映射（供Cancel接口使用）
-                $txMapKey = "game:transaction_id:RSGLIVE:{$transactionId}";
-                \support\Redis::connection()->setex($txMapKey, 604800, $orderNo);  // 7天过期
+                // ✅ 建立 referenceId -> bet 金额映射（供Settle接口查找下注金额）
+                if ($referenceId) {
+                    $refBetKey = "game:record:bet:RSGLIVE:{$referenceId}";
+                    \support\Redis::connection()->hSet($refBetKey, 'amount', $betAmount);
+                    \support\Redis::connection()->expire($refBetKey, 604800);  // 7天过期
+                }
             }
 
             // 游戏交互日志
