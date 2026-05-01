@@ -193,10 +193,11 @@ class DepositBonusQrcodeService
 
             Db::beginTransaction();
 
-            // 增加玩家余额
-            $balanceBefore = $player->money;
-            $player->money += $order->bonus_amount;
-            $player->save();
+            // 增加玩家余额（使用原子操作）
+            $incrementResult = WalletService::atomicIncrement($playerId, $order->bonus_amount);
+
+            $balanceBefore = $incrementResult['old'];
+            $balanceAfter = $incrementResult['balance'];
 
             // 检查玩家是否有未完成的打码量任务
             $existingTask = PlayerBonusTask::where('player_id', $playerId)
@@ -264,7 +265,7 @@ class DepositBonusQrcodeService
                 'change_type' => PlayerMoneyEditLogBonus::CHANGE_TYPE_BONUS_GRANT,
                 'amount' => $order->bonus_amount,
                 'balance_before' => $balanceBefore,
-                'balance_after' => $player->money,
+                'balance_after' => $balanceAfter,
                 'operator_type' => PlayerMoneyEditLogBonus::OPERATOR_TYPE_SYSTEM,
                 'remark' => "充值满赠活动赠送：{$activity->activity_name}",
             ]);
@@ -279,7 +280,7 @@ class DepositBonusQrcodeService
             $moneyEditLog->currency = 'CNY';
             $moneyEditLog->money = $order->bonus_amount;
             $moneyEditLog->origin_money = $balanceBefore;
-            $moneyEditLog->after_money = $player->money;
+            $moneyEditLog->after_money = $balanceAfter;
             $moneyEditLog->inmoney = $order->bonus_amount;
             $moneyEditLog->subsidy_money = 0;
             $moneyEditLog->bet_multiple = $activity->bet_multiple;
