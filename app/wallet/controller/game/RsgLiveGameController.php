@@ -589,12 +589,12 @@ class RsgLiveGameController
     /**
      * 失败响应方法
      *
-     * @param string $code 错误码
+     * @param int $code 错误码
      * @param string|null $message 自定义错误信息
      * @param int $httpCode HTTP状态码
      * @return Response
      */
-    public function error(string $code, ?string $message = null, int $httpCode = 400): Response
+    public function error(int $code, ?string $message = null, int $httpCode = 400): Response
     {
         $responseData = [
             'msgId' => $code,
