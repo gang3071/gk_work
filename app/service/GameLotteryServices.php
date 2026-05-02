@@ -2,6 +2,8 @@
 
 namespace app\service;
 
+use app\model\Game;
+use app\model\GameContent;
 use app\model\GameExtend;
 use app\model\GameLottery;
 use app\model\Notice;
@@ -1084,6 +1086,14 @@ LUA;
         bool                $isDoubled = false
     ): void
     {
+        // 懒加载 channel 关系（只在中奖时才查询）
+        if (!$this->player->relationLoaded('channel')) {
+            $this->player->load('channel');
+        }
+
+        // 获取玩家渠道的默认语言（使用 nullsafe 操作符避免 channel 为 null 时报错）
+        $channelLang = $this->player->channel?->lang ?? 'zh-TW';
+
         // 获取游戏名称或机台信息
         $gameName = '';
         $machineInfo = '';
@@ -1096,12 +1106,12 @@ LUA;
                     ->first();
 
                 if ($playGameRecord) {
-                    $gameExtend = GameExtend::query()
-                        ->where('platform_id', $playGameRecord->platform_id)
-                        ->where('code', $playGameRecord->game_code)
-                        ->first();
-
-                    $gameName = $gameExtend->name ?? '';
+                    // 根据渠道语言获取游戏名称
+                    $gameName = $this->getLocalizedGameName(
+                        $playGameRecord->platform_id,
+                        $playGameRecord->game_code,
+                        $channelLang
+                    );
                 }
             }
         } elseif ($record->source == PlayerLotteryRecord::SOURCE_MACHINE) {
@@ -1152,27 +1162,16 @@ LUA;
             'notice_num' => Notice::query()->where('player_id', $this->player->id)->where('status', 0)->count('*')
         ]);
 
-        // 构建广播内容
-        $doubleText = $isDoubled ? '【雙倍】' : '';
-        if ($record->source == PlayerLotteryRecord::SOURCE_GAME) {
-            // 电子游戏
-            $contentText = sprintf(
-                '恭喜玩家在電子遊戲%s %s 中贏得 %s%d 彩金！',
-                $gameName ? '【' . $gameName . '】' : '',
-                $lottery->name,
-                $doubleText,
-                $record->amount
-            );
-        } else {
-            // 实体机台
-            $contentText = sprintf(
-                '恭喜玩家在機台 %s %s 中贏得 %s%d 彩金！',
-                $machineInfo,
-                $lottery->name,
-                $doubleText,
-                $record->amount
-            );
-        }
+        // 构建广播内容（多语言）
+        $messages = $this->getWinningMessages(
+            $channelLang,
+            $record->source,
+            $gameName,
+            $machineInfo,
+            $lottery->name,
+            $record->amount,
+            $isDoubled
+        );
 
         // 发送全频道广播
         $broadcastMessage = [
@@ -1193,8 +1192,8 @@ LUA;
             'source' => $record->source,
             'game_name' => $gameName,
             'machine_info' => $machineInfo,
-            'title' => '🎊 恭喜玩家中獎！',
-            'content' => $contentText,
+            'title' => $messages['title'],
+            'content' => $messages['content'],
         ];
 
         // 发送到广播频道
@@ -1212,6 +1211,17 @@ LUA;
      */
     public function sendNotice($recordId, $lotteryName): Notice
     {
+        // 懒加载 channel 关系
+        if (!$this->player->relationLoaded('channel')) {
+            $this->player->load('channel');
+        }
+
+        // 获取玩家渠道语言（使用 nullsafe 操作符避免 channel 为 null 时报错）
+        $channelLang = $this->player->channel?->lang ?? 'zh-TW';
+
+        // 获取多语言通知文本
+        $noticeTexts = $this->getNoticeTexts($channelLang, $lotteryName);
+
         // 发送站内信
         $notice = new Notice();
         $notice->department_id = $this->player->department_id;
@@ -1220,8 +1230,8 @@ LUA;
         $notice->type = Notice::TYPE_LOTTERY;
         $notice->receiver = Notice::RECEIVER_PLAYER;
         $notice->is_private = 1;
-        $notice->title = '彩金派彩';
-        $notice->content = '恭喜您在電子遊戲中獲得' . $lotteryName . '的彩金獎勵彩金金額';
+        $notice->title = $noticeTexts['title'];
+        $notice->content = $noticeTexts['content'];
         $notice->save();
 
         return $notice;
@@ -1803,6 +1813,232 @@ LUA;
                 'lottery_id' => $lotteryId,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * 获取站内通知文本（多语言）
+     * @param string $lang 语言代码
+     * @param string $lotteryName 彩金名称
+     * @return array ['title' => string, 'content' => string]
+     */
+    private function getNoticeTexts(string $lang, string $lotteryName): array
+    {
+        $translations = [
+            'zh-TW' => [
+                'title' => '彩金派彩',
+                'content' => '恭喜您在電子遊戲中獲得' . $lotteryName . '的彩金獎勵彩金金額',
+            ],
+            'zh-CN' => [
+                'title' => '彩金派彩',
+                'content' => '恭喜您在电子游戏中获得' . $lotteryName . '的彩金奖励彩金金额',
+            ],
+            'en' => [
+                'title' => 'Jackpot Payout',
+                'content' => 'Congratulations! You won the ' . $lotteryName . ' jackpot in the game!',
+            ],
+            'th' => [
+                'title' => 'การจ่ายแจ็คพอต',
+                'content' => 'ยินดีด้วย! คุณได้รับรางวัลแจ็คพอต ' . $lotteryName . ' ในเกม!',
+            ],
+            'vi' => [
+                'title' => 'Trả thưởng Jackpot',
+                'content' => 'Chúc mừng! Bạn đã thắng jackpot ' . $lotteryName . ' trong trò chơi!',
+            ],
+        ];
+
+        // 默认使用繁体中文
+        return $translations[$lang] ?? $translations['zh-TW'];
+    }
+
+    /**
+     * 获取中奖广播消息（多语言）
+     * @param string $lang 语言代码
+     * @param int $source 来源（1=电子游戏, 2=实体机台）
+     * @param string $gameName 游戏名称
+     * @param string $machineInfo 机台信息
+     * @param string $lotteryName 彩金名称
+     * @param float $amount 中奖金额
+     * @param bool $isDoubled 是否双倍
+     * @return array ['title' => string, 'content' => string]
+     */
+    private function getWinningMessages(
+        string $lang,
+        int    $source,
+        string $gameName,
+        string $machineInfo,
+        string $lotteryName,
+        float  $amount,
+        bool   $isDoubled
+    ): array
+    {
+        // 多语言文本配置
+        $translations = [
+            'zh-TW' => [
+                'title' => '🎊 恭喜玩家中獎！',
+                'double' => '【雙倍】',
+                'game_template' => '恭喜玩家在電子遊戲%s %s 中贏得 %s%.0f 彩金！',
+                'machine_template' => '恭喜玩家在機台 %s %s 中贏得 %s%.0f 彩金！',
+            ],
+            'zh-CN' => [
+                'title' => '🎊 恭喜玩家中奖！',
+                'double' => '【双倍】',
+                'game_template' => '恭喜玩家在电子游戏%s %s 中赢得 %s%.0f 彩金！',
+                'machine_template' => '恭喜玩家在机台 %s %s 中赢得 %s%.0f 彩金！',
+            ],
+            'en' => [
+                'title' => '🎊 Congratulations!',
+                'double' => '[DOUBLE]',
+                'game_template' => 'Congratulations! Player won %s%.0f jackpot in game%s %s!',
+                'machine_template' => 'Congratulations! Player won %s%.0f jackpot on machine %s %s!',
+            ],
+            'th' => [
+                'title' => '🎊 ยินดีด้วย!',
+                'double' => '[สองเท่า]',
+                'game_template' => 'ยินดีด้วย! ผู้เล่นชนะแจ็คพอต %s%.0f ในเกม%s %s!',
+                'machine_template' => 'ยินดีด้วย! ผู้เล่นชนะแจ็คพอต %s%.0f บนเครื่อง %s %s!',
+            ],
+            'vi' => [
+                'title' => '🎊 Chúc mừng!',
+                'double' => '[GẤP ĐÔI]',
+                'game_template' => 'Chúc mừng! Người chơi đã thắng %s%.0f jackpot trong trò chơi%s %s!',
+                'machine_template' => 'Chúc mừng! Người chơi đã thắng %s%.0f jackpot trên máy %s %s!',
+            ],
+        ];
+
+        // 默认使用繁体中文
+        $langData = $translations[$lang] ?? $translations['zh-TW'];
+
+        // 获取双倍标记
+        $doubleText = $isDoubled ? $langData['double'] : '';
+
+        // 根据来源构建消息内容
+        if ($source == PlayerLotteryRecord::SOURCE_GAME) {
+            // 电子游戏
+            if ($lang === 'en') {
+                // 英文格式不同：把双倍和金额放前面
+                $contentText = sprintf(
+                    $langData['game_template'],
+                    $doubleText,
+                    $amount,
+                    $gameName ? ' [' . $gameName . ']' : '',
+                    $lotteryName
+                );
+            } else {
+                $contentText = sprintf(
+                    $langData['game_template'],
+                    $gameName ? '【' . $gameName . '】' : '',
+                    $lotteryName,
+                    $doubleText,
+                    $amount
+                );
+            }
+        } else {
+            // 实体机台
+            if ($lang === 'en') {
+                // 英文格式不同
+                $contentText = sprintf(
+                    $langData['machine_template'],
+                    $doubleText,
+                    $amount,
+                    $machineInfo,
+                    $lotteryName
+                );
+            } else {
+                $contentText = sprintf(
+                    $langData['machine_template'],
+                    $machineInfo,
+                    $lotteryName,
+                    $doubleText,
+                    $amount
+                );
+            }
+        }
+
+        return [
+            'title' => $langData['title'],
+            'content' => $contentText,
+        ];
+    }
+
+    /**
+     * 根据渠道语言获取本地化的游戏名称
+     * @param int $platformId 平台ID
+     * @param string $gameCode 游戏编号
+     * @param string $channelLang 渠道语言代码 (例如: zh-CN, zh-TW, en, th, vi)
+     * @return string
+     */
+    private function getLocalizedGameName(int $platformId, string $gameCode, string $channelLang): string
+    {
+        try {
+            // 1. 通过 platform_id 和 game_code 查询 GameExtend
+            $gameExtend = GameExtend::query()
+                ->where('platform_id', $platformId)
+                ->where('code', $gameCode)
+                ->first();
+
+            if (!$gameExtend) {
+                return '';
+            }
+
+            // 2. 通过 GameExtend.id 查询 Game
+            $game = Game::query()
+                ->where('game_extend_id', $gameExtend->id)
+                ->first();
+
+            if (!$game) {
+                // 如果没有 Game 配置，降级使用 GameExtend 的 name
+                return $gameExtend->name ?? '';
+            }
+
+            // 3. 一次性查询该游戏的所有语言内容（优化：减少数据库查询）
+            $gameContents = GameContent::query()
+                ->where('game_id', $game->id)
+                ->get()
+                ->keyBy('lang');
+
+            if ($gameContents->isEmpty()) {
+                // 如果没有多语言内容，降级使用 GameExtend 的 name
+                return $gameExtend->name ?? '';
+            }
+
+            // 4. 按优先级查找语言（先查目标语言，再降级）
+            $fallbackLangs = [
+                $channelLang,  // 首选：渠道语言
+                'zh-TW',       // 降级1：繁体中文
+                'zh-CN',       // 降级2：简体中文
+                'en',          // 降级3：英文
+            ];
+
+            // 去重（避免重复查找）
+            $fallbackLangs = array_unique($fallbackLangs);
+
+            foreach ($fallbackLangs as $lang) {
+                if (isset($gameContents[$lang]) && !empty($gameContents[$lang]->name)) {
+                    return $gameContents[$lang]->name;
+                }
+            }
+
+            // 5. 最后降级：返回任意语言的第一条非空记录
+            foreach ($gameContents as $content) {
+                if (!empty($content->name)) {
+                    return $content->name;
+                }
+            }
+
+            // 6. 最终降级：返回 GameExtend 的 name
+            return $gameExtend->name ?? '';
+
+        } catch (\Exception $e) {
+            // 查询失败，记录日志
+            $this->log->warning('获取本地化游戏名称失败', [
+                'platform_id' => $platformId,
+                'game_code' => $gameCode,
+                'channel_lang' => $channelLang,
+                'error' => $e->getMessage(),
+            ]);
+
+            return '';
         }
     }
 
