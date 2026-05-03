@@ -40,6 +40,10 @@ Desktop.ini
 *.backup
 *~
 
+/tests
+phpunit.xml
+CLAUDE.md
+
 /docs/
 
 # Media files (可选，根据需要调整)
