@@ -69,13 +69,20 @@ end
 local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
 local betAmount = tonumber(ARGV[2]) or 0
 
--- 3. 余额检查
-if currentBalance < betAmount then
+-- 3. 余额检查（添加 0.01 容差以解决浮点数精度问题）
+local tolerance = 0.01
+if currentBalance + tolerance < betAmount then
     return cjson.encode({ok = 0, error = 'insufficient_balance', balance = currentBalance})
 end
 
 -- 4. 扣款
 local newBalance = currentBalance - betAmount
+
+-- 防止负数余额
+if newBalance < 0 then
+    newBalance = 0
+end
+
 redis.call('SETEX', KEYS[1], ARGV[12], newBalance)
 
 -- 5. 设置幂等性锁

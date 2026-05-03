@@ -251,17 +251,17 @@ class DepositBonusService
                     throw new BusinessException('玩家不存在');
                 }
 
-                // 检查玩家余额是否足够扣除
-                if ($player->money < $order->bonus_amount) {
+                $activity = $order->activity;
+
+                // 使用原子操作扣除赠金（内置余额检查）
+                $decrementResult = WalletService::atomicDecrement($order->player_id, $order->bonus_amount);
+
+                if ($decrementResult['ok'] == 0) {
                     throw new BusinessException('玩家余额不足，无法取消订单');
                 }
 
-                $activity = $order->activity;
-                $balanceBefore = $player->money;
-
-                // 扣除赠金
-                $player->money -= $order->bonus_amount;
-                $player->save();
+                $balanceBefore = $decrementResult['balance'] + $order->bonus_amount;
+                $balanceAfter = $decrementResult['balance'];
 
                 // 记录账变（充值满赠专用表）
                 PlayerMoneyEditLogBonus::createLog([
@@ -271,7 +271,7 @@ class DepositBonusService
                     'change_type' => PlayerMoneyEditLogBonus::CHANGE_TYPE_BONUS_CANCEL,
                     'amount' => -$order->bonus_amount,
                     'balance_before' => $balanceBefore,
-                    'balance_after' => $player->money,
+                    'balance_after' => $balanceAfter,
                     'operator_type' => $operatorId ? PlayerMoneyEditLogBonus::OPERATOR_TYPE_ADMIN : PlayerMoneyEditLogBonus::OPERATOR_TYPE_SYSTEM,
                     'operator_id' => $operatorId,
                     'remark' => "取消充值满赠订单：{$activity->activity_name}" . ($reason ? "，原因：{$reason}" : ''),
@@ -287,7 +287,7 @@ class DepositBonusService
                 $moneyEditLog->currency = 'CNY';
                 $moneyEditLog->money = $order->bonus_amount;
                 $moneyEditLog->origin_money = $balanceBefore;
-                $moneyEditLog->after_money = $player->money;
+                $moneyEditLog->after_money = $balanceAfter;
                 $moneyEditLog->inmoney = -$order->bonus_amount;
                 $moneyEditLog->subsidy_money = 0;
                 $moneyEditLog->bet_multiple = $activity->bet_multiple ?? 0;
