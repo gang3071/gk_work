@@ -396,6 +396,14 @@ class RsgLiveGameController
                     'balance_after' => $result['balance'],
                 ]);
 
+                // ✅ 从同步队列移除 Lua 创建的单条结算记录（保留聚合记录）
+                // Lua 的 atomicSettle 使用 transactionId 作为 order_no，会创建独立记录并加入队列
+                // 这里清理掉，只保留 Handler 更新的聚合记录
+                $syncQueue = 'game:sync:queue';
+                $redis = \support\Redis::connection();
+                $redis->zRem($syncQueue, "game:record:bet:RSGLIVE:{$transactionId}");
+                $redis->zRem($syncQueue, "game:record:settle:RSGLIVE:{$transactionId}");
+
                 // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
                 WalletService::checkMachineCrashAfterTransaction(
                     $player->id,
@@ -541,6 +549,12 @@ class RsgLiveGameController
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
                 ]);
+
+                // ✅ 从同步队列移除 Lua 创建的单条取消记录（保留聚合记录）
+                $syncQueue = 'game:sync:queue';
+                $redis = \support\Redis::connection();
+                $redis->zRem($syncQueue, "game:record:bet:RSGLIVE:{$targetId}");
+                $redis->zRem($syncQueue, "game:record:cancel:RSGLIVE:{$targetId}");
             }
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
