@@ -201,15 +201,15 @@ class RsgLiveGameController
             }
 
             $player = $this->service->player;
-            // ✅ 修复：使用 transaction.id 作为订单号（每笔交易唯一，避免同局多次下注被误判为重复）
+            // ✅ 修复：使用 transaction.id 作为订单号（每笔交易唯一）
             $transactionId = (string)($params['transaction']['id'] ?? '');
             $orderNo = $transactionId;
             $referenceId = (string)($params['transaction']['referenceId'] ?? '');
             $gameName = (string)($params['game']['gameName'] ?? '');
             $betAmount = $params['transaction']['amount'] ?? 0;
 
-            // ✅ 聚合键：referenceId + gameName（同一局游戏按类型分别聚合）
-            $aggKey = $referenceId . ($gameName ? ":{$gameName}" : '');
+            // ✅ 不再聚合：每个 transaction.id 作为独立订单（RSG Live 不传递下注类型，无法正确聚合）
+            $aggKey = $transactionId;
 
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
@@ -248,7 +248,7 @@ class RsgLiveGameController
             // 审计日志
             logLuaScriptCall('bet', 'RSGLIVE', $player->id, $luaParams);
 
-            // 保存下注记录到 Redis（聚合版：按 referenceId:gameName 聚合，供 GameRecordSyncWorker 同步）
+            // 保存下注记录到 Redis（独立版：每个 transaction.id 作为独立订单）
             if ($result['ok'] === 1) {
                 \app\service\RSGLiveGameRecordHandler::saveBet([
                     'referenceId' => $aggKey,
@@ -264,7 +264,7 @@ class RsgLiveGameController
                     'transaction_type' => TransactionType::BET,
                 ]);
 
-                // ✅ 建立 transactionId -> aggKey 映射（供Cancel接口查找聚合记录）
+                // ✅ 建立 transactionId -> transactionId 映射（供Cancel接口查找，保持接口一致性）
                 $txMapKey = "game:tx_to_ref:RSGLIVE:{$transactionId}";
                 \support\Redis::connection()->setex($txMapKey, 604800, $aggKey);
             }
@@ -323,11 +323,11 @@ class RsgLiveGameController
             }
 
             $player = $this->service->player;
-            // ✅ 修复：使用 referenceId:gameName 作为聚合键（与下注关联）
+            // ✅ 修复：使用 transaction.id 作为订单号（与下注保持一致）
             $transactionId = (string)($params['transaction']['id'] ?? '');
             $referenceId = (string)($params['transaction']['referenceId'] ?? $transactionId);
             $gameName = (string)($params['game']['gameName'] ?? '');
-            $orderNo = $referenceId . ($gameName ? ":{$gameName}" : '');
+            $orderNo = $transactionId;  // 使用 transactionId 而非 referenceId:gameName
             $winAmount = (float)($params['transaction']['amount'] ?? 0);
 
             // ✅ 验证金额有效性（Credit接口amount应该>=0）
@@ -336,7 +336,7 @@ class RsgLiveGameController
                 return $this->error(self::API_CODE_DATABASE_ERROR, '结算金额无效');
             }
 
-            // ✅ 优化：从 Redis 读取实际下注金额（聚合记录）
+            // ✅ 优化：从 Redis 读取实际下注金额
             $redisKey = "game:record:bet:RSGLIVE:{$orderNo}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
             $betAmount = $cachedBet !== false ? (float)$cachedBet : 0;
@@ -382,7 +382,7 @@ class RsgLiveGameController
             // 审计日志
             logLuaScriptCall('settle', 'RSGLIVE', $player->id, $luaParams);
 
-            // 保存结算记录到 Redis（聚合版：更新按 referenceId 聚合的记录）
+            // 保存结算记录到 Redis（独立版：更新对应 transactionId 的记录）
             if ($result['ok'] === 1) {
                 \app\service\RSGLiveGameRecordHandler::saveSettle([
                     'referenceId' => $orderNo,
@@ -457,17 +457,10 @@ class RsgLiveGameController
                 return $this->error(self::API_CODE_REFERENCEID_NOT_FOUND);
             }
 
-            // ✅ 通过 targetId 查找对应的聚合键（referenceId:gameName）
-            $txMapKey = "game:tx_to_ref:RSGLIVE:{$targetId}";
-            $orderNo = \support\Redis::connection()->get($txMapKey);
+            // ✅ 直接使用 targetId 作为订单号（不再聚合，每个交易独立）
+            $orderNo = $targetId;
 
-            // 兼容性处理：如果映射不存在，直接使用 targetId
-            if (!$orderNo) {
-                $this->logger->warning('RSGLive未找到transactionId映射，尝试直接使用targetId', ['targetId' => $targetId]);
-                $orderNo = $targetId;
-            }
-
-            // 从 Redis 读取该笔下注的实际金额（使用 targetId 查找单条记录）
+            // 从 Redis 读取该笔下注的实际金额（使用 targetId 查找记录）
             $redisKey = "game:record:bet:RSGLIVE:{$targetId}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
             $actualRefundAmount = $cachedBet !== false ? (float)$cachedBet : 0;
@@ -530,7 +523,7 @@ class RsgLiveGameController
 
             $this->logger->info('rsg_live取消注单成功（Lua原子）', ['order_no' => $orderNo, 'refund_amount' => $actualRefundAmount]);
 
-            // 保存取消记录到 Redis（减少聚合记录金额）
+            // 保存取消记录到 Redis（标记记录为已取消）
             if ($result['ok'] === 1) {
                 \app\service\RSGLiveGameRecordHandler::saveCancel([
                     'referenceId' => $orderNo,
