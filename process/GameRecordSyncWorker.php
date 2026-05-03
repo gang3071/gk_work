@@ -372,8 +372,8 @@ class GameRecordSyncWorker
 
             $needUpdate = false;
 
-            // ✅ DG平台特殊处理：允许未结算状态下更新bet（合并下注累加）
-            if ($platform === 'DG' && $settlementStatus == 0) {
+            // ✅ 合并下注平台：允许未结算状态下更新bet（DG/RSGLIVE同局多笔下注累加）
+            if (in_array($platform, ['DG', 'RSGLIVE']) && $settlementStatus == 0) {
                 if (isset($record['amount']) && $record['amount'] != $existing->bet) {
                     $existing->bet = $record['amount'];
                     $needUpdate = true;
@@ -584,13 +584,13 @@ class GameRecordSyncWorker
                 $needUpdate = false;
                 $platform = $record['platform'] ?? '';
 
-                // ✅ DG平台特殊处理：允许未结算状态下更新bet（合并下注累加）
-                if ($platform === 'DG' && $settlementStatus == 0) {
+                // ✅ 合并下注平台：允许未结算状态下更新bet（DG/RSGLIVE同局多笔下注累加）
+                if (in_array($platform, ['DG', 'RSGLIVE']) && $settlementStatus == 0) {
                     if (isset($record['amount']) && $record['amount'] != $existing->bet) {
                         $existing->bet = $record['amount'];
                         $needUpdate = true;
 
-                        $this->log->info("DG合并下注：更新累计金额", [
+                        $this->log->info("{$platform}合并下注：更新累计金额", [
                             'order_no' => $orderNo,
                             'old_bet' => $existing->bet,
                             'new_bet' => $record['amount'],
