@@ -349,9 +349,9 @@ class RsgLiveGameController
             // 计算 diff = win - bet
             $diff = bcsub((string)$winAmount, (string)$betAmount, 2);
 
-            // Lua 原子结算
+            // Lua 原子结算（操作单条记录，使用 transaction.id 作为 key）
             $luaParams = [
-                'order_no' => $orderNo,  // 使用 referenceId
+                'order_no' => $transactionId,
                 'platform_id' => $this->service->platform->id,
                 'amount' => $winAmount,  // ✅ 已验证>=0，直接使用
                 'diff' => (float)$diff,  // ✅ 修正：diff = win - bet
@@ -467,19 +467,19 @@ class RsgLiveGameController
                 $orderNo = $targetId;
             }
 
-            // 从 Redis 读取实际下注金额
-            $redisKey = "game:record:bet:RSGLIVE:{$orderNo}";
+            // 从 Redis 读取该笔下注的实际金额（使用 targetId 查找单条记录）
+            $redisKey = "game:record:bet:RSGLIVE:{$targetId}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
             $actualRefundAmount = $cachedBet !== false ? (float)$cachedBet : 0;
 
             // Redis 未命中，从数据库降级获取
             if ($actualRefundAmount == 0 && $cachedBet === false) {
-                $actualRefundAmount = getBetAmountWithFallback('RSGLIVE', $orderNo, $player->id, $this->service->platform->id);
+                $actualRefundAmount = getBetAmountWithFallback('RSGLIVE', $targetId, $player->id, $this->service->platform->id);
             }
 
-            // Lua 原子取消
+            // Lua 原子取消（操作单条记录，使用 targetId 作为 key）
             $luaParams = [
-                'order_no' => $orderNo,
+                'order_no' => $targetId,
                 'platform_id' => $this->service->platform->id,
                 'refund_amount' => $actualRefundAmount,
                 'transaction_type' => TransactionType::CANCEL,
@@ -530,17 +530,16 @@ class RsgLiveGameController
 
             $this->logger->info('rsg_live取消注单成功（Lua原子）', ['order_no' => $orderNo, 'refund_amount' => $actualRefundAmount]);
 
-            // 保存取消记录到 Redis
+            // 保存取消记录到 Redis（减少聚合记录金额）
             if ($result['ok'] === 1) {
-                \app\service\GameRecordCacheService::saveCancel('RSGLIVE', [
-                    'order_no' => $orderNo,
+                \app\service\RSGLiveGameRecordHandler::saveCancel([
+                    'referenceId' => $orderNo,
                     'player_id' => $player->id,
                     'platform_id' => $this->service->platform->id,
                     'refund_amount' => $actualRefundAmount,
                     'original_data' => $params,
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
-                    'transaction_id' => $transactionId,
                 ]);
             }
 

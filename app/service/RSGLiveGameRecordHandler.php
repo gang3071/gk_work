@@ -100,8 +100,7 @@ class RSGLiveGameRecordHandler
             ]);
         }
 
-        // 清理 Lua 创建的单条记录和队列条目
-        $redis->del($individualKey);
+        // 从同步队列移除 Lua 创建的单条记录（保留 Redis 数据供 settle/cancel 的 Lua 脚本使用）
         $redis->zRem(self::PREFIX_SYNC_QUEUE, $individualKey);
     }
 
@@ -147,6 +146,54 @@ class RSGLiveGameRecordHandler
             ]);
         } else {
             Log::channel('rsglive_server')->warning('RSGLive聚合记录不存在（结算）', [
+                'referenceId' => $referenceId,
+            ]);
+        }
+    }
+
+    /**
+     * 保存取消记录（减少聚合记录金额）
+     *
+     * @param array $data 取消数据
+     *   - referenceId: 聚合键
+     *   - refund_amount: 退款金额
+     *   - player_id, platform_id
+     */
+    public static function saveCancel(array $data): void
+    {
+        $referenceId = $data['referenceId'];
+        $platform = 'RSGLIVE';
+        $aggKey = self::PREFIX_BET . "{$platform}:{$referenceId}";
+
+        $redis = Redis::connection();
+        $exists = $redis->exists($aggKey);
+
+        if ($exists) {
+            // 减少聚合金额
+            $currentAmount = (float)$redis->hGet($aggKey, 'amount');
+            $refundAmount = (float)($data['refund_amount'] ?? 0);
+            $newAmount = max(0, bcsub((string)$currentAmount, (string)$refundAmount, 2));
+
+            $redis->hMSet($aggKey, [
+                'amount' => $newAmount,
+                'cancel_type' => $data['cancel_type'] ?? 'cancel',
+                'cancel_time' => time(),
+                'action_data' => json_encode($data['original_data'] ?? [], JSON_UNESCAPED_UNICODE),
+                'status' => 'pending',
+                'balance_before' => $data['balance_before'] ?? '',
+                'balance_after' => $data['balance_after'] ?? '',
+            ]);
+
+            $redis->zAdd(self::PREFIX_SYNC_QUEUE, time(), $aggKey);
+
+            Log::channel('rsglive_server')->info('RSGLive聚合记录取消', [
+                'referenceId' => $referenceId,
+                'refund' => $refundAmount,
+                'amount_before' => $currentAmount,
+                'amount_after' => $newAmount,
+            ]);
+        } else {
+            Log::channel('rsglive_server')->warning('RSGLive聚合记录不存在（取消）', [
                 'referenceId' => $referenceId,
             ]);
         }
