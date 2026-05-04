@@ -182,7 +182,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'playerId' => $this->player->uuid,
                 'currency' => 'TWD', // 默认台币
                 'country' => 'TW', // 默认台湾
-                'lang' => $this->lang[$defaultLang] ?? 'zh_TW',
+                'lang' => 'en_US',
                 'mode' => 'real_only', // real | fun
                 'device' => 'mobile', // 默认手机端
                 'gameLaunchTarget' => 'BLANK', // 默认手机端
