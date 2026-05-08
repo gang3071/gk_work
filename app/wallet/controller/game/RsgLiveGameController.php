@@ -409,7 +409,7 @@ class RsgLiveGameController
             }
 
             // 处理结算结果
-            if ($result['ok'] === 0 && $result['error'] === 'duplicate_order') {
+            if ($result['ok'] === 0 && $result['error'] === 'duplicate_settle') {
                 $this->logger->info('RSGLive结算重复请求（Lua幂等）', ['transaction_id' => $transactionId]);
                 return $this->error(self::API_CODE_TRANSACTIONID_DUPLICATE);
             }
