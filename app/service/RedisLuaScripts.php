@@ -474,18 +474,40 @@ LUA;
         // ✅ 成功后异步追加 original_data 和余额到 Redis Hash（不阻塞响应）
         if (isset($decoded['ok']) && $decoded['ok'] === 1) {
             $originalData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
+
+            // 准备余额数据
+            $balanceBefore = $decoded['old_balance'] ?? null;
+            $balanceAfter = $decoded['balance'] ?? null;
+
+            // 调试日志
+            \support\Log::info('[atomicBet] 准备追加余额', [
+                'order_no' => $orderNo,
+                'balance_before' => $balanceBefore,
+                'balance_after' => $balanceAfter,
+                'redis_key' => $keys[1],
+            ]);
+
             try {
                 // 追加 original_data 和余额字段
                 $redis->hMSet($keys[1], [
                     'original_data' => $originalData,
-                    'balance_before' => $decoded['old_balance'] ?? 0,
-                    'balance_after' => $decoded['balance'] ?? 0,
+                    'balance_before' => $balanceBefore,
+                    'balance_after' => $balanceAfter,
+                ]);
+
+                // 验证是否写入成功
+                $check = $redis->hMGet($keys[1], ['balance_before', 'balance_after']);
+                \support\Log::info('[atomicBet] 余额追加成功', [
+                    'order_no' => $orderNo,
+                    'verify_before' => $check['balance_before'] ?? 'NULL',
+                    'verify_after' => $check['balance_after'] ?? 'NULL',
                 ]);
             } catch (\Throwable $e) {
                 // 失败不影响核心业务，仅记录日志
-                \support\Log::warning('[atomicBet] 追加 original_data/余额 失败', [
+                \support\Log::error('[atomicBet] 追加 original_data/余额 失败', [
                     'order_no' => $orderNo,
                     'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
                 ]);
             }
 
