@@ -105,8 +105,8 @@ redis.call('HMSET', KEYS[2],
     'win', 0,
     'diff', 0,
     'created_at', ARGV[13],
-    'balance_before', currentBalance,
-    'balance_after', newBalance
+    'balance_before', tostring(currentBalance),
+    'balance_after', tostring(newBalance)
 )
 redis.call('EXPIRE', KEYS[2], ARGV[11])
 
@@ -201,6 +201,7 @@ redis.call('SETEX', KEYS[5], 300, 1)
 
 if betExists == 1 then
     -- 更新 bet 记录 - ✅ 优化：不再存储 action_data，减少内存占用
+    -- 注意：不覆盖 balance_before/after，这些字段应保持下注时的值
     redis.call('HMSET', KEYS[2],
         'win', ARGV[1],
         'diff', diffAmount,  -- ✅ 使用重新计算的 diff
@@ -208,9 +209,7 @@ if betExists == 1 then
         'transaction_type', ARGV[3],
         'settle_time', ARGV[4],
         'platform_action_at', ARGV[9],
-        'status', 'pending',
-        'balance_before', currentBalance,
-        'balance_after', newBalance
+        'status', 'pending'
     )
 
     -- 更新同步队列（提升优先级）
@@ -236,8 +235,8 @@ else
         'settle_time', ARGV[4],
         'status', 'pending',
         'created_at', ARGV[9],
-        'balance_before', currentBalance,
-        'balance_after', newBalance
+        'balance_before', tostring(currentBalance),
+        'balance_after', tostring(newBalance)
     )
     redis.call('EXPIRE', KEYS[6], ARGV[5])
     redis.call('ZADD', KEYS[3], ARGV[4], KEYS[6])
@@ -304,13 +303,12 @@ redis.call('SETEX', KEYS[1], ARGV[4], newBalance)
 redis.call('SETEX', KEYS[5], 300, 1)
 
 -- 5. 更新记录（betExists 已在幂等性检查时获取）- ✅ 优化：不再存储 action_data
+-- 注意：不覆盖 balance_before/after，这些字段应保持下注时的值
 if betExists == 1 then
     redis.call('HMSET', KEYS[2],
         'transaction_type', ARGV[2],
         'cancel_time', ARGV[3],
-        'status', 'pending',
-        'balance_before', currentBalance,
-        'balance_after', newBalance
+        'status', 'pending'
     )
 
     -- 更新同步队列
