@@ -104,7 +104,9 @@ redis.call('HMSET', KEYS[2],
     'settlement_status', 0,
     'win', 0,
     'diff', 0,
-    'created_at', ARGV[13]
+    'created_at', ARGV[13],
+    'balance_before', currentBalance,
+    'balance_after', newBalance
 )
 redis.call('EXPIRE', KEYS[2], ARGV[11])
 
@@ -206,7 +208,9 @@ if betExists == 1 then
         'transaction_type', ARGV[3],
         'settle_time', ARGV[4],
         'platform_action_at', ARGV[9],
-        'status', 'pending'
+        'status', 'pending',
+        'balance_before', currentBalance,
+        'balance_after', newBalance
     )
 
     -- 更新同步队列（提升优先级）
@@ -231,7 +235,9 @@ else
         'transaction_type', ARGV[3],
         'settle_time', ARGV[4],
         'status', 'pending',
-        'created_at', ARGV[9]
+        'created_at', ARGV[9],
+        'balance_before', currentBalance,
+        'balance_after', newBalance
     )
     redis.call('EXPIRE', KEYS[6], ARGV[5])
     redis.call('ZADD', KEYS[3], ARGV[4], KEYS[6])
@@ -302,7 +308,9 @@ if betExists == 1 then
     redis.call('HMSET', KEYS[2],
         'transaction_type', ARGV[2],
         'cancel_time', ARGV[3],
-        'status', 'pending'
+        'status', 'pending',
+        'balance_before', currentBalance,
+        'balance_after', newBalance
     )
 
     -- 更新同步队列
@@ -471,40 +479,19 @@ LUA;
             );
         }
 
-        // ✅ 成功后异步追加 original_data 和余额到 Redis Hash（不阻塞响应）
+        // ✅ 成功后异步追加 original_data 到 Redis Hash（不阻塞响应）
+        // 注意：balance_before 和 balance_after 已在 Lua 脚本中原子保存，无需再次追加
         if (isset($decoded['ok']) && $decoded['ok'] === 1) {
             $originalData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
 
-            // 准备余额数据
-            $balanceBefore = $decoded['old_balance'] ?? null;
-            $balanceAfter = $decoded['balance'] ?? null;
-
-            // 调试日志
-            \support\Log::info('[atomicBet] 准备追加余额', [
-                'order_no' => $orderNo,
-                'balance_before' => $balanceBefore,
-                'balance_after' => $balanceAfter,
-                'redis_key' => $keys[1],
-            ]);
-
             try {
-                // 追加 original_data 和余额字段
+                // 仅追加 original_data（余额字段已在 Lua 脚本中保存）
                 $redis->hMSet($keys[1], [
                     'original_data' => $originalData,
-                    'balance_before' => $balanceBefore,
-                    'balance_after' => $balanceAfter,
-                ]);
-
-                // 验证是否写入成功
-                $check = $redis->hMGet($keys[1], ['balance_before', 'balance_after']);
-                \support\Log::info('[atomicBet] 余额追加成功', [
-                    'order_no' => $orderNo,
-                    'verify_before' => $check['balance_before'] ?? 'NULL',
-                    'verify_after' => $check['balance_after'] ?? 'NULL',
                 ]);
             } catch (\Throwable $e) {
                 // 失败不影响核心业务，仅记录日志
-                \support\Log::error('[atomicBet] 追加 original_data/余额 失败', [
+                \support\Log::error('[atomicBet] 追加 original_data 失败', [
                     'order_no' => $orderNo,
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
