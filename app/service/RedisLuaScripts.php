@@ -89,15 +89,12 @@ redis.call('SETEX', KEYS[1], ARGV[12], newBalance)
 redis.call('SETEX', KEYS[5], 300, 1)
 
 -- 6. 保存下注记录（Hash）- ✅ 优化：不再存储 original_data，减少 CPU 和内存占用
--- ✅ 保存余额快照：解决连续下注时余额记录不准确的问题
 redis.call('HMSET', KEYS[2],
     'platform', ARGV[3],
     'order_no', ARGV[4],
     'player_id', ARGV[1],
     'platform_id', ARGV[5],
     'amount', ARGV[2],
-    'balance_before', currentBalance,
-    'balance_after', newBalance,
     'game_code', ARGV[6],
     'game_type', ARGV[7],
     'game_name', ARGV[8],
@@ -474,14 +471,19 @@ LUA;
             );
         }
 
-        // ✅ 成功后异步追加 original_data 到 Redis Hash（不阻塞响应）
+        // ✅ 成功后异步追加 original_data 和余额到 Redis Hash（不阻塞响应）
         if (isset($decoded['ok']) && $decoded['ok'] === 1) {
             $originalData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
             try {
-                $redis->hSet($keys[1], 'original_data', $originalData);
+                // 追加 original_data 和余额字段
+                $redis->hMSet($keys[1], [
+                    'original_data' => $originalData,
+                    'balance_before' => $decoded['old_balance'] ?? 0,
+                    'balance_after' => $decoded['balance'] ?? 0,
+                ]);
             } catch (\Throwable $e) {
                 // 失败不影响核心业务，仅记录日志
-                \support\Log::warning('[atomicBet] 追加 original_data 失败', [
+                \support\Log::warning('[atomicBet] 追加 original_data/余额 失败', [
                     'order_no' => $orderNo,
                     'error' => $e->getMessage(),
                 ]);
