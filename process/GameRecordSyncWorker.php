@@ -301,7 +301,9 @@ class GameRecordSyncWorker
             if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
                 && ($record['amount'] ?? 0) > 0) {
                 // ✅ 优先使用 Lua 脚本保存的余额快照（精确）
-                if (!empty($record['balance_before']) && !empty($record['balance_after'])) {
+                // 注意：使用 isset 而非 empty，因为余额可能为 "0"
+                if (isset($record['balance_before']) && isset($record['balance_after'])
+                    && $record['balance_before'] !== '' && $record['balance_after'] !== '') {
                     $beforeBalance = (float)$record['balance_before'];
                     $afterBalance = (float)$record['balance_after'];
                 } elseif (isset($redisBalances[$playerId])) {
@@ -660,7 +662,9 @@ class GameRecordSyncWorker
                 $afterBalance = null;
                 if ($settlementStatus == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
                     // ✅ 优先使用 Lua 脚本保存的余额快照（精确）
-                    if (!empty($record['balance_before']) && !empty($record['balance_after'])) {
+                    // 注意：使用 isset 而非 empty，因为余额可能为 "0"
+                    if (isset($record['balance_before']) && isset($record['balance_after'])
+                        && $record['balance_before'] !== '' && $record['balance_after'] !== '') {
                         $beforeBalance = (float)$record['balance_before'];
                         $afterBalance = (float)$record['balance_after'];
 
