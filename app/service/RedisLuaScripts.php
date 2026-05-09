@@ -89,12 +89,15 @@ redis.call('SETEX', KEYS[1], ARGV[12], newBalance)
 redis.call('SETEX', KEYS[5], 300, 1)
 
 -- 6. 保存下注记录（Hash）- ✅ 优化：不再存储 original_data，减少 CPU 和内存占用
+-- ✅ 保存余额快照：解决连续下注时余额记录不准确的问题
 redis.call('HMSET', KEYS[2],
     'platform', ARGV[3],
     'order_no', ARGV[4],
     'player_id', ARGV[1],
     'platform_id', ARGV[5],
     'amount', ARGV[2],
+    'balance_before', currentBalance,
+    'balance_after', newBalance,
     'game_code', ARGV[6],
     'game_type', ARGV[7],
     'game_name', ARGV[8],

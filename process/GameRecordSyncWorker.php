@@ -295,13 +295,17 @@ class GameRecordSyncWorker
                 continue;
             }
 
-            // 计算余额（仅下注时有余额变化）
+            // 读取余额（优先使用 Lua 脚本保存的快照，兼容老数据）
             $beforeBalance = null;
             $afterBalance = null;
             if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
                 && ($record['amount'] ?? 0) > 0) {
-                if (isset($redisBalances[$playerId])) {
-                    // Redis 余额是 Lua 脚本扣款后的余额
+                // ✅ 优先使用 Lua 脚本保存的余额快照（精确）
+                if (!empty($record['balance_before']) && !empty($record['balance_after'])) {
+                    $beforeBalance = (float)$record['balance_before'];
+                    $afterBalance = (float)$record['balance_after'];
+                } elseif (isset($redisBalances[$playerId])) {
+                    // ✅ 兜底：老数据没有余额快照，通过当前余额反推（可能不准确）
                     $afterBalance = $redisBalances[$playerId];
                     $beforeBalance = $afterBalance + ($record['amount'] ?? 0);
                 }
@@ -655,43 +659,66 @@ class GameRecordSyncWorker
                 $beforeBalance = null;
                 $afterBalance = null;
                 if ($settlementStatus == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
-                    // 从 Redis 读取 Lua 脚本扣款后的最新余额
-                    // 使用 work 连接池读取余额（共享数据）
-                    $redisBalance = \support\Redis::connection('work')->get("wallet:balance:{$playerId}");
+                    // ✅ 优先使用 Lua 脚本保存的余额快照（精确）
+                    if (!empty($record['balance_before']) && !empty($record['balance_after'])) {
+                        $beforeBalance = (float)$record['balance_before'];
+                        $afterBalance = (float)$record['balance_after'];
 
-                    if ($redisBalance !== null && $redisBalance !== false) {
+                        // 同步余额到 MySQL
                         /** @var PlayerPlatformCash $wallet */
                         $wallet = PlayerPlatformCash::query()->where('player_id', $playerId)
                             ->lockForUpdate()
                             ->first();
 
-                        if (!$wallet) {
-                            throw new \Exception("钱包不存在");
+                        if ($wallet) {
+                            $wallet->money = $afterBalance;
+                            $wallet->save();
+
+                            $this->log->info("同步钱包余额（Lua快照）", [
+                                'player_id' => $playerId,
+                                'before' => $beforeBalance,
+                                'after' => $afterBalance,
+                                'order_no' => $orderNo,
+                            ]);
                         }
-
-                        $amount = (float)$record['amount'];
-
-                        // 计算余额：Redis 余额是扣款后的余额
-                        $afterBalance = (float)$redisBalance;
-                        $beforeBalance = $afterBalance + $amount;
-
-                        // 同步 Redis 余额到 MySQL（不是减法，是直接覆盖）
-                        $wallet->money = $afterBalance;
-                        $wallet->save();
-
-                        $this->log->info("同步钱包余额", [
-                            'player_id' => $playerId,
-                            'before' => $beforeBalance,
-                            'after' => $afterBalance,
-                            'order_no' => $orderNo,
-                        ]);
-
                     } else {
-                        // Redis 余额不存在，可能是缓存过期，跳过钱包同步
-                        $this->log->warning("Redis 余额不存在，跳过钱包同步", [
-                            'player_id' => $playerId,
-                            'order_no' => $orderNo,
-                        ]);
+                        // ✅ 兜底：老数据没有余额快照，通过当前余额反推（可能不准确）
+                        $redisBalance = \support\Redis::connection('work')->get("wallet:balance:{$playerId}");
+
+                        if ($redisBalance !== null && $redisBalance !== false) {
+                            /** @var PlayerPlatformCash $wallet */
+                            $wallet = PlayerPlatformCash::query()->where('player_id', $playerId)
+                                ->lockForUpdate()
+                                ->first();
+
+                            if (!$wallet) {
+                                throw new \Exception("钱包不存在");
+                            }
+
+                            $amount = (float)$record['amount'];
+
+                            // 计算余额：Redis 余额是扣款后的余额（不准确，仅兼容老数据）
+                            $afterBalance = (float)$redisBalance;
+                            $beforeBalance = $afterBalance + $amount;
+
+                            // 同步 Redis 余额到 MySQL（不是减法，是直接覆盖）
+                            $wallet->money = $afterBalance;
+                            $wallet->save();
+
+                            $this->log->warning("同步钱包余额（兜底反推，可能不准确）", [
+                                'player_id' => $playerId,
+                                'before' => $beforeBalance,
+                                'after' => $afterBalance,
+                                'order_no' => $orderNo,
+                            ]);
+
+                        } else {
+                            // Redis 余额不存在，可能是缓存过期，跳过钱包同步
+                            $this->log->warning("Redis 余额不存在，跳过钱包同步", [
+                                'player_id' => $playerId,
+                                'order_no' => $orderNo,
+                            ]);
+                        }
                     }
                 }
 
