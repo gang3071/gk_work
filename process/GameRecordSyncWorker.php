@@ -250,20 +250,20 @@ class GameRecordSyncWorker
         // 2. 批量读取 Redis 余额（用于钱包同步）
         $betPlayerIds = []; // 需要同步钱包的玩家ID
         foreach ($records as $record) {
-            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
+            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
+                && ($record['amount'] ?? 0) > 0) {
                 $betPlayerIds[] = $record['player_id'];
             }
         }
 
         $redisBalances = [];
         if (!empty($betPlayerIds)) {
-            // 批量读取 Redis 余额（先去重并重置索引）
-            $uniquePlayerIds = array_values(array_unique($betPlayerIds));
-            $balanceKeys = array_map(fn($id) => "wallet:balance:{$id}", $uniquePlayerIds);
+            // 批量读取 Redis 余额
+            $balanceKeys = array_map(fn($id) => "wallet:balance:{$id}", array_unique($betPlayerIds));
             // 使用 work 连接池读取余额（共享数据）
             $balanceValues = \support\Redis::connection('work')->mGet($balanceKeys);
 
-            foreach ($uniquePlayerIds as $index => $playerId) {
+            foreach (array_unique($betPlayerIds) as $index => $playerId) {
                 if (isset($balanceValues[$index]) && $balanceValues[$index] !== false) {
                     $redisBalances[$playerId] = (float)$balanceValues[$index];
                 }
@@ -298,11 +298,12 @@ class GameRecordSyncWorker
             // 计算余额（仅下注时有余额变化）
             $beforeBalance = null;
             $afterBalance = null;
-            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
-                if (isset($redisBalances[$playerId]) && isset($wallets[$playerId])) {
-                    $wallet = $wallets[$playerId];
-                    $beforeBalance = $wallet->money;
+            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
+                && ($record['amount'] ?? 0) > 0) {
+                if (isset($redisBalances[$playerId])) {
+                    // Redis 余额是 Lua 脚本扣款后的余额
                     $afterBalance = $redisBalances[$playerId];
+                    $beforeBalance = $afterBalance + ($record['amount'] ?? 0);
                 }
             }
 
@@ -330,7 +331,8 @@ class GameRecordSyncWorker
             ];
 
             // 5. 同步钱包余额（从 Redis 同步到 MySQL）
-            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
+            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
+                && ($record['amount'] ?? 0) > 0) {
                 if (isset($redisBalances[$playerId]) && isset($wallets[$playerId])) {
                     $wallet = $wallets[$playerId];
                     $wallet->money = $redisBalances[$playerId];
@@ -650,6 +652,8 @@ class GameRecordSyncWorker
 
                 // 2. 钱包同步（从 Redis 同步到 MySQL）
                 // ✅ Lua 脚本已经在 Redis 中扣款，这里只需要同步到 MySQL
+                $beforeBalance = null;
+                $afterBalance = null;
                 if ($settlementStatus == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
                     // 从 Redis 读取 Lua 脚本扣款后的最新余额
                     // 使用 work 连接池读取余额（共享数据）
@@ -665,25 +669,25 @@ class GameRecordSyncWorker
                             throw new \Exception("钱包不存在");
                         }
 
-                        $beforeBalance = $wallet->money;
                         $amount = (float)$record['amount'];
 
+                        // 计算余额：Redis 余额是扣款后的余额
+                        $afterBalance = (float)$redisBalance;
+                        $beforeBalance = $afterBalance + $amount;
+
                         // 同步 Redis 余额到 MySQL（不是减法，是直接覆盖）
-                        $wallet->money = (float)$redisBalance;
+                        $wallet->money = $afterBalance;
                         $wallet->save();
 
                         $this->log->info("同步钱包余额", [
                             'player_id' => $playerId,
                             'before' => $beforeBalance,
-                            'after' => $wallet->money,
-                            'redis_balance' => $redisBalance,
+                            'after' => $afterBalance,
                             'order_no' => $orderNo,
                         ]);
 
                     } else {
                         // Redis 余额不存在，可能是缓存过期，跳过钱包同步
-                        $wallet = null;
-                        $beforeBalance = null;
                         $this->log->warning("Redis 余额不存在，跳过钱包同步", [
                             'player_id' => $playerId,
                             'order_no' => $orderNo,
@@ -703,8 +707,8 @@ class GameRecordSyncWorker
                 $gameRecord->bet = $record['amount'] ?? 0;
                 $gameRecord->win = $record['win'] ?? 0;
                 $gameRecord->diff = $record['diff'] ?? 0;
-                $gameRecord->balance_before = $beforeBalance ?? null;
-                $gameRecord->balance_after = isset($wallet) ? $wallet->money : null;
+                $gameRecord->balance_before = $beforeBalance;
+                $gameRecord->balance_after = $afterBalance;
                 $gameRecord->game_code = $record['game_code'] ?? '';
                 $gameRecord->settlement_status = $settlementStatus;
                 $gameRecord->order_time = $record['created_at'] ?? Carbon::now()->toDateTimeString();
@@ -720,7 +724,7 @@ class GameRecordSyncWorker
                 $gameRecord->save();
 
                 // 4. 创建交易记录（如果有扣款）
-                if (isset($wallet) && isset($beforeBalance)) {
+                if (isset($beforeBalance) && isset($afterBalance)) {
                     $delivery = new PlayerDeliveryRecord();
                     $delivery->player_id = $playerId;
                     $delivery->department_id = $player->department_id ?? 0;
@@ -730,9 +734,9 @@ class GameRecordSyncWorker
                     $delivery->type = PlayerDeliveryRecord::TYPE_BET;
                     $delivery->source = 'player_bet';
                     $delivery->remark = '游戏下注';
-                    $delivery->amount = $amount;
+                    $delivery->amount = (float)$record['amount'];
                     $delivery->amount_before = $beforeBalance;
-                    $delivery->amount_after = $wallet->money;
+                    $delivery->amount_after = $afterBalance;
                     $delivery->tradeno = $orderNo;
                     $delivery->user_id = 0;
                     $delivery->user_name = '';
