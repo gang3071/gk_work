@@ -250,7 +250,7 @@ class GameRecordSyncWorker
         // 2. 批量读取 Redis 余额（用于钱包同步）
         $betPlayerIds = []; // 需要同步钱包的玩家ID
         foreach ($records as $record) {
-            if (($record['settlement_status'] ?? 0) == 0 && ($record['amount'] ?? 0) > 0) {
+            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
                 $betPlayerIds[] = $record['player_id'];
             }
         }
@@ -294,6 +294,17 @@ class GameRecordSyncWorker
                 continue;
             }
 
+            // 计算余额（仅下注时有余额变化）
+            $beforeBalance = null;
+            $afterBalance = null;
+            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
+                if (isset($redisBalances[$playerId]) && isset($wallets[$playerId])) {
+                    $wallet = $wallets[$playerId];
+                    $beforeBalance = $wallet->money;
+                    $afterBalance = $redisBalances[$playerId];
+                }
+            }
+
             $insertData[] = [
                 'player_id' => $playerId,
                 'parent_player_id' => $player->recommend_id ?? 0,
@@ -305,8 +316,10 @@ class GameRecordSyncWorker
                 'bet' => $record['amount'] ?? 0,
                 'win' => $record['win'] ?? 0,
                 'diff' => $record['diff'] ?? 0,
+                'balance_before' => $beforeBalance,
+                'balance_after' => $afterBalance,
                 'game_code' => $record['game_code'] ?? '',
-                'settlement_status' => $record['settlement_status'] ?? 0,
+                'settlement_status' => $record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED,
                 'order_time' => $record['created_at'] ?? $now,
                 'original_data' => $record['original_data'] ?? '{}',
                 'action_data' => $record['action_data'] ?? null,
@@ -316,10 +329,9 @@ class GameRecordSyncWorker
             ];
 
             // 5. 同步钱包余额（从 Redis 同步到 MySQL）
-            if (($record['settlement_status'] ?? 0) == 0 && ($record['amount'] ?? 0) > 0) {
+            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
                 if (isset($redisBalances[$playerId]) && isset($wallets[$playerId])) {
                     $wallet = $wallets[$playerId];
-                    $beforeBalance = $wallet->money;
                     $wallet->money = $redisBalances[$playerId];
                     $wallet->save();
 
@@ -360,7 +372,7 @@ class GameRecordSyncWorker
 
         foreach ($records as $record) {
             $orderNo = $record['order_no'];
-            $settlementStatus = $record['settlement_status'] ?? 0;
+            $settlementStatus = $record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED;
             $platform = $record['platform'] ?? '';
 
             /** @var PlayGameRecord $existing */
@@ -416,7 +428,7 @@ class GameRecordSyncWorker
         // ⚠️ 新插入的记录需要查询数据库获取 ID
         $newRecordKeys = [];  // 存储 [platform_id, order_no] 组合
         foreach ($insertedRecords as $record) {
-            if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
                 if (($record['amount'] ?? 0) > 0) {  // 快速过滤
                     $newRecordKeys[] = [
                         'platform_id' => $record['platform_id'],
@@ -453,7 +465,7 @@ class GameRecordSyncWorker
 
         // 2. 检查更新后的已结算记录
         foreach ($updatedRecords as $record) {
-            if (($record['settlement_status'] ?? 0) == 1) {
+            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
                 /** @var PlayGameRecord $existing */
                 $existing = $existingRecords[$record['order_no']] ?? null;
 
@@ -570,7 +582,7 @@ class GameRecordSyncWorker
         $orderNo = $record['order_no'];
         $playerId = $record['player_id'];
         $platformId = $record['platform_id'];
-        $settlementStatus = $record['settlement_status'] ?? 0;
+        $settlementStatus = $record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED;
 
         // 开启事务
         Db::beginTransaction();
@@ -690,6 +702,8 @@ class GameRecordSyncWorker
                 $gameRecord->bet = $record['amount'] ?? 0;
                 $gameRecord->win = $record['win'] ?? 0;
                 $gameRecord->diff = $record['diff'] ?? 0;
+                $gameRecord->balance_before = $beforeBalance ?? null;
+                $gameRecord->balance_after = isset($wallet) ? $wallet->money : null;
                 $gameRecord->game_code = $record['game_code'] ?? '';
                 $gameRecord->settlement_status = $settlementStatus;
                 $gameRecord->order_time = $record['created_at'] ?? Carbon::now()->toDateTimeString();
