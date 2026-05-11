@@ -599,7 +599,8 @@ LUA;
         }
 
         // 应用爆彩概率倍数到中奖检查
-        $adjustedWinRatio = bcmul($lottery->win_ratio, $burstInfo['multiplier'], 8);
+        // 🔧 修复：使用9位精度匹配decimal(10,9)字段，避免精度丢失（2026-05-11）
+        $adjustedWinRatio = bcmul($lottery->win_ratio, (string)$burstInfo['multiplier'], 9);
 
         // 🔍 诊断日志：MEGA/GRAND彩金检查详情（2026-05-11）
         if ($lottery->id == 19 || $lottery->id == 20) {  // MEGA=19, GRAND=20
