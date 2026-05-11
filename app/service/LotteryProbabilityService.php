@@ -83,7 +83,7 @@ class LotteryProbabilityService
         static $logCount = 0;
         if ($winRatio < 0.000001 && $logCount < 10) {  // 只记录前10次极低概率检查
             $logCount++;
-            \support\Log::channel('lottery_probability')->warning('🔍 [诊断] BigInt算法详情', [
+            \support\Log::channel('game_lottery')->warning('🔍 [诊断] BigInt算法详情', [
                 'input_win_ratio' => $winRatio,
                 'input_type' => gettype($winRatio),
                 'precision' => $this->precision,
