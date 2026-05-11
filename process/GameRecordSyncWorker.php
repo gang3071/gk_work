@@ -298,19 +298,16 @@ class GameRecordSyncWorker
             // 读取余额（优先使用 Lua 脚本保存的快照，兼容老数据）
             $beforeBalance = null;
             $afterBalance = null;
-            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
-                && ($record['amount'] ?? 0) > 0) {
-                // ✅ 优先使用 Lua 脚本保存的余额快照（精确）
-                // 注意：使用 isset 而非 empty，因为余额可能为 "0"
-                if (isset($record['balance_before']) && isset($record['balance_after'])
-                    && $record['balance_before'] !== '' && $record['balance_after'] !== '') {
-                    $beforeBalance = (float)$record['balance_before'];
-                    $afterBalance = (float)$record['balance_after'];
-                } elseif (isset($redisBalances[$playerId])) {
-                    // ✅ 兜底：老数据没有余额快照，通过当前余额反推（可能不准确）
-                    $afterBalance = $redisBalances[$playerId];
-                    $beforeBalance = $afterBalance + ($record['amount'] ?? 0);
-                }
+            // ✅ 直接使用 Lua 脚本保存的余额快照（下注和结算记录均适用）
+            if (isset($record['balance_before']) && isset($record['balance_after'])
+                && $record['balance_before'] !== '' && $record['balance_after'] !== '') {
+                $beforeBalance = (float)$record['balance_before'];
+                $afterBalance = (float)$record['balance_after'];
+            } elseif (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
+                && ($record['amount'] ?? 0) > 0 && isset($redisBalances[$playerId])) {
+                // ✅ 兜底：下注老数据没有余额快照，通过当前余额反推（可能不准确）
+                $afterBalance = $redisBalances[$playerId];
+                $beforeBalance = $afterBalance + ($record['amount'] ?? 0);
             }
 
             $insertData[] = [
@@ -660,14 +657,14 @@ class GameRecordSyncWorker
                 // ✅ Lua 脚本已经在 Redis 中扣款，这里只需要同步到 MySQL
                 $beforeBalance = null;
                 $afterBalance = null;
+                // ✅ 直接使用 Lua 脚本保存的余额快照（下注和结算记录均适用）
+                if (isset($record['balance_before']) && isset($record['balance_after'])
+                    && $record['balance_before'] !== '' && $record['balance_after'] !== '') {
+                    $beforeBalance = (float)$record['balance_before'];
+                    $afterBalance = (float)$record['balance_after'];
+                }
                 if ($settlementStatus == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
-                    // ✅ 优先使用 Lua 脚本保存的余额快照（精确）
-                    // 注意：使用 isset 而非 empty，因为余额可能为 "0"
-                    if (isset($record['balance_before']) && isset($record['balance_after'])
-                        && $record['balance_before'] !== '' && $record['balance_after'] !== '') {
-                        $beforeBalance = (float)$record['balance_before'];
-                        $afterBalance = (float)$record['balance_after'];
-
+                    if (isset($beforeBalance)) {
                         // 同步余额到 MySQL
                         /** @var PlayerPlatformCash $wallet */
                         $wallet = PlayerPlatformCash::query()->where('player_id', $playerId)
