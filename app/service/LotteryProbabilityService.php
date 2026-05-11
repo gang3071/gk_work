@@ -79,20 +79,6 @@ class LotteryProbabilityService
         // 将概率转换为整数
         $ratioInt = (int)($winRatio * $scale);
 
-        // 🔍 诊断日志：极低概率算法详情（2026-05-11）
-        static $logCount = 0;
-        if ($winRatio < 0.000001 && $logCount < 10) {  // 只记录前10次极低概率检查
-            $logCount++;
-            \support\Log::channel('game_lottery')->warning('🔍 [诊断] BigInt算法详情', [
-                'input_win_ratio' => $winRatio,
-                'input_type' => gettype($winRatio),
-                'precision' => $this->precision,
-                'scale' => $scale,
-                'multiplication_result' => $winRatio * $scale,
-                'ratio_int' => $ratioInt,
-                'ratio_int_expected' => $winRatio < 0.0000006 ? '应该是500或555' : '其他值',
-            ]);
-        }
 
         // 如果转换后为0，说明概率小于最小精度
         if ($ratioInt <= 0) {
