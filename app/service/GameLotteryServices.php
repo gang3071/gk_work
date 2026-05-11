@@ -601,6 +601,22 @@ LUA;
         // 应用爆彩概率倍数到中奖检查
         $adjustedWinRatio = bcmul($lottery->win_ratio, $burstInfo['multiplier'], 8);
 
+        // 🔍 诊断日志：MEGA/GRAND彩金检查详情（2026-05-11）
+        if ($lottery->id == 19 || $lottery->id == 20) {  // MEGA=19, GRAND=20
+            $this->log->warning('🔍 [诊断] MEGA/GRAND彩金检查详情', [
+                'lottery_id' => $lottery->id,
+                'lottery_name' => $lottery->name,
+                'player_id' => $this->player->id ?? 0,
+                'bet' => $bet,
+                'participate_times' => $participateTimes,
+                'original_win_ratio' => $lottery->win_ratio,
+                'burst_multiplier' => $burstInfo['multiplier'],
+                'adjusted_win_ratio' => $adjustedWinRatio,
+                'is_bursting' => $burstInfo['is_bursting'],
+                'elapsed_seconds' => $burstInfo['elapsed_seconds'],
+            ]);
+        }
+
         // 记录理论检查次数（用于准确评估概率配置）
         // 即使中途中奖退出，也应该记录完整的检查机会数，这样统计才能反映真实概率
         $this->incrementLotteryStats($lottery->id, 'total', $participateTimes);
@@ -618,6 +634,23 @@ LUA;
 
             // 彩金倍数标记（只由双倍派彩决定，爆彩只影响概率不影响金额倍数）
             $lotteryMultiple = $isDoubled ? 2 : 1;
+
+            // 🔍 诊断日志：MEGA/GRAND概率检查结果（2026-05-11）
+            if (($lottery->id == 19 || $lottery->id == 20) && ($i == 1 || $result)) {
+                $this->log->warning('🔍 [诊断] MEGA/GRAND概率检查结果', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                    'attempt' => $i,
+                    'total_attempts' => $participateTimes,
+                    'probability_check_result' => $result ? '✅中奖' : '❌未中奖',
+                    'pool_amount' => $lottery->amount,
+                    'rate' => $lottery->rate,
+                    'calculated_amount' => $amount,
+                    'is_doubled' => $isDoubled,
+                    'max_amount' => $lottery->max_amount,
+                    'max_status' => $lottery->max_status,
+                ]);
+            }
 
             // 检查中奖条件
             if ($result && $amount > 0) {
