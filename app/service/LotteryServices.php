@@ -835,9 +835,9 @@ class LotteryServices
             $incrementResult = WalletService::atomicIncrement($this->player->id, $amount);
             $newBalance = $incrementResult['balance'];
 
-            // 3. 同步到数据库（冷备份）
-            /** @var PlayerPlatformCash $machineWallet */
-            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+            // ✅ 3. 验证玩家钱包存在（但不需要手动同步数据库）
+            // WalletService::atomicIncrement() 内部已自动调用 asyncUpdateDB()
+            $machineWallet = $this->player->machine_wallet()->first();
             if (!$machineWallet) {
                 \support\Log::error('随机彩金派发失败：玩家钱包不存在', [
                     'player_id' => $this->player->id,
@@ -845,8 +845,7 @@ class LotteryServices
                 DB::rollback();
                 return false;
             }
-            $machineWallet->money = $newBalance;
-            $machineWallet->saveWithoutEvents();
+            // ✅ 删除手动同步代码：数据库同步由 WalletService 异步队列自动完成
 
             // 创建交易记录
             $playerDeliveryRecord = new PlayerDeliveryRecord();
@@ -1437,9 +1436,25 @@ class LotteryServices
                     // 发送站内信
                     $notice = $this->sendNotice($playerLotteryRecord->id, $playerLotteryRecord->lottery_name);
 
-                    // 更新玩家钱包（加彩金金额）
-                    /** @var PlayerPlatformCash $machineWallet */
-                    $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+                    // ✅ 更新玩家钱包（加彩金金额）- 使用 WalletService
+                    // ✅ 从 Redis 读取余额（彩金派发前）
+                    $beforeAmount = \app\service\WalletService::getBalance($this->player->id);
+
+                    // ✅ 使用 WalletService 原子加款
+                    $result = \app\service\WalletService::add($this->player->id, $fixedAllowLottery['amount']);
+                    if (!$result['success']) {
+                        \support\Log::error('固定彩金派发失败：WalletService 加款失败', [
+                            'player_id' => $this->player->id,
+                            'amount' => $fixedAllowLottery['amount'],
+                            'error' => $result['error'] ?? 'unknown',
+                        ]);
+                        DB::rollback();
+                        return null;
+                    }
+                    $afterAmount = $result['balance'];
+
+                    // ✅ 验证玩家钱包存在（但不需要手动同步数据库）
+                    $machineWallet = $this->player->machine_wallet()->first();
                     if (!$machineWallet) {
                         \support\Log::error('固定彩金派发失败：玩家钱包不存在', [
                             'player_id' => $this->player->id,
@@ -1447,10 +1462,6 @@ class LotteryServices
                         DB::rollback();
                         return null;
                     }
-
-                    $beforeAmount = $machineWallet->money;
-                    $machineWallet->money = bcadd($machineWallet->money, $fixedAllowLottery['amount'], 2);
-                    $machineWallet->save();
 
                     // 创建交易记录
                     $playerDeliveryRecord = new PlayerDeliveryRecord();
@@ -1463,7 +1474,7 @@ class LotteryServices
                     $playerDeliveryRecord->source = 'lottery_fixed';
                     $playerDeliveryRecord->amount = $fixedAllowLottery['amount'];
                     $playerDeliveryRecord->amount_before = $beforeAmount;
-                    $playerDeliveryRecord->amount_after = $machineWallet->money;
+                    $playerDeliveryRecord->amount_after = $afterAmount;  // ✅ 使用 WalletService 返回的余额
                     $playerDeliveryRecord->tradeno = '';
                     $playerDeliveryRecord->remark = '固定彩金派彩';
                     $playerDeliveryRecord->user_id = 0;

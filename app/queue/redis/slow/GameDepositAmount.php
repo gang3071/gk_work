@@ -93,10 +93,16 @@ class GameDepositAmount implements Consumer
                     'lang' => $lang,
                 ]);
                 $playerWalletTransfer->save();
-                $beforeGameAmount = $machineWallet->money;
-                // 更新玩家统计
-                $machineWallet->money = bcsub($machineWallet->money, $playerWalletTransfer->amount, 2);
-                $machineWallet->save();
+
+                // ✅ 从 Redis 读取余额（转账前）
+                $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
+
+                // ✅ 使用 WalletService 原子扣款
+                $result = \app\service\WalletService::deduct($player->id, $playerWalletTransfer->amount);
+                if (!$result['success']) {
+                    throw new \Exception($result['error'] ?? '余额不足');
+                }
+                $afterGameAmount = $result['balance'];
 
                 $playerDeliveryRecord = new PlayerDeliveryRecord;
                 $playerDeliveryRecord->player_id = $player->id;
@@ -108,7 +114,7 @@ class GameDepositAmount implements Consumer
                 $playerDeliveryRecord->source = 'wallet_transfer_out';
                 $playerDeliveryRecord->amount = $playerWalletTransfer->amount;
                 $playerDeliveryRecord->amount_before = $beforeGameAmount;
-                $playerDeliveryRecord->amount_after = $machineWallet->money;
+                $playerDeliveryRecord->amount_after = $afterGameAmount;  // ✅ 使用 WalletService 返回的余额
                 $playerDeliveryRecord->tradeno = $playerWalletTransfer->tradeno ?? '';
                 $playerDeliveryRecord->remark = $playerWalletTransfer->remark ?? '';
                 $playerDeliveryRecord->user_id = 0;
