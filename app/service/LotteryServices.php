@@ -690,7 +690,10 @@ class LotteryServices
         }
 
         // 应用爆彩概率倍数到中奖检查
-        $adjustedWinRatio = bcmul($lottery->win_ratio, $burstInfo['multiplier'], 6);
+        // 🔧 修复：使用sprintf格式化，避免科学计数法导致bcmul报错（2026-05-11）
+        $winRatioStr = sprintf("%.9f", $lottery->win_ratio);
+        $multiplierStr = sprintf("%.9f", $burstInfo['multiplier']);
+        $adjustedWinRatio = bcmul($winRatioStr, $multiplierStr, 9);
 
         // 循环检查多次派彩机会
         for ($i = 1; $i <= $participateTimes; $i++) {

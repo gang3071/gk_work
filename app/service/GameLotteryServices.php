@@ -600,7 +600,10 @@ LUA;
 
         // 应用爆彩概率倍数到中奖检查
         // 🔧 修复：使用9位精度匹配decimal(10,9)字段，避免精度丢失（2026-05-11）
-        $adjustedWinRatio = bcmul($lottery->win_ratio, (string)$burstInfo['multiplier'], 9);
+        // 🔧 修复：使用sprintf格式化，避免科学计数法导致bcmul报错（2026-05-11）
+        $winRatioStr = sprintf("%.9f", $lottery->win_ratio);
+        $multiplierStr = sprintf("%.9f", $burstInfo['multiplier']);
+        $adjustedWinRatio = bcmul($winRatioStr, $multiplierStr, 9);
 
 
         // 记录理论检查次数（用于准确评估概率配置）
