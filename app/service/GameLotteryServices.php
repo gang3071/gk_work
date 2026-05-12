@@ -275,6 +275,34 @@ LUA;
         $cachedList = Cache::get(self::CACHE_KEY_LOTTERY_LIST);
 
         if (empty($cachedList)) {
+            // 🔍 先查询数据库中所有彩金的状态（用于诊断）
+            $allLotteries = GameLottery::query()
+                ->select(['id', 'name', 'status', 'deleted_at', 'win_ratio'])
+                ->get();
+
+            $megaGrandStatus = [];
+            foreach ($allLotteries as $item) {
+                if (in_array($item->id, [19, 20])) { // MEGA=19, GRAND=20
+                    $megaGrandStatus[] = [
+                        'id' => $item->id,
+                        'name' => $item->name,
+                        'status' => $item->status,
+                        'deleted_at' => $item->deleted_at,
+                        'deleted_at_type' => gettype($item->deleted_at),
+                        'deleted_at_is_null' => is_null($item->deleted_at),
+                        'deleted_at_value' => $item->deleted_at === '' ? '(empty string)' : $item->deleted_at,
+                        'win_ratio' => $item->win_ratio,
+                    ];
+                }
+            }
+
+            if (!empty($megaGrandStatus)) {
+                $this->log->info('🔍 [MEGA/GRAND] 数据库原始状态', [
+                    'all_count' => $allLotteries->count(),
+                    'mega_grand_status' => $megaGrandStatus,
+                ]);
+            }
+
             $this->lotteryList = GameLottery::query()
                 ->select([
                     'id',
@@ -307,6 +335,29 @@ LUA;
                 'ids' => $this->lotteryList->pluck('id')->toArray(),
             ]);
 
+            // 🔍 检查 MEGA 和 GRAND 是否在加载的列表中
+            $megaGrandLoaded = [];
+            foreach ($this->lotteryList as $item) {
+                if (in_array($item->id, [19, 20])) {
+                    $megaGrandLoaded[] = [
+                        'id' => $item->id,
+                        'name' => $item->name,
+                        'win_ratio' => $item->win_ratio,
+                    ];
+                }
+            }
+
+            if (count($megaGrandStatus) > 0 && count($megaGrandLoaded) === 0) {
+                $this->log->error('🔍 [MEGA/GRAND] 数据库中存在但未被加载！', [
+                    'reason' => '可能是 status != 1 或 deleted_at 不为 NULL',
+                    'database_status' => $megaGrandStatus,
+                ]);
+            } elseif (count($megaGrandLoaded) > 0) {
+                $this->log->info('🔍 [MEGA/GRAND] 成功加载到彩金列表', [
+                    'loaded' => $megaGrandLoaded,
+                ]);
+            }
+
             // 缓存为数组以减少序列化开销
             Cache::set(self::CACHE_KEY_LOTTERY_LIST, $this->lotteryList->toArray(), self::CACHE_TTL_LOTTERY);
         } else {
@@ -317,6 +368,26 @@ LUA;
                 'count' => count($this->lotteryList),
                 'ids' => $this->lotteryList->pluck('id')->toArray(),
             ]);
+
+            // 🔍 检查缓存中是否有 MEGA/GRAND
+            $megaGrandInCache = [];
+            foreach ($this->lotteryList as $item) {
+                if (in_array($item->id, [19, 20])) {
+                    $megaGrandInCache[] = [
+                        'id' => $item->id,
+                        'name' => $item->name,
+                        'win_ratio' => $item->win_ratio,
+                    ];
+                }
+            }
+
+            if (!empty($megaGrandInCache)) {
+                $this->log->info('🔍 [MEGA/GRAND] 从缓存加载', [
+                    'loaded' => $megaGrandInCache,
+                ]);
+            } else {
+                $this->log->warning('🔍 [MEGA/GRAND] 缓存中不存在，可能是旧缓存');
+            }
         }
 
         return $this;
@@ -364,6 +435,28 @@ LUA;
 
         $lotteryList = $this->lotteryList;
 
+        // 🔍 针对 MEGA 和 GRAND 的调试日志
+        $megaGrandIds = [19, 20]; // MEGA=19, GRAND=20
+        $megaGrandInList = [];
+        foreach ($lotteryList as $item) {
+            if (in_array($item->id, $megaGrandIds)) {
+                $megaGrandInList[] = [
+                    'id' => $item->id,
+                    'name' => $item->name,
+                    'win_ratio' => $item->win_ratio,
+                    'base_bet_amount' => $item->base_bet_amount,
+                ];
+            }
+        }
+        if (!empty($megaGrandInList)) {
+            $this->log->info('🔍 [MEGA/GRAND] 彩金检查开始', [
+                'play_game_record_id' => $playGameRecordId,
+                'bet' => $bet,
+                'lottery_list_count' => count($lotteryList),
+                'mega_grand_found' => $megaGrandInList,
+            ]);
+        }
+
         // ✅ 性能优化（2026-04-09）：批量获取所有彩金池的爆彩状态，减少 Redis 网络往返
         $burstInfoMap = $this->getBatchBurstInfo($lotteryList);
 
@@ -372,6 +465,19 @@ LUA;
             try {
                 // 检查是否应该处理这个彩金
                 if (!$this->shouldCheckLottery($lottery, $bet)) {
+                    // 🔍 针对 MEGA 和 GRAND 的调试日志
+                    if (in_array($lottery->id, $megaGrandIds)) {
+                        $participateTimes = $lottery->base_bet_amount > 0
+                            ? intval(floor($bet / $lottery->base_bet_amount))
+                            : 0;
+                        $this->log->warning('🔍 [MEGA/GRAND] 未通过 shouldCheckLottery 检查', [
+                            'lottery_id' => $lottery->id,
+                            'lottery_name' => $lottery->name,
+                            'bet' => $bet,
+                            'base_bet_amount' => $lottery->base_bet_amount,
+                            'participate_times' => $participateTimes,
+                        ]);
+                    }
                     continue;
                 }
 
@@ -586,6 +692,9 @@ LUA;
         int         $playGameRecordId
     ): void
     {
+        $megaGrandIds = [19, 20]; // MEGA=19, GRAND=20
+        $isMegaGrand = in_array($lottery->id, $megaGrandIds);
+
         // 冷却期检查：该彩金中奖后半小时内不再触发中奖
         if ($this->isInCooldown($lottery->id)) {
             $remainingTime = $this->getCooldownRemainingTime($lottery->id);
@@ -595,6 +704,14 @@ LUA;
                 'remaining_seconds' => $remainingTime,
                 'remaining_minutes' => round($remainingTime / 60, 1),
             ]);
+            // 🔍 针对 MEGA 和 GRAND 的调试日志
+            if ($isMegaGrand) {
+                $this->log->warning('🔍 [MEGA/GRAND] 在冷却期，跳过检查', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                    'remaining_minutes' => round($remainingTime / 60, 1),
+                ]);
+            }
             return;
         }
 
@@ -605,6 +722,22 @@ LUA;
         $multiplierStr = sprintf("%.9f", $burstInfo['multiplier']);
         $adjustedWinRatio = bcmul($winRatioStr, $multiplierStr, 9);
 
+        // 🔍 针对 MEGA 和 GRAND 的调试日志
+        if ($isMegaGrand) {
+            $this->log->info('🔍 [MEGA/GRAND] 进入概率检查', [
+                'play_game_record_id' => $playGameRecordId,
+                'lottery_id' => $lottery->id,
+                'lottery_name' => $lottery->name,
+                'bet' => $bet,
+                'base_bet_amount' => $lottery->base_bet_amount,
+                'participate_times' => $participateTimes,
+                'original_win_ratio' => $lottery->win_ratio,
+                'win_ratio_str' => $winRatioStr,
+                'burst_multiplier' => $burstInfo['multiplier'],
+                'adjusted_win_ratio' => $adjustedWinRatio,
+                'adjusted_win_ratio_float' => (float)$adjustedWinRatio,
+            ]);
+        }
 
         // 记录理论检查次数（用于准确评估概率配置）
         // 即使中途中奖退出，也应该记录完整的检查机会数，这样统计才能反映真实概率
@@ -616,6 +749,18 @@ LUA;
         // 循环检查多次派彩机会
         for ($i = 1; $i <= $participateTimes; $i++) {
             $result = $service->checkSmart($adjustedWinRatio);
+
+            // 🔍 针对 MEGA 和 GRAND 的调试日志 - 记录每次检查
+            if ($isMegaGrand) {
+                $this->log->info('🔍 [MEGA/GRAND] 概率检查结果', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                    'attempt' => $i,
+                    'total_attempts' => $participateTimes,
+                    'result' => $result ? 'WIN' : 'LOSE',
+                    'adjusted_win_ratio' => $adjustedWinRatio,
+                ]);
+            }
 
             // 计算彩金金额（包含rate、double、max逻辑）
             $isDoubled = false;
@@ -656,7 +801,6 @@ LUA;
                     'stats_daily_wins' => $stats['daily_win'],
                     'stats_daily_win_rate' => $stats['daily_win_rate'],
                 ]);
-
                 try {
                     $distributed = $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $i, $participateTimes, $isDoubled);
                 } catch (PushException $e) {
@@ -688,6 +832,18 @@ LUA;
 
                 // 跳出当前彩金的检查循环，继续检查下一个彩金
                 break;
+            } else {
+                // 🔍 针对 MEGA 和 GRAND 的调试日志 - 记录为什么没有中奖
+                if ($isMegaGrand && $result) {
+                    $this->log->warning('🔍 [MEGA/GRAND] 概率检查通过但金额为0，未中奖', [
+                        'lottery_id' => $lottery->id,
+                        'lottery_name' => $lottery->name,
+                        'attempt' => $i,
+                        'result' => $result,
+                        'amount' => $amount,
+                        'reason' => $amount <= 0 ? '金额 <= 0' : '概率检查未通过',
+                    ]);
+                }
             }
         }
     }
@@ -1451,6 +1607,9 @@ LUA;
      */
     private function calculateBurstAmount(GameLottery $lottery, bool &$isDoubled = false): float
     {
+        $megaGrandIds = [19, 20]; // MEGA=19, GRAND=20
+        $isMegaGrand = in_array($lottery->id, $megaGrandIds);
+
         // 1. 根据rate计算派彩金额（默认100%全派）
         $rate = $lottery->rate > 0 ? $lottery->rate : 100;
         $amount = bcmul($lottery->amount, bcdiv($rate, 100, 4), 2);
@@ -1470,7 +1629,35 @@ LUA;
         }
 
         // 4. 发放金额向下取整（只保留整数位）
+        $amountBeforeFloor = $amount;
         $amount = floor($amount);
+
+        // 🔍 针对 MEGA 和 GRAND 的金额计算日志
+        if ($isMegaGrand) {
+            $this->log->info('🔍 [MEGA/GRAND] 金额计算详情', [
+                'lottery_id' => $lottery->id,
+                'lottery_name' => $lottery->name,
+                'pool_amount' => $lottery->amount,
+                'rate' => $rate . '%',
+                'amount_after_rate' => bcmul($lottery->amount, bcdiv($rate, 100, 4), 2),
+                'is_doubled' => $isDoubled,
+                'amount_before_floor' => $amountBeforeFloor,
+                'amount_after_floor' => $amount,
+                'max_status' => $lottery->max_status,
+                'max_amount' => $lottery->max_amount,
+                'double_status' => $lottery->double_status,
+                'double_amount' => $lottery->double_amount,
+            ]);
+
+            if ($amount <= 0) {
+                $this->log->error('🔍 [MEGA/GRAND] 金额 <= 0，即使中奖也不会发放！', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                    'final_amount' => $amount,
+                    'reason' => '向下取整后为 0',
+                ]);
+            }
+        }
 
         return (float)$amount;
     }

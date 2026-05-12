@@ -79,9 +79,21 @@ class LotteryProbabilityService
         // 将概率转换为整数
         $ratioInt = (int)($winRatio * $scale);
 
+        // 🔍 针对 MEGA (0.000000333) 和 GRAND (0.000000250) 的调试日志
+        $isMegaGrand = (
+            abs($winRatio - 0.000000333) < 0.000000001 ||  // MEGA
+            abs($winRatio - 0.000000250) < 0.000000001     // GRAND
+        );
 
         // 如果转换后为0，说明概率小于最小精度
         if ($ratioInt <= 0) {
+            if ($isMegaGrand) {
+                \support\Log::channel('game_lottery')->error('🔍 [MEGA/GRAND] ratioInt = 0，永远不会中奖！', [
+                    'win_ratio' => $winRatio,
+                    'scale' => $scale,
+                    'ratio_int' => $ratioInt,
+                ]);
+            }
             return false;
         }
 
@@ -89,7 +101,22 @@ class LotteryProbabilityService
         $random = random_int(0, (int)$scale - 1);
 
         // 当 random < ratioInt 时中奖
-        return $random < $ratioInt;
+        $result = $random < $ratioInt;
+
+        // 🔍 针对 MEGA 和 GRAND 的详细日志
+        if ($isMegaGrand) {
+            \support\Log::channel('game_lottery')->info('🔍 [MEGA/GRAND] checkByBigInt 详细信息', [
+                'win_ratio' => $winRatio,
+                'scale' => number_format($scale, 0, '.', ','),
+                'ratio_int' => $ratioInt,
+                'random' => $random,
+                'result' => $result ? 'WIN' : 'LOSE',
+                'win_range' => '0-' . ($ratioInt - 1),
+                'probability' => ($ratioInt / $scale),
+            ]);
+        }
+
+        return $result;
     }
 
     /**
