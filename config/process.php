@@ -15,16 +15,27 @@
 use process\BalancePushWorker;
 use process\BurstCleaner;
 use process\ChannelSettlement;
+use process\ClearAbnormalMachine;
 use process\GamePoolSocket;
 use process\GameRecordCleanWorker;
 use process\GameRecordSyncWorker;
+use process\GetAmsViewers;
+use process\GetTencentViewers;
 use process\LotteryPoolSocket;
 use process\LotteryRemind;
+use process\MachineKeepOutPlayer;
+use process\MediaClear;
 use process\NationalPromoterRebate;
 use process\OnlinePlayerPushWorker;
 use process\ProfitSettlement;
+use process\RechargeRemind;
 use process\ReconciliationTask;
 use process\ReverseWater;
+use process\SyncMachineActivity;
+use process\SyncMachineGameLog;
+use process\SyncMachineStatus;
+use process\TencentStream;
+use process\WithdrawRemind;
 
 return [
     'ProfitSettlement' => [
@@ -81,6 +92,106 @@ return [
     'OnlinePlayerPushWorker' => [
         'handler' => OnlinePlayerPushWorker::class,
         'count' => 1,  // 1个进程即可（定时任务不需要并发）
+    ],
+
+    // ============================================================
+    // 实体机台相关进程
+    // ============================================================
+
+    // ✅ 机台超时玩家踢出进程
+    // 作用：每分钟检查一次，将超时玩家踢出机台
+    // 时间：默认5分钟无操作自动踢出
+    'MachineKeepOutPlayer' => [
+        'handler' => MachineKeepOutPlayer::class,
+        'count' => 1,
+    ],
+
+    // ✅ 机台状态同步进程
+    // 作用：每5秒从硬件读取机台实时状态，推送到前端
+    // 延迟：< 5秒
+    'SyncMachineStatus' => [
+        'handler' => SyncMachineStatus::class,
+        'count' => 1,
+    ],
+
+    // ✅ 机台游戏日志同步进程
+    // 作用：每10秒记录一次玩家游戏行为
+    // 用途：数据分析、统计
+    'SyncMachineGameLog' => [
+        'handler' => SyncMachineGameLog::class,
+        'count' => 1,
+    ],
+
+    // ✅ 机台活动同步进程
+    // 作用：每分钟统计机台运行时间和游戏次数
+    // 用途：活动奖励计算
+    'SyncMachineActivity' => [
+        'handler' => SyncMachineActivity::class,
+        'count' => 1,
+    ],
+
+    // ✅ 异常机台清理进程
+    // 作用：每小时清理一次异常机台（无玩家但状态异常）
+    // 安全：避免机台被永久占用
+    'ClearAbnormalMachine' => [
+        'handler' => ClearAbnormalMachine::class,
+        'count' => 1,
+    ],
+
+    // ============================================================
+    // 视讯直播相关进程
+    // ============================================================
+
+    // ✅ AMS 媒体服务器观看人数统计
+    // 作用：每分钟统计 AMS 媒体服务器观看人数，缓存到 Redis
+    // 延迟：< 60秒
+    'GetAmsViewers' => [
+        'handler' => GetAmsViewers::class,
+        'count' => 1,
+    ],
+
+    // ✅ 腾讯云直播观看人数统计
+    // 作用：每分钟统计腾讯云直播观看人数，缓存到 Redis
+    // 延迟：< 60秒
+    'GetTencentViewers' => [
+        'handler' => GetTencentViewers::class,
+        'count' => 1,
+    ],
+
+    // ✅ 腾讯云直播流管理
+    // 作用：每2分钟检查推流状态，无观看者自动关闭，节省带宽
+    // 优化：自动释放无效推流资源
+    'TencentStream' => [
+        'handler' => TencentStream::class,
+        'count' => 1,
+    ],
+
+    // ✅ 媒体文件清理
+    // 作用：每5分钟清理一次过期媒体文件
+    // 防止：磁盘空间无限增长
+    'MediaClear' => [
+        'handler' => MediaClear::class,
+        'count' => 1,
+    ],
+
+    // ============================================================
+    // 提醒相关进程
+    // ============================================================
+
+    // ✅ 充值审核提醒
+    // 作用：每25秒推送待审核充值通知到管理员
+    // 实时：管理员及时处理充值申请
+    'RechargeRemind' => [
+        'handler' => RechargeRemind::class,
+        'count' => 1,
+    ],
+
+    // ✅ 提款审核提醒
+    // 作用：每20秒推送待审核提款通知到管理员
+    // 实时：管理员及时处理提款申请
+    'WithdrawRemind' => [
+        'handler' => WithdrawRemind::class,
+        'count' => 1,
     ],
 ];
 
