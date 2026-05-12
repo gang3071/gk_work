@@ -91,18 +91,15 @@ local processed = 0
 for i, pool in ipairs(pools) do
     local lottery_id = tostring(pool.id)
     local add_amount = tonumber(pool.add_amount) or 0
-    local stat_increment = tonumber(pool.stat_increment) or 0
 
     if add_amount > 0 then
         redis.call('INCRBYFLOAT', 'game_lottery_amount:' .. lottery_id, add_amount)
         processed = processed + 1
     end
 
-    if stat_increment > 0 then
-        redis.call('INCRBY', 'game_lottery_stats:total:' .. lottery_id, stat_increment)
-        redis.call('INCRBY', 'game_lottery_stats:daily:total:' .. lottery_id .. ':' .. current_date, stat_increment)
-        redis.call('EXPIRE', 'game_lottery_stats:daily:total:' .. lottery_id .. ':' .. current_date, 172800)
-    end
+    -- ❌ 删除统计逻辑：统计应该由 incrementLotteryStats 方法统一处理
+    -- 原逻辑会导致重复统计：addLotteryPool 按金额统计 + incrementLotteryStats 按次数统计
+    -- 修复时间：2026-05-13
 end
 
 return processed
@@ -110,6 +107,7 @@ LUA;
 
     /**
      * Lua 脚本的 SHA1 缓存（EVALSHA 优化）
+     * ⚠️ 修改 LUA_BATCH_ADD_LOTTERY 后需要重启服务以重新加载脚本
      * @var string|null
      */
     private static ?string $luaScriptSha = null;
@@ -1953,7 +1951,8 @@ LUA;
             $poolsData[] = [
                 'id' => $lottery->id,
                 'add_amount' => (float)$addAmount,
-                'stat_increment' => (int)bcmul($bet, 1, 0), // 下注金额作为统计权重
+                // ❌ 删除 stat_increment：统计由 incrementLotteryStats 统一处理
+                // 修复时间：2026-05-13
             ];
         }
 
