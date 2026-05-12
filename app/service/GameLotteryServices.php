@@ -849,7 +849,7 @@ LUA;
     }
 
     /**
-     * 增加彩金统计数据
+     * 增加彩金统计数据（带惰性清理）
      * @param int $lotteryId
      * @param string $type total|win
      * @param int $count
@@ -867,19 +867,69 @@ LUA;
             // 获取彩金名称
             $lotteryName = $this->getLotteryName($lotteryId);
 
-            if ($type === 'total') {
-                // 总开奖次数
-                $oldTotal = (int)$redis->get(self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId) ?: 0;
-                $newTotal = $redis->incrBy(self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId, $count);
+            // 获取清除时间标记
+            $clearTimeKey = 'game_lottery_stats:clear_time:' . $lotteryId;
+            $currentClearTime = $redis->get($clearTimeKey) ?: '';
 
-                // 每日开奖次数（24小时过期）
+            if ($type === 'total') {
+                // 使用 Lua 脚本实现惰性清理 + 原子累加
+                $statsKey = self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId;
                 $dailyKey = self::REDIS_KEY_LOTTERY_STATS_DAILY_TOTAL . $lotteryId . ':' . $today;
-                $oldDailyTotal = (int)$redis->get($dailyKey) ?: 0;
-                $newDailyTotal = $redis->incrBy($dailyKey, $count);
-                $redis->expire($dailyKey, 86400 * 2); // 保留2天
+                $versionKey = $statsKey . ':version'; // 版本键，记录上次累加时的清除时间
+
+                // Lua 脚本：检查版本，必要时清零，然后累加
+                $luaScript = <<<'LUA'
+local stats_key = KEYS[1]
+local daily_key = KEYS[2]
+local version_key = KEYS[3]
+
+local increment = tonumber(ARGV[1])
+local current_clear_time = ARGV[2]
+local ttl = tonumber(ARGV[3])
+
+-- 获取旧值（用于日志）
+local old_total = tonumber(redis.call('GET', stats_key) or 0)
+local old_daily = tonumber(redis.call('GET', daily_key) or 0)
+
+-- 获取版本（上次累加时的清除时间）
+local last_version = redis.call('GET', version_key) or ''
+
+local was_cleared = 0
+-- 如果版本不匹配，说明发生了清除，需要先清零
+if last_version ~= current_clear_time then
+    redis.call('SET', stats_key, 0)
+    redis.call('SET', daily_key, 0)
+    redis.call('SET', version_key, current_clear_time)
+    old_total = 0
+    old_daily = 0
+    was_cleared = 1
+end
+
+-- 累加统计
+local new_total = redis.call('INCRBY', stats_key, increment)
+local new_daily = redis.call('INCRBY', daily_key, increment)
+redis.call('EXPIRE', daily_key, ttl)
+
+return {old_total, new_total, old_daily, new_daily, was_cleared}
+LUA;
+
+                $result = $redis->eval($luaScript, [
+                    $statsKey,
+                    $dailyKey,
+                    $versionKey,
+                    $count,
+                    $currentClearTime,
+                    86400 * 2 // TTL: 2天
+                ], 3); // 3 个 KEYS
+
+                $oldTotal = (int)$result[0];
+                $newTotal = (int)$result[1];
+                $oldDailyTotal = (int)$result[2];
+                $newDailyTotal = (int)$result[3];
+                $wasCleared = (int)$result[4];
 
                 // 📊 记录统计变化日志
-                $this->log->info('📊 彩金统计增加 [Total]', [
+                $logData = [
                     'play_game_record_id' => $playGameRecordId,
                     'lottery_id' => $lotteryId,
                     'lottery_name' => $lotteryName,
@@ -893,17 +943,69 @@ LUA;
                     'daily_before' => $oldDailyTotal,
                     'daily_after' => $newDailyTotal,
                     'date' => $today,
-                ]);
-            } elseif ($type === 'win') {
-                // 总中奖次数
-                $oldWin = (int)$redis->get(self::REDIS_KEY_LOTTERY_STATS_WIN . $lotteryId) ?: 0;
-                $newWin = $redis->incrBy(self::REDIS_KEY_LOTTERY_STATS_WIN . $lotteryId, $count);
+                ];
 
-                // 每日中奖次数（24小时过期）
+                // 如果发生了惰性清理，记录日志
+                if ($wasCleared === 1) {
+                    $logData['lazy_cleared'] = true;
+                    $logData['clear_time'] = $currentClearTime;
+                    $this->log->warning('🔄 检测到统计已清除，自动重置为0', $logData);
+                } else {
+                    $this->log->info('📊 彩金统计增加 [Total]', $logData);
+                }
+
+            } elseif ($type === 'win') {
+                // 使用 Lua 脚本实现惰性清理 + 原子累加
+                $statsKey = self::REDIS_KEY_LOTTERY_STATS_WIN . $lotteryId;
                 $dailyKey = self::REDIS_KEY_LOTTERY_STATS_DAILY_WIN . $lotteryId . ':' . $today;
-                $oldDailyWin = (int)$redis->get($dailyKey) ?: 0;
-                $newDailyWin = $redis->incrBy($dailyKey, $count);
-                $redis->expire($dailyKey, 86400 * 2); // 保留2天
+                $versionKey = $statsKey . ':version'; // 版本键
+
+                // 使用相同的 Lua 脚本
+                $luaScript = <<<'LUA'
+local stats_key = KEYS[1]
+local daily_key = KEYS[2]
+local version_key = KEYS[3]
+
+local increment = tonumber(ARGV[1])
+local current_clear_time = ARGV[2]
+local ttl = tonumber(ARGV[3])
+
+local old_total = tonumber(redis.call('GET', stats_key) or 0)
+local old_daily = tonumber(redis.call('GET', daily_key) or 0)
+
+local last_version = redis.call('GET', version_key) or ''
+
+local was_cleared = 0
+if last_version ~= current_clear_time then
+    redis.call('SET', stats_key, 0)
+    redis.call('SET', daily_key, 0)
+    redis.call('SET', version_key, current_clear_time)
+    old_total = 0
+    old_daily = 0
+    was_cleared = 1
+end
+
+local new_total = redis.call('INCRBY', stats_key, increment)
+local new_daily = redis.call('INCRBY', daily_key, increment)
+redis.call('EXPIRE', daily_key, ttl)
+
+return {old_total, new_total, old_daily, new_daily, was_cleared}
+LUA;
+
+                $result = $redis->eval($luaScript, [
+                    $statsKey,
+                    $dailyKey,
+                    $versionKey,
+                    $count,
+                    $currentClearTime,
+                    86400 * 2
+                ], 3);
+
+                $oldWin = (int)$result[0];
+                $newWin = (int)$result[1];
+                $oldDailyWin = (int)$result[2];
+                $newDailyWin = (int)$result[3];
+                $wasCleared = (int)$result[4];
 
                 // 获取累计开奖次数用于计算中奖率
                 $totalChecks = (int)$redis->get(self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId) ?: 0;
@@ -911,7 +1013,7 @@ LUA;
                 $newWinRate = $totalChecks > 0 ? round(($newWin / $totalChecks) * 100, 4) : 0;
 
                 // 📊 记录统计变化日志
-                $this->log->info('📊 彩金统计增加 [Win]', [
+                $logData = [
                     'play_game_record_id' => $playGameRecordId,
                     'lottery_id' => $lotteryId,
                     'lottery_name' => $lotteryName,
@@ -927,7 +1029,15 @@ LUA;
                     'win_rate_before' => $oldWinRate . '%',
                     'win_rate_after' => $newWinRate . '%',
                     'date' => $today,
-                ]);
+                ];
+
+                if ($wasCleared === 1) {
+                    $logData['lazy_cleared'] = true;
+                    $logData['clear_time'] = $currentClearTime;
+                    $this->log->warning('🔄 检测到统计已清除，自动重置为0', $logData);
+                } else {
+                    $this->log->info('📊 彩金统计增加 [Win]', $logData);
+                }
             }
         } catch (\Exception $e) {
             $this->log->error('记录彩金统计失败', [
