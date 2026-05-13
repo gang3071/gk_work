@@ -6,6 +6,7 @@ use support\Log;
 use support\Request;
 use support\Response;
 use Webman\Push\Api;
+use Webman\Push\PushException;
 
 /**
  * 推送服务测试控制器
@@ -15,6 +16,7 @@ class PushTestController
     /**
      * 创建 Push API 实例（连接到 gk_api 的推送服务）
      * @return Api
+     * @throws PushException
      */
     private function createPushApi(): Api
     {
