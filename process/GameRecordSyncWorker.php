@@ -7,6 +7,7 @@ use app\model\PlayerDeliveryRecord;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
 use app\service\GameRecordCacheService;
+use app\service\HighScoreBroadcastService;
 use Carbon\Carbon;
 use support\Db;
 use support\Log;
@@ -703,6 +704,16 @@ class GameRecordSyncWorker
                 }
 
                 $gameRecord->save();
+
+                // 🎉 高分广播检测（2026-05-13）
+                try {
+                    HighScoreBroadcastService::checkAndBroadcast($gameRecord);
+                } catch (\Throwable $e) {
+                    $this->log->error('高分广播检测失败', [
+                        'record_id' => $gameRecord->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
 
                 // 4. 创建交易记录（如果有扣款）
                 if (isset($wallet) && isset($beforeBalance)) {
