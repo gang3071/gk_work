@@ -705,14 +705,29 @@ class GameRecordSyncWorker
 
                 $gameRecord->save();
 
-                // 🎉 高分广播检测（2026-05-13）
-                try {
-                    HighScoreBroadcastService::checkAndBroadcast($gameRecord);
-                } catch (\Throwable $e) {
-                    $this->log->error('高分广播检测失败', [
-                        'record_id' => $gameRecord->id,
-                        'error' => $e->getMessage(),
-                    ]);
+                // 🎉 高分广播检测（2026-05-14 优化：改为异步队列，避免阻塞同步流程）
+                // ✅ 优化：提前检查是否达到阈值，减少不必要的队列消息
+                if ($gameRecord->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
+                    && $gameRecord->win > 0) {
+                    try {
+                        // 获取该渠道的高分广播阈值
+                        $threshold = HighScoreBroadcastService::getThreshold($gameRecord->department_id);
+
+                        // 只有达到阈值才发送到队列
+                        if ($threshold !== null && $threshold > 0 && $gameRecord->win >= $threshold) {
+                            Client::send('high-score-broadcast', [
+                                'record_id' => $gameRecord->id,
+                                'player_id' => $gameRecord->player_id,
+                                'department_id' => $gameRecord->department_id,
+                                'win' => $gameRecord->win,
+                            ], 'fast');
+                        }
+                    } catch (\Throwable $e) {
+                        $this->log->error('高分广播队列发送失败', [
+                            'record_id' => $gameRecord->id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
                 }
 
                 // 4. 创建交易记录（如果有扣款）

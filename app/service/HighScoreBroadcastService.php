@@ -8,7 +8,6 @@ use app\model\Player;
 use support\Cache;
 use support\Log;
 use support\Redis;
-use Webman\Push\Api;
 
 /**
  * 高分广播服务
@@ -27,6 +26,11 @@ class HighScoreBroadcastService
      * 防抖时间（秒）- 同一玩家在此时间内只广播一次
      */
     const DEBOUNCE_SECONDS = 60;
+
+    /**
+     * 未配置阈值的缓存标记
+     */
+    const NOT_CONFIGURED_MARKER = '__NOT_CONFIGURED__';
 
     /**
      * 检查并广播高分消息
@@ -82,10 +86,10 @@ class HighScoreBroadcastService
             }
 
             // 6. 构建广播消息
-            $message = self::buildMessage($player, $channel, $record);
+            $messageData = self::buildMessage($player, $channel, $record);
 
             // 7. 执行广播
-            self::broadcast($channel->department_id, $message);
+            self::broadcast($channel->department_id, $messageData['message'], $messageData['lang']);
 
             Log::info('高分广播成功', [
                 'player_id' => $record->player_id,
@@ -94,7 +98,8 @@ class HighScoreBroadcastService
                 'win' => $record->win,
                 'threshold' => $threshold,
                 'department_id' => $record->department_id,
-                'message' => $message,
+                'message' => $messageData['message'],
+                'lang' => $messageData['lang'],
             ]);
 
             return true;
@@ -110,12 +115,98 @@ class HighScoreBroadcastService
     }
 
     /**
+     * 批量获取多个渠道的高分广播阈值
+     *
+     * @param array $departmentIds 渠道ID数组
+     * @return array 渠道ID => 阈值的映射，未配置则为null
+     */
+    public static function batchGetThresholds(array $departmentIds): array
+    {
+        if (empty($departmentIds)) {
+            return [];
+        }
+
+        $thresholds = [];
+        $uncached = [];
+
+        // 1. 先从缓存读取
+        foreach ($departmentIds as $id) {
+            $cacheKey = 'setting-high_score_broadcast_threshold-' . $id;
+            $setting = Cache::get($cacheKey);
+
+            if ($setting) {
+                if ($setting === self::NOT_CONFIGURED_MARKER) {
+                    $thresholds[$id] = null;
+                } else {
+                    $thresholds[$id] = self::extractThreshold($setting);
+                }
+            } else {
+                $uncached[] = $id;
+            }
+        }
+
+        // 2. 批量查询未缓存的
+        if (!empty($uncached)) {
+            try {
+                $settingModel = plugin()->webman->config('database.system_setting_model');
+                if ($settingModel && class_exists($settingModel)) {
+                    $settings = $settingModel::whereIn('department_id', $uncached)
+                        ->where('feature', 'high_score_broadcast_threshold')
+                        ->get()
+                        ->keyBy('department_id');
+
+                    foreach ($uncached as $id) {
+                        $setting = $settings[$id] ?? null;
+                        $cacheKey = 'setting-high_score_broadcast_threshold-' . $id;
+
+                        if ($setting) {
+                            Cache::set($cacheKey, $setting, 300);
+                            $thresholds[$id] = self::extractThreshold($setting);
+                        } else {
+                            Cache::set($cacheKey, self::NOT_CONFIGURED_MARKER, 300);
+                            $thresholds[$id] = null;
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::error('批量获取高分广播阈值失败', [
+                    'department_ids' => $uncached,
+                    'error' => $e->getMessage(),
+                ]);
+
+                // 失败时填充 null
+                foreach ($uncached as $id) {
+                    $thresholds[$id] = null;
+                }
+            }
+        }
+
+        return $thresholds;
+    }
+
+    /**
+     * 从 setting 对象提取阈值
+     *
+     * @param mixed $setting SystemSetting 对象
+     * @return float|null 阈值，null表示未启用或无效
+     */
+    private static function extractThreshold($setting): ?float
+    {
+        if (empty($setting->status)) {
+            return null;
+        }
+
+        $threshold = (float)($setting->num ?? 0);
+        return $threshold > 0 ? $threshold : null;
+    }
+
+    /**
      * 获取指定渠道的高分广播阈值
      *
      * @param int $departmentId 渠道ID
      * @return float|null 阈值金额，null表示未配置
      */
-    private static function getThreshold(int $departmentId): ?float
+    public static function getThreshold(int $departmentId): ?float
     {
         try {
             // 从缓存获取配置（SystemSetting 模型已实现自动缓存）
@@ -135,11 +226,18 @@ class HighScoreBroadcastService
                     ->first();
 
                 if (!$setting) {
+                    // ✅ 优化：缓存"未配置"状态，避免重复查询数据库
+                    Cache::set($cacheKey, self::NOT_CONFIGURED_MARKER, 300);
                     return null;
                 }
 
-                // 缓存结果
-                Cache::set($cacheKey, $setting);
+                // 缓存结果（设置5分钟过期，避免跨服务器缓存不同步）
+                Cache::set($cacheKey, $setting, 300);
+            }
+
+            // ✅ 优化：检查是否为"未配置"标记
+            if ($setting === self::NOT_CONFIGURED_MARKER) {
+                return null;
             }
 
             // 检查是否启用
@@ -184,9 +282,9 @@ class HighScoreBroadcastService
      * @param Player $player 玩家
      * @param Channel $channel 渠道
      * @param PlayGameRecord $record 游戏记录
-     * @return string 广播消息
+     * @return array ['message' => string, 'lang' => string] 消息和语言代码
      */
-    private static function buildMessage(Player $player, Channel $channel, PlayGameRecord $record): string
+    private static function buildMessage(Player $player, Channel $channel, PlayGameRecord $record): array
     {
         $deviceName = $player->nickname ?? 'Unknown';
         $gameName = $record->game_name ?? 'Unknown Game';
@@ -195,13 +293,26 @@ class HighScoreBroadcastService
         // 根据渠道语言返回不同的文本
         $lang = $channel->lang ?? 'zh-TW';
 
-        return match($lang) {
-            'zh-CN' => "高分报喜：恭喜（{$deviceName}）于（{$gameName}）赢得{$score}分",
-            'zh-TW' => "高分報喜：恭喜（{$deviceName}）於（{$gameName}）贏得{$score}分",
-            'en' => "Big Win: Congratulations to ({$deviceName}) for winning {$score} points in ({$gameName})",
-            'jp' => "高得点おめでとう：（{$deviceName}）が（{$gameName}）で{$score}ポイント獲得",
-            default => "高分報喜：恭喜（{$deviceName}）於（{$gameName}）贏得{$score}分", // 默认繁体
-        };
+        // ✅ 优化：使用翻译文件，支持运营自行修改文案
+        try {
+            $message = trans('high_score_broadcast.message', [
+                'device_name' => $deviceName,
+                'game_name' => $gameName,
+                'score' => $score,
+            ], $lang);
+        } catch (\Throwable $e) {
+            // 降级：如果翻译失败，使用默认繁体中文
+            $message = "高分報喜：恭喜（{$deviceName}）於（{$gameName}）贏得{$score}分";
+            Log::warning('高分广播翻译失败，使用默认文案', [
+                'lang' => $lang,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return [
+            'message' => $message,
+            'lang' => $lang,
+        ];
     }
 
     /**
@@ -209,27 +320,36 @@ class HighScoreBroadcastService
      *
      * @param int $departmentId 渠道ID
      * @param string $message 广播消息
+     * @param string $lang 语言代码
      * @return void
      */
-    private static function broadcast(int $departmentId, string $message): void
+    private static function broadcast(int $departmentId, string $message, string $lang = 'zh-TW'): void
     {
         try {
-            // 构建推送数据
+            // ✅ 优化：title 支持多语言
+            try {
+                $title = trans('high_score_broadcast.title', [], $lang);
+            } catch (\Throwable $e) {
+                $title = '🎉 高分報喜'; // 降级默认值
+            }
+
+            // 构建推送数据（与彩金通知格式统一）
             $data = [
-                'type' => 'high_score_broadcast',
-                'message' => $message,
+                'msg_type' => 'high_score_broadcast',
+                'title' => $title,
+                'content' => $message,
                 'timestamp' => time(),
+                'department_id' => $departmentId,
             ];
 
-            // 使用推送服务向该渠道所有在线用户广播
-            // 频道格式：department_{渠道ID}
-            $channel = "department_{$departmentId}";
-
-            Api::trigger($channel, 'high_score', $data);
+            // 使用全局广播频道（与机台彩金、电子游戏彩金保持一致）
+            sendSocketMessage('broadcast', $data);
 
             Log::info('推送高分广播', [
-                'channel' => $channel,
+                'channel' => 'broadcast',
                 'message' => $message,
+                'department_id' => $departmentId,
+                'lang' => $lang,
             ]);
 
         } catch (\Throwable $e) {
