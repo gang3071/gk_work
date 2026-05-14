@@ -3,6 +3,7 @@
 namespace app\queue\redis\fast;
 
 use app\model\Channel;
+use app\model\GameExtend;
 use app\model\Player;
 use app\model\PlayGameRecord;
 use app\service\HighScoreBroadcastService;
@@ -64,11 +65,17 @@ class HighScoreBroadcast implements Consumer
             // 预加载关联数据（避免N+1查询）
             $player = Player::find($playerId);
             $channel = Channel::where('department_id', $departmentId)->first();
+            $gameExtend = GameExtend::where('platform_id', $record->platform_id)
+                ->where('code', $record->game_code)
+                ->first();
 
             Log::info('📨 高分广播队列：关联数据查询', [
                 'record_id' => $recordId,
                 'has_player' => !is_null($player),
                 'has_channel' => !is_null($channel),
+                'has_game_extend' => !is_null($gameExtend),
+                'game_code' => $record->game_code,
+                'platform_id' => $record->platform_id,
                 'record_settlement_status' => $record->settlement_status,
                 'record_win' => $record->win,
             ]);
@@ -78,6 +85,9 @@ class HighScoreBroadcast implements Consumer
             }
             if ($channel) {
                 $record->setRelation('channel', $channel);
+            }
+            if ($gameExtend) {
+                $record->setRelation('gameExtend', $gameExtend);
             }
 
             // 执行高分广播检测

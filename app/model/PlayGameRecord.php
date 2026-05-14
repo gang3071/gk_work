@@ -39,6 +39,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property Channel channel 渠道
  * @property Player player 玩家
  * @property GamePlatform gamePlatform 平台信息
+ * @property GameExtend gameExtend 游戏信息
  * @package app\model
  */
 class PlayGameRecord extends Model
@@ -109,5 +110,15 @@ class PlayGameRecord extends Model
     public function gamePlatform(): BelongsTo
     {
         return $this->belongsTo(GamePlatform::class, 'platform_id')->withTrashed();
+    }
+
+    /**
+     * 游戏信息
+     * @return BelongsTo
+     */
+    public function gameExtend(): BelongsTo
+    {
+        return $this->belongsTo(GameExtend::class, 'game_code', 'code')
+            ->where('platform_id', $this->platform_id);
     }
 }

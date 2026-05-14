@@ -112,8 +112,8 @@ class HighScoreBroadcastService
 
             Log::info('高分广播成功', [
                 'player_id' => $record->player_id,
-                'player_nickname' => $player->nickname,
-                'game_name' => $record->game_name ?? 'Unknown',
+                'player_nickname' => $player->name ?? '',
+                'game_code' => $record->game_code ?? '',
                 'win' => $record->win,
                 'threshold' => $threshold,
                 'department_id' => $record->department_id,
@@ -296,8 +296,17 @@ class HighScoreBroadcastService
      */
     private static function buildMessage(Player $player, Channel $channel, PlayGameRecord $record): array
     {
-        $deviceName = $player->name ?? 'Unknown';
-        $gameName = $record->game_name ?? 'Unknown Game';
+        $deviceName = $player->nickname ?? ($player->name ?? 'Unknown');
+
+        // 优先从 game_extend 表获取游戏名称
+        $gameName = 'Unknown Game';
+        if ($record->gameExtend && !empty($record->gameExtend->name)) {
+            $gameName = $record->gameExtend->name;
+        } elseif (!empty($record->game_code)) {
+            // 降级：使用 game_code
+            $gameName = $record->game_code;
+        }
+
         $score = number_format($record->win, 0);
 
         // 根据渠道语言返回不同的文本
@@ -306,9 +315,9 @@ class HighScoreBroadcastService
         // ✅ 优化：使用翻译文件，支持运营自行修改文案
         try {
             $message = trans('message', [
-                'device_name' => $deviceName,
-                'game_name' => $gameName,
-                'score' => $score,
+                '{device_name}' => $deviceName,
+                '{game_name}' => $gameName,
+                '{score}' => $score,
             ], 'high_score_broadcast', $lang);
         } catch (\Throwable $e) {
             // 降级：如果翻译失败，使用默认繁体中文
