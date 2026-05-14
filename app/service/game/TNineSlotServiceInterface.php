@@ -88,7 +88,7 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
         $params['apiKey'] = $key;
         $params['platform'] = 'T9SlotSeamless';
 
-        $response = Http::timeout(7)
+        $response = Http::timeout(10)
             ->asJson()
             ->post($this->config['api_domain'] . $url, $params);
 
