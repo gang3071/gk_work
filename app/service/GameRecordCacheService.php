@@ -248,9 +248,7 @@ LUA;
                 'platform_action_at' => date('Y-m-d H:i:s'),
                 'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',  // 重新标记待同步
-                // ✅ 结算时覆盖余额字段（用于 Worker 推送）
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
+                // ✅ 不覆盖 balance_before/after — 保持下注时 Lua 记录的余额快照
             ]);
 
             // 更新同步队列（提升优先级）
@@ -444,9 +442,7 @@ LUA;
                 'cancel_time' => time(),
                 'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',
-                // ✅ 取消时覆盖余额字段（统一字段名）
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
+                // ✅ 不覆盖 balance_before/after — 保持下注时 Lua 记录的余额快照
             ]);
 
             // 更新同步队列

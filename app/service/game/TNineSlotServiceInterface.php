@@ -78,7 +78,7 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
      * @throws GameException
      * @throws Exception
      */
-    public function doCurl(string $url, array $params = [], string $method = 'post'): mixed
+    public function doCurl(string $url, array $params = [], string $method = 'post', array $acceptCodes = []): mixed
     {
         $agentId = $this->config['agent_id'];
         $key = $this->config['api_key'];
@@ -107,7 +107,8 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
             throw new Exception($errorMsg);
         }
 
-        if ($res['resultCode'] != 'OK') {
+        $resultCode = $res['resultCode'] ?? '';
+        if ($resultCode != 'OK' && !in_array($resultCode, $acceptCodes)) {
             $errorMsg = 'T9 API错误: ' . ($res['resultCode'] ?? '未知错误') . ' - ' . ($res['message'] ?? $response->body());
             $this->log->error($url, ['params' => $params, 'response' => $response->body(), 'result_code' => $res['resultCode'] ?? 'null']);
             throw new Exception($errorMsg);
@@ -128,7 +129,7 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
             'gameAccount' => $this->player->uuid, // todo后期需要处理每个用户不同的agentid带入
             'currency' => 'TWD',
         ];
-        $response = $this->doCurl('/CreatePlayer', $params);
+        $response = $this->doCurl('/CreatePlayer', $params, 'post', ['GameAccount_EXIST']);
         $this->log->info('createPlayer', [$response]);
         return $response;
     }
