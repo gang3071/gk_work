@@ -873,7 +873,7 @@ class GameRecordSyncWorker
                                 'player_id' => $gameRecord->player_id,
                                 'department_id' => $gameRecord->department_id,
                                 'win' => $gameRecord->win,
-                            ], 'fast');
+                            ]);
                         }
                     } catch (\Throwable $e) {
                         $this->log->error('高分广播队列发送失败', [
