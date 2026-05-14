@@ -296,7 +296,7 @@ class HighScoreBroadcastService
      */
     private static function buildMessage(Player $player, Channel $channel, PlayGameRecord $record): array
     {
-        $deviceName = $player->nickname ?? 'Unknown';
+        $deviceName = $player->name ?? 'Unknown';
         $gameName = $record->game_name ?? 'Unknown Game';
         $score = number_format($record->win, 0);
 
