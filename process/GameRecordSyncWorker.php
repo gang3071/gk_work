@@ -182,6 +182,9 @@ class GameRecordSyncWorker
             // 5. 批量触发彩金检查
             $this->batchTriggerLottery($toInsert, $toUpdate, $existingRecords);
 
+            // 5.5. 批量触发高分广播检测
+            $this->batchTriggerHighScoreBroadcast($toInsert, $toUpdate, $existingRecords);
+
             // 6. 批量标记已同步（需要重新查询以获取新插入记录的ID）
             if (!empty($toInsert)) {
                 // 重新查询新插入的记录以获取ID
@@ -494,6 +497,125 @@ class GameRecordSyncWorker
         if (count($lotteryTriggers) > 0) {
             $this->log->info('🎰 批量触发彩金检查', [
                 'count' => count($lotteryTriggers),
+            ]);
+        }
+    }
+
+    /**
+     * 批量触发高分广播检测
+     */
+    private function batchTriggerHighScoreBroadcast(array $insertedRecords, array $updatedRecords, $existingRecords): void
+    {
+        $broadcastTriggers = [];
+
+        // 1. 收集所有需要检查的渠道ID
+        $departmentIds = [];
+        foreach ($insertedRecords as $record) {
+            if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
+                && ($record['win'] ?? 0) > 0) {
+                $departmentIds[] = $record['department_id'] ?? 0;
+            }
+        }
+        foreach ($updatedRecords as $record) {
+            if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
+                && ($record['win'] ?? 0) > 0) {
+                $existing = $existingRecords[$record['order_no']] ?? null;
+                if ($existing) {
+                    $departmentIds[] = $existing->department_id ?? 0;
+                }
+            }
+        }
+
+        if (empty($departmentIds)) {
+            return;
+        }
+
+        // 2. 批量获取阈值配置（一次性查询所有渠道）
+        $departmentIds = array_unique($departmentIds);
+        $thresholds = HighScoreBroadcastService::batchGetThresholds($departmentIds);
+
+        // 3. 检查新插入的已结算记录
+        $newRecordKeys = [];
+        foreach ($insertedRecords as $record) {
+            if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
+                && ($record['win'] ?? 0) > 0) {
+                $departmentId = $record['department_id'] ?? 0;
+                $threshold = $thresholds[$departmentId] ?? null;
+
+                // 提前过滤：只有达到阈值的记录才需要查询 ID
+                if ($threshold !== null && $threshold > 0 && $record['win'] >= $threshold) {
+                    $newRecordKeys[] = [
+                        'platform_id' => $record['platform_id'],
+                        'order_no' => $record['order_no'],
+                    ];
+                }
+            }
+        }
+
+        // 批量查询新插入记录的 ID
+        if (!empty($newRecordKeys)) {
+            $orderNos = array_column($newRecordKeys, 'order_no');
+            $platformIds = array_unique(array_column($newRecordKeys, 'platform_id'));
+
+            $newRecords = PlayGameRecord::query()
+                ->whereIn('order_no', $orderNos)
+                ->whereIn('platform_id', $platformIds)
+                ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id', 'win')
+                ->get();
+
+            foreach ($newRecords as $newRecord) {
+                $broadcastTriggers[] = [
+                    'record_id' => $newRecord->id,
+                    'player_id' => $newRecord->player_id,
+                    'department_id' => $newRecord->department_id,
+                    'win' => $newRecord->win,
+                ];
+            }
+        }
+
+        // 4. 检查更新后的已结算记录
+        foreach ($updatedRecords as $record) {
+            if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
+                && ($record['win'] ?? 0) > 0) {
+                /** @var PlayGameRecord $existing */
+                $existing = $existingRecords[$record['order_no']] ?? null;
+
+                if ($existing) {
+                    $threshold = $thresholds[$existing->department_id] ?? null;
+
+                    // 只有达到阈值才触发
+                    if ($threshold !== null && $threshold > 0 && $existing->win >= $threshold) {
+                        $broadcastTriggers[] = [
+                            'record_id' => $existing->id,
+                            'player_id' => $existing->player_id,
+                            'department_id' => $existing->department_id,
+                            'win' => $existing->win,
+                        ];
+                    }
+                }
+            }
+        }
+
+        // 5. 批量发送到高分广播队列
+        foreach ($broadcastTriggers as $trigger) {
+            try {
+                Client::send('high-score-broadcast', [
+                    'record_id' => $trigger['record_id'],
+                    'player_id' => $trigger['player_id'],
+                    'department_id' => $trigger['department_id'],
+                    'win' => $trigger['win'],
+                ], 'fast');
+            } catch (\Throwable $e) {
+                $this->log->warning('⚠️ 高分广播队列发送失败', [
+                    'record_id' => $trigger['record_id'],
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if (count($broadcastTriggers) > 0) {
+            $this->log->info('🎉 批量触发高分广播', [
+                'count' => count($broadcastTriggers),
             ]);
         }
     }

@@ -3,8 +3,9 @@
 namespace app\service;
 
 use app\model\Channel;
-use app\model\PlayGameRecord;
 use app\model\Player;
+use app\model\PlayGameRecord;
+use app\model\SystemSetting;
 use support\Cache;
 use support\Log;
 use support\Redis;
@@ -148,24 +149,21 @@ class HighScoreBroadcastService
         // 2. 批量查询未缓存的
         if (!empty($uncached)) {
             try {
-                $settingModel = plugin()->webman->config('database.system_setting_model');
-                if ($settingModel && class_exists($settingModel)) {
-                    $settings = $settingModel::whereIn('department_id', $uncached)
-                        ->where('feature', 'high_score_broadcast_threshold')
-                        ->get()
-                        ->keyBy('department_id');
+                $settings = SystemSetting::whereIn('department_id', $uncached)
+                    ->where('feature', 'high_score_broadcast_threshold')
+                    ->get()
+                    ->keyBy('department_id');
 
-                    foreach ($uncached as $id) {
-                        $setting = $settings[$id] ?? null;
-                        $cacheKey = 'setting-high_score_broadcast_threshold-' . $id;
+                foreach ($uncached as $id) {
+                    $setting = $settings[$id] ?? null;
+                    $cacheKey = 'setting-high_score_broadcast_threshold-' . $id;
 
-                        if ($setting) {
-                            Cache::set($cacheKey, $setting, 300);
-                            $thresholds[$id] = self::extractThreshold($setting);
-                        } else {
-                            Cache::set($cacheKey, self::NOT_CONFIGURED_MARKER, 300);
-                            $thresholds[$id] = null;
-                        }
+                    if ($setting) {
+                        Cache::set($cacheKey, $setting, 300);
+                        $thresholds[$id] = self::extractThreshold($setting);
+                    } else {
+                        Cache::set($cacheKey, self::NOT_CONFIGURED_MARKER, 300);
+                        $thresholds[$id] = null;
                     }
                 }
             } catch (\Throwable $e) {
@@ -215,13 +213,7 @@ class HighScoreBroadcastService
 
             if (!$setting) {
                 // 缓存未命中，从数据库查询
-                // 需要使用后管的 SystemSetting 模型
-                $settingModel = plugin()->webman->config('database.system_setting_model');
-                if (!$settingModel || !class_exists($settingModel)) {
-                    return null;
-                }
-
-                $setting = $settingModel::where('department_id', $departmentId)
+                $setting = SystemSetting::where('department_id', $departmentId)
                     ->where('feature', 'high_score_broadcast_threshold')
                     ->first();
 
@@ -343,10 +335,10 @@ class HighScoreBroadcastService
             ];
 
             // 使用全局广播频道（与机台彩金、电子游戏彩金保持一致）
-            sendSocketMessage('broadcast', $data);
+            sendSocketMessage('group-lottery-pool', $data);
 
             Log::info('推送高分广播', [
-                'channel' => 'broadcast',
+                'channel' => 'group-lottery-pool',
                 'message' => $message,
                 'department_id' => $departmentId,
                 'lang' => $lang,
