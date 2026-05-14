@@ -534,6 +534,11 @@ class GameRecordSyncWorker
         $departmentIds = array_unique($departmentIds);
         $thresholds = HighScoreBroadcastService::batchGetThresholds($departmentIds);
 
+        $this->log->info('🔍 高分广播阈值查询结果', [
+            'department_ids' => $departmentIds,
+            'thresholds' => $thresholds,
+        ]);
+
         // 3. 检查新插入的已结算记录
         $newRecordKeys = [];
         foreach ($insertedRecords as $record) {
@@ -541,6 +546,14 @@ class GameRecordSyncWorker
                 && ($record['win'] ?? 0) > 0) {
                 $departmentId = $record['department_id'] ?? 0;
                 $threshold = $thresholds[$departmentId] ?? null;
+
+                $this->log->info('🔍 高分广播新记录检查', [
+                    'order_no' => $record['order_no'],
+                    'win' => $record['win'],
+                    'threshold' => $threshold,
+                    'department_id' => $departmentId,
+                    'passed' => ($threshold !== null && $threshold > 0 && $record['win'] >= $threshold),
+                ]);
 
                 // 提前过滤：只有达到阈值的记录才需要查询 ID
                 if ($threshold !== null && $threshold > 0 && $record['win'] >= $threshold) {
@@ -583,6 +596,15 @@ class GameRecordSyncWorker
                 if ($existing) {
                     $threshold = $thresholds[$existing->department_id] ?? null;
 
+                    $this->log->info('🔍 高分广播更新记录检查', [
+                        'order_no' => $record['order_no'],
+                        'existing_win' => $existing->win,
+                        'record_win' => $record['win'] ?? null,
+                        'threshold' => $threshold,
+                        'department_id' => $existing->department_id,
+                        'passed' => ($threshold !== null && $threshold > 0 && $existing->win >= $threshold),
+                    ]);
+
                     // 只有达到阈值才触发
                     if ($threshold !== null && $threshold > 0 && $existing->win >= $threshold) {
                         $broadcastTriggers[] = [
@@ -597,6 +619,7 @@ class GameRecordSyncWorker
         }
 
         // 5. 批量发送到高分广播队列
+        $sentCount = 0;
         foreach ($broadcastTriggers as $trigger) {
             try {
                 Client::send('high-score-broadcast', [
@@ -604,18 +627,26 @@ class GameRecordSyncWorker
                     'player_id' => $trigger['player_id'],
                     'department_id' => $trigger['department_id'],
                     'win' => $trigger['win'],
-                ], 'fast');
+                ]);
+                $sentCount++;
+                $this->log->info('✅ 高分广播队列发送成功', [
+                    'record_id' => $trigger['record_id'],
+                    'player_id' => $trigger['player_id'],
+                    'win' => $trigger['win'],
+                ]);
             } catch (\Throwable $e) {
-                $this->log->warning('⚠️ 高分广播队列发送失败', [
+                $this->log->error('❌ 高分广播队列发送失败', [
                     'record_id' => $trigger['record_id'],
                     'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
                 ]);
             }
         }
 
         if (count($broadcastTriggers) > 0) {
             $this->log->info('🎉 批量触发高分广播', [
-                'count' => count($broadcastTriggers),
+                'total' => count($broadcastTriggers),
+                'sent' => $sentCount,
             ]);
         }
     }

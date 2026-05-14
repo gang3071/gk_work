@@ -26,7 +26,7 @@ class HighScoreBroadcast implements Consumer
     /**
      * 连接名称
      */
-    public $connection = 'fast';
+    public $connection = 'default';
 
     /**
      * 消费消息
@@ -41,6 +41,13 @@ class HighScoreBroadcast implements Consumer
             $playerId = $data['player_id'] ?? 0;
             $departmentId = $data['department_id'] ?? 0;
             $win = $data['win'] ?? 0;
+
+            Log::info('📨 高分广播队列：收到消息', [
+                'record_id' => $recordId,
+                'player_id' => $playerId,
+                'department_id' => $departmentId,
+                'win' => $win,
+            ]);
 
             if (!$recordId || !$playerId || !$departmentId) {
                 Log::warning('高分广播队列：数据不完整', $data);
@@ -58,6 +65,14 @@ class HighScoreBroadcast implements Consumer
             $player = Player::find($playerId);
             $channel = Channel::where('department_id', $departmentId)->first();
 
+            Log::info('📨 高分广播队列：关联数据查询', [
+                'record_id' => $recordId,
+                'has_player' => !is_null($player),
+                'has_channel' => !is_null($channel),
+                'record_settlement_status' => $record->settlement_status,
+                'record_win' => $record->win,
+            ]);
+
             if ($player) {
                 $record->setRelation('player', $player);
             }
@@ -69,15 +84,22 @@ class HighScoreBroadcast implements Consumer
             $result = HighScoreBroadcastService::checkAndBroadcast($record);
 
             if ($result) {
-                Log::info('高分广播队列：处理成功', [
+                Log::info('✅ 高分广播队列：广播成功', [
                     'record_id' => $recordId,
                     'player_id' => $playerId,
+                    'win' => $win,
+                ]);
+            } else {
+                Log::info('⏭️ 高分广播队列：未触发广播（未达阈值/防抖/数据不完整）', [
+                    'record_id' => $recordId,
+                    'player_id' => $playerId,
+                    'department_id' => $departmentId,
                     'win' => $win,
                 ]);
             }
 
         } catch (\Throwable $e) {
-            Log::error('高分广播队列：处理失败', [
+            Log::error('❌ 高分广播队列：处理异常', [
                 'data' => $data,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),

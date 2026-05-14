@@ -44,10 +44,18 @@ class HighScoreBroadcastService
         try {
             // 1. 只处理已结算且有赢分的记录
             if ($record->settlement_status != PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+                Log::info('高分广播跳过：非已结算状态', [
+                    'record_id' => $record->id,
+                    'settlement_status' => $record->settlement_status,
+                ]);
                 return false;
             }
 
             if ($record->win <= 0) {
+                Log::info('高分广播跳过：win<=0', [
+                    'record_id' => $record->id,
+                    'win' => $record->win,
+                ]);
                 return false;
             }
 
@@ -55,11 +63,21 @@ class HighScoreBroadcastService
             $threshold = self::getThreshold($record->department_id);
 
             if ($threshold === null || $threshold <= 0) {
+                Log::info('高分广播跳过：未配置阈值或阈值<=0', [
+                    'record_id' => $record->id,
+                    'department_id' => $record->department_id,
+                    'threshold' => $threshold,
+                ]);
                 return false; // 未配置或禁用
             }
 
             // 3. 检查是否达到阈值
             if ($record->win < $threshold) {
+                Log::info('高分广播跳过：未达阈值', [
+                    'record_id' => $record->id,
+                    'win' => $record->win,
+                    'threshold' => $threshold,
+                ]);
                 return false;
             }
 
