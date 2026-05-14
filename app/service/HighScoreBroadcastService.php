@@ -310,14 +310,17 @@ class HighScoreBroadcastService
         $score = number_format($record->win, 0);
 
         // 根据渠道语言返回不同的文本
-        $lang = $channel->lang ?? 'zh-TW';
+        $channelLang = $channel->lang ?? 'zh-TW';
+
+        // 转换语言格式：zh-TW -> zh_TW（翻译目录使用下划线）
+        $lang = str_replace('-', '_', $channelLang);
 
         // ✅ 优化：使用翻译文件，支持运营自行修改文案
         try {
             $message = trans('message', [
-                '{device_name}' => $deviceName,
-                '{game_name}' => $gameName,
-                '{score}' => $score,
+                'device_name' => $deviceName,
+                'game_name' => $gameName,
+                'score' => $score,
             ], 'high_score_broadcast', $lang);
         } catch (\Throwable $e) {
             // 降级：如果翻译失败，使用默认繁体中文
@@ -330,7 +333,7 @@ class HighScoreBroadcastService
 
         return [
             'message' => $message,
-            'lang' => $lang,
+            'lang' => $channelLang, // 返回原始语言代码
         ];
     }
 
@@ -345,9 +348,12 @@ class HighScoreBroadcastService
     private static function broadcast(int $departmentId, string $message, string $lang = 'zh-TW'): void
     {
         try {
+            // 转换语言格式：zh-TW -> zh_TW
+            $locale = str_replace('-', '_', $lang);
+
             // ✅ 优化：title 支持多语言
             try {
-                $title = trans('title', [], 'high_score_broadcast', $lang);
+                $title = trans('title', [], 'high_score_broadcast', $locale);
             } catch (\Throwable $e) {
                 $title = '🎉 高分報喜'; // 降级默认值
             }
