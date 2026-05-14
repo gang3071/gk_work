@@ -2,5 +2,5 @@
 
 return [
     'title' => '🎉 高得点おめでとう',
-    'message' => '高得点おめでとう：（:device_name）が（:game_name）で:scoreポイント獲得',
+    'message' => '高得点おめでとう：（{device_name}）が（{game_name}）で{score}ポイント獲得',
 ];
