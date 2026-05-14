@@ -309,7 +309,7 @@ class HighScoreBroadcastService
                 'device_name' => $deviceName,
                 'game_name' => $gameName,
                 'score' => $score,
-            ], $lang);
+            ], null, $lang);
         } catch (\Throwable $e) {
             // 降级：如果翻译失败，使用默认繁体中文
             $message = "高分報喜：恭喜（{$deviceName}）於（{$gameName}）贏得{$score}分";
@@ -338,7 +338,7 @@ class HighScoreBroadcastService
         try {
             // ✅ 优化：title 支持多语言
             try {
-                $title = trans('high_score_broadcast.title', [], $lang);
+                $title = trans('high_score_broadcast.title', [], null, $lang);
             } catch (\Throwable $e) {
                 $title = '🎉 高分報喜'; // 降级默认值
             }
