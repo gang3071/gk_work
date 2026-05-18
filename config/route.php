@@ -47,6 +47,26 @@ Route::group('/api', function () {
         Route::post('/enter-game', [\app\api\v1\AdminGamePlatformController::class, 'enterGame']);
 // 管理后台 - 游戏回放
         Route::post('/replay', [\app\api\v1\AdminGamePlatformController::class, 'replay']);
+
+        // 管理后台 - 机台操作 API
+        Route::group('/machine', function () {
+            // 发送机台指令
+            Route::post('/send-cmd', [\app\api\v1\AdminMachineController::class, 'sendCmd']);
+            // 获取机台状态
+            Route::post('/status', [\app\api\v1\AdminMachineController::class, 'getMachineStatus']);
+            // 检查机台在线状态
+            Route::post('/check-online', [\app\api\v1\AdminMachineController::class, 'checkOnline']);
+            // 批量检查机台在线状态
+            Route::post('/batch-check-online', [\app\api\v1\AdminMachineController::class, 'batchCheckOnline']);
+            // 获取机台操作描述
+            Route::post('/get-description', [\app\api\v1\AdminMachineController::class, 'getDescription']);
+            // 获取Gateway信息（调试用）
+            Route::get('/gateway-info', [\app\api\v1\AdminMachineController::class, 'getGatewayInfo']);
+            // 获取所有机台在线状态
+            Route::post('/all-online-status', [\app\api\v1\AdminMachineController::class, 'getAllOnlineStatus']);
+            // 获取机台在线统计
+            Route::get('/online-statistics', [\app\api\v1\AdminMachineController::class, 'getOnlineStatistics']);
+        });
     });
 });
 
