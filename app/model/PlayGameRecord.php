@@ -21,6 +21,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property float bet 押注
  * @property float win 输赢
  * @property float diff 玩家輸贏額度
+ * @property float balance_before 下注前余额
+ * @property float balance_after 下注后余额
  * @property float reward 奖金(不计入输赢)
  * @property string order_no 单号
  * @property string order_time 订单时间
@@ -71,6 +73,8 @@ class PlayGameRecord extends Model
         'bet',
         'win',
         'diff',
+        'balance_before',
+        'balance_after',
         'reward',
         'order_no',
         'original_data',

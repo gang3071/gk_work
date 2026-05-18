@@ -104,7 +104,9 @@ redis.call('HMSET', KEYS[2],
     'settlement_status', 0,
     'win', 0,
     'diff', 0,
-    'created_at', ARGV[13]
+    'created_at', ARGV[13],
+    'balance_before', tostring(currentBalance),
+    'balance_after', tostring(newBalance)
 )
 redis.call('EXPIRE', KEYS[2], ARGV[11])
 
@@ -199,6 +201,7 @@ redis.call('SETEX', KEYS[5], 300, 1)
 
 if betExists == 1 then
     -- 更新 bet 记录 - ✅ 优化：不再存储 action_data，减少内存占用
+    -- 注意：不覆盖 balance_before/after，这些字段应保持下注时的值
     redis.call('HMSET', KEYS[2],
         'win', ARGV[1],
         'diff', diffAmount,  -- ✅ 使用重新计算的 diff
@@ -231,7 +234,9 @@ else
         'transaction_type', ARGV[3],
         'settle_time', ARGV[4],
         'status', 'pending',
-        'created_at', ARGV[9]
+        'created_at', ARGV[9],
+        'balance_before', tostring(currentBalance),
+        'balance_after', tostring(newBalance)
     )
     redis.call('EXPIRE', KEYS[6], ARGV[5])
     redis.call('ZADD', KEYS[3], ARGV[4], KEYS[6])
@@ -298,6 +303,7 @@ redis.call('SETEX', KEYS[1], ARGV[4], newBalance)
 redis.call('SETEX', KEYS[5], 300, 1)
 
 -- 5. 更新记录（betExists 已在幂等性检查时获取）- ✅ 优化：不再存储 action_data
+-- 注意：不覆盖 balance_before/after，这些字段应保持下注时的值
 if betExists == 1 then
     redis.call('HMSET', KEYS[2],
         'transaction_type', ARGV[2],
@@ -471,16 +477,22 @@ LUA;
             );
         }
 
-        // ✅ 成功后异步追加 original_data 到 Redis Hash（不阻塞响应）
+        // ✅ 成功后异步追加 original_data 到下注记录 Hash（不阻塞响应）
+        // 注意：balance_before 和 balance_after 已在 Lua 脚本中原子保存，无需再次追加
         if (isset($decoded['ok']) && $decoded['ok'] === 1) {
             $originalData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
+
             try {
-                $redis->hSet($keys[1], 'original_data', $originalData);
+                // 追加 original_data 到下注记录 Hash（KEYS[2]，不是余额 Key KEYS[1]）
+                $redis->hMSet($keys[2], [
+                    'original_data' => $originalData,
+                ]);
             } catch (\Throwable $e) {
                 // 失败不影响核心业务，仅记录日志
-                \support\Log::warning('[atomicBet] 追加 original_data 失败', [
+                \support\Log::error('[atomicBet] 追加 original_data 失败', [
                     'order_no' => $orderNo,
                     'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
                 ]);
             }
 
@@ -600,13 +612,13 @@ LUA;
             $originalData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
 
             try {
-                // 检查是否存在 bet 记录
-                if ($redis->exists($keys[1])) {
+                // 检查是否存在 bet 记录（KEYS[2]，不是余额 Key KEYS[1]）
+                if ($redis->exists($keys[2])) {
                     // 更新 bet 记录的 action_data
-                    $redis->hSet($keys[1], 'action_data', $originalData);
+                    $redis->hSet($keys[2], 'action_data', $originalData);
                 } else {
-                    // 独立 settle 记录，追加 original_data
-                    $redis->hSet($keys[5], 'original_data', $originalData);
+                    // 独立 settle 记录，追加 original_data（KEYS[6]，不是锁 Key KEYS[5]）
+                    $redis->hSet($keys[6], 'original_data', $originalData);
                 }
             } catch (\Throwable $e) {
                 // 失败不影响核心业务，仅记录日志
@@ -738,9 +750,9 @@ LUA;
             $actionData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
 
             try {
-                // 只有当 bet 记录存在时才追加 action_data
-                if ($redis->exists($keys[1])) {
-                    $redis->hSet($keys[1], 'action_data', $actionData);
+                // 只有当 bet 记录存在时才追加 action_data（KEYS[2]，不是余额 Key KEYS[1]）
+                if ($redis->exists($keys[2])) {
+                    $redis->hSet($keys[2], 'action_data', $actionData);
                 }
             } catch (\Throwable $e) {
                 // 失败不影响核心业务，仅记录日志
