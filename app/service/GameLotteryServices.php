@@ -1189,21 +1189,21 @@ LUA;
 
             // 更新玩家钱包（加彩金金额）
             /** @var PlayerPlatformCash $machineWallet */
-            // 1. 从 Redis 读取余额（唯一可信源）
+            // ✅ 1. 从 Redis 读取余额（唯一可信源）
             $beforeAmount = WalletService::getBalance($this->player->id);
 
-            // 2. 使用 WalletService 原子性加款（Redis）
+            // ✅ 2. 使用 WalletService 原子性加款（Redis）
+            // WalletService::atomicIncrement() 会自动同步到数据库，无需手动操作
             $incrementResult = WalletService::atomicIncrement($this->player->id, $amount);
             $newBalance = $incrementResult['balance'];
 
-            // 3. 同步到数据库（冷备份）
-            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
+            // ✅ 3. 验证玩家钱包存在（但不需要手动同步数据库）
+            $machineWallet = $this->player->machine_wallet()->first();
             if (!$machineWallet) {
                 DB::rollback();
                 return false;
             }
-            $machineWallet->money = $newBalance;
-            $machineWallet->saveWithoutEvents();
+            // ✅ 删除手动同步代码：WalletService::atomicIncrement() 内部已调用 asyncUpdateDB()
 
             // 创建交易记录
             $playerDeliveryRecord = new PlayerDeliveryRecord();

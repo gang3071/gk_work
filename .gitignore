@@ -49,3 +49,61 @@ CLAUDE.md
 # Media files (可选，根据需要调整)
 # /public/uploads/
 # /public/media/
+
+# ============================
+# 分析和测试文档（本地开发）
+# ============================
+
+# Claude AI 对话记录
+.claude/
+
+# 分析文档（全大写开头的 MD 文件）
+[A-Z]*_*.md
+[A-Z]*.md
+
+# 测试脚本和文件
+test_*.php
+test_*.sh
+test-*.sh
+check_*.php
+check_*.sh
+debug_*.php
+debug_*.sh
+diagnose_*.php
+diagnose_*.sh
+verify_*.php
+verify_*.sh
+monitor_*.php
+flush_*.php
+cleanup_*.php
+
+# 临时脚本
+*.bat
+deploy*.sh
+add_*.sh
+quick_*.sh
+
+# 临时文本文件
+*.txt
+!composer.json
+!.htaccess
+
+# 临时配置文件
+*.ini
+!php.ini
+*.conf
+!nginx.conf
+
+# SQL 脚本（临时优化脚本）
+optimize_*.sql
+
+# 其他临时文件
+scripts/
+app/*.txt
+config/*.bak.*
+config/**/*.bak.*
+
+# 异常文件（路径错误的文件）
+D:*
+*diagnose_*
+redis_monitor_analysis.sh

@@ -7,7 +7,6 @@ use app\model\Game;
 use app\model\GamePlatform;
 use app\model\Player;
 use app\model\PlayerDeliveryRecord;
-use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
 use Carbon\Carbon;
 use Exception;
@@ -443,9 +442,6 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
             }
 
-            /** @var PlayerPlatformCash $machineWallet */
-            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
             // 检查订单是否已存在（使用 order_id，避免重复派发）
             $existingRecord = PlayGameRecord::query()
                 ->where('order_no', $orderId)
@@ -455,13 +451,19 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             if ($existingRecord) {
                 // 订单已存在，返回当前余额（幂等性）
                 $this->error = 'DUPLICATE_TRAN_ID';
-                return ['balance' => round((float)$machineWallet->money, 2)];
+                return ['balance' => round(\app\service\WalletService::getBalance($this->player->id), 2)];
             }
 
-            // 奖励加款
-            $beforeBalance = $machineWallet->money;
-            $machineWallet->money = bcadd($machineWallet->money, $rewardAmount, 2);
-            $machineWallet->save();
+            // ✅ 从 Redis 读取余额（奖励派发前）
+            $beforeBalance = \app\service\WalletService::getBalance($this->player->id);
+
+            // ✅ 使用 WalletService 原子加款（奖励）
+            $result = \app\service\WalletService::add($this->player->id, $rewardAmount);
+            if (!$result['success']) {
+                $this->error = 'SOMETHING_WRONG';
+                return ['balance' => round($result['balance'] ?? 0, 2)];
+            }
+            $afterBalance = $result['balance'];
 
             // 创建游戏记录（奖励记录）
             $insert = [
@@ -497,7 +499,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             $playerDeliveryRecord->source = 'player_bet_reward';
             $playerDeliveryRecord->amount = $rewardAmount;
             $playerDeliveryRecord->amount_before = $beforeBalance;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->amount_after = $afterBalance;  // ✅ 使用 WalletService 返回的余额
             $playerDeliveryRecord->tradeno = $orderId;
             $playerDeliveryRecord->remark = '額外獎金';
             $playerDeliveryRecord->user_id = 0;
@@ -511,7 +513,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'play_game_record_id' => $record->id
             ]);
 
-            return ['balance' => round((float)$machineWallet->money, 2)];
+            return ['balance' => round((float)$afterBalance, 2)];
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferReward error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = 'SOMETHING_WRONG';
@@ -628,9 +630,6 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'player_id' => $this->player->id
             ]);
 
-            /** @var PlayerPlatformCash $machineWallet */
-            $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
             // 幂等性检查 - 根据txnId查找是否已处理过该回滚
             $existingRollbackDelivery = PlayerDeliveryRecord::query()
                 ->where('tradeno', $txnId)
@@ -646,7 +645,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 ]);
 
                 return [
-                    'balance' => round((float)$machineWallet->money, 2),
+                    'balance' => round(\app\service\WalletService::getBalance($this->player->id), 2),
                     'referenceId' => (string)$existingRollbackDelivery->id
                 ];
             }
@@ -664,7 +663,7 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 ]);
 
                 return [
-                    'balance' => round((float)$machineWallet->money, 2)
+                    'balance' => round(\app\service\WalletService::getBalance($this->player->id), 2)
                     // 不返回referenceId
                 ];
             }
@@ -676,13 +675,19 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                     'settlement_status' => $betRecord->settlement_status
                 ]);
                 $this->error = 'TRANSACTION_ALREADY_SETTLED';
-                return ['balance' => round((float)$machineWallet->money, 2)];
+                return ['balance' => round(\app\service\WalletService::getBalance($this->player->id), 2)];
             }
 
-            // 执行回滚 - 退还下注金额
-            $beforeBalance = $machineWallet->money;
-            $machineWallet->money = bcadd($machineWallet->money, $amount, 2);
-            $machineWallet->save();
+            // ✅ 从 Redis 读取余额（回滚前）
+            $beforeBalance = \app\service\WalletService::getBalance($this->player->id);
+
+            // ✅ 使用 WalletService 原子加款（回滚退款）
+            $result = \app\service\WalletService::add($this->player->id, $amount);
+            if (!$result['success']) {
+                $this->error = 'INTERNAL_ERROR';
+                return ['balance' => round($result['balance'] ?? 0, 2)];
+            }
+            $afterBalance = $result['balance'];
 
             // 更新游戏记录状态
             $betRecord->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_CANCELLED;
@@ -701,25 +706,22 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
             $playerDeliveryRecord->source = 'qt_rollback';
             $playerDeliveryRecord->amount = $amount;
             $playerDeliveryRecord->amount_before = $beforeBalance;
-            $playerDeliveryRecord->amount_after = $machineWallet->money;
+            $playerDeliveryRecord->amount_after = $afterBalance;  // ✅ 使用 WalletService 返回的余额
             $playerDeliveryRecord->tradeno = $txnId;
             $playerDeliveryRecord->remark = '回滚交易';
             $playerDeliveryRecord->user_id = 0;
             $playerDeliveryRecord->user_name = '';
             $playerDeliveryRecord->save();
 
-            // 重新获取钱包以确保余额准确
-            $machineWallet = $this->player->machine_wallet()->first();
-
             Log::channel('qt_server')->info('QT ROLLBACK成功', [
                 'betId' => $betId,
                 'txnId' => $txnId,
                 'amount' => $amount,
-                'balance' => $machineWallet->money
+                'balance' => $afterBalance
             ]);
 
             return [
-                'balance' => round((float)$machineWallet->money, 2),
+                'balance' => round((float)$afterBalance, 2),
                 'referenceId' => (string)$playerDeliveryRecord->id
             ];
         } catch (Exception $e) {
