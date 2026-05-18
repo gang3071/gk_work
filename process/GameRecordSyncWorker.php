@@ -302,6 +302,7 @@ class GameRecordSyncWorker
             // 读取余额（优先使用 Lua 脚本保存的快照，兼容老数据）
             $beforeBalance = null;
             $afterBalance = null;
+            $balanceSource = 'none';
             // ✅ 直接使用 Lua 脚本保存的余额快照（下注和结算记录均适用）
             if (isset($record['balance_before']) && isset($record['balance_after'])
                 && $record['balance_before'] !== '' && $record['balance_after'] !== '') {
@@ -817,6 +818,7 @@ class GameRecordSyncWorker
                     $beforeBalance = (float)$record['balance_before'];
                     $afterBalance = (float)$record['balance_after'];
                 }
+
                 if ($settlementStatus == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED && ($record['amount'] ?? 0) > 0) {
                     if (isset($beforeBalance)) {
                         // 同步余额到 MySQL
