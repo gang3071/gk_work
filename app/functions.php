@@ -171,12 +171,12 @@ function machineKeepOutPlayer(): void
                 ]);
             } else {
                 // 保留时间为0时踢出玩家
-                $beforeGameAmount = $player->machine_wallet->money;
+                // ✅ 从 Redis 读取实时余额
+                $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
                 if (machineWash($player, $machine, 'leave', 1)) {
-                    /** @var PlayerPlatformCash $playerPlatformWallet */
-                    $playerPlatformWallet = PlayerPlatformCash::query()->where('player_id', $player->id)->first();
                     //寫入踢人log
-                    $afterGameAmount = $playerPlatformWallet->money;
+                    // ✅ machineWash 内部已使用 WalletService，洗分后从 Redis 读取新余额
+                    $afterGameAmount = \app\service\WalletService::getBalance($player->id);
                     $wash_point = abs($afterGameAmount - $beforeGameAmount);
                     $machineKickLog = new MachineKickLog;
                     $machineKickLog->player_id = $player->id;
@@ -965,9 +965,15 @@ function doSettlement($id, int $userId = 0, string $userName = ''): void
                 ]);
         }
         if ($settlement > 0) {
-            // 增加钱包余额
-            $amountBefore = $playerPromoter->player->machine_wallet->money;
-            $amountAfter = bcadd($amountBefore, $settlement, 2);
+            // ✅ 使用 WalletService 原子操作增加余额（Redis 作为唯一实时标准）
+            $addResult = \app\service\WalletService::add(
+                $playerPromoter->player_id,
+                $settlement
+            );
+
+            $amountBefore = $addResult['old_balance'];
+            $amountAfter = $addResult['balance'];
+
             $playerDeliveryRecord = new PlayerDeliveryRecord;
             $playerDeliveryRecord->player_id = $playerPromoter->player_id;
             $playerDeliveryRecord->department_id = $playerPromoter->department_id;
@@ -982,8 +988,7 @@ function doSettlement($id, int $userId = 0, string $userName = ''): void
             $playerDeliveryRecord->remark = '';
             $playerDeliveryRecord->save();
 
-            $playerPromoter->player->machine_wallet->money = $amountAfter;
-            $playerPromoter->player->machine_wallet->save();
+            // ✅ WalletService 已自动同步数据库，无需手动保存
         }
         $playerPromoter->push();
         DB::commit();
@@ -1793,7 +1798,8 @@ function notifyMachineCrash(Player $player, array $crashInfo): void
 function calculateAllowedWithdrawAmount(Player $player, float $requestedAmount): array
 {
     $crashCheck = checkMachineCrash($player);
-    $currentAmount = $player->machine_wallet->money ?? 0;
+    // ✅ 从 Redis 读取实时余额
+    $currentAmount = \app\service\WalletService::getBalance($player->id);
     $allowedAmount = $requestedAmount;
     $isLimited = false;
 

@@ -149,7 +149,8 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
      */
     public function getBalance(array $data = []): float
     {
-        return (float)$this->player->machine_wallet->money ?? 0;
+        // ✅ 从 Redis 读取实时余额
+        return \app\service\WalletService::getBalance($this->player->id);
     }
 
     /**
@@ -439,7 +440,8 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
 
             if ($rewardAmount <= 0) {
                 $this->error = 'BAD_FORMAT_PARAMS';
-                return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
+                // ✅ 从 Redis 读取实时余额
+                return ['balance' => \app\service\WalletService::getBalance($this->player->id)];
             }
 
             // 检查订单是否已存在（使用 order_id，避免重复派发）
@@ -517,7 +519,8 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
         } catch (Exception $e) {
             Log::channel('qt_server')->error('QT transferReward error', ['error' => $e->getMessage(), 'params' => $params]);
             $this->error = 'SOMETHING_WRONG';
-            return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
+            // ✅ 从 Redis 读取实时余额
+            return ['balance' => \app\service\WalletService::getBalance($this->player->id)];
         }
     }
 
@@ -730,7 +733,8 @@ class QTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'trace' => $e->getTraceAsString()
             ]);
             $this->error = 'INTERNAL_ERROR';
-            return ['balance' => round((float)($this->player->machine_wallet->money ?? 0), 2)];
+            // ✅ 从 Redis 读取实时余额
+            return ['balance' => \app\service\WalletService::getBalance($this->player->id)];
         }
     }
 }
