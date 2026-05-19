@@ -19,6 +19,7 @@ return [
     ['game_id' => 'SL2455', 'name' => '阿茲特克大秘寶', 'code' => 'SL2455'],
     ['game_id' => 'SL2456', 'name' => '一點靈', 'code' => 'SL2456'],
     ['game_id' => 'SL2459', 'name' => '宇宙連結', 'code' => 'SL2459'],
+    ['game_id' => 'SL2571', 'name' => '金虎爺', 'code' => 'SL2571'],
     ['game_id' => 'CR2401', 'name' => '火箭', 'code' => 'CR2401'],
     ['game_id' => 'CR2402', 'name' => '彈跳宇宙', 'code' => 'CR2402'],
     ['game_id' => 'CR2403', 'name' => '絕對領域', 'code' => 'CR2403'],
