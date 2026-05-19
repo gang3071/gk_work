@@ -298,19 +298,13 @@ class HighScoreBroadcastService
     {
         $deviceName = $player->nickname ?? ($player->name ?? 'Unknown');
 
-        // 优先从 game_extend 表获取游戏名称
-        $gameName = 'Unknown Game';
-        if ($record->gameExtend && !empty($record->gameExtend->name)) {
-            $gameName = $record->gameExtend->name;
-        } elseif (!empty($record->game_code)) {
-            // 降级：使用 game_code
-            $gameName = $record->game_code;
-        }
-
-        $score = number_format($record->win, 0);
-
         // 根据渠道语言返回不同的文本
         $channelLang = $channel->lang ?? 'zh-TW';
+
+        // 获取游戏名称（支持多语言）
+        $gameName = self::getGameName($record, $channelLang);
+
+        $score = number_format($record->win, 0);
 
         // 转换语言格式：zh-TW -> zh_TW（翻译目录使用下划线）
         $lang = str_replace('-', '_', $channelLang);
@@ -383,6 +377,93 @@ class HighScoreBroadcastService
                 'message' => $message,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * 获取游戏名称（支持多语言）
+     *
+     * @param PlayGameRecord $record 游戏记录
+     * @param string $lang 语言代码（如 'zh-TW', 'zh-CN', 'en'）
+     * @return string 游戏名称
+     */
+    private static function getGameName(PlayGameRecord $record, string $lang): string
+    {
+        try {
+            // 1. 优先从 game_content 表获取对应语言的名称
+            // 通过 game_extend_id 查找对应的 game，然后获取 game_content
+            if ($record->gameExtend && $record->gameExtend->id) {
+                $game = \app\model\Game::where('game_extend_id', $record->gameExtend->id)
+                    ->with('gameContent')
+                    ->first();
+
+                if ($game && $game->gameContent && $game->gameContent->isNotEmpty()) {
+                    // 查找对应语言的游戏内容
+                    $content = $game->gameContent->firstWhere('lang', $lang);
+                    if ($content && !empty($content->name)) {
+                        return $content->name;
+                    }
+
+                    // 降级策略：避免繁体渠道显示简体，简体渠道显示繁体
+                    if ($lang === 'zh-CN') {
+                        // 简体渠道：优先zh-TW，再尝试其他语言（排除zh-CN自己）
+                        $fallbackLangs = ['zh-TW', 'en', 'jp'];
+                    } elseif ($lang === 'zh-TW') {
+                        // 繁体渠道：优先en/jp，不降级到zh-CN
+                        $fallbackLangs = ['en', 'jp'];
+                    } else {
+                        // 其他语言：优先zh-TW，再zh-CN，再其他
+                        $fallbackLangs = ['zh-TW', 'zh-CN', 'en', 'jp'];
+                    }
+
+                    foreach ($fallbackLangs as $fallbackLang) {
+                        $content = $game->gameContent->firstWhere('lang', $fallbackLang);
+                        if ($content && !empty($content->name)) {
+                            return $content->name;
+                        }
+                    }
+                }
+            }
+
+            // 2. 从 game_extend 表获取游戏名称（可能是单语言或 JSON 格式）
+            if ($record->gameExtend && !empty($record->gameExtend->name)) {
+                $rawName = $record->gameExtend->name;
+
+                // 检查是否为 JSON 格式（多语言支持）
+                if (is_string($rawName) && str_starts_with(trim($rawName), '{')) {
+                    try {
+                        $nameJson = json_decode($rawName, true);
+                        if (is_array($nameJson)) {
+                            // 优先使用当前语言
+                            return $nameJson[$lang] ?? $nameJson['zh-TW'] ?? $nameJson['zh-CN'] ?? $rawName;
+                        }
+                    } catch (\Throwable $e) {
+                        // JSON 解析失败，使用原始值
+                    }
+                }
+
+                // 单语言直接返回
+                return $rawName;
+            }
+
+            // 3. 降级：使用 game_code
+            if (!empty($record->game_code)) {
+                return $record->game_code;
+            }
+
+            // 4. 最后的降级
+            return 'Unknown Game';
+
+        } catch (\Throwable $e) {
+            Log::warning('获取游戏名称失败', [
+                'record_id' => $record->id ?? 0,
+                'platform_id' => $record->platform_id ?? 0,
+                'game_code' => $record->game_code ?? '',
+                'error' => $e->getMessage(),
+            ]);
+
+            // 异常时降级
+            return $record->game_code ?? 'Unknown Game';
         }
     }
 

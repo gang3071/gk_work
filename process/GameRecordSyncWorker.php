@@ -2,6 +2,7 @@
 
 namespace process;
 
+use app\model\GamePlatform;
 use app\model\Player;
 use app\model\PlayerDeliveryRecord;
 use app\model\PlayerPlatformCash;
@@ -44,6 +45,24 @@ class GameRecordSyncWorker
      * 每次同步数量
      */
     private const BATCH_SIZE = 100;
+
+    /**
+     * 真人视讯平台代码列表（这些平台不发送高分广播）
+     * 根据平台唯一 code 识别
+     */
+    private const LIVE_CASINO_CODES = [
+        'WM',      // WM真人
+        'DG',      // DG真人
+        'SA',      // SA真人
+        'RSGLIVE', // GClub真人
+        'MT',      // MT真人
+        'O8',      // EEAI真人
+        'TNINE',   // TNINE真人
+        'KYS',     // KYSport
+        'OB',      // OB
+        'SPS',     // SPSport
+        'SPS_DY',  // SPSport单一钱包
+    ];
 
     /**
      * 执行锁标志
@@ -508,12 +527,14 @@ class GameRecordSyncWorker
     {
         $broadcastTriggers = [];
 
-        // 1. 收集所有需要检查的渠道ID
+        // 1. 收集所有需要检查的渠道ID和平台ID
         $departmentIds = [];
+        $platformIds = [];
         foreach ($insertedRecords as $record) {
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
                 && ($record['win'] ?? 0) > 0) {
                 $departmentIds[] = $record['department_id'] ?? 0;
+                $platformIds[] = $record['platform_id'] ?? 0;
             }
         }
         foreach ($updatedRecords as $record) {
@@ -522,6 +543,7 @@ class GameRecordSyncWorker
                 $existing = $existingRecords[$record['order_no']] ?? null;
                 if ($existing) {
                     $departmentIds[] = $existing->department_id ?? 0;
+                    $platformIds[] = $existing->platform_id ?? 0;
                 }
             }
         }
@@ -530,20 +552,49 @@ class GameRecordSyncWorker
             return;
         }
 
-        // 2. 批量获取阈值配置（一次性查询所有渠道）
+        // 2. 批量查询平台信息（通过 code 识别真人视讯平台）
+        $platformIds = array_unique(array_filter($platformIds));
+        $livePlatformIds = [];
+        if (!empty($platformIds)) {
+            $platforms = GamePlatform::query()
+                ->whereIn('id', $platformIds)
+                ->select('id', 'code')
+                ->get();
+
+            foreach ($platforms as $platform) {
+                // 通过平台唯一 code 判断是否是真人视讯
+                if (in_array($platform->code, self::LIVE_CASINO_CODES)) {
+                    $livePlatformIds[] = $platform->id;
+                    $this->log->debug('真人视讯平台跳过高分广播', [
+                        'platform_id' => $platform->id,
+                        'platform_code' => $platform->code,
+                    ]);
+                }
+            }
+        }
+
+        // 3. 批量获取阈值配置（一次性查询所有渠道）
         $departmentIds = array_unique($departmentIds);
         $thresholds = HighScoreBroadcastService::batchGetThresholds($departmentIds);
 
         $this->log->info('🔍 高分广播阈值查询结果', [
             'department_ids' => $departmentIds,
             'thresholds' => $thresholds,
+            'live_platform_ids' => $livePlatformIds,
         ]);
 
-        // 3. 检查新插入的已结算记录
+        // 4. 检查新插入的已结算记录
         $newRecordKeys = [];
         foreach ($insertedRecords as $record) {
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
                 && ($record['win'] ?? 0) > 0) {
+                $platformId = $record['platform_id'] ?? 0;
+
+                // 跳过真人视讯平台
+                if (in_array($platformId, $livePlatformIds)) {
+                    continue;
+                }
+
                 $departmentId = $record['department_id'] ?? 0;
                 $threshold = $thresholds[$departmentId] ?? null;
 
@@ -552,13 +603,14 @@ class GameRecordSyncWorker
                     'win' => $record['win'],
                     'threshold' => $threshold,
                     'department_id' => $departmentId,
+                    'platform_id' => $platformId,
                     'passed' => ($threshold !== null && $threshold > 0 && $record['win'] >= $threshold),
                 ]);
 
                 // 提前过滤：只有达到阈值的记录才需要查询 ID
                 if ($threshold !== null && $threshold > 0 && $record['win'] >= $threshold) {
                     $newRecordKeys[] = [
-                        'platform_id' => $record['platform_id'],
+                        'platform_id' => $platformId,
                         'order_no' => $record['order_no'],
                     ];
                 }
@@ -586,7 +638,7 @@ class GameRecordSyncWorker
             }
         }
 
-        // 4. 检查更新后的已结算记录
+        // 5. 检查更新后的已结算记录
         foreach ($updatedRecords as $record) {
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
                 && ($record['win'] ?? 0) > 0) {
@@ -594,6 +646,11 @@ class GameRecordSyncWorker
                 $existing = $existingRecords[$record['order_no']] ?? null;
 
                 if ($existing) {
+                    // 跳过真人视讯平台
+                    if (in_array($existing->platform_id, $livePlatformIds)) {
+                        continue;
+                    }
+
                     $threshold = $thresholds[$existing->department_id] ?? null;
 
                     $this->log->info('🔍 高分广播更新记录检查', [
@@ -602,6 +659,7 @@ class GameRecordSyncWorker
                         'record_win' => $record['win'] ?? null,
                         'threshold' => $threshold,
                         'department_id' => $existing->department_id,
+                        'platform_id' => $existing->platform_id,
                         'passed' => ($threshold !== null && $threshold > 0 && $existing->win >= $threshold),
                     ]);
 
@@ -618,7 +676,7 @@ class GameRecordSyncWorker
             }
         }
 
-        // 5. 批量发送到高分广播队列
+        // 6. 批量发送到高分广播队列
         $sentCount = 0;
         foreach ($broadcastTriggers as $trigger) {
             try {
@@ -860,20 +918,32 @@ class GameRecordSyncWorker
 
                 // 🎉 高分广播检测（2026-05-14 优化：改为异步队列，避免阻塞同步流程）
                 // ✅ 优化：提前检查是否达到阈值，减少不必要的队列消息
+                // ⚠️ 2026-05-18：排除真人视讯平台，不发送高分广播
                 if ($gameRecord->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
                     && $gameRecord->win > 0) {
                     try {
-                        // 获取该渠道的高分广播阈值
-                        $threshold = HighScoreBroadcastService::getThreshold($gameRecord->department_id);
-
-                        // 只有达到阈值才发送到队列
-                        if ($threshold !== null && $threshold > 0 && $gameRecord->win >= $threshold) {
-                            Client::send('high-score-broadcast', [
+                        // 检查是否是真人视讯平台（通过 code 识别）
+                        $platform = GamePlatform::query()->find($gameRecord->platform_id);
+                        if ($platform && in_array($platform->code, self::LIVE_CASINO_CODES)) {
+                            // 真人视讯平台不发送高分广播
+                            $this->log->debug('真人视讯平台跳过高分广播', [
                                 'record_id' => $gameRecord->id,
-                                'player_id' => $gameRecord->player_id,
-                                'department_id' => $gameRecord->department_id,
+                                'platform_code' => $platform->code,
                                 'win' => $gameRecord->win,
                             ]);
+                        } else {
+                            // 获取该渠道的高分广播阈值
+                            $threshold = HighScoreBroadcastService::getThreshold($gameRecord->department_id);
+
+                            // 只有达到阈值才发送到队列
+                            if ($threshold !== null && $threshold > 0 && $gameRecord->win >= $threshold) {
+                                Client::send('high-score-broadcast', [
+                                    'record_id' => $gameRecord->id,
+                                    'player_id' => $gameRecord->player_id,
+                                    'department_id' => $gameRecord->department_id,
+                                    'win' => $gameRecord->win,
+                                ]);
+                            }
                         }
                     } catch (\Throwable $e) {
                         $this->log->error('高分广播队列发送失败', [
