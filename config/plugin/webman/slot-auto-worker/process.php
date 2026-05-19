@@ -6,11 +6,11 @@ use Webman\GatewayWorker\Gateway;
 return [
     'gateway' => [
         'handler' => Gateway::class,
-        'listen' => 'tcp://127.0.0.1:' . config('gateway_worker.slot_auto_port'),  // 修改：仅本地访问，提高安全性
+        'listen' => 'tcp://0.0.0.0:' . config('gateway_worker.slot_auto_port'),  // 监听所有网卡，允许外部连接
         'count' => cpu_count(),
         'reloadable' => false,
         'constructor' => ['config' => [
-            'lanIp' => '127.0.0.1',
+            'lanIp' => '127.0.0.1',  // 自动获取局域网 IP
             'startPort' => 2550,
             'pingInterval' => 10,
             'pingData' => hex2bin('AA57080000004B0D'),

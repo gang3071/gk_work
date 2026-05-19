@@ -8,11 +8,11 @@ use Webman\GatewayWorker\Register;
 return [
     'gateway' => [
         'handler' => Gateway::class,
-        'listen' => 'tcp://127.0.0.1:' . config('gateway_worker.jackpot_port'),  // 修改：仅本地访问，提高安全性
+        'listen' => 'tcp://0.0.0.0:' . config('gateway_worker.jackpot_port'),  // 监听所有网卡，允许外部连接
         'count' => cpu_count(),
         'reloadable' => false,
         'constructor' => ['config' => [
-            'lanIp' => '127.0.0.1',
+            'lanIp' => '127.0.0.1',  // 自动获取局域网 IP
             'startPort' => 2300,
             'pingInterval' => 10,
             'pingData' => hex2bin('A22000000000005500000000000082DD'),
@@ -32,7 +32,7 @@ return [
     ],
     'register' => [
         'handler' => Register::class,
-        'listen' => 'text://127.0.0.1:1236',
+        'listen' => 'text://0.0.0.0:1236',  // 允许外部 BusinessWorker 连接
         'count' => 1, // Must be 1
         'constructor' => []
     ],
