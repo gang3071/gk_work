@@ -288,7 +288,9 @@ class GameRecordSyncWorker
 
             foreach (array_unique($betPlayerIds) as $index => $playerId) {
                 if (isset($balanceValues[$index]) && $balanceValues[$index] !== false) {
-                    $redisBalances[$playerId] = (float)$balanceValues[$index];
+                    // ✅ 整数化改造：Redis 存储"分"，转换为"元"
+                    $balanceInCents = (int)$balanceValues[$index];
+                    $redisBalances[$playerId] = round($balanceInCents / 100, 2);
                 }
             }
         }
@@ -920,10 +922,13 @@ class GameRecordSyncWorker
                                 throw new \Exception("钱包不存在");
                             }
 
+                            // ✅ 整数化改造：Redis 存储"分"，转换为"元"
+                            $balanceInCents = (int)$redisBalance;
+                            $afterBalance = round($balanceInCents / 100, 2);
+
                             $amount = (float)$record['amount'];
 
                             // 计算余额：Redis 余额是扣款后的余额（不准确，仅兼容老数据）
-                            $afterBalance = (float)$redisBalance;
                             $beforeBalance = $afterBalance + $amount;
 
                             // 同步 Redis 余额到 MySQL（不是减法，是直接覆盖）

@@ -121,7 +121,9 @@ class ReconciliationTask
             $redisBalance = Redis::connection('work')->get($cacheKey);
 
             if ($redisBalance !== null && $redisBalance !== false) {
-                $redisBalance = (float)$redisBalance;
+                // ✅ 整数化改造：Redis 存储"分"，转换为"元"
+                $balanceInCents = (int)$redisBalance;
+                $redisBalance = round($balanceInCents / 100, 2);
             } else {
                 $redisBalance = null;
             }
