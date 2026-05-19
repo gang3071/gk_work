@@ -414,10 +414,15 @@ class GameRecordSyncWorker
 
             $needUpdate = false;
 
-            // ✅ 合并下注平台：允许未结算状态下更新bet（DG/RSGLIVE同局多笔下注累加）
+            // ✅ 合并下注平台：允许未结算状态下更新bet和balance（DG/RSGLIVE同局多笔下注累加）
             if (in_array($platform, ['DG', 'RSGLIVE']) && $settlementStatus == 0) {
                 if (isset($record['amount']) && $record['amount'] != $existing->bet) {
                     $existing->bet = $record['amount'];
+                    $needUpdate = true;
+                }
+                // ✅ 更新 balance_after 为最新下注后的余额
+                if (isset($record['balance_after']) && $record['balance_after'] !== '' && $record['balance_after'] != $existing->balance_after) {
+                    $existing->balance_after = (float)$record['balance_after'];
                     $needUpdate = true;
                 }
             }
@@ -815,7 +820,7 @@ class GameRecordSyncWorker
                 $needUpdate = false;
                 $platform = $record['platform'] ?? '';
 
-                // ✅ 合并下注平台：允许未结算状态下更新bet（DG/RSGLIVE同局多笔下注累加）
+                // ✅ 合并下注平台：允许未结算状态下更新bet和balance（DG/RSGLIVE同局多笔下注累加）
                 if (in_array($platform, ['DG', 'RSGLIVE']) && $settlementStatus == 0) {
                     if (isset($record['amount']) && $record['amount'] != $existing->bet) {
                         $existing->bet = $record['amount'];
@@ -827,6 +832,11 @@ class GameRecordSyncWorker
                             'new_bet' => $record['amount'],
                             'record_id' => $existing->id,
                         ]);
+                    }
+                    // ✅ 更新 balance_after 为最新下注后的余额
+                    if (isset($record['balance_after']) && $record['balance_after'] !== '' && (float)$record['balance_after'] != $existing->balance_after) {
+                        $existing->balance_after = (float)$record['balance_after'];
+                        $needUpdate = true;
                     }
                 }
 
