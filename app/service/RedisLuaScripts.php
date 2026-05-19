@@ -26,6 +26,8 @@ class RedisLuaScripts
     /**
      * 原子下注（检查余额 + 扣款 + 保存记录）
      *
+     * ✅ 整数化改造：使用整数运算（分），避免浮点数精度问题
+     *
      * KEYS[1] = 余额 Key (wallet:balance:{player_id})
      * KEYS[2] = 下注记录 Key (game:record:bet:{platform}:{order_no})
      * KEYS[3] = 同步队列 Key (game:sync:queue)
@@ -33,7 +35,7 @@ class RedisLuaScripts
      * KEYS[5] = 幂等性锁 Key (order:bet:lock:{order_no})
      *
      * ARGV[1] = 玩家ID
-     * ARGV[2] = 下注金额
+     * ARGV[2] = 下注金额（分，整数）✅
      * ARGV[3] = 平台代码
      * ARGV[4] = 订单号
      * ARGV[5] = 平台ID
@@ -46,10 +48,10 @@ class RedisLuaScripts
      * ARGV[12] = 余额TTL (3600 = 1小时)
      * ARGV[13] = 创建时间字符串
      *
-     * 返回值：
-     * - success: {ok: 1, balance: 新余额, old_balance: 旧余额}
-     * - 余额不足: {ok: 0, error: "insufficient_balance", balance: 当前余额}
-     * - 重复订单: {ok: 0, error: "duplicate_order", balance: 当前余额}
+     * 返回值（余额单位：分）：
+     * - success: {ok: 1, balance: 新余额（分）, old_balance: 旧余额（分）}
+     * - 余额不足: {ok: 0, error: "insufficient_balance", balance: 当前余额（分）}
+     * - 重复订单: {ok: 0, error: "duplicate_order", balance: 当前余额（分）}
      */
     public const LUA_ATOMIC_BET = <<<'LUA'
 -- 1. 幂等性检查（先检查记录，再检查锁）
@@ -65,17 +67,16 @@ if lockExists == 1 then
     return cjson.encode({ok = 0, error = 'duplicate_order', balance = currentBalance})
 end
 
--- 2. 获取当前余额（防御性：确保即使 Redis 数据损坏也能得到有效数字）
+-- 2. 获取当前余额（✅ 整数：分）
 local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
 local betAmount = tonumber(ARGV[2]) or 0
 
--- 3. 余额检查（添加 0.01 容差以解决浮点数精度问题）
-local tolerance = 0.01
-if currentBalance + tolerance < betAmount then
+-- 3. 余额检查（✅ 整数比较，无需容差）
+if currentBalance < betAmount then
     return cjson.encode({ok = 0, error = 'insufficient_balance', balance = currentBalance})
 end
 
--- 4. 扣款
+-- 4. 扣款（✅ 整数运算）
 local newBalance = currentBalance - betAmount
 
 -- 防止负数余额
@@ -83,7 +84,8 @@ if newBalance < 0 then
     newBalance = 0
 end
 
-redis.call('SETEX', KEYS[1], ARGV[12], newBalance)
+-- ✅ 整数化：存储整数
+redis.call('SETEX', KEYS[1], ARGV[12], tostring(math.floor(newBalance)))
 
 -- 5. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
@@ -123,6 +125,8 @@ LUA;
     /**
      * 原子结算（加钱 + 更新记录）
      *
+     * ✅ 整数化改造：使用整数运算（分），避免浮点数精度问题
+     *
      * KEYS[1] = 余额 Key
      * KEYS[2] = 下注记录 Key
      * KEYS[3] = 同步队列 Key
@@ -130,8 +134,8 @@ LUA;
      * KEYS[5] = 幂等性锁 Key (order:settle:lock:{order_no})
      * KEYS[6] = 结算记录 Key (game:record:settle:{platform}:{order_no}) - 仅当 bet 不存在时使用
      *
-     * ARGV[1] = 派彩金额
-     * ARGV[2] = 输赢金额 (diff)
+     * ARGV[1] = 派彩金额（分，整数）✅
+     * ARGV[2] = 输赢金额 diff（分，整数）✅
      * ARGV[3] = 结算类型 (settle/refund/jackpot/reward)
      * ARGV[4] = 当前时间戳
      * ARGV[5] = 记录TTL (3600 = 1小时)
@@ -144,9 +148,9 @@ LUA;
      * ARGV[12] = 游戏代码（用于独立结算）
      * ARGV[13] = 允许二次结算标记 ('1' 表示允许，用于补单场景)
      *
-     * 返回值：
-     * - success: {ok: 1, balance: 新余额, old_balance: 旧余额}
-     * - 重复结算: {ok: 0, error: "duplicate_settle", balance: 当前余额}
+     * 返回值（余额单位：分）：
+     * - success: {ok: 1, balance: 新余额（分）, old_balance: 旧余额（分）}
+     * - 重复结算: {ok: 0, error: "duplicate_settle", balance: 当前余额（分）}
      */
     public const LUA_ATOMIC_SETTLE = <<<'LUA'
 -- 1. 幂等性检查（先检查记录，再检查锁）
@@ -173,12 +177,12 @@ if lockExists == 1 then
     return cjson.encode({ok = 0, error = 'duplicate_settle', balance = currentBalance})
 end
 
--- 2. 获取当前余额（防御性：确保即使 Redis 数据损坏也能得到有效数字）
+-- 2. 获取当前余额（✅ 整数：分）
 local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
 local winAmount = tonumber(ARGV[1]) or 0
 local diffAmount = tonumber(ARGV[2]) or 0
 
--- 3. 补单场景：重新结算逻辑
+-- 3. 补单场景：重新结算逻辑（✅ 整数运算）
 local balanceChange = winAmount
 if allowDuplicateSettle and betExists == 1 then
     -- ✅ 补单：获取原结算金额，计算调整差额
@@ -190,9 +194,10 @@ if allowDuplicateSettle and betExists == 1 then
     diffAmount = winAmount - originalBet
 end
 
--- 4. 更新余额（支持加钱和扣钱）
+-- 4. 更新余额（支持加钱和扣钱，✅ 整数运算）
 local newBalance = currentBalance + balanceChange
-redis.call('SETEX', KEYS[1], ARGV[6], newBalance)
+-- ✅ 整数化：存储整数
+redis.call('SETEX', KEYS[1], ARGV[6], tostring(math.floor(newBalance)))
 
 -- 5. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
@@ -252,20 +257,22 @@ LUA;
     /**
      * 原子取消/退款（退款 + 更新记录）
      *
+     * ✅ 整数化改造：使用整数运算（分），避免浮点数精度问题
+     *
      * KEYS[1] = 余额 Key
      * KEYS[2] = 下注记录 Key
      * KEYS[3] = 同步队列 Key
      * KEYS[4] = 统计 Key (game:stats:{platform}:cancel:count)
      * KEYS[5] = 幂等性锁 Key (order:cancel:lock:{order_no})
      *
-     * ARGV[1] = 退款金额
+     * ARGV[1] = 退款金额（分，整数）✅
      * ARGV[2] = 取消类型 (cancel/refund)
      * ARGV[3] = 当前时间戳
      * ARGV[4] = 余额TTL
      *
-     * 返回值：
-     * - success: {ok: 1, balance: 新余额, old_balance: 旧余额}
-     * - 重复取消: {ok: 0, error: "duplicate_cancel", balance: 当前余额}
+     * 返回值（余额单位：分）：
+     * - success: {ok: 1, balance: 新余额（分）, old_balance: 旧余额（分）}
+     * - 重复取消: {ok: 0, error: "duplicate_cancel", balance: 当前余额（分）}
      */
     public const LUA_ATOMIC_CANCEL = <<<'LUA'
 -- 1. 幂等性检查（先检查记录，再检查锁）
@@ -291,13 +298,14 @@ if lockExists == 1 then
     return cjson.encode({ok = 0, error = 'duplicate_cancel', balance = currentBalance})
 end
 
--- 2. 获取当前余额（防御性：确保即使 Redis 数据损坏也能得到有效数字）
+-- 2. 获取当前余额（✅ 整数：分）
 local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
 local refundAmount = tonumber(ARGV[1]) or 0
 
--- 3. 退款
+-- 3. 退款（✅ 整数运算）
 local newBalance = currentBalance + refundAmount
-redis.call('SETEX', KEYS[1], ARGV[4], newBalance)
+-- ✅ 整数化：存储整数
+redis.call('SETEX', KEYS[1], ARGV[4], tostring(math.floor(newBalance)))
 
 -- 4. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
@@ -428,6 +436,9 @@ LUA;
         $transactionType = $data['transaction_type'] ?? TransactionType::mapFromLegacy($data);
         $createdAt = date('Y-m-d H:i:s');
 
+        // ✅ 整数化：将"元"转换为"分"
+        $betAmountInCents = (int)round($betAmount * 100);
+
         // 准备 Keys
         $keys = [
             "wallet:balance:{$playerId}",                    // KEYS[1]
@@ -437,10 +448,10 @@ LUA;
             "order:bet:lock:{$orderNo}",                     // KEYS[5]
         ];
 
-        // ✅ 优化：Lua 脚本只接收核心字段，不再接收 original_data
+        // ✅ 整数化：Lua 脚本接收"分"（整数）
         $argv = [
             $playerId,                                       // ARGV[1]
-            $betAmount,                                      // ARGV[2]
+            $betAmountInCents,                               // ARGV[2] - ✅ 下注金额（分）
             $platform,                                       // ARGV[3]
             $orderNo,                                        // ARGV[4]
             $data['platform_id'],                            // ARGV[5]
@@ -496,12 +507,12 @@ LUA;
                 ]);
             }
 
-            // ✅ 格式化余额精度（避免科学计数法传递给第三方）
+            // ✅ 整数化：将"分"转换回"元"
             if (isset($decoded['balance'])) {
-                $decoded['balance'] = round((float)$decoded['balance'], 2);
+                $decoded['balance'] = round((int)$decoded['balance'] / 100, 2);
             }
             if (isset($decoded['old_balance'])) {
-                $decoded['old_balance'] = round((float)$decoded['old_balance'], 2);
+                $decoded['old_balance'] = round((int)$decoded['old_balance'] / 100, 2);
             }
 
             // ✅ 实时推送：发布余额变化消息到 Redis Pub/Sub
@@ -513,9 +524,9 @@ LUA;
                 'amount' => -$betAmount,
             ]);
         } else {
-            // 失败时也格式化余额
+            // ✅ 整数化：失败时也转换"分"→"元"
             if (isset($decoded['balance'])) {
-                $decoded['balance'] = round((float)$decoded['balance'], 2);
+                $decoded['balance'] = round((int)$decoded['balance'] / 100, 2);
             }
         }
 
@@ -557,6 +568,10 @@ LUA;
         $timestamp = time();
         $dateTime = date('Y-m-d H:i:s', $timestamp);
 
+        // ✅ 整数化：将"元"转换为"分"
+        $winAmountInCents = (int)round($winAmount * 100);
+        $diffInCents = (int)round($diff * 100);
+
         // 准备 Keys
         $keys = [
             "wallet:balance:{$playerId}",                    // KEYS[1]
@@ -567,10 +582,10 @@ LUA;
             "game:record:settle:{$platform}:{$orderNo}",     // KEYS[6]
         ];
 
-        // ✅ 优化：Lua 脚本只接收核心字段，不再接收 original_data 和 action_data
+        // ✅ 整数化：Lua 脚本接收"分"（整数）
         $argv = [
-            $winAmount,                                      // ARGV[1]
-            $diff,                                           // ARGV[2]
+            $winAmountInCents,                               // ARGV[1] - ✅ 派彩金额（分）
+            $diffInCents,                                    // ARGV[2] - ✅ 输赢金额（分）
             $transactionType,                                // ARGV[3]
             $timestamp,                                      // ARGV[4]
             3600,                                            // ARGV[5] - 1小时 TTL
@@ -628,12 +643,18 @@ LUA;
                 ]);
             }
 
-            // ✅ 格式化余额精度（避免科学计数法传递给第三方）
+            // ✅ 整数化：将"分"转换回"元"
             if (isset($decoded['balance'])) {
-                $decoded['balance'] = round((float)$decoded['balance'], 2);
+                $decoded['balance'] = round((int)$decoded['balance'] / 100, 2);
             }
             if (isset($decoded['old_balance'])) {
-                $decoded['old_balance'] = round((float)$decoded['old_balance'], 2);
+                $decoded['old_balance'] = round((int)$decoded['old_balance'] / 100, 2);
+            }
+            if (isset($decoded['balance_change'])) {
+                $decoded['balance_change'] = round((int)$decoded['balance_change'] / 100, 2);
+            }
+            if (isset($decoded['recalculated_diff'])) {
+                $decoded['recalculated_diff'] = round((int)$decoded['recalculated_diff'] / 100, 2);
             }
 
             // ✅ 实时推送：发布余额变化消息
@@ -645,9 +666,9 @@ LUA;
                 'amount' => $winAmount,
             ]);
         } else {
-            // 失败时也格式化余额
+            // ✅ 整数化：失败时也转换"分"→"元"
             if (isset($decoded['balance'])) {
-                $decoded['balance'] = round((float)$decoded['balance'], 2);
+                $decoded['balance'] = round((int)$decoded['balance'] / 100, 2);
             }
         }
 
@@ -705,6 +726,9 @@ LUA;
             }
         }
 
+        // ✅ 整数化：将"元"转换为"分"
+        $refundAmountInCents = (int)round($refundAmount * 100);
+
         // 准备 Keys
         $keys = [
             "wallet:balance:{$playerId}",                    // KEYS[1]
@@ -714,9 +738,9 @@ LUA;
             "order:cancel:lock:{$orderNo}",                  // KEYS[5]
         ];
 
-        // ✅ 优化：Lua 脚本只接收核心字段，不再接收 action_data
+        // ✅ 整数化：Lua 脚本接收"分"（整数）
         $argv = [
-            $refundAmount,                                   // ARGV[1]
+            $refundAmountInCents,                            // ARGV[1] - ✅ 退款金额（分）
             $transactionType,                                // ARGV[2]
             time(),                                          // ARGV[3]
             3600,                                            // ARGV[4] - 余额 TTL
@@ -762,12 +786,12 @@ LUA;
                 ]);
             }
 
-            // ✅ 格式化余额精度（避免科学计数法传递给第三方）
+            // ✅ 整数化：将"分"转换回"元"
             if (isset($decoded['balance'])) {
-                $decoded['balance'] = round((float)$decoded['balance'], 2);
+                $decoded['balance'] = round((int)$decoded['balance'] / 100, 2);
             }
             if (isset($decoded['old_balance'])) {
-                $decoded['old_balance'] = round((float)$decoded['old_balance'], 2);
+                $decoded['old_balance'] = round((int)$decoded['old_balance'] / 100, 2);
             }
 
             // ✅ 实时推送：发布余额变化消息
@@ -779,9 +803,9 @@ LUA;
                 'amount' => $data['refund_amount'] ?? 0,
             ]);
         } else {
-            // 失败时也格式化余额
+            // ✅ 整数化：失败时也转换"分"→"元"
             if (isset($decoded['balance'])) {
-                $decoded['balance'] = round((float)$decoded['balance'], 2);
+                $decoded['balance'] = round((int)$decoded['balance'] / 100, 2);
             }
         }
 
@@ -791,8 +815,10 @@ LUA;
     /**
      * 批量获取余额（优化性能）
      *
+     * ✅ 整数化改造：Redis 存储"分"，转换为"元"
+     *
      * @param array $playerIds
-     * @return array [player_id => balance]
+     * @return array [player_id => balance（元）]
      */
     public static function batchGetBalances(array $playerIds): array
     {
@@ -805,7 +831,9 @@ LUA;
 
         $result = [];
         foreach ($playerIds as $index => $playerId) {
-            $result[$playerId] = round((float)($balances[$index] ?? 0), 2);
+            // ✅ 整数化：Redis 存储"分"，转换为"元"
+            $balanceInCents = (int)($balances[$index] ?? 0);
+            $result[$playerId] = round($balanceInCents / 100, 2);
         }
 
         return $result;

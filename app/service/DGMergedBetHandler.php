@@ -2,11 +2,13 @@
 
 namespace app\service;
 
-use support\Redis;
 use support\Log;
+use support\Redis;
 
 /**
  * DG 平台多次下注合并处理器
+ *
+ * ✅ 整数化改造：使用整数运算（分），避免浮点数精度问题
  *
  * 背景：
  * - DG 平台同一局游戏（同一个 ticketId）会有多次下注请求
@@ -35,11 +37,15 @@ class DGMergedBetHandler
         $detail = json_decode($params['detail'], true);
         $type = $params['type'];
 
+        // ✅ 整数化：将"元"转换为"分"
+        $amountInCents = (int)round($amount * 100);
+
         Log::channel('dg_server')->info('[DGMergedBetHandler] 开始处理', [
             'player_id' => $playerId,
             'ticketId' => $ticketId,
             'data' => $data,
-            'amount' => $amount,
+            'amount_yuan' => $amount,
+            'amount_cents' => $amountInCents,
             'type' => $type
         ]);
 
@@ -64,16 +70,16 @@ class DGMergedBetHandler
         $mainOrderKey = "game:record:bet:DG:{$ticketId}";
         $isFirstBet = !Redis::exists($mainOrderKey);
 
-        // 3. 获取余额
+        // 3. 获取余额（✅ 整数：分）
         $balanceKey = "wallet:balance:{$playerId}";
-        $currentBalance = (float)(Redis::get($balanceKey) ?? 0);
+        $currentBalanceInCents = (int)(Redis::get($balanceKey) ?? 0);
 
-        // 4. 余额检查
-        if ($currentBalance < $amount) {
+        // 4. 余额检查（✅ 整数比较）
+        if ($currentBalanceInCents < $amountInCents) {
             return [
                 'ok' => 0,
                 'error' => 'insufficient_balance',
-                'balance' => $currentBalance,
+                'balance' => round($currentBalanceInCents / 100, 2),  // ✅ 转换为元
                 'is_first_bet' => $isFirstBet
             ];
         }
@@ -83,7 +89,7 @@ class DGMergedBetHandler
             $playerId,
             $ticketId,
             $data,
-            $amount,
+            $amountInCents,  // ✅ 传入"分"
             $detail,
             $platformId,
             $type,
@@ -95,12 +101,14 @@ class DGMergedBetHandler
 
     /**
      * Lua 原子操作：合并下注
+     *
+     * ✅ 整数化改造：使用整数运算（分），避免浮点数精度问题
      */
     private static function executeAtomicMergedBet(
         int $playerId,
         string $ticketId,
         string $data,
-        float $amount,
+        int $amountInCents,  // ✅ 改为整数（分）
         array $detail,
         int $platformId,
         int $type,
@@ -114,7 +122,7 @@ class DGMergedBetHandler
 -- KEYS[5] = 同步队列 Key (game:sync:queue)
 
 -- ARGV[1] = 玩家ID
--- ARGV[2] = 下注金额（增量）
+-- ARGV[2] = 下注金额（增量，分，整数）✅
 -- ARGV[3] = 平台ID
 -- ARGV[4] = 游戏代码
 -- ARGV[5] = 交易类型
@@ -149,17 +157,18 @@ if redis.call('EXISTS', transferKey) == 1 then
     return cjson.encode({ok = 0, error = 'duplicate_transfer', balance = currentBalance})
 end
 
--- 2. 获取当前余额
+-- 2. 获取当前余额（✅ 整数：分）
 local currentBalance = tonumber(redis.call('GET', balanceKey)) or 0
 
--- 3. 余额检查
+-- 3. 余额检查（✅ 整数比较）
 if currentBalance < betAmount then
     return cjson.encode({ok = 0, error = 'insufficient_balance', balance = currentBalance})
 end
 
--- 4. 扣款
+-- 4. 扣款（✅ 整数运算）
 local newBalance = currentBalance - betAmount
-redis.call('SETEX', balanceKey, 3600, newBalance)
+-- ✅ 整数化：存储整数
+redis.call('SETEX', balanceKey, 3600, tostring(math.floor(newBalance)))
 
 -- 5. 记录转账流水号（防止重复）
 redis.call('SETEX', transferKey, 3600, 1)
@@ -229,7 +238,7 @@ LUA;
 
             $args = [
                 $playerId,
-                $amount,
+                $amountInCents,  // ✅ 传入"分"（整数）
                 $platformId,
                 $detail['gameId'] ?? '',
                 $type == 3 ? \app\Constants\TransactionType::BET_ADJUST : \app\Constants\TransactionType::BET,
@@ -263,11 +272,22 @@ LUA;
             ]);
             $decoded = json_decode($result, true);
 
+            // ✅ 整数化：将"分"转换回"元"
+            if (isset($decoded['balance'])) {
+                $decoded['balance'] = round((int)$decoded['balance'] / 100, 2);
+            }
+            if (isset($decoded['old_balance'])) {
+                $decoded['old_balance'] = round((int)$decoded['old_balance'] / 100, 2);
+            }
+            if (isset($decoded['total_amount'])) {
+                $decoded['total_amount'] = round((int)$decoded['total_amount'] / 100, 2);
+            }
+
             // 记录审计日志
             Log::channel('dg_server')->info('[DG合并下注] Lua执行结果', [
                 'ticketId' => $ticketId,
                 'data' => $data,
-                'amount' => $amount,
+                'amount_cents' => $amountInCents,
                 'is_first_bet' => $isFirstBet,
                 'result' => $decoded
             ]);
@@ -292,11 +312,14 @@ LUA;
 
     /**
      * 获取玩家余额
+     *
+     * ✅ 整数化改造：Redis 存储"分"，转换为"元"
      */
     private static function getPlayerBalance(int $playerId): float
     {
         $balanceKey = "wallet:balance:{$playerId}";
-        return (float)(Redis::get($balanceKey) ?? 0);
+        $balanceInCents = (int)(Redis::get($balanceKey) ?? 0);
+        return round($balanceInCents / 100, 2);  // ✅ 转换为元
     }
 
     /**
@@ -314,13 +337,16 @@ LUA;
     /**
      * 获取注单的累计金额
      *
+     * ✅ 整数化改造：Redis 存储"分"，转换为"元"
+     *
      * @param string $ticketId 注单号
-     * @return float 累计金额
+     * @return float 累计金额（元）
      */
     public static function getTotalAmount(string $ticketId): float
     {
         $mainOrderKey = "game:record:bet:DG:{$ticketId}";
-        return (float)(Redis::hget($mainOrderKey, 'amount') ?? 0);
+        $amountInCents = (int)(Redis::hget($mainOrderKey, 'amount') ?? 0);
+        return round($amountInCents / 100, 2);  // ✅ 转换为元
     }
 
     /**
