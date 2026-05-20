@@ -175,7 +175,6 @@ function machineKeepOutPlayer(): void
                 $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
                 if (machineWash($player, $machine, 'leave', 1)) {
                     //寫入踢人log
-                    // ✅ machineWash 内部已使用 WalletService，洗分后从 Redis 读取新余额
                     $afterGameAmount = \app\service\WalletService::getBalance($player->id);
                     $wash_point = abs($afterGameAmount - $beforeGameAmount);
                     $machineKickLog = new MachineKickLog;
