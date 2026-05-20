@@ -526,7 +526,11 @@ class GameRecordSyncWorker
     private function batchTriggerHighScoreBroadcast(array $insertedRecords, array $updatedRecords, $existingRecords): void
     {
         $broadcastTriggers = [];
-
+        $this->log->debug('真人视讯平台跳过高分广播', [
+            '$insertedRecords' => $insertedRecords,
+            '$updatedRecords' => $updatedRecords,
+            '$existingRecords' => $existingRecords,
+        ]);
         // 1. 收集所有需要检查的渠道ID和平台ID
         $departmentIds = [];
         $platformIds = [];
