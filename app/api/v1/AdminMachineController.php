@@ -2,6 +2,7 @@
 
 namespace app\api\v1;
 
+use app\model\GameType;
 use app\model\Machine;
 use app\service\machine\MachineServices;
 use Exception;
@@ -429,6 +430,108 @@ class AdminMachineController
         } catch (Exception $e) {
             Log::error('Get machine online statistics failed', [
                 'error' => $e->getMessage()
+            ]);
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    /**
+     * 批量获取机台状态
+     * POST /api/admin/machine/batch-status
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function batchGetMachineStatus(Request $request): Response
+    {
+        try {
+            $machineIds = $request->post('machine_ids', []);
+            $lang = $request->post('lang', 'zh_CN');
+
+            if (empty($machineIds) || !is_array($machineIds)) {
+                return $this->fail('机台ID列表不能为空');
+            }
+
+            $machines = Machine::whereIn('id', $machineIds)->get();
+            $results = [];
+
+            foreach ($machines as $machine) {
+                $services = MachineServices::createServices($machine, $lang);
+
+                // 获取机台信息
+                $machineInfo = [];
+                foreach ($services->machineInfo as $key) {
+                    $machineInfo[$key] = $services->$key ?? null;
+                }
+
+                $results[] = [
+                    'machine_id' => $machine->id,
+                    'machine_info' => $machineInfo,
+                    'cache_data' => $services->cacheData ?? []
+                ];
+            }
+
+            return $this->success($results);
+
+        } catch (Exception $e) {
+            Log::error('Batch get machine status failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    /**
+     * 更新机台状态（直接修改 Redis 缓存）
+     * POST /api/admin/machine/update-state
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function updateMachineState(Request $request): Response
+    {
+        try {
+            $machineId = $request->post('machine_id');
+            $field = $request->post('field');
+            $value = $request->post('value');
+            $lang = $request->post('lang', 'zh_CN');
+
+            if (empty($machineId)) {
+                return $this->fail('机台ID不能为空');
+            }
+
+            if (empty($field)) {
+                return $this->fail('字段名不能为空');
+            }
+
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在');
+            }
+
+            // 创建机台服务
+            $services = MachineServices::createServices($machine, $lang);
+
+            // 更新字段值
+            $services->$field = $value;
+
+            Log::info('Admin update machine state', [
+                'machine_id' => $machineId,
+                'field' => $field,
+                'value' => $value
+            ]);
+
+            return $this->success([
+                'machine_id' => $machineId,
+                'field' => $field,
+                'value' => $value
+            ], '状态更新成功');
+
+        } catch (Exception $e) {
+            Log::error('Update machine state failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
             return $this->fail($e->getMessage());
         }
