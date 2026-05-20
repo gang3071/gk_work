@@ -66,6 +66,10 @@ Route::group('/api', function () {
             Route::post('/all-online-status', [\app\api\v1\AdminMachineController::class, 'getAllOnlineStatus']);
             // 获取机台在线统计
             Route::get('/online-statistics', [\app\api\v1\AdminMachineController::class, 'getOnlineStatistics']);
+            // 批量获取机台状态
+            Route::post('/batch-status', [\app\api\v1\AdminMachineController::class, 'batchGetMachineStatus']);
+            // 更新机台状态
+            Route::post('/update-state', [\app\api\v1\AdminMachineController::class, 'updateMachineState']);
         });
     });
 });
