@@ -198,26 +198,27 @@ class GameRecordSyncWorker
                 $updated = $this->batchUpdateRecords($toUpdate, $existingRecords);
             }
 
-            // 5. 批量触发彩金检查
-            $this->batchTriggerLottery($toInsert, $toUpdate, $existingRecords);
-
-            // 5.5. 批量触发高分广播检测
-            $this->batchTriggerHighScoreBroadcast($toInsert, $toUpdate, $existingRecords);
-
-            // 6. 批量标记已同步（需要重新查询以获取新插入记录的ID）
+            // 4.5. ✅ 统一查询新插入记录的完整信息（避免重复查询）
+            // 这个查询结果会被彩金检查、高分广播、标记已同步三个功能共享使用
             if (!empty($toInsert)) {
-                // 重新查询新插入的记录以获取ID
                 $insertedOrderNos = array_column($toInsert, 'order_no');
                 $newlyInserted = PlayGameRecord::query()
                     ->whereIn('order_no', $insertedOrderNos)
+                    ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id', 'bet', 'win', 'original_data')
                     ->get()
                     ->keyBy('order_no');
 
-                // 合并到 $existingRecords
+                // 合并到 $existingRecords，后续方法可以直接使用
                 foreach ($newlyInserted as $orderNo => $record) {
                     $existingRecords[$orderNo] = $record;
                 }
             }
+
+            // 5. 批量触发彩金检查（使用已更新的 $existingRecords，不再单独查询）
+            $this->batchTriggerLottery($toInsert, $toUpdate, $existingRecords);
+
+            // 5.5. 批量触发高分广播检测（使用已更新的 $existingRecords，不再单独查询）
+            $this->batchTriggerHighScoreBroadcast($toInsert, $toUpdate, $existingRecords);
 
             foreach ($records as $record) {
                 $orderNo = $record['order_no'];
@@ -416,7 +417,7 @@ class GameRecordSyncWorker
 
             $needUpdate = false;
 
-            // ✅ 合并下注平台：允许未结算状态下更新bet和balance（DG/RSGLIVE同局多笔下注累加）
+            // ✅ 合并下注平台：允许未结算状态下更新bet（DG/RSGLIVE同局多笔下注累加）
             if (in_array($platform, ['DG', 'RSGLIVE']) && $settlementStatus == 0) {
                 if (isset($record['amount']) && $record['amount'] != $existing->bet) {
                     $existing->bet = $record['amount'];
@@ -462,47 +463,29 @@ class GameRecordSyncWorker
         $lotteryTriggers = [];
 
         // 1. 检查新插入的已结算记录
-        // ⚠️ 新插入的记录需要查询数据库获取 ID
-        $newRecordKeys = [];  // 存储 [platform_id, order_no] 组合
+        // ✅ 直接从 $existingRecords 获取完整信息（已在 syncBatchRecords 中统一查询）
         foreach ($insertedRecords as $record) {
-            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
-                if (($record['amount'] ?? 0) > 0) {  // 快速过滤
-                    $newRecordKeys[] = [
-                        'platform_id' => $record['platform_id'],
-                        'order_no' => $record['order_no'],
+            if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+                $orderNo = $record['order_no'];
+                /** @var PlayGameRecord $dbRecord */
+                $dbRecord = $existingRecords[$orderNo] ?? null;
+
+                if ($dbRecord && $dbRecord->bet > 0) {
+                    $lotteryTriggers[] = [
+                        'order_no' => $dbRecord->order_no,
+                        'platform_id' => $dbRecord->platform_id,
+                        'player_id' => $dbRecord->player_id,
+                        'bet' => $dbRecord->bet,
+                        'original_data' => $dbRecord->original_data ?? '{}',
+                        'record_id' => $dbRecord->id,
                     ];
                 }
             }
         }
 
-        // 批量查询新插入记录的 ID（使用 platform_id + order_no 组合查询）
-        if (!empty($newRecordKeys)) {
-            // 提取所有订单号和平台ID
-            $orderNos = array_column($newRecordKeys, 'order_no');
-            $platformIds = array_unique(array_column($newRecordKeys, 'platform_id'));
-
-            $newRecords = PlayGameRecord::query()
-                ->whereIn('order_no', $orderNos)
-                ->whereIn('platform_id', $platformIds)
-                ->select('id', 'order_no', 'platform_id', 'player_id', 'bet', 'original_data')
-                ->get();
-
-            // 使用 platform_id + order_no 作为复合键
-            foreach ($newRecords as $newRecord) {
-                $lotteryTriggers[] = [
-                    'order_no' => $newRecord->order_no,
-                    'platform_id' => $newRecord->platform_id,
-                    'player_id' => $newRecord->player_id,
-                    'bet' => $newRecord->bet,
-                    'original_data' => $newRecord->original_data ?? '{}',
-                    'record_id' => $newRecord->id,  // ✅ 现在有 ID 了
-                ];
-            }
-        }
-
         // 2. 检查更新后的已结算记录
         foreach ($updatedRecords as $record) {
-            if (($record['settlement_status'] ?? PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+            if (($record['settlement_status'] ?? 0) == 1) {
                 /** @var PlayGameRecord $existing */
                 $existing = $existingRecords[$record['order_no']] ?? null;
 
@@ -554,15 +537,25 @@ class GameRecordSyncWorker
         $broadcastTriggers = [];
 
         // 1. 收集所有需要检查的渠道ID和平台ID
+        // ✅ 直接从 $existingRecords 获取完整信息（已在 syncBatchRecords 中统一查询）
         $departmentIds = [];
         $platformIds = [];
+
+        // 从新插入记录中收集
         foreach ($insertedRecords as $record) {
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
                 && ($record['win'] ?? 0) > 0) {
-                $departmentIds[] = $record['department_id'] ?? 0;
-                $platformIds[] = $record['platform_id'] ?? 0;
+                $orderNo = $record['order_no'];
+                $dbRecord = $existingRecords[$orderNo] ?? null;
+
+                if ($dbRecord) {
+                    $departmentIds[] = $dbRecord->department_id ?? 0;
+                    $platformIds[] = $dbRecord->platform_id ?? 0;
+                }
             }
         }
+
+        // 从已存在记录中获取更新记录的 department_id
         foreach ($updatedRecords as $record) {
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
                 && ($record['win'] ?? 0) > 0) {
@@ -578,7 +571,7 @@ class GameRecordSyncWorker
             return;
         }
 
-        // 2. 批量查询平台信息（通过 code 识别真人视讯平台）
+        // 4. 批量查询平台信息（通过 code 识别真人视讯平台）
         $platformIds = array_unique(array_filter($platformIds));
         $livePlatformIds = [];
         if (!empty($platformIds)) {
@@ -599,7 +592,7 @@ class GameRecordSyncWorker
             }
         }
 
-        // 3. 批量获取阈值配置（一次性查询所有渠道）
+        // 5. 批量获取阈值配置（一次性查询所有渠道）
         $departmentIds = array_unique($departmentIds);
         $thresholds = HighScoreBroadcastService::batchGetThresholds($departmentIds);
 
@@ -609,62 +602,51 @@ class GameRecordSyncWorker
             'live_platform_ids' => $livePlatformIds,
         ]);
 
-        // 4. 检查新插入的已结算记录
-        $newRecordKeys = [];
+        // 6. 检查新插入的已结算记录
+        // ✅ 使用 $existingRecords 中的完整信息（已包含新插入记录）
         foreach ($insertedRecords as $record) {
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
                 && ($record['win'] ?? 0) > 0) {
-                $platformId = $record['platform_id'] ?? 0;
+                $orderNo = $record['order_no'];
+                /** @var PlayGameRecord $dbRecord */
+                $dbRecord = $existingRecords[$orderNo] ?? null;
+
+                if (!$dbRecord) {
+                    continue;
+                }
+
+                $platformId = $dbRecord->platform_id;
 
                 // 跳过真人视讯平台
                 if (in_array($platformId, $livePlatformIds)) {
                     continue;
                 }
 
-                $departmentId = $record['department_id'] ?? 0;
+                $departmentId = $dbRecord->department_id ?? 0;
                 $threshold = $thresholds[$departmentId] ?? null;
 
                 $this->log->info('🔍 高分广播新记录检查', [
-                    'order_no' => $record['order_no'],
-                    'win' => $record['win'],
+                    'order_no' => $orderNo,
+                    'win' => $dbRecord->win,
                     'threshold' => $threshold,
                     'department_id' => $departmentId,
                     'platform_id' => $platformId,
-                    'passed' => ($threshold !== null && $threshold > 0 && $record['win'] >= $threshold),
+                    'passed' => ($threshold !== null && $threshold > 0 && $dbRecord->win >= $threshold),
                 ]);
 
-                // 提前过滤：只有达到阈值的记录才需要查询 ID
-                if ($threshold !== null && $threshold > 0 && $record['win'] >= $threshold) {
-                    $newRecordKeys[] = [
-                        'platform_id' => $platformId,
-                        'order_no' => $record['order_no'],
+                // 只有达到阈值才加入触发列表
+                if ($threshold !== null && $threshold > 0 && $dbRecord->win >= $threshold) {
+                    $broadcastTriggers[] = [
+                        'record_id' => $dbRecord->id,
+                        'player_id' => $dbRecord->player_id,
+                        'department_id' => $dbRecord->department_id,
+                        'win' => $dbRecord->win,
                     ];
                 }
             }
         }
 
-        // 批量查询新插入记录的 ID
-        if (!empty($newRecordKeys)) {
-            $orderNos = array_column($newRecordKeys, 'order_no');
-            $platformIds = array_unique(array_column($newRecordKeys, 'platform_id'));
-
-            $newRecords = PlayGameRecord::query()
-                ->whereIn('order_no', $orderNos)
-                ->whereIn('platform_id', $platformIds)
-                ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id', 'win')
-                ->get();
-
-            foreach ($newRecords as $newRecord) {
-                $broadcastTriggers[] = [
-                    'record_id' => $newRecord->id,
-                    'player_id' => $newRecord->player_id,
-                    'department_id' => $newRecord->department_id,
-                    'win' => $newRecord->win,
-                ];
-            }
-        }
-
-        // 5. 检查更新后的已结算记录
+        // 7. 检查更新后的已结算记录
         foreach ($updatedRecords as $record) {
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
                 && ($record['win'] ?? 0) > 0) {
@@ -702,7 +684,7 @@ class GameRecordSyncWorker
             }
         }
 
-        // 6. 批量发送到高分广播队列
+        // 8. 批量发送到高分广播队列
         $sentCount = 0;
         foreach ($broadcastTriggers as $trigger) {
             try {

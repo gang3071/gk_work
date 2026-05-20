@@ -5,7 +5,8 @@ on:
   push:
     branches:
       - super9-main  # 正式线
-      - jin          # jin 开发分支
+      - jin  # 金尊
+      - fix-high-score  # 金尊
       - fix/**       # 测试线（所有 fix 开头的分支）
       - feature/**   # 测试线（所有 feature 开头的分支）
       - test/**      # 测试线（所有 test 开头的分支）
