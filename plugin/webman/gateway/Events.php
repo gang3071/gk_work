@@ -203,11 +203,11 @@ class Events
         ]);
 
         $service = MachineServices::createServices($machine);
-        $msg = strtoupper(bin2hex($message));
         switch ($gatewayPort) {
             case config('gateway_worker.slot_port'):
                 switch ($machine->control_type) {
                     case Machine::CONTROL_TYPE_MEI:
+                        $msg = strtoupper(bin2hex($message));
                         $chunkSize = 32;
                         for ($i = 0; $i < strlen($msg); $i += $chunkSize) {
                             $chunk = substr($msg, $i, $chunkSize);
@@ -215,14 +215,14 @@ class Events
                         }
                         return true;
                     case Machine::CONTROL_TYPE_SONG:
-                        return $service->slotCmd($msg);
+                        return $service->slotCmd(bin2hex($message));
                     default:
                         return true;
                 }
             case config('gateway_worker.slot_auto_port'):
-                return $service->slotAutoCmd($msg);
+                return $service->slotAutoCmd(strtoupper(bin2hex($message)));
             case config('gateway_worker.jackpot_port'):
-                return $service->jackPotCmd($msg);
+                return $service->jackPotCmd(strtoupper(bin2hex($message)));
             default:
                 $log->error('未知的 Gateway 端口', [
                     'client_id' => $client_id,
