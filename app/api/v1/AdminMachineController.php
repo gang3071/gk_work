@@ -30,10 +30,23 @@ class AdminMachineController
     }
 
     /**
+     * 设置语言环境
+     * @param Request $request
+     * @return string
+     */
+    private function setLanguage(Request $request): string
+    {
+        $lang = $request->post('lang', $request->header('Accept-Language', 'zh_TW'));
+        locale($lang);
+        return $lang;
+    }
+
+    /**
      * 成功响应
      */
-    private function success($data = [], string $message = 'success'): Response
+    private function success($data = [], string $message = null): Response
     {
+        $message = $message ?? trans('success', [], 'admin_machine');
         return json([
             'code' => 200,
             'msg' => $message,
@@ -44,8 +57,9 @@ class AdminMachineController
     /**
      * 失败响应
      */
-    private function fail(string $message = 'fail', int $code = 400, $data = []): Response
+    private function fail(string $message = null, int $code = 400, $data = []): Response
     {
+        $message = $message ?? trans('fail', [], 'admin_machine');
         return json([
             'code' => $code,
             'msg' => $message,
@@ -63,24 +77,24 @@ class AdminMachineController
     public function sendCmd(Request $request): Response
     {
         try {
+            $lang = $this->setLanguage($request);
             $adminId = $this->getAdminId($request);
             $machineId = $request->post('machine_id');
             $cmd = $request->post('cmd');
             $data = $request->post('data', 0);
-            $lang = $request->post('lang', 'zh_CN');
 
             if (empty($machineId)) {
-                return $this->fail('机台ID不能为空');
+                return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
             if (empty($cmd)) {
-                return $this->fail('指令不能为空');
+                return $this->fail(trans('cmd_required', [], 'admin_machine'));
             }
 
             // 查询机台
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在');
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
 
             // 创建机台服务
@@ -101,7 +115,7 @@ class AdminMachineController
                 'result' => $result,
                 'cmd' => $cmd,
                 'machine_id' => $machineId
-            ], '指令发送成功');
+            ], trans('cmd_sent_success', [], 'admin_machine'));
 
         } catch (Exception $e) {
             Log::error('Admin send machine cmd failed', [
@@ -122,16 +136,16 @@ class AdminMachineController
     public function getMachineStatus(Request $request): Response
     {
         try {
+            $lang = $this->setLanguage($request);
             $machineId = $request->post('machine_id');
-            $lang = $request->post('lang', 'zh_CN');
 
             if (empty($machineId)) {
-                return $this->fail('机台ID不能为空');
+                return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在');
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
 
             $services = MachineServices::createServices($machine, $lang);
@@ -167,15 +181,16 @@ class AdminMachineController
     public function checkOnline(Request $request): Response
     {
         try {
+            $this->setLanguage($request);
             $machineId = $request->post('machine_id');
 
             if (empty($machineId)) {
-                return $this->fail('机台ID不能为空');
+                return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在');
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
 
             // 检查主连接是否在线
@@ -215,10 +230,11 @@ class AdminMachineController
     public function batchCheckOnline(Request $request): Response
     {
         try {
+            $this->setLanguage($request);
             $machineIds = $request->post('machine_ids', []);
 
             if (empty($machineIds) || !is_array($machineIds)) {
-                return $this->fail('机台ID列表不能为空');
+                return $this->fail(trans('machine_ids_required', [], 'admin_machine'));
             }
 
             $machines = Machine::whereIn('id', $machineIds)->get();
@@ -262,18 +278,18 @@ class AdminMachineController
     public function getDescription(Request $request): Response
     {
         try {
+            $lang = $this->setLanguage($request);
             $machineId = $request->post('machine_id');
             $fun = $request->post('fun', '');
             $data = $request->post('data', 0);
-            $lang = $request->post('lang', 'zh_CN');
 
             if (empty($machineId)) {
-                return $this->fail('机台ID不能为空');
+                return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在');
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
 
             $services = MachineServices::createServices($machine, $lang);
@@ -315,6 +331,7 @@ class AdminMachineController
     public function getAllOnlineStatus(Request $request): Response
     {
         try {
+            $this->setLanguage($request);
             $departmentId = $request->post('department_id', 0);
             $type = $request->post('type'); // slot, steel_ball, fish
 
@@ -382,6 +399,7 @@ class AdminMachineController
     public function getOnlineStatistics(Request $request): Response
     {
         try {
+            $this->setLanguage($request);
             $machines = Machine::query()->where('status', 1)->get(['id', 'domain', 'port', 'type']);
 
             $statistics = [
@@ -445,11 +463,11 @@ class AdminMachineController
     public function batchGetMachineStatus(Request $request): Response
     {
         try {
+            $lang = $this->setLanguage($request);
             $machineIds = $request->post('machine_ids', []);
-            $lang = $request->post('lang', 'zh_CN');
 
             if (empty($machineIds) || !is_array($machineIds)) {
-                return $this->fail('机台ID列表不能为空');
+                return $this->fail(trans('machine_ids_required', [], 'admin_machine'));
             }
 
             $machines = Machine::whereIn('id', $machineIds)->get();
@@ -492,22 +510,22 @@ class AdminMachineController
     public function updateMachineState(Request $request): Response
     {
         try {
+            $lang = $this->setLanguage($request);
             $machineId = $request->post('machine_id');
             $field = $request->post('field');
             $value = $request->post('value');
-            $lang = $request->post('lang', 'zh_CN');
 
             if (empty($machineId)) {
-                return $this->fail('机台ID不能为空');
+                return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
             if (empty($field)) {
-                return $this->fail('字段名不能为空');
+                return $this->fail(trans('field_required', [], 'admin_machine'));
             }
 
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在');
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
 
             // 创建机台服务
@@ -526,7 +544,7 @@ class AdminMachineController
                 'machine_id' => $machineId,
                 'field' => $field,
                 'value' => $value
-            ], '状态更新成功');
+            ], trans('state_updated_success', [], 'admin_machine'));
 
         } catch (Exception $e) {
             Log::error('Update machine state failed', [

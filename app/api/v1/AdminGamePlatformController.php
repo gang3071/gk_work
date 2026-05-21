@@ -47,10 +47,35 @@ class AdminGamePlatformController
     }
 
     /**
+     * 设置语言环境
+     * @param Request $request
+     * @return string
+     */
+    private function setLanguage(Request $request): string
+    {
+        $lang = $request->post('lang', $request->header('Accept-Language', 'zh_TW'));
+        // 统一转换为下划线格式 (zh-CN -> zh_CN)
+        $lang = Str::replace('-', '_', $lang);
+        locale($lang);
+        return $lang;
+    }
+
+    /**
+     * 获取用于游戏服务的语言格式 (zh_TW -> zh-TW)
+     * @param string $lang
+     * @return string
+     */
+    private function getGameLang(string $lang): string
+    {
+        return Str::replace('_', '-', $lang);
+    }
+
+    /**
      * 成功响应
      */
-    private function success($data = [], string $message = 'success'): Response
+    private function success($data = [], string $message = null): Response
     {
+        $message = $message ?? trans('success', [], 'admin_game_platform');
         return json([
             'code' => 200,
             'msg' => $message,
@@ -61,8 +86,9 @@ class AdminGamePlatformController
     /**
      * 失败响应
      */
-    private function fail(string $message, int $code = 100): Response
+    private function fail(string $message = null, int $code = 100): Response
     {
+        $message = $message ?? trans('system_error', [], 'admin_game_platform');
         return json([
             'code' => $code,
             'msg' => $message,
@@ -96,34 +122,32 @@ class AdminGamePlatformController
     public function lobbyLogin(Request $request): Response
     {
         try {
+            $lang = $this->setLanguage($request);
             $player = $this->getPlayer($request);
             if (empty($player)) {
-                return $this->fail('玩家信息获取失败，请检查 X-Player-Id header');
+                return $this->fail(trans('player_info_failed', [], 'admin_game_platform'));
             }
 
             $data = $request->all();
 
             if (empty($data['game_platform_id'])) {
-                return $this->fail('游戏平台ID不能为空');
+                return $this->fail(trans('game_platform_id_required', [], 'admin_game_platform'));
             }
 
             /** @var GamePlatform $gamePlatform */
             $gamePlatform = GamePlatform::query()->find($data['game_platform_id']);
 
             if (empty($gamePlatform)) {
-                return $this->fail('游戏平台不存在');
+                return $this->fail(trans('game_platform_not_found', [], 'admin_game_platform'));
             }
 
             if ($gamePlatform->status == 0) {
-                return $this->fail('游戏平台已禁用');
+                return $this->fail(trans('game_platform_disabled', [], 'admin_game_platform'));
             }
-
-            $lang = $request->header('Accept-Language', 'zh-CN');
-            $lang = Str::replace('_', '-', $lang);
 
             // 调用游戏服务获取大厅URL
             $gameService = GameServiceFactory::createService(strtoupper($gamePlatform->code), $player);
-            $lobbyUrl = $gameService->lobbyLogin(['lang' => $lang]);
+            $lobbyUrl = $gameService->lobbyLogin(['lang' => $this->getGameLang($lang)]);
 
             Log::info('Admin enter lobby', [
                 'player_id' => $player->id,
@@ -145,7 +169,7 @@ class AdminGamePlatformController
                 'game_platform_id' => $data['game_platform_id'] ?? null,
                 'player_id' => $player->id ?? null,
             ]);
-            return $this->fail($e->getMessage() ?? '系统错误');
+            return $this->fail($e->getMessage() ?? trans('system_error', [], 'admin_game_platform'));
         }
     }
 
@@ -157,34 +181,32 @@ class AdminGamePlatformController
     public function getGameList(Request $request): Response
     {
         try {
+            $lang = $this->setLanguage($request);
             $player = $this->getPlayer($request);
             if (empty($player)) {
-                return $this->fail('玩家信息获取失败，请检查 X-Player-Id header');
+                return $this->fail(trans('player_info_failed', [], 'admin_game_platform'));
             }
 
             $data = $request->all();
 
             if (empty($data['game_platform_id'])) {
-                return $this->fail('游戏平台ID不能为空');
+                return $this->fail(trans('game_platform_id_required', [], 'admin_game_platform'));
             }
 
             /** @var GamePlatform $gamePlatform */
             $gamePlatform = GamePlatform::query()->find($data['game_platform_id']);
 
             if (empty($gamePlatform)) {
-                return $this->fail('游戏平台不存在');
+                return $this->fail(trans('game_platform_not_found', [], 'admin_game_platform'));
             }
 
             if ($gamePlatform->status == 0) {
-                return $this->fail('游戏平台已禁用');
+                return $this->fail(trans('game_platform_disabled', [], 'admin_game_platform'));
             }
-
-            $lang = $request->header('Accept-Language', 'zh-CN');
-            $lang = Str::replace('_', '-', $lang);
 
             // 调用游戏服务获取游戏列表并保存到数据库
             $gameService = GameServiceFactory::createService(strtoupper($gamePlatform->code), $player);
-            $gameService->getGameList($lang);
+            $gameService->getGameList($this->getGameLang($lang));
 
             Log::info('Admin get game list', [
                 'player_id' => $player->id,
@@ -193,7 +215,7 @@ class AdminGamePlatformController
             ]);
 
             return $this->success([
-                'message' => '游戏列表已更新',
+                'message' => trans('game_list_updated', [], 'admin_game_platform'),
                 'platform_id' => $gamePlatform->id,
                 'platform_name' => $gamePlatform->name,
             ]);
@@ -207,7 +229,7 @@ class AdminGamePlatformController
                 'game_platform_id' => $data['game_platform_id'] ?? null,
                 'player_id' => $player->id ?? null,
             ]);
-            return $this->fail($e->getMessage() ?? '系统错误');
+            return $this->fail($e->getMessage() ?? trans('system_error', [], 'admin_game_platform'));
         }
     }
 
@@ -219,42 +241,40 @@ class AdminGamePlatformController
     public function enterGame(Request $request): Response
     {
         try {
+            $lang = $this->setLanguage($request);
             $player = $this->getPlayer($request);
             if (empty($player)) {
-                return $this->fail('玩家信息获取失败，请检查 X-Player-Id header');
+                return $this->fail(trans('player_info_failed', [], 'admin_game_platform'));
             }
 
             $data = $request->all();
 
             if (empty($data['game_id'])) {
-                return $this->fail('游戏ID不能为空');
+                return $this->fail(trans('game_id_required', [], 'admin_game_platform'));
             }
 
             /** @var Game $game */
             $game = Game::query()->where('id', $data['game_id'])->first();
 
             if (empty($game)) {
-                return $this->fail('游戏不存在');
+                return $this->fail(trans('game_not_found', [], 'admin_game_platform'));
             }
 
             if ($game->status == 0) {
-                return $this->fail('游戏已禁用');
+                return $this->fail(trans('game_disabled', [], 'admin_game_platform'));
             }
 
             if (empty($game->gamePlatform)) {
-                return $this->fail('游戏平台不存在');
+                return $this->fail(trans('game_platform_not_found', [], 'admin_game_platform'));
             }
 
             if ($game->gamePlatform->status == 0) {
-                return $this->fail('游戏平台已禁用');
+                return $this->fail(trans('game_platform_disabled', [], 'admin_game_platform'));
             }
-
-            $lang = $request->header('Accept-Language', 'zh-CN');
-            $lang = Str::replace('_', '-', $lang);
 
             // 调用游戏服务获取游戏URL
             $gameService = GameServiceFactory::createService(strtoupper($game->gamePlatform->code), $player);
-            $gameUrl = $gameService->gameLogin($game, $lang);
+            $gameUrl = $gameService->gameLogin($game, $this->getGameLang($lang));
 
             Log::info('Admin enter game', [
                 'player_id' => $player->id,
@@ -276,7 +296,7 @@ class AdminGamePlatformController
                 'game_id' => $data['game_id'] ?? null,
                 'player_id' => $player->id ?? null,
             ]);
-            return $this->fail($e->getMessage() ?? '系统错误');
+            return $this->fail($e->getMessage() ?? trans('system_error', [], 'admin_game_platform'));
         }
     }
 
@@ -288,15 +308,16 @@ class AdminGamePlatformController
     public function replay(Request $request): Response
     {
         try {
+            $lang = $this->setLanguage($request);
             $player = $this->getPlayer($request);
             if (empty($player)) {
-                return $this->fail('玩家信息获取失败，请检查 X-Player-Id header');
+                return $this->fail(trans('player_info_failed', [], 'admin_game_platform'));
             }
 
             $data = $request->all();
 
             if (empty($data['game_record_id'])) {
-                return $this->fail('游戏记录ID不能为空');
+                return $this->fail(trans('game_record_id_required', [], 'admin_game_platform'));
             }
 
             // 查询游戏记录
@@ -305,22 +326,19 @@ class AdminGamePlatformController
                 ->find($data['game_record_id']);
 
             if (empty($gameRecord)) {
-                return $this->fail('游戏记录不存在');
+                return $this->fail(trans('game_record_not_found', [], 'admin_game_platform'));
             }
 
             if (empty($gameRecord->gamePlatform)) {
-                return $this->fail('游戏平台不存在');
+                return $this->fail(trans('game_platform_not_found', [], 'admin_game_platform'));
             }
-
-            $lang = $request->header('Accept-Language', 'zh-CN');
-            $lang = Str::replace('_', '-', $lang);
 
             // 调用游戏服务获取回放URL
             $gameService = GameServiceFactory::createService(strtoupper($gameRecord->gamePlatform->code), $player);
             $replayUrl = $gameService->replay($gameRecord->toArray());
 
             if (empty($replayUrl)) {
-                return $this->fail('该游戏平台不支持回放功能');
+                return $this->fail(trans('replay_not_supported', [], 'admin_game_platform'));
             }
 
             Log::info('Admin replay game', [
@@ -342,7 +360,7 @@ class AdminGamePlatformController
                 'game_record_id' => $data['game_record_id'] ?? null,
                 'player_id' => $player->id ?? null,
             ]);
-            return $this->fail($e->getMessage() ?? '系统错误');
+            return $this->fail($e->getMessage() ?? trans('system_error', [], 'admin_game_platform'));
         }
     }
 }
