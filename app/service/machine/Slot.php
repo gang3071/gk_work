@@ -508,8 +508,26 @@ class Slot extends MachineServices implements BaseMachine
             ]);
             throw new Exception($e->getMessage());
         }
-        saveMachineOperationLog($this->machine, $this->machine->gamingPlayer, json_encode($this->getAllData()), $cmd, 1,
-            $isSystem, $data);
+        $this->log->info('玩家机台操作', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'machine_name' => $this->machine->name,
+            'machine_type' => $this->machine->type,
+            'machine_cate' => $this->machine->cate_id,
+            'producer_id' => $this->machine->producer_id,
+            'player_id' => $this->machine->gamingPlayer->id ?? 0,
+            'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',
+            'player_phone' => $this->machine->gamingPlayer->phone ?? '',
+            'player_name' => $this->machine->gamingPlayer->name ?? '',
+            'department_id' => $this->machine->gamingPlayer->department_id ?? 0,
+            'action' => $cmd,
+            'action_desc' => $this->getDescription($cmd),
+            'is_system' => $isSystem,
+            'point' => $data,
+            'machine_data' => $this->getAllData(),
+            'source' => $source,
+            'source_id' => $source_id,
+        ]);
 
         return true;
     }
