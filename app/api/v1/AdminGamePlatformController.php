@@ -97,24 +97,6 @@ class AdminGamePlatformController
     }
 
     /**
-     * 发送 Telegram 告警通知
-     */
-    private function sendTelegramAlert(string $action, Exception $e, array $context = []): void
-    {
-        try {
-            Log::error('管理后台游戏操作异常: ' . $action . ' - ' . $e->getMessage(), array_merge($context, [
-                'action' => $action,
-                'error' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
-            ]));
-        } catch (\Throwable $te) {
-            Log::warning('Send telegram alert failed: ' . $te->getMessage());
-        }
-    }
-
-    /**
      * 进入游戏大厅
      * @param Request $request
      * @return Response
@@ -164,10 +146,6 @@ class AdminGamePlatformController
             Log::error('Admin lobby login failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
-            ]);
-            $this->sendTelegramAlert('管理后台进入游戏大厅', $e, [
-                'game_platform_id' => $data['game_platform_id'] ?? null,
-                'player_id' => $player->id ?? null,
             ]);
             return $this->fail($e->getMessage() ?? trans('system_error', [], 'admin_game_platform'));
         }
@@ -224,10 +202,6 @@ class AdminGamePlatformController
             Log::error('Admin get game list failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
-            ]);
-            $this->sendTelegramAlert('管理后台获取游戏列表', $e, [
-                'game_platform_id' => $data['game_platform_id'] ?? null,
-                'player_id' => $player->id ?? null,
             ]);
             return $this->fail($e->getMessage() ?? trans('system_error', [], 'admin_game_platform'));
         }
@@ -292,10 +266,6 @@ class AdminGamePlatformController
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
-            $this->sendTelegramAlert('管理后台进入游戏', $e, [
-                'game_id' => $data['game_id'] ?? null,
-                'player_id' => $player->id ?? null,
-            ]);
             return $this->fail($e->getMessage() ?? trans('system_error', [], 'admin_game_platform'));
         }
     }
@@ -355,10 +325,6 @@ class AdminGamePlatformController
             Log::error('Admin replay game failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
-            ]);
-            $this->sendTelegramAlert('管理后台游戏回放', $e, [
-                'game_record_id' => $data['game_record_id'] ?? null,
-                'player_id' => $player->id ?? null,
             ]);
             return $this->fail($e->getMessage() ?? trans('system_error', [], 'admin_game_platform'));
         }
