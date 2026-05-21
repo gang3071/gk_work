@@ -349,13 +349,12 @@ class Slot extends MachineServices implements BaseMachine
 
     /**
      * 斯洛自动卡
-     * @param string $message 消息
+     * @param string $msg 消息
      * @return bool
      */
-    public function slotAutoCmd(string $message): bool
+    public function slotAutoCmd(string $msg): bool
     {
         try {
-            $msg = strtoupper(bin2hex($message));
             slotCheckCRC8($msg);
             $fun = substr($msg, 0, 8);
             if ($fun == Slot::AUTO && $this->machine->is_special == 0) {

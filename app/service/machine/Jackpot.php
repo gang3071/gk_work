@@ -321,13 +321,12 @@ class Jackpot extends MachineServices implements BaseMachine
 
     /**
      * 钢珠消息处理
-     * @param string $message 消息
+     * @param string $msg 消息
      * @return bool
      */
-    public function jackPotCmd(string $message): bool
+    public function jackPotCmd(string $msg): bool
     {
         try {
-            $msg = strtoupper(bin2hex($message));
             jackPotCheckCRC8($msg); // 检查crc8
             $fun = substr($msg, 2, 2);
             $data = jackpotDecodeData($msg);
