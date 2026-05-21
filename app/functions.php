@@ -10,6 +10,7 @@ use app\model\MachineKeepingLog;
 use app\model\MachineKickLog;
 use app\model\MachineMedia;
 use app\model\MachineMediaPush;
+use app\model\mongo\MachineOperationLog;
 use app\model\NationalProfitRecord;
 use app\model\Notice;
 use app\model\Player;
@@ -34,6 +35,7 @@ use app\service\MediaServer;
 use support\Cache;
 use support\Db;
 use support\Log;
+use TencentCloud\Ess\V20201111\Models\Admin;
 use Webman\Push\Api;
 use Webman\Push\PushException;
 use Webman\RedisQueue\Client as queueClient;
@@ -2268,4 +2270,54 @@ function clearMachineCrashCache(int $playerId): bool
 
         return false;
     }
+}
+
+/**
+ * @param Machine $machine
+ * @param Player|null $player
+ * @param string $content 内容
+ * @param string $action 功能
+ * @param int $status 状态
+ * @param int $isSystem
+ * @param int $point
+ * @return bool
+ */
+function saveMachineOperationLog(
+    Machine $machine,
+    Player  $player = null,
+    string  $content = '',
+    string  $action = '',
+    int     $status = 1,
+    int     $isSystem = 0,
+    int     $point = 0
+): bool
+{
+    $machineOperationLog = new MachineOperationLog;
+    $machineOperationLog->id = 0;
+    $machineOperationLog->department_id = $player->department_id ?? 0;
+    $machineOperationLog->machine_id = $machine->id;
+    $machineOperationLog->producer_id = $machine->producer_id;
+    $machineOperationLog->machine_name = $machine->name;
+    $machineOperationLog->machine_type = $machine->type;
+    $machineOperationLog->machine_cate = $machine->cate_id;
+    $machineOperationLog->machine_code = $machine->code;
+    $machineOperationLog->uuid = $player->uuid ?? '';
+    $machineOperationLog->player_id = $player->id ?? 0;
+    $machineOperationLog->player_phone = $player->phone ?? '';
+    $machineOperationLog->player_name = $player->name ?? '';
+    $machineOperationLog->status = $status;
+    $machineOperationLog->is_system = $isSystem;
+    $machineOperationLog->content = $content;
+    $machineOperationLog->action = $action;
+    $machineOperationLog->remark = request()?->input('data')['remark'] ?? '';
+    $machineOperationLog->user_id = Admin::id() ?? 0;
+    $machineOperationLog->user_name = !empty(Admin::user()) ? Admin::user()->toArray()['username'] : trans('system_automatic',
+        [], 'message');
+    if ($action == 41) {
+        $point = 100;
+    } elseif ($action == 42) {
+        $point = 1000;
+    }
+    $machineOperationLog->point = $point;
+    return $machineOperationLog->save();
 }

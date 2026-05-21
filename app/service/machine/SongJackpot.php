@@ -4,6 +4,7 @@ namespace app\service\machine;
 
 use app\model\GameType;
 use app\model\Machine;
+use app\model\MachineLotteryRecord;
 use app\model\Notice;
 use app\service\LotteryServices;
 use Exception;
@@ -745,10 +746,10 @@ class SongJackpot extends MachineServices implements BaseMachine
      */
     public function sendCmd(
         string $cmd,
-        int    $data = 0,
+        int $data = 0,
         string $source = 'player',
-        int    $source_id = 0,
-        int    $isSystem = 0
+        int $source_id = 0,
+        int $isSystem = 0
     ): bool
     {
         $uid = $this->machine->domain . ':' . $this->machine->port;
@@ -870,8 +871,8 @@ class SongJackpot extends MachineServices implements BaseMachine
         string $uid,
         string $cmd,
         string $source = 'player',
-        int    $source_id = 0,
-        int    $attempts = 0
+        int $source_id = 0,
+        int $attempts = 0
     ): void
     {
         $maxRetries = 8;
@@ -1025,9 +1026,9 @@ class SongJackpot extends MachineServices implements BaseMachine
     private function openPoint(
         string $uid,
         string $cmd,
-        int    $data,
+        int $data,
         string $source = 'player',
-        int    $source_id = 0,
+        int $source_id = 0,
     ): void
     {
         $expirationTime = 1000000;
@@ -1075,10 +1076,10 @@ class SongJackpot extends MachineServices implements BaseMachine
     private function washPoint(
         string $uid,
         string $cmd,
-        int    $data,
+        int $data,
         string $source = 'player',
-        int    $source_id = 0,
-        int    $attempts = 0
+        int $source_id = 0,
+        int $attempts = 0
     ): void
     {
         $maxRetries = 8;
