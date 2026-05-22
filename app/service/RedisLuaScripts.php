@@ -460,8 +460,8 @@ LUA;
             $data['game_name'] ?? '',                        // ARGV[8]
             $transactionType,                                // ARGV[9]
             time(),                                          // ARGV[10]
-            3600,                                            // ARGV[11] - 1小时 TTL
-            3600,                                            // ARGV[12] - 余额 TTL
+            3600,                                            // ARGV[11] - 押注记录 TTL (1小时)
+            5184000,                                         // ARGV[12] - 余额 TTL (60天，与 WalletService::CACHE_TTL 保持一致)
             $createdAt,                                      // ARGV[13]
         ];
 
@@ -588,8 +588,8 @@ LUA;
             $diffInCents,                                    // ARGV[2] - ✅ 输赢金额（分）
             $transactionType,                                // ARGV[3]
             $timestamp,                                      // ARGV[4]
-            3600,                                            // ARGV[5] - 1小时 TTL
-            3600,                                            // ARGV[6] - 余额 TTL
+            3600,                                            // ARGV[5] - 结算记录 TTL (1小时)
+            5184000,                                         // ARGV[6] - 余额 TTL (60天，与 WalletService::CACHE_TTL 保持一致)
             $playerId,                                       // ARGV[7]
             $data['platform_id'],                            // ARGV[8]
             $dateTime,                                       // ARGV[9] - 预格式化日期
@@ -743,7 +743,7 @@ LUA;
             $refundAmountInCents,                            // ARGV[1] - ✅ 退款金额（分）
             $transactionType,                                // ARGV[2]
             time(),                                          // ARGV[3]
-            3600,                                            // ARGV[4] - 余额 TTL
+            5184000,                                         // ARGV[4] - 余额 TTL (60天，与 WalletService::CACHE_TTL 保持一致)
         ];
 
         // 执行 Lua 脚本（使用 work 连接池，确保 igaming 核心业务稳定）

@@ -28,12 +28,12 @@ class ReconciliationTask
     public function onWorkerStart()
     {
         // 每10分钟执行一次对账
-        new Crontab('0 */3 * * * *', function () {
+        new Crontab('0 */5 * * * *', function () {
             $this->reconcile();
         });
 
         Log::info('ReconciliationTask: 对账任务已启动', [
-            'interval' => '每3分钟',
+            'interval' => '每5分钟',
             'mode' => '单向对账（Redis → DB）',
             'principle' => 'Redis as Single Source of Truth',
         ]);
