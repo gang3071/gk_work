@@ -69,8 +69,9 @@ class WalletService
             $balance = self::getBalanceFromDB($playerId, $platformId);
 
             // ✅ 整数化：写入缓存时转换为"分"
+            // ⚠️ 永不过期：Redis 是余额的唯一实时标准
             $balanceInCents = (int)round($balance * 100);
-            Redis::setex($cacheKey, self::CACHE_TTL, $balanceInCents);
+            Redis::set($cacheKey, $balanceInCents);
 
             return round($balance, 2);
 
@@ -265,8 +266,9 @@ class WalletService
             $cacheKey = self::getCacheKey($playerId);
 
             // ✅ 整数化：转换为"分"（整数）后存储
+            // ⚠️ 永不过期：Redis 是余额的唯一实时标准
             $balanceInCents = (int)round($balance * 100);
-            Redis::setex($cacheKey, $ttl, $balanceInCents);
+            Redis::set($cacheKey, $balanceInCents);
 
             $duration = (microtime(true) - $startTime) * 1000;
 
@@ -481,14 +483,13 @@ class WalletService
     private const LUA_ATOMIC_INCREMENT = <<<'LUA'
 local key = KEYS[1]
 local amount = tonumber(ARGV[1])  -- 金额（分，整数）
-local ttl = tonumber(ARGV[2]) or 3600
 
 -- ✅ 整数化：Redis 存储整数（分）
 local currentBalance = tonumber(redis.call('GET', key)) or 0
 local newBalance = currentBalance + amount
 
--- ✅ 整数化：存储整数
-redis.call('SETEX', key, ttl, tostring(math.floor(newBalance)))
+-- ✅ 整数化：存储整数（永不过期，Redis 是唯一实时标准）
+redis.call('SET', key, tostring(math.floor(newBalance)))
 return cjson.encode({ok = 1, balance = newBalance, old = currentBalance, new = newBalance})
 LUA;
 
@@ -500,7 +501,6 @@ LUA;
     private const LUA_ATOMIC_DECREMENT = <<<'LUA'
 local key = KEYS[1]
 local amount = tonumber(ARGV[1])  -- 金额（分，整数）
-local ttl = tonumber(ARGV[2]) or 3600
 
 -- ✅ 整数化：Redis 存储整数（分）
 local currentBalance = tonumber(redis.call('GET', key)) or 0
@@ -517,8 +517,8 @@ if newBalance < 0 then
     newBalance = 0
 end
 
--- ✅ 整数化：存储整数
-redis.call('SETEX', key, ttl, tostring(math.floor(newBalance)))
+-- ✅ 整数化：存储整数（永不过期，Redis 是唯一实时标准）
+redis.call('SET', key, tostring(math.floor(newBalance)))
 return cjson.encode({ok = 1, balance = newBalance, old = currentBalance, new = newBalance})
 LUA;
 
@@ -541,7 +541,6 @@ LUA;
     private const LUA_ATOMIC_WASH = <<<'LUA'
 local key = KEYS[1]
 local minWashAmount = tonumber(ARGV[1]) or 10000  -- ✅ 最小洗分金额（分，默认10000=100元）
-local ttl = tonumber(ARGV[2]) or 3600
 
 -- ✅ 整数化：Redis 存储整数（分）
 local currentBalance = tonumber(redis.call('GET', key)) or 0
@@ -578,8 +577,8 @@ if newBalance < 0 then
     newBalance = 0
 end
 
--- ✅ 整数化：存储整数
-redis.call('SETEX', key, ttl, tostring(math.floor(newBalance)))
+-- ✅ 整数化：存储整数（永不过期，Redis 是唯一实时标准）
+redis.call('SET', key, tostring(math.floor(newBalance)))
 
 return cjson.encode({
     ok = 1,
