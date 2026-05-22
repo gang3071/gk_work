@@ -33,7 +33,7 @@ class ReconciliationTask
         });
 
         Log::info('ReconciliationTask: 对账任务已启动', [
-            'interval' => '每10分钟',
+            'interval' => '每3分钟',
             'mode' => '单向对账（Redis → DB）',
             'principle' => 'Redis as Single Source of Truth',
         ]);
