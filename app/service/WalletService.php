@@ -18,7 +18,8 @@ class WalletService
     private const CACHE_PREFIX = 'wallet:balance:';
 
     // 缓存过期时间（秒）
-    private const CACHE_TTL = 3600; // 1小时
+    // ⚠️ 60天过期：活跃玩家长期缓存，僵尸玩家自动清理
+    private const CACHE_TTL = 5184000; // 60天 (60 * 24 * 3600)
 
     // 短期缓存过期时间（用于高频访问的玩家）
     private const CACHE_TTL_SHORT = 300; // 5分钟
