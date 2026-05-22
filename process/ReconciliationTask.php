@@ -28,7 +28,7 @@ class ReconciliationTask
     public function onWorkerStart()
     {
         // 每10分钟执行一次对账
-        new Crontab('0 */10 * * * *', function () {
+        new Crontab('0 */3 * * * *', function () {
             $this->reconcile();
         });
 
