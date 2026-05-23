@@ -167,9 +167,9 @@ end
 
 -- 4. 扣款（✅ 整数运算）
 local newBalance = currentBalance - betAmount
+-- ⚠️ 永不过期：余额是核心数据，Redis 是唯一实时标准
 -- ✅ 整数化：存储整数
-redis.call('SETEX', balanceKey, 3600, tostring(math.floor(newBalance)))
-
+redis.call('SET', balanceKey, tostring(math.floor(newBalance)))
 -- 5. 记录转账流水号（防止重复）
 redis.call('SETEX', transferKey, 3600, 1)
 

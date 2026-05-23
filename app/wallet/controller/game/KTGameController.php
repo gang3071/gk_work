@@ -206,9 +206,10 @@ class KTGameController
 
                 // 更新余额（使用Redis保证原子性）
                 // ✅ 整数化改造：将"元"转换为"分"存储
+                // ⚠️ 永不过期：余额是核心数据，Redis 是唯一实时标准
                 $balanceKey = "wallet:balance:{$player->id}";
                 $newBalanceInCents = (int)round($newBalance * 100);
-                $redis->setex($balanceKey, 3600, $newBalanceInCents);
+                $redis->set($balanceKey, $newBalanceInCents);
 
                 // 爆机检测（仅加款时）
                 if (bccomp($balanceChange, '0', 2) > 0) {

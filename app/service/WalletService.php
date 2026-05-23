@@ -18,8 +18,8 @@ class WalletService
     private const CACHE_PREFIX = 'wallet:balance:';
 
     // 缓存过期时间（秒）
-    // ⚠️ 60天过期：活跃玩家长期缓存，僵尸玩家自动清理
-    private const CACHE_TTL = 5184000; // 60天 (60 * 24 * 3600)
+    // ⚠️ 已废弃：余额缓存现在永不过期（Redis as Single Source of Truth）
+    // private const CACHE_TTL = 5184000; // 60天 (60 * 24 * 3600)
 
     // 短期缓存过期时间（用于高频访问的玩家）
     private const CACHE_TTL_SHORT = 300; // 5分钟
@@ -255,11 +255,11 @@ class WalletService
      *
      * @param int $playerId 玩家ID
      * @param int $platformId 平台ID
+     * @param int $ttl (已废弃) 过期时间 - 余额已改为永不过期
      * @param float $balance 余额（元）
-     * @param int $ttl 过期时间（秒）
      * @return bool
      */
-    public static function updateCache(int $playerId, int $platformId, float $balance, int $ttl = self::CACHE_TTL): bool
+    public static function updateCache(int $playerId, int $platformId, float $balance, int $ttl = 0): bool
     {
         $startTime = microtime(true);
 
@@ -278,7 +278,8 @@ class WalletService
                 'platform_id' => $platformId,
                 'balance_yuan' => $balance,
                 'balance_cents' => $balanceInCents,
-                'ttl' => $ttl,
+                'balance' => $balance,
+                'ttl' => 'never_expire',
                 'cache_time' => round($duration, 2) . 'ms',
             ]);
 
@@ -686,10 +687,11 @@ LUA;
      *
      * @param int $playerId 玩家ID
      * @param float $amount 减少金额（元，必须 > 0）
-     * @param int $ttl Redis 缓存过期时间（秒），默认 3600
      * @return array ['ok' => 1, 'balance' => 新余额(元)] 或 ['ok' => 0, 'error' => 'insufficient_balance', 'balance' => 当前余额(元)]
+     * @param int $ttl (已废弃) Redis 缓存过期时间 - 余额已改为永不过期
+     * @return array ['ok' => 1, 'balance' => 新余额] 或 ['ok' => 0, 'error' => 'insufficient_balance', 'balance' => 当前余额]
      */
-    public static function atomicDecrement(int $playerId, float $amount, int $ttl = 3600): array
+    public static function atomicDecrement(int $playerId, float $amount, int $ttl = 0): array
     {
         if ($amount <= 0) {
             throw new \InvalidArgumentException('Amount must be greater than 0');
@@ -774,7 +776,7 @@ LUA;
      *
      * @param int $playerId 玩家ID
      * @param int $minWashAmount 最小洗分金额（元，默认100）
-     * @param int $ttl Redis 缓存过期时间（秒），默认 3600
+     * @param int $ttl (已废弃) Redis 缓存过期时间 - 余额已改为永不过期
      * @return array [
      *   'ok' => 1,                 // 成功标志
      *   'balance' => 新余额(元),
@@ -786,7 +788,7 @@ LUA;
      *   'balance' => 当前余额(元)
      * ]
      */
-    public static function atomicWash(int $playerId, int $minWashAmount = 100, int $ttl = 3600): array
+    public static function atomicWash(int $playerId, int $minWashAmount = 100, int $ttl = 0): array
     {
         try {
             $cacheKey = self::getCacheKey($playerId);
