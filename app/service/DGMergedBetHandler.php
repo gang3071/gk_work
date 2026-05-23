@@ -2,8 +2,8 @@
 
 namespace app\service;
 
-use support\Redis;
 use support\Log;
+use support\Redis;
 
 /**
  * DG 平台多次下注合并处理器
@@ -159,7 +159,8 @@ end
 
 -- 4. 扣款
 local newBalance = currentBalance - betAmount
-redis.call('SETEX', balanceKey, 3600, newBalance)
+-- ⚠️ 永不过期：余额是核心数据，Redis 是唯一实时标准
+redis.call('SET', balanceKey, newBalance)
 
 -- 5. 记录转账流水号（防止重复）
 redis.call('SETEX', transferKey, 3600, 1)

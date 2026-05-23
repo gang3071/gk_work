@@ -18,8 +18,8 @@ class WalletService
     private const CACHE_PREFIX = 'wallet:balance:';
 
     // 缓存过期时间（秒）
-    // ⚠️ 60天过期：活跃玩家长期缓存，僵尸玩家自动清理
-    private const CACHE_TTL = 5184000; // 60天 (60 * 24 * 3600)
+    // ⚠️ 已废弃：余额缓存现在永不过期（Redis as Single Source of Truth）
+    // private const CACHE_TTL = 5184000; // 60天 (60 * 24 * 3600)
 
     // 短期缓存过期时间（用于高频访问的玩家）
     private const CACHE_TTL_SHORT = 300; // 5分钟
@@ -66,8 +66,8 @@ class WalletService
             // 缓存未命中或强制刷新，从数据库读取
             $balance = self::getBalanceFromDB($playerId, $platformId);
 
-            // 写入缓存
-            Redis::setex($cacheKey, self::CACHE_TTL, $balance);
+            // 写入缓存（永不过期，Redis 是余额的唯一实时标准）
+            Redis::set($cacheKey, $balance);
 
             return round($balance, 2);
 
@@ -249,16 +249,17 @@ class WalletService
      * @param int $playerId 玩家ID
      * @param int $platformId 平台ID
      * @param float $balance 余额
-     * @param int $ttl 过期时间（秒）
+     * @param int $ttl (已废弃) 过期时间 - 余额已改为永不过期
      * @return bool
      */
-    public static function updateCache(int $playerId, int $platformId, float $balance, int $ttl = self::CACHE_TTL): bool
+    public static function updateCache(int $playerId, int $platformId, float $balance, int $ttl = 0): bool
     {
         $startTime = microtime(true);
 
         try {
             $cacheKey = self::getCacheKey($playerId);
-            Redis::setex($cacheKey, $ttl, $balance);
+            // ⚠️ 永不过期：余额是核心数据，Redis 是唯一实时标准
+            Redis::set($cacheKey, $balance);
 
             $duration = (microtime(true) - $startTime) * 1000;
 
@@ -266,7 +267,7 @@ class WalletService
                 'player_id' => $playerId,
                 'platform_id' => $platformId,
                 'balance' => $balance,
-                'ttl' => $ttl,
+                'ttl' => 'never_expire',
                 'cache_time' => round($duration, 2) . 'ms',
             ]);
 
@@ -469,12 +470,12 @@ class WalletService
     private const LUA_ATOMIC_INCREMENT = <<<'LUA'
 local key = KEYS[1]
 local amount = tonumber(ARGV[1])
-local ttl = tonumber(ARGV[2]) or 3600
 
 local currentBalance = tonumber(redis.call('GET', key)) or 0
 local newBalance = currentBalance + amount
 
-redis.call('SETEX', key, ttl, newBalance)
+-- ⚠️ 永不过期：余额是核心数据，Redis 是唯一实时标准
+redis.call('SET', key, newBalance)
 return cjson.encode({ok = 1, balance = newBalance, old = currentBalance, new = newBalance})
 LUA;
 
@@ -484,7 +485,6 @@ LUA;
     private const LUA_ATOMIC_DECREMENT = <<<'LUA'
 local key = KEYS[1]
 local amount = tonumber(ARGV[1])
-local ttl = tonumber(ARGV[2]) or 3600
 
 local currentBalance = tonumber(redis.call('GET', key)) or 0
 
@@ -501,7 +501,8 @@ if newBalance < 0 then
     newBalance = 0
 end
 
-redis.call('SETEX', key, ttl, newBalance)
+-- ⚠️ 永不过期：余额是核心数据，Redis 是唯一实时标准
+redis.call('SET', key, newBalance)
 return cjson.encode({ok = 1, balance = newBalance, old = currentBalance, new = newBalance})
 LUA;
 
@@ -522,7 +523,6 @@ LUA;
     private const LUA_ATOMIC_WASH = <<<'LUA'
 local key = KEYS[1]
 local minWashAmount = tonumber(ARGV[1]) or 100  -- 最小洗分金额（默认100）
-local ttl = tonumber(ARGV[2]) or 3600
 
 local currentBalance = tonumber(redis.call('GET', key)) or 0
 
@@ -559,7 +559,8 @@ if newBalance < 0 then
     newBalance = 0
 end
 
-redis.call('SETEX', key, ttl, newBalance)
+-- ⚠️ 永不过期：余额是核心数据，Redis 是唯一实时标准
+redis.call('SET', key, newBalance)
 
 return cjson.encode({
     ok = 1,
@@ -585,10 +586,10 @@ LUA;
      *
      * @param int $playerId 玩家ID
      * @param float $amount 增加金额（必须 > 0）
-     * @param int $ttl Redis 缓存过期时间（秒），默认 3600
+     * @param int $ttl (已废弃) Redis 缓存过期时间 - 余额已改为永不过期
      * @return float 新余额
      */
-    public static function atomicIncrement(int $playerId, float $amount, int $ttl = 3600): array
+    public static function atomicIncrement(int $playerId, float $amount, int $ttl = 0): array
     {
         if ($amount <= 0) {
             throw new \InvalidArgumentException('Amount must be greater than 0');
@@ -602,8 +603,7 @@ LUA;
                 self::LUA_ATOMIC_INCREMENT,
                 1,  // KEYS 数量
                 $cacheKey,  // KEYS[1]
-                $amount,    // ARGV[1]
-                $ttl        // ARGV[2]
+                $amount     // ARGV[1]
             );
 
             // 解析返回的 JSON：{ok, balance, old, new}
@@ -658,10 +658,10 @@ LUA;
      *
      * @param int $playerId 玩家ID
      * @param float $amount 减少金额（必须 > 0）
-     * @param int $ttl Redis 缓存过期时间（秒），默认 3600
+     * @param int $ttl (已废弃) Redis 缓存过期时间 - 余额已改为永不过期
      * @return array ['ok' => 1, 'balance' => 新余额] 或 ['ok' => 0, 'error' => 'insufficient_balance', 'balance' => 当前余额]
      */
-    public static function atomicDecrement(int $playerId, float $amount, int $ttl = 3600): array
+    public static function atomicDecrement(int $playerId, float $amount, int $ttl = 0): array
     {
         if ($amount <= 0) {
             throw new \InvalidArgumentException('Amount must be greater than 0');
@@ -685,8 +685,7 @@ LUA;
                 self::LUA_ATOMIC_DECREMENT,
                 1,  // KEYS 数量
                 $cacheKey,  // KEYS[1]
-                $amount,    // ARGV[1]
-                $ttl        // ARGV[2]
+                $amount     // ARGV[1]
             );
 
             $result = json_decode($resultJson, true);
@@ -748,7 +747,7 @@ LUA;
      *
      * @param int $playerId 玩家ID
      * @param int $minWashAmount 最小洗分金额（默认100）
-     * @param int $ttl Redis 缓存过期时间（秒），默认 3600
+     * @param int $ttl (已废弃) Redis 缓存过期时间 - 余额已改为永不过期
      * @return array [
      *   'ok' => 1,                 // 成功标志
      *   'balance' => 新余额,
@@ -760,7 +759,7 @@ LUA;
      *   'balance' => 当前余额
      * ]
      */
-    public static function atomicWash(int $playerId, int $minWashAmount = 100, int $ttl = 3600): array
+    public static function atomicWash(int $playerId, int $minWashAmount = 100, int $ttl = 0): array
     {
         try {
             $cacheKey = self::getCacheKey($playerId);
@@ -770,8 +769,7 @@ LUA;
                 self::LUA_ATOMIC_WASH,
                 1,  // KEYS 数量
                 $cacheKey,      // KEYS[1]
-                $minWashAmount, // ARGV[1]
-                $ttl            // ARGV[2]
+                $minWashAmount  // ARGV[1]
             );
 
             $result = json_decode($resultJson, true);

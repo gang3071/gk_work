@@ -43,7 +43,7 @@ class RedisLuaScripts
      * ARGV[9] = 交易类型
      * ARGV[10] = 当前时间戳
      * ARGV[11] = 记录TTL (3600 = 1小时，极限内存优化)
-     * ARGV[12] = 余额TTL (3600 = 1小时)
+     * ARGV[12] = (已废弃) 余额TTL - 余额已改为永不过期
      * ARGV[13] = 创建时间字符串
      *
      * 返回值：
@@ -83,7 +83,8 @@ if newBalance < 0 then
     newBalance = 0
 end
 
-redis.call('SETEX', KEYS[1], ARGV[12], newBalance)
+-- ⚠️ 永不过期：余额是核心数据，Redis 是唯一实时标准
+redis.call('SET', KEYS[1], newBalance)
 
 -- 5. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
@@ -133,7 +134,7 @@ LUA;
      * ARGV[3] = 结算类型 (settle/refund/jackpot/reward)
      * ARGV[4] = 当前时间戳
      * ARGV[5] = 记录TTL (3600 = 1小时)
-     * ARGV[6] = 余额TTL
+     * ARGV[6] = (已废弃) 余额TTL - 余额已改为永不过期
      * ARGV[7] = 玩家ID
      * ARGV[8] = 平台ID
      * ARGV[9] = 预格式化日期字符串 (Y-m-d H:i:s)
@@ -190,7 +191,8 @@ end
 
 -- 4. 更新余额（支持加钱和扣钱）
 local newBalance = currentBalance + balanceChange
-redis.call('SETEX', KEYS[1], ARGV[6], newBalance)
+-- ⚠️ 永不过期：余额是核心数据，Redis 是唯一实时标准
+redis.call('SET', KEYS[1], newBalance)
 
 -- 5. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
@@ -256,7 +258,7 @@ LUA;
      * ARGV[1] = 退款金额
      * ARGV[2] = 取消类型 (cancel/refund)
      * ARGV[3] = 当前时间戳
-     * ARGV[4] = 余额TTL
+     * ARGV[4] = (已废弃) 余额TTL - 余额已改为永不过期
      *
      * 返回值：
      * - success: {ok: 1, balance: 新余额, old_balance: 旧余额}
@@ -292,7 +294,8 @@ local refundAmount = tonumber(ARGV[1]) or 0
 
 -- 3. 退款
 local newBalance = currentBalance + refundAmount
-redis.call('SETEX', KEYS[1], ARGV[4], newBalance)
+-- ⚠️ 永不过期：余额是核心数据，Redis 是唯一实时标准
+redis.call('SET', KEYS[1], newBalance)
 
 -- 4. 设置幂等性锁
 redis.call('SETEX', KEYS[5], 300, 1)
@@ -444,7 +447,7 @@ LUA;
             $transactionType,                                // ARGV[9]
             time(),                                          // ARGV[10]
             3600,                                            // ARGV[11] - 押注记录 TTL (1小时)
-            5184000,                                         // ARGV[12] - 余额 TTL (60天，与 WalletService::CACHE_TTL 保持一致)
+            0,                                               // ARGV[12] - 已废弃：余额已改为永不过期
             $createdAt,                                      // ARGV[13]
         ];
 
@@ -562,7 +565,7 @@ LUA;
             $transactionType,                                // ARGV[3]
             $timestamp,                                      // ARGV[4]
             3600,                                            // ARGV[5] - 结算记录 TTL (1小时)
-            5184000,                                         // ARGV[6] - 余额 TTL (60天，与 WalletService::CACHE_TTL 保持一致)
+            0,                                               // ARGV[6] - 已废弃：余额已改为永不过期
             $playerId,                                       // ARGV[7]
             $data['platform_id'],                            // ARGV[8]
             $dateTime,                                       // ARGV[9] - 预格式化日期
@@ -707,7 +710,7 @@ LUA;
             $refundAmount,                                   // ARGV[1]
             $transactionType,                                // ARGV[2]
             time(),                                          // ARGV[3]
-            5184000,                                         // ARGV[4] - 余额 TTL (60天，与 WalletService::CACHE_TTL 保持一致)
+            0,                                               // ARGV[4] - 已废弃：余额已改为永不过期
         ];
 
         // 执行 Lua 脚本（使用 work 连接池，确保 igaming 核心业务稳定）
