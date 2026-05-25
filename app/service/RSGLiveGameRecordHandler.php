@@ -50,6 +50,16 @@ class RSGLiveGameRecordHandler
         $redis = Redis::connection();
         $exists = $redis->exists($aggKey);
 
+        // ✅ 诊断日志：记录传入的 balance 值
+        Log::channel('rsglive_server')->info('[saveBet] 传入数据', [
+            'referenceId' => $referenceId,
+            'transactionId' => $transactionId,
+            'exists' => $exists,
+            'balance_before' => $data['balance_before'] ?? 'null',
+            'balance_after' => $data['balance_after'] ?? 'null',
+            'amount' => $data['amount'],
+        ]);
+
         if (!$exists) {
             // 首次下注：创建聚合记录
             $record = [
@@ -80,19 +90,30 @@ class RSGLiveGameRecordHandler
             Log::channel('rsglive_server')->info('RSGLive聚合记录创建', [
                 'referenceId' => $referenceId,
                 'amount' => $data['amount'],
+                'balance_before' => $data['balance_before'] ?? '',
+                'balance_after' => $data['balance_after'] ?? '',
             ]);
         } else {
-            // 后续下注：累加金额
+            // 后续下注：累加金额 + 更新 balance_after（记录最新余额）
+            $oldBalanceAfter = $redis->hGet($aggKey, 'balance_after');
             $redis->hIncrByFloat($aggKey, 'amount', $data['amount']);
             $redis->hSet($aggKey, 'status', 'pending');
             $redis->hSet($aggKey, 'original_data', json_encode($data['original_data'] ?? [], JSON_UNESCAPED_UNICODE));
+            // ✅ 更新 balance_after 为最新余额（balance_before 保持首次下注前的值不变）
+            if (!empty($data['balance_after'])) {
+                $redis->hSet($aggKey, 'balance_after', $data['balance_after']);
+            }
             $redis->zAdd(self::PREFIX_SYNC_QUEUE, time(), $aggKey);
 
             $newAmount = $redis->hGet($aggKey, 'amount');
+            $newBalanceAfter = $redis->hGet($aggKey, 'balance_after');
             Log::channel('rsglive_server')->info('RSGLive聚合记录累加', [
                 'referenceId' => $referenceId,
                 'added' => $data['amount'],
                 'total' => $newAmount,
+                'input_balance_after' => $data['balance_after'] ?? 'null',
+                'old_balance_after' => $oldBalanceAfter,
+                'new_balance_after' => $newBalanceAfter,
             ]);
         }
 
@@ -128,8 +149,7 @@ class RSGLiveGameRecordHandler
                 'platform_action_at' => date('Y-m-d H:i:s'),
                 'action_data' => json_encode($data['original_data'] ?? [], JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
+                // ✅ 不覆盖 balance_before/after — 保持下注时的余额快照
             ]);
 
             $redis->zAdd(self::PREFIX_SYNC_QUEUE, time(), $aggKey);
@@ -176,8 +196,7 @@ class RSGLiveGameRecordHandler
                 'cancel_time' => time(),
                 'action_data' => json_encode($data['original_data'] ?? [], JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
+                // ✅ 不覆盖 balance_before/after — 保持下注时的余额快照
             ]);
 
             $redis->zAdd(self::PREFIX_SYNC_QUEUE, time(), $aggKey);

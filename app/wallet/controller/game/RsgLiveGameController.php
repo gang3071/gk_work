@@ -234,13 +234,15 @@ class RsgLiveGameController
 
             $result = RedisLuaScripts::atomicBet($player->id, 'RSGLIVE', $luaParams);
 
-            // ✅ 记录Lua脚本返回结果
+            // ✅ 诊断日志：记录 Lua 返回和传递给 saveBet 的值
             $this->logger->info('rsg_live下注Lua结果', [
                 'transaction_id' => $transactionId,
                 'reference_id' => $referenceId,
-                'lua_result' => $result,
-                'balance_before' => $result['old_balance'] ?? null,
-                'balance_after' => $result['balance'] ?? null,
+                'lua_ok' => $result['ok'] ?? 'null',
+                'lua_balance' => $result['balance'] ?? 'null',
+                'lua_old_balance' => $result['old_balance'] ?? 'null',
+                'lua_balance_type' => gettype($result['balance'] ?? null),
+                'will_call_saveBet' => ($result['ok'] ?? 0) === 1,
             ]);
 
             // 审计日志
