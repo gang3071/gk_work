@@ -84,6 +84,8 @@ return [
             Jackpot::OPEN_TEN => 'Open 10 times',
             Jackpot::RESET_READY_TURN => 'Reset the number of rotations to be prepared for transfer',
             Jackpot::OP_3 => 'Open OP_3 for protection',
+            Jackpot::CLEAR_GIVE => 'Clear Gift Request',
+            Jackpot::CLEAR_LOG => 'Clear History',
             Jackpot::TESTING => 'Test Connection',
             Jackpot::MACHINE_POINT => 'Current Score',
             Jackpot::MACHINE_SCORE => 'Win Score',

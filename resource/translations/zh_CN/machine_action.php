@@ -84,6 +84,8 @@ return [
             Jackpot::OPEN_TEN => '开分10次',
             Jackpot::RESET_READY_TURN => '重设预备转入的转数',
             Jackpot::OP_3 => '开OP_3个保转',
+            Jackpot::CLEAR_GIVE => '清除开赠要求',
+            Jackpot::CLEAR_LOG => '清除历史记录',
             Jackpot::TESTING => '测试连接',
             Jackpot::MACHINE_POINT => '当前分数',
             Jackpot::MACHINE_SCORE => '当前得分',

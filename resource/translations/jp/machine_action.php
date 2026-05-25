@@ -85,6 +85,8 @@ return [
             Jackpot::RESET_READY_TURN => '予備転入の回転数をリセット',
 
             Jackpot::OP_3 => 'OP _ 3つの保転」をつけて',
+            Jackpot::CLEAR_GIVE => 'ギフト要求をクリア',
+            Jackpot::CLEAR_LOG => '履歴をクリア',
             Jackpot::TESTING => 'テスト接続',
             Jackpot::MACHINE_POINT => '現在のスコア',
             Jackpot::MACHINE_SCORE => '現在のスコア',
