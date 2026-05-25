@@ -689,7 +689,7 @@ class Jackpot extends MachineServices implements BaseMachine
             $description .= trans('machine_open_point', [], 'machine_action') . ($this->open_point ?? 0) . PHP_EOL;
             $description .= trans('machine_wash_point', [], 'machine_action') . ($this->wash_point ?? 0);
         } else {
-            $description .= trans('function.' . GameType::TYPE_STEEL_BALL . '_' . Machine::CONTROL_TYPE_SONG . '.' . $fun,
+            $description .= trans('function.' . GameType::TYPE_STEEL_BALL . '_' . Machine::CONTROL_TYPE_MEI . '.' . $fun,
                 [], 'machine_action');
             switch ($fun) {
                 case Jackpot::MACHINE_POINT:
