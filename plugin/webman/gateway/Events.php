@@ -149,7 +149,7 @@ class Events
                         return true;
                 }
             case config('gateway_worker.slot_auto_port'):
-                return $service->slotAutoCmd($message);
+                return $service->slotAutoCmd(bin2hex($message));
             case config('gateway_worker.jackpot_port'):
                 switch ($machine->control_type) {
                     case Machine::CONTROL_TYPE_MEI:
