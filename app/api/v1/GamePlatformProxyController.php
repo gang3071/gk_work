@@ -146,6 +146,7 @@ class GamePlatformProxyController
             return '登录已过期，请重新登录';
         }
 
+
         // 数据库错误
         if (stripos($errorMsg, 'database') !== false ||
             stripos($errorMsg, 'query') !== false ||
