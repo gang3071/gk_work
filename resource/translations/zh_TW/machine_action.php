@@ -153,6 +153,7 @@ return [
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_SONG => [
             /** 小淞工控 */
+            SongSlot::ALL => '機台狀態',
             SongSlot::OPEN_ANY_POINT => '開任意分',
             SongSlot::WASH_ZERO => '洗分&清零',
             SongSlot::READ_SCORE => '讀取分數',
@@ -162,11 +163,11 @@ return [
             SongSlot::REWARD_SWITCH => '切換大賞燈',
             SongSlot::CHECK => '故排',
             SongSlot::START => '啟動/停止自動',
-            SongSlot::OUT_ON => '启动自动',
+            SongSlot::OUT_ON => '啟動自動',
             SongSlot::STOP_ONE => '左停',
             SongSlot::STOP_TWO => '中停',
             SongSlot::STOP_THREE => '右停',
-            SongSlot::MACHINE_OPEN => '开机',
+            SongSlot::MACHINE_OPEN => '開機',
             SongSlot::MACHINE_CLOSE => '关机',
             SongSlot::ALL_DOWN => '清理历史数据',
         ],

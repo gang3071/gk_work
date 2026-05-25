@@ -153,6 +153,7 @@ return [
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_SONG => [
             /** 小淞工控 */
+            SongSlot::ALL => '机台状态',
             SongSlot::OPEN_ANY_POINT => '开任意分',
             SongSlot::WASH_ZERO => '洗分&清零',
             SongSlot::READ_SCORE => '读取分数',

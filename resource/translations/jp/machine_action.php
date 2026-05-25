@@ -154,6 +154,7 @@ return [
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_SONG => [
             /** 小淞工控 */
+            SongSlot::ALL => '台の状態',
             SongSlot::OPEN_ANY_POINT => '任意点を開く',
             SongSlot::WASH_ZERO => '洗浄&クリア',
             SongSlot::READ_SCORE => '読取スコア',
