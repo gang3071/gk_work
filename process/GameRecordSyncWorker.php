@@ -9,6 +9,7 @@ use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
 use app\service\GameRecordCacheService;
 use app\service\HighScoreBroadcastService;
+use app\service\MergeBetPlatformHelper;
 use Carbon\Carbon;
 use support\Db;
 use support\Log;
@@ -264,6 +265,9 @@ class GameRecordSyncWorker
             return 0;
         }
 
+        // ✅ 从 Redis 缓存记录中补充 balance_before/balance_after 快照
+        $records = MergeBetPlatformHelper::enrichInsertRecords($records);
+
         // 1. 批量查询玩家信息（一次性查询）
         $playerIds = array_unique(array_column($records, 'player_id'));
         $players = Player::query()
@@ -271,25 +275,14 @@ class GameRecordSyncWorker
             ->get()
             ->keyBy('id');
 
-        // 2. 批量读取 Redis 余额（用于钱包同步）
-        $betPlayerIds = []; // 需要同步钱包的玩家ID
+        // 2. 收集需要同步钱包的玩家ID（下注记录且有余额快照）
+        $betPlayerIds = [];
         foreach ($records as $record) {
-            if (($record['settlement_status'] ?? 0) == 0 && ($record['amount'] ?? 0) > 0) {
+            $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
+            if (($record['settlement_status'] ?? 0) == 0
+                && ($record['amount'] ?? 0) > 0
+                && $snapshot['after'] !== null) {
                 $betPlayerIds[] = $record['player_id'];
-            }
-        }
-
-        $redisBalances = [];
-        if (!empty($betPlayerIds)) {
-            // 批量读取 Redis 余额
-            $balanceKeys = array_map(fn($id) => "wallet:balance:{$id}", array_unique($betPlayerIds));
-            // 使用 work 连接池读取余额（共享数据）
-            $balanceValues = \support\Redis::connection('work')->mGet($balanceKeys);
-
-            foreach (array_unique($betPlayerIds) as $index => $playerId) {
-                if (isset($balanceValues[$index]) && $balanceValues[$index] !== false) {
-                    $redisBalances[$playerId] = (float)$balanceValues[$index];
-                }
             }
         }
 
@@ -304,6 +297,7 @@ class GameRecordSyncWorker
 
         // 4. 构建插入数据
         $insertData = [];
+        $deliveryRecords = [];
         $now = Carbon::now()->toDateTimeString();
 
         foreach ($records as $record) {
@@ -339,21 +333,31 @@ class GameRecordSyncWorker
                 'updated_at' => $now,
             ];
 
-            // 5. 同步钱包余额（从 Redis 同步到 MySQL）
-            if (($record['settlement_status'] ?? 0) == 0 && ($record['amount'] ?? 0) > 0) {
-                if (isset($redisBalances[$playerId]) && isset($wallets[$playerId])) {
-                    $wallet = $wallets[$playerId];
-                    $beforeBalance = $wallet->money;
-                    $wallet->money = $redisBalances[$playerId];
-                    $wallet->save();
+            // 5. 同步钱包余额（使用 Lua 脚本执行时的余额快照，而非当前 Redis 余额）
+            $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
+            if (($record['settlement_status'] ?? 0) == 0
+                && ($record['amount'] ?? 0) > 0
+                && $snapshot['after'] !== null
+                && isset($wallets[$playerId])) {
+                $wallet = $wallets[$playerId];
+                $beforeBalance = $wallet->money;
+                $wallet->money = $snapshot['after'];
+                $wallet->save();
 
-                    $this->log->info("批量同步钱包余额", [
-                        'player_id' => $playerId,
-                        'before' => $beforeBalance,
-                        'after' => $wallet->money,
-                        'order_no' => $record['order_no'],
-                    ]);
-                }
+                $this->log->info("批量同步钱包余额（快照）", [
+                    'player_id' => $playerId,
+                    'before' => $beforeBalance,
+                    'after' => $wallet->money,
+                    'order_no' => $record['order_no'],
+                ]);
+
+                // 收集 DeliveryRecord 数据（插入后需要 record ID）
+                $deliveryRecords[$record['order_no']] = [
+                    'player_id' => $playerId,
+                    'department_id' => $player->department_id ?? 0,
+                    'platform_id' => $record['platform_id'],
+                    'record' => $record,
+                ];
             }
         }
 
@@ -368,9 +372,28 @@ class GameRecordSyncWorker
             'count' => count($insertData),
         ]);
 
-        // 7. ❌ 已移除：批量推送余额变化（下注）
-        // 原因：现在通过 Redis Pub/Sub 实时推送（atomicBet 自动触发）
-        // $this->batchPushBalanceChanges($records, 'bet');
+        // 7. 批量创建 DeliveryRecord（需要查询新插入记录的 ID）
+        if (!empty($deliveryRecords)) {
+            $orderNos = array_keys($deliveryRecords);
+            $newRecords = PlayGameRecord::query()
+                ->whereIn('order_no', $orderNos)
+                ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id')
+                ->get()
+                ->keyBy('order_no');
+
+            foreach ($deliveryRecords as $orderNo => $deliveryData) {
+                $gameRecord = $newRecords[$orderNo] ?? null;
+                if ($gameRecord) {
+                    MergeBetPlatformHelper::createDeliveryFromSnapshot(
+                        $deliveryData['player_id'],
+                        $deliveryData['platform_id'],
+                        $deliveryData['record'],
+                        $gameRecord,
+                        $deliveryData['department_id']
+                    );
+                }
+            }
+        }
 
         return count($insertData);
     }
@@ -397,9 +420,8 @@ class GameRecordSyncWorker
             $needUpdate = false;
 
             // ✅ 合并下注平台：允许未结算状态下更新bet（DG/RSGLIVE同局多笔下注累加）
-            if (in_array($platform, ['DG', 'RSGLIVE']) && $settlementStatus == 0) {
-                if (isset($record['amount']) && $record['amount'] != $existing->bet) {
-                    $existing->bet = $record['amount'];
+            if (MergeBetPlatformHelper::isMergePlatform($platform) && $settlementStatus == 0) {
+                if (MergeBetPlatformHelper::updateMergedBetBalance($existing, $record)) {
                     $needUpdate = true;
                 }
             }
@@ -779,15 +801,13 @@ class GameRecordSyncWorker
                 $platform = $record['platform'] ?? '';
 
                 // ✅ 合并下注平台：允许未结算状态下更新bet（DG/RSGLIVE同局多笔下注累加）
-                if (in_array($platform, ['DG', 'RSGLIVE']) && $settlementStatus == 0) {
-                    if (isset($record['amount']) && $record['amount'] != $existing->bet) {
-                        $existing->bet = $record['amount'];
+                if (MergeBetPlatformHelper::isMergePlatform($platform) && $settlementStatus == 0) {
+                    if (MergeBetPlatformHelper::updateMergedBetBalance($existing, $record)) {
                         $needUpdate = true;
 
                         $this->log->info("{$platform}合并下注：更新累计金额", [
                             'order_no' => $orderNo,
-                            'old_bet' => $existing->bet,
-                            'new_bet' => $record['amount'],
+                            'new_bet' => $existing->bet,
                             'record_id' => $existing->id,
                         ]);
                     }
@@ -829,44 +849,23 @@ class GameRecordSyncWorker
                     throw new \Exception("玩家不存在: {$playerId}");
                 }
 
-                // 2. 钱包同步（从 Redis 同步到 MySQL）
-                // ✅ Lua 脚本已经在 Redis 中扣款，这里只需要同步到 MySQL
-                if ($settlementStatus == 0 && ($record['amount'] ?? 0) > 0) {
-                    // 从 Redis 读取 Lua 脚本扣款后的最新余额
-                    // 使用 work 连接池读取余额（共享数据）
-                    $redisBalance = \support\Redis::connection('work')->get("wallet:balance:{$playerId}");
+                // 2. 钱包同步（使用 Lua 脚本执行时的余额快照，而非当前 Redis 余额）
+                $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
+                if ($settlementStatus == 0 && ($record['amount'] ?? 0) > 0 && $snapshot['after'] !== null) {
+                    /** @var PlayerPlatformCash $wallet */
+                    $wallet = PlayerPlatformCash::query()->where('player_id', $playerId)
+                        ->lockForUpdate()
+                        ->first();
 
-                    if ($redisBalance !== null && $redisBalance !== false) {
-                        /** @var PlayerPlatformCash $wallet */
-                        $wallet = PlayerPlatformCash::query()->where('player_id', $playerId)
-                            ->lockForUpdate()
-                            ->first();
-
-                        if (!$wallet) {
-                            throw new \Exception("钱包不存在");
-                        }
-
+                    if ($wallet) {
                         $beforeBalance = $wallet->money;
-                        $amount = (float)$record['amount'];
-
-                        // 同步 Redis 余额到 MySQL（不是减法，是直接覆盖）
-                        $wallet->money = (float)$redisBalance;
+                        $wallet->money = $snapshot['after'];
                         $wallet->save();
 
-                        $this->log->info("同步钱包余额", [
+                        $this->log->info("同步钱包余额（快照）", [
                             'player_id' => $playerId,
                             'before' => $beforeBalance,
                             'after' => $wallet->money,
-                            'redis_balance' => $redisBalance,
-                            'order_no' => $orderNo,
-                        ]);
-
-                    } else {
-                        // Redis 余额不存在，可能是缓存过期，跳过钱包同步
-                        $wallet = null;
-                        $beforeBalance = null;
-                        $this->log->warning("Redis 余额不存在，跳过钱包同步", [
-                            'player_id' => $playerId,
                             'order_no' => $orderNo,
                         ]);
                     }
@@ -935,25 +934,14 @@ class GameRecordSyncWorker
                     }
                 }
 
-                // 4. 创建交易记录（如果有扣款）
-                if (isset($wallet) && isset($beforeBalance)) {
-                    $delivery = new PlayerDeliveryRecord();
-                    $delivery->player_id = $playerId;
-                    $delivery->department_id = $player->department_id ?? 0;
-                    $delivery->target = $gameRecord->getTable();
-                    $delivery->target_id = $gameRecord->id;
-                    $delivery->platform_id = $platformId;
-                    $delivery->type = PlayerDeliveryRecord::TYPE_BET;
-                    $delivery->source = 'player_bet';
-                    $delivery->remark = '游戏下注';
-                    $delivery->amount = $amount;
-                    $delivery->amount_before = $beforeBalance;
-                    $delivery->amount_after = $wallet->money;
-                    $delivery->tradeno = $orderNo;
-                    $delivery->user_id = 0;
-                    $delivery->user_name = '';
-                    $delivery->save();
-                }
+                // 4. 创建交易记录（使用余额快照）
+                MergeBetPlatformHelper::createDeliveryFromSnapshot(
+                    $playerId,
+                    $platformId,
+                    $record,
+                    $gameRecord,
+                    $player->department_id ?? 0
+                );
 
                 $this->log->info("创建游戏记录", [
                     'order_no' => $orderNo,

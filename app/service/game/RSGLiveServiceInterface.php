@@ -181,12 +181,12 @@ class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceI
             ->post($url);
 
 
-        $data = $response->body();
-        $data = openssl_decrypt(base64_decode($data), 'DES-CBC', $config['DesKey'], OPENSSL_RAW_DATA,
+        $raw = $response->body();
+        $data = openssl_decrypt(base64_decode($raw), 'DES-CBC', $config['DesKey'], OPENSSL_RAW_DATA,
             $config['DesIV']);
 
         if (!$response->ok()) {
-            $this->log->error($url, ['config' => $config, 'params' => $params, 'response' => $data]);
+            $this->log->error($url, ['config' => $config, 'params' => $params, 'response' => $raw]);
             throw new GameException(trans('system_busy', [], 'message'));
         }
 
