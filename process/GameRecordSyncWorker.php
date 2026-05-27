@@ -329,6 +329,8 @@ class GameRecordSyncWorker
                 'original_data' => $record['original_data'] ?? '{}',
                 'action_data' => $record['action_data'] ?? null,
                 'platform_action_at' => $record['platform_action_at'] ?? null,
+                'balance_before' => $record['balance_before'] ?? null,
+                'balance_after' => $record['balance_after'] ?? null,
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
@@ -379,7 +381,20 @@ class GameRecordSyncWorker
         }
 
         // 6. 批量插入（一次性插入所有记录）
-        PlayGameRecord::query()->insert($insertData);
+        // 🔍 诊断日志：打印第一条记录的完整插入数据
+        $this->log->info('[batchInsertRecords] 插入数据样本', [
+            'first_record' => $insertData[0] ?? 'empty',
+        ]);
+
+        try {
+            PlayGameRecord::query()->insert($insertData);
+        } catch (\Throwable $e) {
+            $this->log->error('[batchInsertRecords] 插入失败', [
+                'error' => $e->getMessage(),
+                'data_sample' => $insertData[0] ?? 'empty',
+            ]);
+            throw $e;
+        }
 
         $this->log->info("批量插入记录", [
             'count' => count($insertData),

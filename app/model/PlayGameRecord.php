@@ -80,7 +80,9 @@ class PlayGameRecord extends Model
         'order_time',
         'settlement_status',
         'action_data',
-        'type'
+        'type',
+        'balance_before',
+        'balance_after'
     ];
     protected $table = 'play_game_record';
 
