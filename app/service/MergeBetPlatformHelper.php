@@ -49,6 +49,18 @@ class MergeBetPlatformHelper
             $hasSnapshot = isset($record['balance_before']) && $record['balance_before'] !== ''
                 && isset($record['balance_after']) && $record['balance_after'] !== '';
 
+            // 🔍 诊断日志：记录每条记录的快照状态
+            Log::channel('game_bet_record')->info('[enrichInsertRecords] 记录快照状态', [
+                'order_no' => $record['order_no'] ?? 'unknown',
+                'platform' => $record['platform'] ?? 'unknown',
+                'balance_before' => $record['balance_before'] ?? 'NOT_SET',
+                'balance_after' => $record['balance_after'] ?? 'NOT_SET',
+                'has_snapshot' => $hasSnapshot,
+                'settlement_status' => $record['settlement_status'] ?? 'null',
+                'amount' => $record['amount'] ?? 'null',
+                'all_keys' => array_keys($record),
+            ]);
+
             if (!$hasSnapshot
                 && ($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
                 && ($record['amount'] ?? 0) > 0) {
@@ -83,6 +95,12 @@ class MergeBetPlatformHelper
                 // 已有快照，确保为浮点数
                 $record['balance_before'] = (float)$record['balance_before'];
                 $record['balance_after'] = (float)$record['balance_after'];
+
+                Log::channel('game_bet_record')->info('[enrichInsertRecords] 使用已有快照', [
+                    'order_no' => $record['order_no'] ?? 'unknown',
+                    'balance_before' => $record['balance_before'],
+                    'balance_after' => $record['balance_after'],
+                ]);
             } elseif (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
                 && ($record['amount'] ?? 0) > 0) {
                 // 下注记录无快照，通过当前 Redis 余额反推（兜底，可能不准确）
@@ -90,6 +108,19 @@ class MergeBetPlatformHelper
                 if (isset($redisBalances[$playerId])) {
                     $record['balance_after'] = $redisBalances[$playerId];
                     $record['balance_before'] = $record['balance_after'] + ($record['amount'] ?? 0);
+
+                    Log::channel('game_bet_record')->warning('[enrichInsertRecords] 兜底：使用当前 Redis 余额反推', [
+                        'order_no' => $record['order_no'] ?? 'unknown',
+                        'player_id' => $playerId,
+                        'redis_balance' => $redisBalances[$playerId],
+                        'balance_before' => $record['balance_before'],
+                        'balance_after' => $record['balance_after'],
+                    ]);
+                } else {
+                    Log::channel('game_bet_record')->error('[enrichInsertRecords] 无快照且无 Redis 余额', [
+                        'order_no' => $record['order_no'] ?? 'unknown',
+                        'player_id' => $playerId,
+                    ]);
                 }
             }
         }
