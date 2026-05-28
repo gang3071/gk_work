@@ -186,7 +186,7 @@ class RSGLiveServiceInterface extends GameServiceFactory implements GameServiceI
             $config['DesIV']);
 
         if (!$response->ok()) {
-            $this->log->error($url, ['config' => $config, 'params' => $params, 'response' => $raw]);
+            $this->log->error($url, ['config' => $config, 'params' => $params, 'response' => $data]);
             throw new GameException(trans('system_busy', [], 'message'));
         }
 

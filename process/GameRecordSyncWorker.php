@@ -447,9 +447,14 @@ class GameRecordSyncWorker
 
             $needUpdate = false;
 
-            // ✅ 合并下注平台：允许未结算状态下更新bet（DG/RSGLIVE同局多笔下注累加）
+            // ✅ 合并下注平台：允许未结算状态下更新bet和balance_after（DG/RSGLIVE同局多笔下注累加）
             if (MergeBetPlatformHelper::isMergePlatform($platform) && $settlementStatus == 0) {
                 if (MergeBetPlatformHelper::updateMergedBetBalance($existing, $record)) {
+                    $needUpdate = true;
+                }
+                // 更新 balance_after 为最新余额（balance_before 保持首次下注前的值不变）
+                if (isset($record['balance_after']) && $record['balance_after'] !== '' && $record['balance_after'] != $existing->balance_after) {
+                    $existing->balance_after = $record['balance_after'];
                     $needUpdate = true;
                 }
             }
