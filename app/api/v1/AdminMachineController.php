@@ -227,11 +227,21 @@ class AdminMachineController
                 }
             }
 
+            // 根据机型计算在线状态
+            // Slot老虎机：需要 main 和 auto 两个连接都在线
+            // 钢珠机：只需要 main 连接在线
+            if ($machine->type === GameType::TYPE_SLOT) {
+                $online = $mainOnline && $autoOnline;
+            } else {
+                $online = $mainOnline;
+            }
+
             return $this->success([
                 'machine_id' => $machineId,
+                'type' => $machine->type,
                 'main_online' => $mainOnline,
                 'auto_online' => $autoOnline,
-                'online' => $mainOnline, // 主连接在线即认为在线
+                'online' => $online,
             ]);
 
         } catch (Exception $e) {
@@ -291,11 +301,21 @@ class AdminMachineController
                     }
                 }
 
+                // 根据机型计算在线状态
+                // Slot老虎机：需要 main 和 auto 两个连接都在线
+                // 钢珠机：只需要 main 连接在线
+                if ($machine->type === GameType::TYPE_SLOT) {
+                    $online = $mainOnline && $autoOnline;
+                } else {
+                    $online = $mainOnline;
+                }
+
                 $results[] = [
                     'machine_id' => $machine->id,
+                    'type' => $machine->type,
                     'main_online' => $mainOnline,
                     'auto_online' => $autoOnline,
-                    'online' => $mainOnline,
+                    'online' => $online,
                 ];
             }
 
