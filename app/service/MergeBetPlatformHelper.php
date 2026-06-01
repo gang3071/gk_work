@@ -121,6 +121,7 @@ class MergeBetPlatformHelper
                 }
             }
         }
+        unset($record); // ✅ 解除引用，避免后续代码意外修改数组
 
         return $records;
     }

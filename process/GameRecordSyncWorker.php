@@ -423,6 +423,9 @@ class GameRecordSyncWorker
     {
         $updated = 0;
 
+        // 收集需要同步钱包的玩家（合并平台累加下注）
+        $walletSyncNeeded = [];
+
         foreach ($records as $record) {
             $orderNo = $record['order_no'];
             $settlementStatus = $record['settlement_status'] ?? 0;
@@ -436,6 +439,7 @@ class GameRecordSyncWorker
             }
 
             $needUpdate = false;
+            $balanceUpdated = false;
 
             // ✅ 合并下注平台：允许未结算状态下更新bet和balance_after（DG/RSGLIVE同局多笔下注累加）
             if (MergeBetPlatformHelper::isMergePlatform($platform) && $settlementStatus == 0) {
@@ -446,6 +450,13 @@ class GameRecordSyncWorker
                 if (isset($record['balance_after']) && $record['balance_after'] !== '' && $record['balance_after'] != $existing->balance_after) {
                     $existing->balance_after = $record['balance_after'];
                     $needUpdate = true;
+                    $balanceUpdated = true;
+
+                    // 收集钱包同步信息
+                    $walletSyncNeeded[$existing->player_id] = [
+                        'balance_after' => (float)$record['balance_after'],
+                        'order_no' => $orderNo,
+                    ];
                 }
             }
 
@@ -468,6 +479,31 @@ class GameRecordSyncWorker
             if ($needUpdate) {
                 $existing->save();
                 $updated++;
+            }
+        }
+
+        // ✅ 批量同步钱包余额（合并平台累加下注后）
+        if (!empty($walletSyncNeeded)) {
+            $playerIds = array_keys($walletSyncNeeded);
+            $wallets = PlayerPlatformCash::query()
+                ->whereIn('player_id', $playerIds)
+                ->get()
+                ->keyBy('player_id');
+
+            foreach ($walletSyncNeeded as $playerId => $syncInfo) {
+                $wallet = $wallets[$playerId] ?? null;
+                if ($wallet) {
+                    $beforeBalance = $wallet->money;
+                    $wallet->money = $syncInfo['balance_after'];
+                    $wallet->save();
+
+                    $this->log->info("批量更新：同步钱包余额（合并平台累加）", [
+                        'player_id' => $playerId,
+                        'before' => $beforeBalance,
+                        'after' => $wallet->money,
+                        'order_no' => $syncInfo['order_no'],
+                    ]);
+                }
             }
         }
 
@@ -823,7 +859,7 @@ class GameRecordSyncWorker
                 $needUpdate = false;
                 $platform = $record['platform'] ?? '';
 
-                // ✅ 合并下注平台：允许未结算状态下更新bet（DG/RSGLIVE同局多笔下注累加）
+                // ✅ 合并下注平台：允许未结算状态下更新bet和balance_after（DG/RSGLIVE同局多笔下注累加）
                 if (MergeBetPlatformHelper::isMergePlatform($platform) && $settlementStatus == 0) {
                     if (MergeBetPlatformHelper::updateMergedBetBalance($existing, $record)) {
                         $needUpdate = true;
@@ -833,6 +869,34 @@ class GameRecordSyncWorker
                             'new_bet' => $existing->bet,
                             'record_id' => $existing->id,
                         ]);
+                    }
+
+                    // 更新 balance_after 为最新余额（balance_before 保持首次下注前的值不变）
+                    if (isset($record['balance_after']) && $record['balance_after'] !== '' && $record['balance_after'] != $existing->balance_after) {
+                        $oldBalanceAfter = $existing->balance_after;
+                        $existing->balance_after = $record['balance_after'];
+                        $needUpdate = true;
+
+                        // 同步钱包余额
+                        $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
+                        if ($snapshot['after'] !== null) {
+                            $wallet = PlayerPlatformCash::query()->where('player_id', $playerId)
+                                ->lockForUpdate()
+                                ->first();
+
+                            if ($wallet) {
+                                $beforeWalletBalance = $wallet->money;
+                                $wallet->money = $snapshot['after'];
+                                $wallet->save();
+
+                                $this->log->info("{$platform}合并下注：同步钱包余额", [
+                                    'player_id' => $playerId,
+                                    'before' => $beforeWalletBalance,
+                                    'after' => $wallet->money,
+                                    'order_no' => $orderNo,
+                                ]);
+                            }
+                        }
                     }
                 }
 
