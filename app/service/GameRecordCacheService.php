@@ -203,13 +203,11 @@ LUA;
         self::redis()->hMSet($key, $record);
         self::redis()->expire($key, self::TTL_RECORD);
 
-        // 🔍 诊断日志：验证 balance 快照是否写入
-        Log::channel('game_bet_record')->info('[saveBet] 写入余额快照', [
+        // 🔍 诊断日志：验证 balance 快照是否写入（调试级别，避免高并发日志膨胀）
+        Log::channel('game_bet_record')->debug('[saveBet] 写入余额快照', [
             'key' => $key,
             'balance_before' => $data['balance_before'] ?? 'NULL',
             'balance_after' => $data['balance_after'] ?? 'NULL',
-            'balance_before_type' => gettype($data['balance_before'] ?? null),
-            'balance_after_type' => gettype($data['balance_after'] ?? null),
         ]);
 
         // 加入同步队列
@@ -336,13 +334,12 @@ LUA;
             if (!empty($data)) {
                 $data['redis_key'] = $key;
 
-                // 🔍 诊断日志：记录 SyncWorker 读到的原始数据
-                Log::channel('game_bet_record')->info('[getPendingSyncRecords] 读取记录', [
+                // 🔍 诊断日志：记录 SyncWorker 读到的原始数据（调试级别）
+                Log::channel('game_bet_record')->debug('[getPendingSyncRecords] 读取记录', [
                     'key' => $key,
                     'balance_before' => $data['balance_before'] ?? 'NOT_IN_HASH',
                     'balance_after' => $data['balance_after'] ?? 'NOT_IN_HASH',
                     'platform' => $data['platform'] ?? 'unknown',
-                    'order_no' => $data['order_no'] ?? 'unknown',
                 ]);
 
                 $records[] = $data;

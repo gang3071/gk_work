@@ -49,16 +49,11 @@ class MergeBetPlatformHelper
             $hasSnapshot = isset($record['balance_before']) && $record['balance_before'] !== ''
                 && isset($record['balance_after']) && $record['balance_after'] !== '';
 
-            // 🔍 诊断日志：记录每条记录的快照状态
-            Log::channel('game_bet_record')->info('[enrichInsertRecords] 记录快照状态', [
+            // 🔍 诊断日志：记录每条记录的快照状态（调试级别）
+            Log::channel('game_bet_record')->debug('[enrichInsertRecords] 记录快照状态', [
                 'order_no' => $record['order_no'] ?? 'unknown',
                 'platform' => $record['platform'] ?? 'unknown',
-                'balance_before' => $record['balance_before'] ?? 'NOT_SET',
-                'balance_after' => $record['balance_after'] ?? 'NOT_SET',
                 'has_snapshot' => $hasSnapshot,
-                'settlement_status' => $record['settlement_status'] ?? 'null',
-                'amount' => $record['amount'] ?? 'null',
-                'all_keys' => array_keys($record),
             ]);
 
             if (!$hasSnapshot
@@ -76,7 +71,9 @@ class MergeBetPlatformHelper
                 $balanceValues = Redis::connection('work')->mGet($balanceKeys);
                 foreach (array_unique($fallbackPlayerIds) as $index => $playerId) {
                     if (isset($balanceValues[$index]) && $balanceValues[$index] !== false) {
-                        $redisBalances[$playerId] = (float)$balanceValues[$index];
+                        // ✅ 整数化改造：Redis 存储"分"，转换为"元"
+                        $balanceInCents = (int)$balanceValues[$index];
+                        $redisBalances[$playerId] = round($balanceInCents / 100, 2);
                     }
                 }
             } catch (\Throwable $e) {
@@ -96,7 +93,7 @@ class MergeBetPlatformHelper
                 $record['balance_before'] = (float)$record['balance_before'];
                 $record['balance_after'] = (float)$record['balance_after'];
 
-                Log::channel('game_bet_record')->info('[enrichInsertRecords] 使用已有快照', [
+                Log::channel('game_bet_record')->debug('[enrichInsertRecords] 使用已有快照', [
                     'order_no' => $record['order_no'] ?? 'unknown',
                     'balance_before' => $record['balance_before'],
                     'balance_after' => $record['balance_after'],

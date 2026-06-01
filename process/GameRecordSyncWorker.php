@@ -338,16 +338,11 @@ class GameRecordSyncWorker
             // 5. 同步钱包余额（使用 Lua 脚本执行时的余额快照，而非当前 Redis 余额）
             $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
 
-            // 🔍 诊断日志
-            $this->log->info('[batchInsertRecords] 快照状态', [
+            // 🔍 诊断日志（调试级别）
+            $this->log->debug('[batchInsertRecords] 快照状态', [
                 'order_no' => $record['order_no'],
-                'platform' => $record['platform'] ?? 'unknown',
                 'snapshot_before' => $snapshot['before'],
                 'snapshot_after' => $snapshot['after'],
-                'balance_before_raw' => $record['balance_before'] ?? 'NOT_SET',
-                'balance_after_raw' => $record['balance_after'] ?? 'NOT_SET',
-                'settlement_status' => $record['settlement_status'] ?? 'null',
-                'amount' => $record['amount'] ?? 'null',
             ]);
 
             if (($record['settlement_status'] ?? 0) == 0
@@ -381,17 +376,12 @@ class GameRecordSyncWorker
         }
 
         // 6. 批量插入（一次性插入所有记录）
-        // 🔍 诊断日志：打印第一条记录的完整插入数据
-        $this->log->info('[batchInsertRecords] 插入数据样本', [
-            'first_record' => $insertData[0] ?? 'empty',
-        ]);
-
         try {
             PlayGameRecord::query()->insert($insertData);
         } catch (\Throwable $e) {
             $this->log->error('[batchInsertRecords] 插入失败', [
                 'error' => $e->getMessage(),
-                'data_sample' => $insertData[0] ?? 'empty',
+                'count' => count($insertData),
             ]);
             throw $e;
         }
@@ -884,16 +874,6 @@ class GameRecordSyncWorker
 
                 // 2. 钱包同步（使用 Lua 脚本执行时的余额快照，而非当前 Redis 余额）
                 $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
-
-                // 🔍 诊断日志
-                $this->log->info('[syncSingleRecord] 快照状态', [
-                    'order_no' => $orderNo,
-                    'platform' => $record['platform'] ?? '',
-                    'snapshot_before' => $snapshot['before'],
-                    'snapshot_after' => $snapshot['after'],
-                    'balance_before_raw' => $record['balance_before'] ?? 'NOT_SET',
-                    'balance_after_raw' => $record['balance_after'] ?? 'NOT_SET',
-                ]);
 
                 if ($settlementStatus == 0 && ($record['amount'] ?? 0) > 0 && $snapshot['after'] !== null) {
                     /** @var PlayerPlatformCash $wallet */
