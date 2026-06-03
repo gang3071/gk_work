@@ -52,6 +52,8 @@ Route::group('/api', function () {
         Route::group('/machine', function () {
             // 发送机台指令
             Route::post('/send-cmd', [\app\api\v1\AdminMachineController::class, 'sendCmd']);
+            // 批量发送机台指令
+            Route::post('/batch-send-cmd', [\app\api\v1\AdminMachineController::class, 'batchSendCmd']);
             // 获取机台状态
             Route::post('/status', [\app\api\v1\AdminMachineController::class, 'getMachineStatus']);
             // 检查机台在线状态

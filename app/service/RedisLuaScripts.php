@@ -113,10 +113,7 @@ redis.call('HMSET', KEYS[2],
 )
 redis.call('EXPIRE', KEYS[2], ARGV[11])
 
--- 7. 加入同步队列
-redis.call('ZADD', KEYS[3], ARGV[10], KEYS[2])
-
--- 8. 统计计数
+-- 7. 统计计数
 redis.call('INCR', KEYS[4])
 
 -- 9. 返回成功
@@ -217,9 +214,6 @@ if betExists == 1 then
         'platform_action_at', ARGV[9],
         'status', 'pending'
     )
-
-    -- 更新同步队列（提升优先级）
-    redis.call('ZADD', KEYS[3], ARGV[4], KEYS[2])
 else
     -- bet 不存在，创建独立 settle 记录 - ✅ 优化：不再存储 original_data
     local finalOrderNo = ARGV[11]
@@ -245,7 +239,6 @@ else
         'balance_after', tostring(newBalance)
     )
     redis.call('EXPIRE', KEYS[6], ARGV[5])
-    redis.call('ZADD', KEYS[3], ARGV[4], KEYS[6])
 end
 
 -- 7. 统计计数
@@ -320,9 +313,6 @@ if betExists == 1 then
         'cancel_time', ARGV[3],
         'status', 'pending'
     )
-
-    -- 更新同步队列
-    redis.call('ZADD', KEYS[3], ARGV[3], KEYS[2])
 end
 
 -- 6. 统计计数

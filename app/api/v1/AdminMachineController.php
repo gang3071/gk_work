@@ -91,6 +91,11 @@ class AdminMachineController
                 return $this->fail(trans('cmd_required', [], 'admin_machine'));
             }
 
+            // 验证 data 参数类型
+            if (!is_numeric($data)) {
+                return $this->fail(trans('data_must_be_numeric', [], 'admin_machine'));
+            }
+
             // 查询机台
             $machine = Machine::find($machineId);
             if (!$machine) {
@@ -193,22 +198,50 @@ class AdminMachineController
                 return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
 
-            // 检查主连接是否在线
+            // 检查主连接是否在线（带异常处理）
             $mainUid = $machine->domain . ':' . $machine->port;
-            $mainOnline = Gateway::isUidOnline($mainUid);
+            try {
+                $mainOnline = Gateway::isUidOnline($mainUid);
+            } catch (Exception $e) {
+                Log::warning('Gateway isUidOnline failed for main connection', [
+                    'machine_id' => $machineId,
+                    'uid' => $mainUid,
+                    'error' => $e->getMessage()
+                ]);
+                $mainOnline = false; // 优雅降级
+            }
 
             // 检查自动卡是否在线（如果有）
             $autoOnline = false;
             if (!empty($machine->auto_card_domain) && !empty($machine->auto_card_port)) {
                 $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
-                $autoOnline = Gateway::isUidOnline($autoUid);
+                try {
+                    $autoOnline = Gateway::isUidOnline($autoUid);
+                } catch (Exception $e) {
+                    Log::warning('Gateway isUidOnline failed for auto card', [
+                        'machine_id' => $machineId,
+                        'uid' => $autoUid,
+                        'error' => $e->getMessage()
+                    ]);
+                    $autoOnline = false; // 优雅降级
+                }
+            }
+
+            // 根据机型计算在线状态
+            // Slot老虎机：需要 main 和 auto 两个连接都在线
+            // 钢珠机：只需要 main 连接在线
+            if ($machine->type === GameType::TYPE_SLOT) {
+                $online = $mainOnline && $autoOnline;
+            } else {
+                $online = $mainOnline;
             }
 
             return $this->success([
                 'machine_id' => $machineId,
+                'type' => $machine->type,
                 'main_online' => $mainOnline,
                 'auto_online' => $autoOnline,
-                'online' => $mainOnline, // 主连接在线即认为在线
+                'online' => $online,
             ]);
 
         } catch (Exception $e) {
@@ -242,19 +275,47 @@ class AdminMachineController
 
             foreach ($machines as $machine) {
                 $mainUid = $machine->domain . ':' . $machine->port;
-                $mainOnline = Gateway::isUidOnline($mainUid);
+                try {
+                    $mainOnline = Gateway::isUidOnline($mainUid);
+                } catch (Exception $e) {
+                    Log::warning('Gateway isUidOnline failed in batch check', [
+                        'machine_id' => $machine->id,
+                        'uid' => $mainUid,
+                        'error' => $e->getMessage()
+                    ]);
+                    $mainOnline = false; // 优雅降级
+                }
 
                 $autoOnline = false;
                 if (!empty($machine->auto_card_domain) && !empty($machine->auto_card_port)) {
                     $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
-                    $autoOnline = Gateway::isUidOnline($autoUid);
+                    try {
+                        $autoOnline = Gateway::isUidOnline($autoUid);
+                    } catch (Exception $e) {
+                        Log::warning('Gateway isUidOnline failed for auto card in batch check', [
+                            'machine_id' => $machine->id,
+                            'uid' => $autoUid,
+                            'error' => $e->getMessage()
+                        ]);
+                        $autoOnline = false; // 优雅降级
+                    }
+                }
+
+                // 根据机型计算在线状态
+                // Slot老虎机：需要 main 和 auto 两个连接都在线
+                // 钢珠机：只需要 main 连接在线
+                if ($machine->type === GameType::TYPE_SLOT) {
+                    $online = $mainOnline && $autoOnline;
+                } else {
+                    $online = $mainOnline;
                 }
 
                 $results[] = [
                     'machine_id' => $machine->id,
+                    'type' => $machine->type,
                     'main_online' => $mainOnline,
                     'auto_online' => $autoOnline,
-                    'online' => $mainOnline,
+                    'online' => $online,
                 ];
             }
 
@@ -359,12 +420,30 @@ class AdminMachineController
             $results = [];
             foreach ($machines as $machine) {
                 $mainUid = $machine->domain . ':' . $machine->port;
-                $mainOnline = Gateway::isUidOnline($mainUid);
+                try {
+                    $mainOnline = Gateway::isUidOnline($mainUid);
+                } catch (Exception $e) {
+                    Log::warning('Gateway isUidOnline failed in getAllOnlineStatus', [
+                        'machine_id' => $machine->id,
+                        'uid' => $mainUid,
+                        'error' => $e->getMessage()
+                    ]);
+                    $mainOnline = false; // 优雅降级
+                }
 
                 $autoOnline = false;
                 if (!empty($machine->auto_card_domain) && !empty($machine->auto_card_port)) {
                     $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
-                    $autoOnline = Gateway::isUidOnline($autoUid);
+                    try {
+                        $autoOnline = Gateway::isUidOnline($autoUid);
+                    } catch (Exception $e) {
+                        Log::warning('Gateway isUidOnline failed for auto card in getAllOnlineStatus', [
+                            'machine_id' => $machine->id,
+                            'uid' => $autoUid,
+                            'error' => $e->getMessage()
+                        ]);
+                        $autoOnline = false; // 优雅降级
+                    }
                 }
 
                 $results[] = [
@@ -411,7 +490,16 @@ class AdminMachineController
 
             foreach ($machines as $machine) {
                 $uid = $machine->domain . ':' . $machine->port;
-                $isOnline = Gateway::isUidOnline($uid);
+                try {
+                    $isOnline = Gateway::isUidOnline($uid);
+                } catch (Exception $e) {
+                    Log::warning('Gateway isUidOnline failed in getOnlineStatistics', [
+                        'machine_id' => $machine->id,
+                        'uid' => $uid,
+                        'error' => $e->getMessage()
+                    ]);
+                    $isOnline = false; // 优雅降级
+                }
 
                 if ($isOnline) {
                     $statistics['online']++;
@@ -548,6 +636,115 @@ class AdminMachineController
 
         } catch (Exception $e) {
             Log::error('Update machine state failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    /**
+     * 批量发送机台指令
+     * POST /api/admin/machine/batch-send-cmd
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function batchSendCmd(Request $request): Response
+    {
+        try {
+            $lang = $this->setLanguage($request);
+            $adminId = $this->getAdminId($request);
+            $machineId = $request->post('machine_id');
+            $commands = $request->post('commands', []);
+
+            // 参数验证
+            if (empty($machineId)) {
+                return $this->fail(trans('machine_id_required', [], 'admin_machine'));
+            }
+
+            if (empty($commands) || !is_array($commands)) {
+                return $this->fail(trans('commands_required', [], 'admin_machine'));
+            }
+
+            // 查询机台
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'));
+            }
+
+            // 创建机台服务
+            $services = MachineServices::createServices($machine, $lang);
+
+            // 执行批量指令
+            $results = [];
+            $successCount = 0;
+            $failedCount = 0;
+
+            foreach ($commands as $index => $command) {
+                try {
+                    $cmd = $command['cmd'] ?? '';
+                    $data = (int)($command['data'] ?? 0);
+
+                    if (empty($cmd)) {
+                        $results[] = [
+                            'index' => $index,
+                            'cmd' => $cmd,
+                            'success' => false,
+                            'message' => trans('cmd_required', [], 'admin_machine')
+                        ];
+                        $failedCount++;
+                        continue;
+                    }
+
+                    // 发送指令
+                    $result = $services->sendCmd($cmd, $data, 'admin', $adminId);
+
+                    $results[] = [
+                        'index' => $index,
+                        'cmd' => $cmd,
+                        'data' => $data,
+                        'success' => true,
+                        'result' => $result
+                    ];
+                    $successCount++;
+
+                } catch (Exception $e) {
+                    $results[] = [
+                        'index' => $index,
+                        'cmd' => $command['cmd'] ?? '',
+                        'success' => false,
+                        'message' => $e->getMessage()
+                    ];
+                    $failedCount++;
+
+                    Log::error('Batch send cmd item failed', [
+                        'machine_id' => $machineId,
+                        'index' => $index,
+                        'command' => $command,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            Log::info('Admin batch send machine cmd', [
+                'admin_id' => $adminId,
+                'machine_id' => $machineId,
+                'total_count' => count($commands),
+                'success_count' => $successCount,
+                'failed_count' => $failedCount
+            ]);
+
+            return $this->success([
+                'machine_id' => $machineId,
+                'total_count' => count($commands),
+                'success_count' => $successCount,
+                'failed_count' => $failedCount,
+                'results' => $results
+            ], trans('batch_cmd_completed', [], 'admin_machine'));
+
+        } catch (Exception $e) {
+            Log::error('Admin batch send machine cmd failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
