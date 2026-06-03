@@ -496,8 +496,8 @@ LUA;
             $originalData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
 
             try {
-                // 追加 original_data 到下注记录 Hash（KEYS[2]，不是余额 Key KEYS[1]）
-                $redis->hMSet($keys[2], [
+                // 追加 original_data 到下注记录 Hash（Lua KEYS[2] = PHP $keys[1]）
+                $redis->hMSet($keys[1], [
                     'original_data' => $originalData,
                 ]);
             } catch (\Throwable $e) {
@@ -629,13 +629,13 @@ LUA;
             $originalData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
 
             try {
-                // 检查是否存在 bet 记录（KEYS[2]，不是余额 Key KEYS[1]）
-                if ($redis->exists($keys[2])) {
+                // 检查是否存在 bet 记录（Lua KEYS[2] = PHP $keys[1]）
+                if ($redis->exists($keys[1])) {
                     // 更新 bet 记录的 action_data
-                    $redis->hSet($keys[2], 'action_data', $originalData);
+                    $redis->hSet($keys[1], 'action_data', $originalData);
                 } else {
-                    // 独立 settle 记录，追加 original_data（KEYS[6]，不是锁 Key KEYS[5]）
-                    $redis->hSet($keys[6], 'original_data', $originalData);
+                    // 独立 settle 记录，追加 original_data（Lua KEYS[6] = PHP $keys[5]）
+                    $redis->hSet($keys[5], 'original_data', $originalData);
                 }
             } catch (\Throwable $e) {
                 // 失败不影响核心业务，仅记录日志
@@ -776,9 +776,9 @@ LUA;
             $actionData = json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE);
 
             try {
-                // 只有当 bet 记录存在时才追加 action_data（KEYS[2]，不是余额 Key KEYS[1]）
-                if ($redis->exists($keys[2])) {
-                    $redis->hSet($keys[2], 'action_data', $actionData);
+                // 只有当 bet 记录存在时才追加 action_data（Lua KEYS[2] = PHP $keys[1]）
+                if ($redis->exists($keys[1])) {
+                    $redis->hSet($keys[1], 'action_data', $actionData);
                 }
             } catch (\Throwable $e) {
                 // 失败不影响核心业务，仅记录日志
