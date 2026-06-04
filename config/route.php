@@ -33,6 +33,20 @@ Route::group('/api', function () {
         Route::post('/push-broadcast', [\app\api\v1\PushTestController::class, 'broadcast']);
         Route::get('/push-config', [\app\api\v1\PushTestController::class, 'checkConfig']);
         Route::post('/push-test-player', [\app\api\v1\PushTestController::class, 'testPlayerPush']);
+
+        // 玩家机台操作 API（来自 gk_api，使用 JWT Token 或 X-Player-Id）
+        Route::group('/machine', function () {
+            // 发送机台指令
+            Route::post('/send-cmd', [\app\api\v1\PlayerMachineController::class, 'sendCmd']);
+            // 获取机台状态
+            Route::post('/status', [\app\api\v1\PlayerMachineController::class, 'getMachineStatus']);
+            // 检查机台在线状态
+            Route::post('/check-online', [\app\api\v1\PlayerMachineController::class, 'checkOnline']);
+            // 批量检查机台在线状态
+            Route::post('/batch-check-online', [\app\api\v1\PlayerMachineController::class, 'batchCheckOnline']);
+            // 获取机台操作描述
+            Route::post('/get-description', [\app\api\v1\PlayerMachineController::class, 'getDescription']);
+        });
     });
 });
 

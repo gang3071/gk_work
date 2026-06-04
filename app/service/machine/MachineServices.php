@@ -334,9 +334,15 @@ class MachineServices
         $seconds = $info['keep_seconds'];
         if ($seconds > 3600) {
             $hours = intval($seconds / 3600);
-            $time = $hours . ":" . gmstrftime('%M:%S', $seconds);
+            $remainingSeconds = $seconds % 3600;
+            $minutes = str_pad(intval($remainingSeconds / 60), 2, '0', STR_PAD_LEFT);
+            $secs = str_pad($remainingSeconds % 60, 2, '0', STR_PAD_LEFT);
+            $time = $hours . ":" . $minutes . ":" . $secs;
         } else {
-            $time = gmstrftime('%H:%M:%S', $seconds);
+            $hours = str_pad(intval($seconds / 3600), 2, '0', STR_PAD_LEFT);
+            $minutes = str_pad(intval(($seconds % 3600) / 60), 2, '0', STR_PAD_LEFT);
+            $secs = str_pad($seconds % 60, 2, '0', STR_PAD_LEFT);
+            $time = $hours . ":" . $minutes . ":" . $secs;
         }
         $info['keep_seconds'] = $time;
         $givePoint = 0;

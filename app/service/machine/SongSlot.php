@@ -646,15 +646,19 @@ class SongSlot extends MachineServices implements BaseMachine
                 $this->has_lock = 1;
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
             }
-            $this->log->error('发送指令异常: ', [
-                $cmd,
-                $source,
-                $source_id,
-                $this->machine->code
+            $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
+            $this->log->error($operatorType . '发送指令异常', [
+                'operator_type' => $source,
+                'operator_id' => $source_id,
+                'cmd' => $cmd,
+                'machine_code' => $this->machine->code
             ]);
             throw new Exception($e->getMessage());
         }
-        $this->log->info('玩家机台操作', [
+        $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
+        $this->log->info($operatorType . '机台操作', [
+            'operator_type' => $source,
+            'operator_id' => $source_id,
             'machine_id' => $this->machine->id,
             'machine_code' => $this->machine->code,
             'machine_name' => $this->machine->name,

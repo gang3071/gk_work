@@ -2,6 +2,7 @@
 
 namespace app\api\v1;
 
+use app\exception\BusinessException;
 use app\model\GameType;
 use app\model\Machine;
 use app\service\machine\MachineServices;
@@ -68,6 +69,46 @@ class AdminMachineController
     }
 
     /**
+     * 处理异常并返回安全的错误响应
+     *
+     * @param Exception $e 异常对象
+     * @param string $context 上下文描述（用于日志）
+     * @param array $logData 额外的日志数据
+     * @return Response
+     */
+    private function handleException(Exception $e, string $context, array $logData = []): Response
+    {
+        // 记录完整错误到日志（包含敏感信息）
+        Log::error($context, array_merge([
+            'error_class' => get_class($e),
+            'error_message' => $e->getMessage(),
+            'error_code' => $e->getCode(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString()
+        ], $logData));
+
+        // 返回给客户端的消息（安全的）
+        if ($e instanceof BusinessException) {
+            // 业务异常：消息是安全的，可以直接返回
+            return $this->fail($e->getMessage(), $e->getErrorCode(), $e->getData());
+        }
+
+        // 系统异常：根据环境决定返回内容
+        if (config('app.debug', false)) {
+            // 开发环境：返回详细错误信息
+            return $this->fail($e->getMessage(), 500, [
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+        } else {
+            // 生产环境：返回通用错误消息
+            return $this->fail('操作失败，请稍后重试', 500);
+        }
+    }
+
+    /**
      * 发送机台指令
      * POST /api/admin/machine/send-cmd
      *
@@ -79,25 +120,31 @@ class AdminMachineController
         try {
             $lang = $this->setLanguage($request);
             $adminId = $this->getAdminId($request);
-            $machineId = $request->post('machine_id');
-            $cmd = $request->post('cmd');
-            $data = $request->post('data', 0);
 
-            if (empty($machineId)) {
+            // 获取并验证参数
+            $machineId = $request->post('machine_id');
+            if ($machineId === null || $machineId === '') {
                 return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
-            if (empty($cmd)) {
+            $machineIdInt = (int)$machineId;
+            if ($machineIdInt <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+
+            $cmd = $request->post('cmd');
+            if ($cmd === null || $cmd === '') {
                 return $this->fail(trans('cmd_required', [], 'admin_machine'));
             }
 
-            // 验证 data 参数类型
+            $data = $request->post('data', 0);
             if (!is_numeric($data)) {
                 return $this->fail(trans('data_must_be_numeric', [], 'admin_machine'));
             }
+            $dataInt = (int)$data;
 
             // 查询机台
-            $machine = Machine::find($machineId);
+            $machine = Machine::find($machineIdInt);
             if (!$machine) {
                 return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
@@ -106,28 +153,31 @@ class AdminMachineController
             $services = MachineServices::createServices($machine, $lang);
 
             // 发送指令
-            $result = $services->sendCmd($cmd, (int)$data, 'admin', $adminId);
+            $result = $services->sendCmd($cmd, $dataInt, 'admin', $adminId);
 
-            Log::info('Admin send machine cmd', [
+            Log::info('【管理员操作】机台指令', [
+                'operator_type' => 'admin',
                 'admin_id' => $adminId,
-                'machine_id' => $machineId,
+                'machine_id' => $machineIdInt,
+                'machine_code' => $machine->code,
                 'cmd' => $cmd,
-                'data' => $data,
+                'data' => $dataInt,
                 'result' => $result
             ]);
 
             return $this->success([
                 'result' => $result,
                 'cmd' => $cmd,
-                'machine_id' => $machineId
+                'machine_id' => $machineIdInt
             ], trans('cmd_sent_success', [], 'admin_machine'));
 
         } catch (Exception $e) {
-            Log::error('Admin send machine cmd failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+            return $this->handleException($e, '【管理员操作】机台指令失败', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId ?? 0,
+                'machine_id' => isset($machineIdInt) ? $machineIdInt : null,
+                'cmd' => $cmd ?? null
             ]);
-            return $this->fail($e->getMessage());
         }
     }
 
@@ -142,13 +192,19 @@ class AdminMachineController
     {
         try {
             $lang = $this->setLanguage($request);
-            $machineId = $request->post('machine_id');
 
-            if (empty($machineId)) {
+            // 获取并验证参数
+            $machineId = $request->post('machine_id');
+            if ($machineId === null || $machineId === '') {
                 return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
-            $machine = Machine::find($machineId);
+            $machineIdInt = (int)$machineId;
+            if ($machineIdInt <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+
+            $machine = Machine::find($machineIdInt);
             if (!$machine) {
                 return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
@@ -162,17 +218,16 @@ class AdminMachineController
             }
 
             return $this->success([
-                'machine_id' => $machineId,
+                'machine_id' => $machineIdInt,
                 'machine_info' => $machineInfo,
                 'cache_data' => $services->cacheData ?? []
             ]);
 
         } catch (Exception $e) {
-            Log::error('Get machine status failed', [
-                'error' => $e->getMessage(),
-                'machine_id' => $machineId ?? null
+            return $this->handleException($e, '【管理员操作】获取机台状态失败', [
+                'operator_type' => 'admin',
+                'machine_id' => isset($machineIdInt) ? $machineIdInt : null
             ]);
-            return $this->fail($e->getMessage());
         }
     }
 
@@ -187,13 +242,19 @@ class AdminMachineController
     {
         try {
             $this->setLanguage($request);
-            $machineId = $request->post('machine_id');
 
-            if (empty($machineId)) {
+            // 获取并验证参数
+            $machineId = $request->post('machine_id');
+            if ($machineId === null || $machineId === '') {
                 return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
-            $machine = Machine::find($machineId);
+            $machineIdInt = (int)$machineId;
+            if ($machineIdInt <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+
+            $machine = Machine::find($machineIdInt);
             if (!$machine) {
                 return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
@@ -204,7 +265,7 @@ class AdminMachineController
                 $mainOnline = Gateway::isUidOnline($mainUid);
             } catch (Exception $e) {
                 Log::warning('Gateway isUidOnline failed for main connection', [
-                    'machine_id' => $machineId,
+                    'machine_id' => $machineIdInt,
                     'uid' => $mainUid,
                     'error' => $e->getMessage()
                 ]);
@@ -219,7 +280,7 @@ class AdminMachineController
                     $autoOnline = Gateway::isUidOnline($autoUid);
                 } catch (Exception $e) {
                     Log::warning('Gateway isUidOnline failed for auto card', [
-                        'machine_id' => $machineId,
+                        'machine_id' => $machineIdInt,
                         'uid' => $autoUid,
                         'error' => $e->getMessage()
                     ]);
@@ -237,7 +298,7 @@ class AdminMachineController
             }
 
             return $this->success([
-                'machine_id' => $machineId,
+                'machine_id' => $machineIdInt,
                 'type' => $machine->type,
                 'main_online' => $mainOnline,
                 'auto_online' => $autoOnline,
@@ -245,11 +306,10 @@ class AdminMachineController
             ]);
 
         } catch (Exception $e) {
-            Log::error('Check machine online failed', [
-                'error' => $e->getMessage(),
-                'machine_id' => $machineId ?? null
+            return $this->handleException($e, '【管理员操作】检查机台在线失败', [
+                'operator_type' => 'admin',
+                'machine_id' => isset($machineIdInt) ? $machineIdInt : null
             ]);
-            return $this->fail($e->getMessage());
         }
     }
 
@@ -270,7 +330,20 @@ class AdminMachineController
                 return $this->fail(trans('machine_ids_required', [], 'admin_machine'));
             }
 
-            $machines = Machine::whereIn('id', $machineIds)->get();
+            // 验证并过滤数组元素
+            $validIds = [];
+            foreach ($machineIds as $id) {
+                $idInt = (int)$id;
+                if ($idInt > 0) {
+                    $validIds[] = $idInt;
+                }
+            }
+
+            if (empty($validIds)) {
+                return $this->fail('没有有效的机台ID', 400);
+            }
+
+            $machines = Machine::whereIn('id', $validIds)->get();
             $results = [];
 
             foreach ($machines as $machine) {
@@ -340,15 +413,22 @@ class AdminMachineController
     {
         try {
             $lang = $this->setLanguage($request);
-            $machineId = $request->post('machine_id');
-            $fun = $request->post('fun', '');
-            $data = $request->post('data', 0);
 
-            if (empty($machineId)) {
+            // 获取并验证参数
+            $machineId = $request->post('machine_id');
+            if ($machineId === null || $machineId === '') {
                 return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
-            $machine = Machine::find($machineId);
+            $machineIdInt = (int)$machineId;
+            if ($machineIdInt <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+
+            $fun = $request->post('fun', '');
+            $data = $request->post('data', 0);
+
+            $machine = Machine::find($machineIdInt);
             if (!$machine) {
                 return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
@@ -361,10 +441,10 @@ class AdminMachineController
             ]);
 
         } catch (Exception $e) {
-            Log::error('Get machine description failed', [
-                'error' => $e->getMessage()
+            return $this->handleException($e, '【管理员操作】获取机台描述失败', [
+                'operator_type' => 'admin',
+                'machine_id' => isset($machineIdInt) ? $machineIdInt : null
             ]);
-            return $this->fail($e->getMessage());
         }
     }
 
@@ -461,10 +541,9 @@ class AdminMachineController
             return $this->success($results);
 
         } catch (Exception $e) {
-            Log::error('Get all machine online status failed', [
-                'error' => $e->getMessage()
+            return $this->handleException($e, '【管理员操作】获取所有在线状态失败', [
+                'operator_type' => 'admin'
             ]);
-            return $this->fail($e->getMessage());
         }
     }
 
@@ -534,10 +613,9 @@ class AdminMachineController
             return $this->success($statistics);
 
         } catch (Exception $e) {
-            Log::error('Get machine online statistics failed', [
-                'error' => $e->getMessage()
+            return $this->handleException($e, '【管理员操作】获取在线统计失败', [
+                'operator_type' => 'admin'
             ]);
-            return $this->fail($e->getMessage());
         }
     }
 
@@ -558,7 +636,20 @@ class AdminMachineController
                 return $this->fail(trans('machine_ids_required', [], 'admin_machine'));
             }
 
-            $machines = Machine::whereIn('id', $machineIds)->get();
+            // 验证并过滤数组元素
+            $validIds = [];
+            foreach ($machineIds as $id) {
+                $idInt = (int)$id;
+                if ($idInt > 0) {
+                    $validIds[] = $idInt;
+                }
+            }
+
+            if (empty($validIds)) {
+                return $this->fail('没有有效的机台ID', 400);
+            }
+
+            $machines = Machine::whereIn('id', $validIds)->get();
             $results = [];
 
             foreach ($machines as $machine) {
@@ -580,11 +671,10 @@ class AdminMachineController
             return $this->success($results);
 
         } catch (Exception $e) {
-            Log::error('Batch get machine status failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+            return $this->handleException($e, '【管理员操作】批量获取机台状态失败', [
+                'operator_type' => 'admin',
+                'machine_count' => isset($validIds) ? count($validIds) : 0
             ]);
-            return $this->fail($e->getMessage());
         }
     }
 
@@ -599,19 +689,26 @@ class AdminMachineController
     {
         try {
             $lang = $this->setLanguage($request);
-            $machineId = $request->post('machine_id');
-            $field = $request->post('field');
-            $value = $request->post('value');
 
-            if (empty($machineId)) {
+            // 获取并验证参数
+            $machineId = $request->post('machine_id');
+            if ($machineId === null || $machineId === '') {
                 return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
-            if (empty($field)) {
+            $machineIdInt = (int)$machineId;
+            if ($machineIdInt <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+
+            $field = $request->post('field');
+            if ($field === null || $field === '') {
                 return $this->fail(trans('field_required', [], 'admin_machine'));
             }
 
-            $machine = Machine::find($machineId);
+            $value = $request->post('value');
+
+            $machine = Machine::find($machineIdInt);
             if (!$machine) {
                 return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
@@ -623,23 +720,23 @@ class AdminMachineController
             $services->$field = $value;
 
             Log::info('Admin update machine state', [
-                'machine_id' => $machineId,
+                'machine_id' => $machineIdInt,
                 'field' => $field,
                 'value' => $value
             ]);
 
             return $this->success([
-                'machine_id' => $machineId,
+                'machine_id' => $machineIdInt,
                 'field' => $field,
                 'value' => $value
             ], trans('state_updated_success', [], 'admin_machine'));
 
         } catch (Exception $e) {
-            Log::error('Update machine state failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+            return $this->handleException($e, '【管理员操作】更新机台状态失败', [
+                'operator_type' => 'admin',
+                'machine_id' => isset($machineIdInt) ? $machineIdInt : null,
+                'field' => $field ?? null
             ]);
-            return $this->fail($e->getMessage());
         }
     }
 
@@ -655,20 +752,25 @@ class AdminMachineController
         try {
             $lang = $this->setLanguage($request);
             $adminId = $this->getAdminId($request);
-            $machineId = $request->post('machine_id');
-            $commands = $request->post('commands', []);
 
-            // 参数验证
-            if (empty($machineId)) {
+            // 获取并验证参数
+            $machineId = $request->post('machine_id');
+            if ($machineId === null || $machineId === '') {
                 return $this->fail(trans('machine_id_required', [], 'admin_machine'));
             }
 
+            $machineIdInt = (int)$machineId;
+            if ($machineIdInt <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+
+            $commands = $request->post('commands', []);
             if (empty($commands) || !is_array($commands)) {
                 return $this->fail(trans('commands_required', [], 'admin_machine'));
             }
 
             // 查询机台
-            $machine = Machine::find($machineId);
+            $machine = Machine::find($machineIdInt);
             if (!$machine) {
                 return $this->fail(trans('machine_not_found', [], 'admin_machine'));
             }
@@ -686,7 +788,8 @@ class AdminMachineController
                     $cmd = $command['cmd'] ?? '';
                     $data = (int)($command['data'] ?? 0);
 
-                    if (empty($cmd)) {
+                    // 验证cmd
+                    if ($cmd === null || $cmd === '') {
                         $results[] = [
                             'index' => $index,
                             'cmd' => $cmd,
@@ -727,7 +830,8 @@ class AdminMachineController
                 }
             }
 
-            Log::info('Admin batch send machine cmd', [
+            Log::info('【管理员操作】批量机台指令', [
+                'operator_type' => 'admin',
                 'admin_id' => $adminId,
                 'machine_id' => $machineId,
                 'total_count' => count($commands),
@@ -744,11 +848,12 @@ class AdminMachineController
             ], trans('batch_cmd_completed', [], 'admin_machine'));
 
         } catch (Exception $e) {
-            Log::error('Admin batch send machine cmd failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+            return $this->handleException($e, '【管理员操作】批量机台指令失败', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId ?? 0,
+                'machine_id' => isset($machineIdInt) ? $machineIdInt : null,
+                'commands_count' => isset($commands) ? count($commands) : 0
             ]);
-            return $this->fail($e->getMessage());
         }
     }
 }

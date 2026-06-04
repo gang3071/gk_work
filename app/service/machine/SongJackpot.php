@@ -850,7 +850,10 @@ class SongJackpot extends MachineServices implements BaseMachine
                 'description' => $this->getDescription($cmd),
             ]);
         }
-        $this->log->info('玩家机台操作', [
+        $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
+        $this->log->info($operatorType . '机台操作', [
+            'operator_type' => $source,
+            'operator_id' => $source_id,
             'machine_id' => $this->machine->id,
             'machine_code' => $this->machine->code,
             'machine_name' => $this->machine->name,
@@ -867,8 +870,6 @@ class SongJackpot extends MachineServices implements BaseMachine
             'is_system' => $isSystem,
             'point' => $data,
             'machine_data' => $this->getAllData(),
-            'source' => $source,
-            'source_id' => $source_id,
         ]);
 
         return true;
