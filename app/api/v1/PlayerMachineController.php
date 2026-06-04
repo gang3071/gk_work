@@ -39,7 +39,6 @@ class PlayerMachineController
                     'Authorization' => $request->header('Authorization') ? 'Bearer ***' : null,
                 ],
                 'body' => $request->post(),
-                'ip' => $request->ip(),
             ]);
 
             // 优先从 X-Player-Id header 获取（来自 gk_api 代理）
