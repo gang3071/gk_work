@@ -32,9 +32,14 @@ class PlayerMachineController
             // 优先从 X-Player-Id header 获取（来自 gk_api 代理）
             $playerIdRaw = $request->header('X-Player-Id', '');
 
+            // PHP 8.0+ 兼容：确保不是 null
+            if ($playerIdRaw === null) {
+                $playerIdRaw = '';
+            }
+
             // 修复 HTTP Keep-Alive 导致的 header 累积问题
             // 如果是逗号分隔的字符串，取第一个值
-            if (strpos($playerIdRaw, ',') !== false) {
+            if ($playerIdRaw !== '' && strpos($playerIdRaw, ',') !== false) {
                 $playerIdArray = explode(',', $playerIdRaw);
                 $playerId = trim($playerIdArray[0]);
             } else {
