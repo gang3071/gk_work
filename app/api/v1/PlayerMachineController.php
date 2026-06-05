@@ -174,12 +174,33 @@ class PlayerMachineController
     public function sendCmd(Request $request): Response
     {
         $player = null;  // 初始化变量，避免catch块中未定义
+        $cmdId = uniqid('cmd_', true);  // 生成唯一指令ID用于追踪
+        $startTime = microtime(true);
+
+        // 提取追踪上下文（来自 gk_api）
+        $traceContext = [
+            'batch_id' => $request->header('X-Batch-Id', ''),
+            'command_index' => $request->header('X-Command-Index', ''),
+            'command_id' => $request->header('X-Command-Id', ''),
+            'wash_id' => $request->header('X-Wash-Id', ''),
+        ];
+
+        // 过滤空值
+        $traceContext = array_filter($traceContext, function ($value) {
+            return $value !== '' && $value !== null;
+        });
 
         try {
             $lang = $this->setLanguage($request);
             $player = $this->getPlayer($request);
 
             if (!$player) {
+                Log::warning('[PlayerMachine-SendCmd] 玩家信息获取失败', [
+                    'cmd_id' => $cmdId,
+                    'trace_context' => $traceContext,
+                    'player_id_header' => $request->header('X-Player-Id', ''),
+                    'ip' => $request->getRealIp(),
+                ]);
                 return $this->fail('玩家信息获取失败', 401);
             }
 
@@ -208,16 +229,44 @@ class PlayerMachineController
             // 查询机台
             $machine = Machine::find($machineIdInt);
             if (!$machine) {
+                Log::warning('[PlayerMachine-SendCmd] 机台不存在', [
+                    'cmd_id' => $cmdId,
+                    'machine_id' => $machineIdInt,
+                    'player_id' => $player->id,
+                ]);
                 return $this->fail(trans('machine_not_found', [], 'player_machine'));
             }
 
             // 创建机台服务
             $services = MachineServices::createServices($machine, $lang);
 
-            // 发送指令 - 标记为玩家操作
-            $result = $services->sendCmd($cmd, $dataInt, 'player', $player->id);
+            // 记录指令执行前的状态
+            Log::info('[PlayerMachine-SendCmd] 准备执行指令', [
+                'cmd_id' => $cmdId,
+                'trace_context' => $traceContext,  // 关键：包含 batch_id, wash_id 等
+                'operator_type' => 'player',
+                'player_id' => $player->id,
+                'player_name' => $player->name,
+                'machine_id' => $machineIdInt,
+                'machine_code' => $machine->code,
+                'machine_type' => $machine->type,
+                'cmd' => $cmd,
+                'data' => $dataInt,
+                'lang' => $lang,
+                'ip' => $request->getRealIp(),
+                'timestamp' => date('Y-m-d H:i:s'),
+            ]);
 
-            Log::info('【玩家操作】机台指令', [
+            // 发送指令 - 标记为玩家操作
+            $execStartTime = microtime(true);
+            $result = $services->sendCmd($cmd, $dataInt, 'player', $player->id);
+            $execDuration = round((microtime(true) - $execStartTime) * 1000, 2);
+
+            $totalDuration = round((microtime(true) - $startTime) * 1000, 2);
+
+            Log::info('[PlayerMachine-SendCmd] 指令执行完成', [
+                'cmd_id' => $cmdId,
+                'trace_context' => $traceContext,  // 关键：包含 batch_id, wash_id 等
                 'operator_type' => 'player',
                 'player_id' => $player->id,
                 'player_name' => $player->name,
@@ -225,8 +274,23 @@ class PlayerMachineController
                 'machine_code' => $machine->code,
                 'cmd' => $cmd,
                 'data' => $dataInt,
-                'result' => $result
+                'result' => $result,
+                'exec_duration_ms' => $execDuration,
+                'total_duration_ms' => $totalDuration,
+                'success' => true,
+                'timestamp' => date('Y-m-d H:i:s'),
             ]);
+
+            // 性能警告（超过500ms）
+            if ($totalDuration > 500) {
+                Log::warning('[PlayerMachine-SendCmd] 指令执行耗时过长', [
+                    'cmd_id' => $cmdId,
+                    'machine_id' => $machineIdInt,
+                    'cmd' => $cmd,
+                    'duration_ms' => $totalDuration,
+                    'threshold_ms' => 500,
+                ]);
+            }
 
             return $this->success([
                 'result' => $result,
@@ -235,6 +299,26 @@ class PlayerMachineController
             ], trans('cmd_sent_success', [], 'player_machine'));
 
         } catch (Exception $e) {
+            $failDuration = round((microtime(true) - $startTime) * 1000, 2);
+
+            Log::error('[PlayerMachine-SendCmd] 指令执行失败', [
+                'cmd_id' => $cmdId,
+                'trace_context' => $traceContext,  // 关键：包含 batch_id, wash_id 等
+                'operator_type' => 'player',
+                'player_id' => isset($player) && $player ? $player->id : null,
+                'player_name' => isset($player) && $player ? $player->name : null,
+                'machine_id' => isset($machineIdInt) ? $machineIdInt : null,
+                'cmd' => $cmd ?? null,
+                'data' => isset($dataInt) ? $dataInt : null,
+                'error' => $e->getMessage(),
+                'error_code' => $e->getCode(),
+                'error_file' => $e->getFile(),
+                'error_line' => $e->getLine(),
+                'duration_ms' => $failDuration,
+                'trace' => $e->getTraceAsString(),
+                'timestamp' => date('Y-m-d H:i:s'),
+            ]);
+
             return $this->handleException($e, '【玩家操作】机台指令失败', [
                 'operator_type' => 'player',
                 'player_id' => isset($player) && $player ? $player->id : null,
