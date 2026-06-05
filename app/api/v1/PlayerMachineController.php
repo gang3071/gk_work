@@ -29,85 +29,30 @@ class PlayerMachineController
     private function getPlayer(Request $request): ?Player
     {
         try {
-            // ========== 日志：记录接收到的请求信息 ==========
-            Log::info('[GK_WORK] 🔍 getPlayer - 开始获取玩家信息', [
-                'url' => $request->url(),
-                'method' => $request->method(),
-                'headers' => [
-                    'X-Player-Id' => $request->header('X-Player-Id'),
-                    'x-player-id' => $request->header('x-player-id'),
-                    'Authorization' => $request->header('Authorization') ? 'Bearer ***' : null,
-                ],
-                'body' => $request->post(),
-            ]);
-
             // 优先从 X-Player-Id header 获取（来自 gk_api 代理）
-            $playerId = $request->header('X-Player-Id', '');
+            $playerIdRaw = $request->header('X-Player-Id', '');
 
-            Log::info('[GK_WORK] 📋 读取 X-Player-Id header', [
-                'X-Player-Id_raw' => $playerId,
-                'is_empty' => $playerId === '' || $playerId === null,
-                'type' => gettype($playerId),
-            ]);
+            // 修复 HTTP Keep-Alive 导致的 header 累积问题
+            // 如果是逗号分隔的字符串，取第一个值
+            if (strpos($playerIdRaw, ',') !== false) {
+                $playerIdArray = explode(',', $playerIdRaw);
+                $playerId = trim($playerIdArray[0]);
+            } else {
+                $playerId = $playerIdRaw;
+            }
 
             // 明确判断：非空字符串且转为整数后大于0
             if ($playerId !== '' && $playerId !== null) {
                 $playerIdInt = (int)$playerId;
 
-                Log::info('[GK_WORK] 🔢 转换 player_id 为整数', [
-                    'original' => $playerId,
-                    'converted' => $playerIdInt,
-                    'is_valid' => $playerIdInt > 0,
-                ]);
-
                 // 只接受正整数的玩家ID（拒绝0和负数）
                 if ($playerIdInt > 0) {
-                    Log::info('[GK_WORK] 🗄️  开始查询数据库', [
-                        'player_id' => $playerIdInt,
-                        'query' => 'Player::query()->where(id, ' . $playerIdInt . ')->first()',
-                    ]);
-
                     $player = Player::query()->where('id', $playerIdInt)->first();
 
                     if ($player) {
-                        Log::info('[GK_WORK] ✅ 玩家查询成功', [
-                            'player_id' => $player->id,
-                            'username' => $player->username ?? 'N/A',
-                            'status' => $player->status ?? 'N/A',
-                        ]);
                         return $player;
-                    } else {
-                        Log::warning('[GK_WORK] ❌ 玩家未找到（Player模型查询）', [
-                            'player_id' => $playerIdInt,
-                            'query_result' => 'null',
-                        ]);
-
-                        // 检查是否因为软删除
-                        $directQuery = \support\Db::table('player')->where('id', $playerIdInt)->first();
-                        if ($directQuery) {
-                            Log::warning('[GK_WORK] ⚠️  直接SQL查询找到了玩家', [
-                                'player_id' => $playerIdInt,
-                                'username' => $directQuery->username ?? null,
-                                'deleted_at' => $directQuery->deleted_at ?? null,
-                                'status' => $directQuery->status ?? null,
-                                'reason' => $directQuery->deleted_at ? '玩家已被软删除' : '可能被全局作用域过滤',
-                            ]);
-                        } else {
-                            Log::error('[GK_WORK] 💥 直接SQL查询也未找到玩家', [
-                                'player_id' => $playerIdInt,
-                                'reason' => '数据库中不存在该玩家记录',
-                            ]);
-                        }
                     }
-                } else {
-                    Log::warning('[GK_WORK] ⚠️  player_id 无效（≤0）', [
-                        'player_id' => $playerIdInt,
-                    ]);
                 }
-            } else {
-                Log::warning('[GK_WORK] ⚠️  X-Player-Id header 为空', [
-                    'header_value' => $playerId,
-                ]);
             }
 
             // 降级方案：尝试解析 JWT token（直接访问时）
@@ -231,27 +176,12 @@ class PlayerMachineController
         $player = null;  // 初始化变量，避免catch块中未定义
 
         try {
-            Log::info('[GK_WORK] 📥 收到机台指令请求', [
-                'endpoint' => '/api/v1/machine/send-cmd',
-                'method' => $request->method(),
-                'post_data' => $request->post(),
-            ]);
-
             $lang = $this->setLanguage($request);
             $player = $this->getPlayer($request);
 
             if (!$player) {
-                Log::error('[GK_WORK] 💥 玩家信息获取失败 - 返回401', [
-                    'X-Player-Id' => $request->header('X-Player-Id'),
-                    'Authorization' => $request->header('Authorization') ? 'exists' : 'missing',
-                ]);
                 return $this->fail('玩家信息获取失败', 401);
             }
-
-            Log::info('[GK_WORK] ✅ 玩家验证成功', [
-                'player_id' => $player->id,
-                'username' => $player->username ?? 'N/A',
-            ]);
 
             // 获取并验证参数
             $machineId = $request->post('machine_id');
