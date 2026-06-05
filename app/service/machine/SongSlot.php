@@ -264,6 +264,32 @@ class SongSlot extends MachineServices implements BaseMachine
                     $orgWin = $this->win;
                     if (substr($msg, 18, 2) != 'da') {
                         $this->has_lock = 1;
+
+                        // 详细记录机台锁的原因
+                        Log::channel('machine_operations')->error('[SongSlot-MachineLock] 机台被锁', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'machine_name' => $this->machine->name,
+                            'lock_reason' => '心跳数据异常',
+                            'exception_message' => '机台故障 - 心跳字节校验失败',
+                            'heartbeat_msg' => $msg,
+                            'expected_byte_18' => 'da',
+                            'actual_byte_18' => substr($msg, 18, 2),
+                            'player_id' => $gamingUserId,
+                            'player_info' => $this->machine->gamingPlayer ? [
+                                'uuid' => $this->machine->gamingPlayer->uuid,
+                                'name' => $this->machine->gamingPlayer->name,
+                                'phone' => $this->machine->gamingPlayer->phone,
+                            ] : null,
+                            'machine_state' => [
+                                'point' => $this->point,
+                                'bet' => $this->bet,
+                                'win' => $this->win,
+                                'auto' => $this->auto,
+                            ],
+                            'timestamp' => date('Y-m-d H:i:s'),
+                        ]);
+
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
                         throw new \Exception('机台故障');
                     }
@@ -381,6 +407,32 @@ class SongSlot extends MachineServices implements BaseMachine
                     $machineStatus = substr($msg, 8, 2);
                     if ($machineStatus != 'da') {
                         $this->has_lock = 1;
+
+                        // 详细记录机台锁的原因
+                        Log::channel('machine_operations')->error('[SongSlot-MachineLock] 机台被锁', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'machine_name' => $this->machine->name,
+                            'lock_reason' => '机台状态异常',
+                            'exception_message' => '机台故障, 故障码: ' . $machineStatus,
+                            'expected_status' => 'da',
+                            'actual_status' => $machineStatus,
+                            'status_msg' => $msg,
+                            'player_id' => $gamingUserId,
+                            'player_info' => $this->machine->gamingPlayer ? [
+                                'uuid' => $this->machine->gamingPlayer->uuid,
+                                'name' => $this->machine->gamingPlayer->name,
+                                'phone' => $this->machine->gamingPlayer->phone,
+                            ] : null,
+                            'machine_state' => [
+                                'point' => $this->point,
+                                'bet' => $this->bet,
+                                'win' => $this->win,
+                                'auto' => $this->auto,
+                            ],
+                            'timestamp' => date('Y-m-d H:i:s'),
+                        ]);
+
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
                         throw new \Exception('机台故障, 故障码:' . $machineStatus);
                     }
@@ -586,6 +638,35 @@ class SongSlot extends MachineServices implements BaseMachine
                 self::WASH_ZERO
             ])) {
                 $this->has_lock = 1;
+
+                // 详细记录机台锁的原因
+                Log::channel('machine_operations')->error('[SongSlot-MachineLock] 机台被锁', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'machine_name' => $this->machine->name,
+                    'cmd' => $cmd,
+                    'cmd_desc' => $this->getDescription($cmd),
+                    'lock_reason' => '指令执行异常',
+                    'exception_message' => $e->getMessage(),
+                    'exception_file' => $e->getFile(),
+                    'exception_line' => $e->getLine(),
+                    'operator_type' => $source,
+                    'operator_id' => $source_id,
+                    'player_id' => $this->machine->gaming_user_id,
+                    'player_info' => $this->machine->gamingPlayer ? [
+                        'uuid' => $this->machine->gamingPlayer->uuid,
+                        'name' => $this->machine->gamingPlayer->name,
+                        'phone' => $this->machine->gamingPlayer->phone,
+                    ] : null,
+                    'machine_state' => [
+                        'point' => $this->point,
+                        'bet' => $this->bet,
+                        'win' => $this->win,
+                        'auto' => $this->auto,
+                    ],
+                    'timestamp' => date('Y-m-d H:i:s'),
+                ]);
+
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
             }
             $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';

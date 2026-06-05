@@ -498,6 +498,36 @@ class Slot extends MachineServices implements BaseMachine
                 self::WASH_ZERO
             ])) {
                 $this->has_lock = 1;
+
+                // 详细记录机台锁的原因
+                Log::channel('machine_operations')->error('[Slot-MachineLock] 机台被锁', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'machine_name' => $this->machine->name,
+                    'cmd' => $cmd,
+                    'cmd_desc' => $this->getDescription($cmd),
+                    'lock_reason' => '指令执行异常',
+                    'exception_message' => $e->getMessage(),
+                    'exception_file' => $e->getFile(),
+                    'exception_line' => $e->getLine(),
+                    'operator_type' => $source,
+                    'operator_id' => $source_id,
+                    'player_id' => $this->machine->gaming_user_id,
+                    'player_info' => $this->machine->gamingPlayer ? [
+                        'uuid' => $this->machine->gamingPlayer->uuid,
+                        'name' => $this->machine->gamingPlayer->name,
+                        'phone' => $this->machine->gamingPlayer->phone,
+                    ] : null,
+                    'machine_state' => [
+                        'point' => $this->point,
+                        'bet' => $this->bet,
+                        'win' => $this->win,
+                        'auto' => $this->auto,
+                        'reward_status' => $this->reward_status,
+                    ],
+                    'timestamp' => date('Y-m-d H:i:s'),
+                ]);
+
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
             }
             $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
