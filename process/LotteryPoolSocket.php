@@ -57,7 +57,6 @@ class LotteryPoolSocket
         // 数据变化检测，避免发送重复数据
         $currentHash = md5(json_encode($messageData));
         if ($currentHash === self::$lastDataHash) {
-            Log::debug('LotteryPoolSocket定时检查: 数据无变化，跳过推送');
             return;
         }
         // 发送消息

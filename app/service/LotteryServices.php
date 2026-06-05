@@ -401,22 +401,6 @@ class LotteryServices
                 $addAmount = bcsub($lottery->max_pool_amount, $lottery->amount, 4);
             }
 
-            // 记录彩金累积日志
-            \support\Log::info('彩金池累积:', [
-                'lottery_id' => $lottery->id,
-                'name' => $lottery->name,
-                'uuid' => $this->player->uuid,
-                'player_id' => $this->player->id,
-                'machine_id' => $this->machine->id,
-                'num' => $num,
-                'base_amount' => $baseAmount,
-                'pool_ratio' => $lottery->pool_ratio,
-                'add_amount' => $addAmount,
-                'old_amount' => $lottery->amount,
-                'new_amount' => $newAmount,
-                'max_pool_amount' => $lottery->max_pool_amount,
-            ]);
-
             // 使用 Redis 原子操作累积彩金（性能优化）
             try {
                 $redisKey = self::REDIS_KEY_LOTTERY_AMOUNT . $lottery->id;
@@ -450,10 +434,6 @@ class LotteryServices
 
                     if (!$lastSync || (time() - $lastSync) >= self::DB_SYNC_INTERVAL) {
                         $shouldSyncToDB = true;
-                        \support\Log::debug('达到同步时间间隔，将彩金同步到数据库', [
-                            'lottery_id' => $lottery->id,
-                            'interval' => self::DB_SYNC_INTERVAL,
-                        ]);
                     }
                 }
 
