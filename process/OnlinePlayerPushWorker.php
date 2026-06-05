@@ -50,7 +50,6 @@ class OnlinePlayerPushWorker
             $playerIds = $redis->sMembers('online_players:game');
 
             if (empty($playerIds)) {
-                Log::debug('[在线玩家推送] 无在线玩家');
                 return;
             }
 

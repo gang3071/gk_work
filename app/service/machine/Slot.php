@@ -581,6 +581,20 @@ class Slot extends MachineServices implements BaseMachine
     {
         try {
             $beforePoint = $this->point;
+
+            // 追踪日志：开分前的机台状态
+            Log::channel('machine_operations')->info('[Slot-OpenPoint] 开分前机台状态', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'open_data' => $data,
+                'before_point' => $beforePoint,
+                'before_bet' => $this->bet,
+                'before_win' => $this->win,
+                'source' => $source,
+                'source_id' => $source_id,
+            ]);
+
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . $cmd, $data, self::TYPE_OPEN_CARD)));
             $beforeActionTime = $this->action_time;
             $handleDuration = 0;
@@ -589,6 +603,19 @@ class Slot extends MachineServices implements BaseMachine
                 $point = $this->point;
                 $actionTime = $this->action_time;
                 if ($actionTime > $beforeActionTime && $beforePoint < $point) {
+                    // 追踪日志：开分成功
+                    Log::channel('machine_operations')->info('[Slot-OpenPoint] 开分成功', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'before_point' => $beforePoint,
+                        'after_point' => $point,
+                        'added_point' => $point - $beforePoint,
+                        'after_bet' => $this->bet,
+                        'after_win' => $this->win,
+                        'wait_duration_ms' => round($handleDuration / 1000, 2),
+                    ]);
+
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -599,6 +626,15 @@ class Slot extends MachineServices implements BaseMachine
                     return;
                 }
                 if ($handleDuration >= $this->expirationTime) { // 只跑1.5秒钟
+                    // 追踪日志：开分超时
+                    Log::channel('machine_operations')->error('[Slot-OpenPoint] 开分超时', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'current_point' => $this->point,
+                        'timeout_ms' => round($handleDuration / 1000, 2),
+                        'expiration_time_ms' => round($this->expirationTime / 1000, 2),
+                    ]);
                     $this->log->error('指令超时异常', ['slot -> openPoint', [$this->machine->code, $cmd]]);
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
@@ -606,6 +642,14 @@ class Slot extends MachineServices implements BaseMachine
                 $handleDuration += $sleep;
             }
         } catch (Exception $e) {
+            // 追踪日志：开分失败
+            Log::channel('machine_operations')->error('[Slot-OpenPoint] 开分失败', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'current_point' => $this->point,
+                'error' => $e->getMessage(),
+            ]);
             throw new Exception($e->getMessage());
         }
     }
@@ -697,6 +741,20 @@ class Slot extends MachineServices implements BaseMachine
             if ($beforePoint == 0) {
                 return;
             }
+
+            // 追踪日志：洗分前的机台状态
+            Log::channel('machine_operations')->info('[Slot-WashPoint] 洗分前机台状态', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'before_point' => $beforePoint,
+                'before_bet' => $this->bet,
+                'before_win' => $this->win,
+                'before_action_time' => $this->action_time,
+                'attempts' => $attempts,
+                'source' => $source,
+                'source_id' => $source_id,
+            ]);
+
             Gateway::sendToUid($uid,
                 hex2bin($this->createCmd(self::PREFIX . self::WASH_ZERO, 0, self::TYPE_OPEN_CARD)));
             $beforeActionTime = $this->action_time;
@@ -706,6 +764,19 @@ class Slot extends MachineServices implements BaseMachine
                 $point = $this->point;
                 $actionTime = $this->action_time;
                 if ($actionTime > $beforeActionTime && $point == 0) {
+                    // 追踪日志：洗分成功，记录最终状态
+                    Log::channel('machine_operations')->info('[Slot-WashPoint] 洗分成功', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'before_point' => $beforePoint,
+                        'after_point' => $point,
+                        'after_bet' => $this->bet,
+                        'after_win' => $this->win,
+                        'after_action_time' => $actionTime,
+                        'wait_duration_ms' => round($handleDuration / 1000, 2),
+                        'attempts' => $attempts,
+                    ]);
+
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -724,9 +795,28 @@ class Slot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
+                // 追踪日志：洗分失败
+                Log::channel('machine_operations')->error('[Slot-WashPoint] 洗分失败 - 超过最大重试次数', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'attempts' => $attempts,
+                    'max_retries' => $maxRetries,
+                    'current_point' => $this->point,
+                    'error' => $e->getMessage(),
+                ]);
                 $this->log->error('指令超时异常', ['slot -> washPoint', [$this->machine->code]]);
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
+
+            // 追踪日志：洗分重试
+            Log::channel('machine_operations')->warning('[Slot-WashPoint] 洗分重试', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'attempts' => $attempts,
+                'max_retries' => $maxRetries,
+                'error' => $e->getMessage(),
+            ]);
+
             usleep(50000);
             $this->washPoint($uid, $source, $source_id, $attempts);
         }
@@ -751,6 +841,19 @@ class Slot extends MachineServices implements BaseMachine
             if ($beforePoint == 0) {
                 return;
             }
+
+            // 追踪日志：洗分(留分)前的机台状态
+            Log::channel('machine_operations')->info('[Slot-WashSurplusPoint] 洗分(留分)前机台状态', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'before_point' => $beforePoint,
+                'before_bet' => $this->bet,
+                'before_win' => $this->win,
+                'reward_status' => $this->reward_status,
+                'source' => $source,
+                'source_id' => $source_id,
+            ]);
+
             Gateway::sendToUid($uid,
                 hex2bin($this->createCmd(self::PREFIX . self::WASH_POINT, 0, self::TYPE_OPEN_CARD)));
             Gateway::sendToUid($uid,
@@ -762,6 +865,18 @@ class Slot extends MachineServices implements BaseMachine
                 $point = $this->point;
                 $actionTime = $this->action_time;
                 if ($actionTime > $beforeActionTime && $point < $beforePoint) {
+                    // 追踪日志：洗分(留分)成功
+                    Log::channel('machine_operations')->info('[Slot-WashSurplusPoint] 洗分(留分)成功', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'before_point' => $beforePoint,
+                        'after_point' => $point,
+                        'washed_point' => $beforePoint - $point,
+                        'after_bet' => $this->bet,
+                        'after_win' => $this->win,
+                        'wait_duration_ms' => round($handleDuration / 1000, 2),
+                    ]);
+
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -778,6 +893,13 @@ class Slot extends MachineServices implements BaseMachine
                 $handleDuration += $sleep;
             }
         } catch (Exception $e) {
+            // 追踪日志：洗分(留分)失败
+            Log::channel('machine_operations')->error('[Slot-WashSurplusPoint] 洗分(留分)失败', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'current_point' => $this->point,
+                'error' => $e->getMessage(),
+            ]);
             throw new Exception($e->getMessage());
         }
     }

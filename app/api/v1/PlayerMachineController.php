@@ -241,7 +241,7 @@ class PlayerMachineController
             $services = MachineServices::createServices($machine, $lang);
 
             // 记录指令执行前的状态
-            Log::info('[PlayerMachine-SendCmd] 准备执行指令', [
+            Log::channel('machine_operations')->info('[PlayerMachine-SendCmd] 准备执行指令', [
                 'cmd_id' => $cmdId,
                 'trace_context' => $traceContext,  // 关键：包含 batch_id, wash_id 等
                 'operator_type' => 'player',
@@ -264,7 +264,7 @@ class PlayerMachineController
 
             $totalDuration = round((microtime(true) - $startTime) * 1000, 2);
 
-            Log::info('[PlayerMachine-SendCmd] 指令执行完成', [
+            Log::channel('machine_operations')->info('[PlayerMachine-SendCmd] 指令执行完成', [
                 'cmd_id' => $cmdId,
                 'trace_context' => $traceContext,  // 关键：包含 batch_id, wash_id 等
                 'operator_type' => 'player',
@@ -301,7 +301,7 @@ class PlayerMachineController
         } catch (Exception $e) {
             $failDuration = round((microtime(true) - $startTime) * 1000, 2);
 
-            Log::error('[PlayerMachine-SendCmd] 指令执行失败', [
+            Log::channel('machine_operations')->error('[PlayerMachine-SendCmd] 指令执行失败', [
                 'cmd_id' => $cmdId,
                 'trace_context' => $traceContext,  // 关键：包含 batch_id, wash_id 等
                 'operator_type' => 'player',

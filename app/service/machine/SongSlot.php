@@ -164,21 +164,8 @@ class SongSlot extends MachineServices implements BaseMachine
                 // 获取失败时立即重试1次
                 try {
                     $value = Cache::get($key, 0);
-                    \support\Log::warning('Redis缓存读取失败后重试成功', [
-                        'machine_id' => $this->machine->id,
-                        'field' => $name,
-                        'error' => $e->getMessage()
-                    ]);
                     return $value;
                 } catch (\Exception $e2) {
-                    // 重试仍失败，记录错误日志并返回默认值
-                    \support\Log::error('Redis缓存读取失败（重试1次后仍失败）', [
-                        'machine_id' => $this->machine->id,
-                        'machine_code' => $this->machine->code,
-                        'field' => $name,
-                        'key' => $key,
-                        'error' => $e2->getMessage()
-                    ]);
                     return 0;
                 }
             }
@@ -349,25 +336,6 @@ class SongSlot extends MachineServices implements BaseMachine
                     $this->win = $nowWin;
                     $this->auto = $nowAuto;
                     $this->reward_status = $nowRewardStatus;
-                    $this->log->error('机台当前数据: ', [
-                        [
-                            'msg' => $msg,
-                            'machine_code' => $this->machine->code,
-                            'point' => $nowPoint,
-                            'bet' => $nowBet,
-                            'win' => $nowWin,
-                            'reward_status' => $nowRewardStatus,
-                            'now_turn' => $this->now_turn / 3,
-                            'auto' => $nowAuto,
-                        ],
-                        [
-                            'orgBet' => $orgBet,
-                            'orgWin' => $orgWin,
-                            'orgRewardStatus' => $orgRewardStatus,
-                            'orgNowTurn' => $orgNowTurn / 3,
-                            'orgAuto' => $orgAuto,
-                        ],
-                    ]);
                     $this->sendMachineNowStatusMessage($this->machine->id);
                     break;
                 case self::WASH_ZERO:
@@ -376,7 +344,6 @@ class SongSlot extends MachineServices implements BaseMachine
                     $this->setActionVersion($cmd);
                     $washPoint = self::parseScore(substr($msg, 6, 6));
                     $preWashPoint = $this->pre_wash_point;
-                    $this->log->info('washPoint', [$washPoint, $preWashPoint]);
                     if ($preWashPoint != $washPoint) {
                         throw new \Exception('预下分不等于实际下分,请稍后尝试');
                     }
@@ -396,40 +363,18 @@ class SongSlot extends MachineServices implements BaseMachine
                     }
                     $this->bet = $bet;
                     self::sendCmd('af');
-                    $this->log->error('机台压分: ', [
-                        [
-                            'msg' => $msg,
-                            'bet' => $this->bet,
-                            'orgBet' => $orgBet,
-                        ]
-                    ]);
                     $this->setActionVersion(self::READ_BET);
                     break;
                 case self::GET_WIN:
                     $win = self::parseScore(substr($msg, 4, 6));
                     $orgWin = $this->win;
                     $this->win = $win;
-                    $this->log->error('机台得分: ', [
-                        [
-                            'msg' => $msg,
-                            'win' => $this->win,
-                            'orgWin' => $orgWin,
-                        ]
-                    ]);
                     self::sendCmd('af');
                     $this->setActionVersion(self::READ_WIN);
                     break;
                 case self::GET_SCORE:
                     $point = self::parseScore(substr($msg, 4, 6));
-                    $orgPoint = $this->point;
                     $this->point = $point;
-                    $this->log->error('机台分数: ', [
-                        [
-                            'msg' => $msg,
-                            'point' => $this->point,
-                            'orgPoint' => $orgPoint,
-                        ]
-                    ]);
                     $this->setActionVersion(self::READ_SCORE);
                     break;
                 case self::GET_STATUS:
@@ -609,15 +554,12 @@ class SongSlot extends MachineServices implements BaseMachine
                     break;
                 case self::OPEN_ANY_POINT:
                     $code = sprintf('%02x', rand(0, 0x63));
-                    $this->log->info('上分编号为', [$code]);
                     $this->openPoint($uid, $cmd . $code, $data, $source, $source_id);
                     break;
                 case self::WASH_ZERO:
                     $code = sprintf('%02x', rand(0, 0x63));
-                    $this->log->info('下分编号为', [$code]);
                     $point = $this->point;
                     $this->pre_wash_point = empty($data) ? $point : $data;
-                    $this->log->info('发送下分操作: 预下分为', [$this->pre_wash_point]);
                     $this->washPoint($uid, $cmd . $code, $this->pre_wash_point, $source, $source_id);
                     break;
                 case self::READ_BET:
@@ -718,13 +660,6 @@ class SongSlot extends MachineServices implements BaseMachine
                     }
                     return;
                 }
-                $this->log->error('开启自动: ', [
-                    [
-                        'msg' => 'autoOn',
-                        '$auto' => $auto,
-                        '$handleDuration' => $handleDuration,
-                    ]
-                ]);
                 if ($handleDuration >= $expirationTime) {
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
@@ -754,7 +689,6 @@ class SongSlot extends MachineServices implements BaseMachine
         $cmd .= $hexString;
         $s1 = self::calculateS1($cmd);
         $s2 = self::calculateS2($cmd, $s1);
-        $this->log->error('发送指令:', [$cmd . $s1 . $s2]);
         return $cmd . $s1 . $s2;
     }
 
@@ -864,13 +798,6 @@ class SongSlot extends MachineServices implements BaseMachine
                     }
                     return;
                 }
-                $this->log->error('停止自动: ', [
-                    [
-                        'msg' => 'autoOff',
-                        '$auto' => $auto,
-                        '$handleDuration' => $handleDuration,
-                    ]
-                ]);
                 if ($handleDuration >= $expirationTime) {
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }

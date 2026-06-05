@@ -757,7 +757,6 @@ class Jackpot extends MachineServices implements BaseMachine
                     return;
                 }
                 if ($handleDuration >= $this->expirationTime) { // 只跑1.5秒钟
-                    $this->log->error('指令超时异常', ['jackpot -> openPoint', [$this->machine->code]]);
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
                 usleep($sleep);
@@ -819,7 +818,6 @@ class Jackpot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('指令超时异常', ['jackpot -> machineAction -> ' . $cmd, [$this->machine->code]]);
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
             usleep(50000);

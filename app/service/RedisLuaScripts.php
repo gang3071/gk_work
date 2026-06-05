@@ -340,46 +340,40 @@ LUA;
         // 计算脚本的 SHA1
         $sha = sha1($script);
 
-        // 如果已经加载过，直接使用 EVALSHA（节省网络传输）
-        if (isset(self::$scriptShas[$sha])) {
+        // 第一次执行：使用 SCRIPT LOAD 加载脚本
+        if (!isset(self::$scriptShas[$sha])) {
             try {
-                $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
-
-                // ✅ 修复：检查 EVALSHA 返回值，false 表示脚本不存在或执行失败
-                if ($result === false) {
-                    // 清除 SHA 缓存，强制降级到 EVAL（正常流程，不记录日志）
-                    unset(self::$scriptShas[$sha]);
-                    // 不返回 false，继续执行下面的 EVAL
-                } else {
-                    // 记录慢脚本（只记录异常慢的）
-                    $duration = (microtime(true) - $start) * 1000;
-                    if ($duration > 50) {  // 超过 50ms 才记录
-                        \support\Log::warning('慢 Lua 脚本 (EVALSHA)', [
-                            'duration_ms' => round($duration, 2),
-                            'keys_count' => count($keys),
-                            'sha' => substr($sha, 0, 8),
-                        ]);
-                    }
-
-                    return $result;
-                }
+                // 使用 SCRIPT LOAD 加载脚本到 Redis，返回 SHA1
+                $redis->script('load', $script);
+                self::$scriptShas[$sha] = true;
             } catch (\RedisException $e) {
-                // SHA 可能已过期（正常流程，不记录日志）
-                unset(self::$scriptShas[$sha]);
+                // 加载失败，直接使用 EVAL
+                return self::evalDirectly($redis, $script, $keys, $argv, $start);
             }
         }
 
-        // 第一次执行或 SHA 失效：使用 EVAL
+        // 使用 EVALSHA 执行脚本
         try {
-            $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+            $redis->clearLastError();
+            $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
 
-            // 标记为已加载
-            self::$scriptShas[$sha] = true;
+            // 检查是否有错误
+            $lastError = $redis->getLastError();
+            if ($lastError !== null && strpos($lastError, 'NOSCRIPT') !== false) {
+                // Redis 重启导致脚本丢失，重新加载
+                unset(self::$scriptShas[$sha]);
+                $redis->script('load', $script);
+                self::$scriptShas[$sha] = true;
 
-            // 记录慢脚本（只记录异常慢的）
+                // 重新执行
+                $redis->clearLastError();
+                $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+            }
+
+            // 记录慢脚本
             $duration = (microtime(true) - $start) * 1000;
-            if ($duration > 50) {  // 超过 50ms 才记录
-                \support\Log::warning('慢 Lua 脚本 (EVAL)', [
+            if ($duration > 50) {
+                \support\Log::warning('慢 Lua 脚本 (EVALSHA)', [
                     'duration_ms' => round($duration, 2),
                     'keys_count' => count($keys),
                     'sha' => substr($sha, 0, 8),
@@ -388,9 +382,41 @@ LUA;
 
             return $result;
         } catch (\RedisException $e) {
+            // EVALSHA 失败，清除缓存并降级到 EVAL
+            unset(self::$scriptShas[$sha]);
+            return self::evalDirectly($redis, $script, $keys, $argv, $start);
+        }
+    }
+
+    /**
+     * 直接使用 EVAL 执行脚本
+     *
+     * @param \Redis $redis
+     * @param string $script
+     * @param array $keys
+     * @param array $argv
+     * @param float $start
+     * @return mixed
+     * @throws \RuntimeException
+     */
+    private static function evalDirectly($redis, string $script, array $keys, array $argv, float $start)
+    {
+        try {
+            $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+
+            // 记录慢脚本
+            $duration = (microtime(true) - $start) * 1000;
+            if ($duration > 50) {
+                \support\Log::warning('慢 Lua 脚本 (EVAL)', [
+                    'duration_ms' => round($duration, 2),
+                    'keys_count' => count($keys),
+                ]);
+            }
+
+            return $result;
+        } catch (\RedisException $e) {
             \support\Log::error('Redis Lua 脚本执行失败', [
                 'error' => $e->getMessage(),
-                'sha' => substr($sha, 0, 8),
                 'keys_count' => count($keys),
                 'argv_count' => count($argv),
             ]);

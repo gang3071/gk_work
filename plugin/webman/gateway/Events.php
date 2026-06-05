@@ -117,12 +117,6 @@ class Events
             return Gateway::closeClient($client_id);
         }
         $machine = self::getMachine($gatewayPort, $domain, $port, $client_id);
-        $log->warning('接收消息', [
-            'remote_addr' => $domain,
-            'remote_port' => $port,
-            'gateway_port' => $_SERVER['GATEWAY_PORT'],
-            'message' => bin2hex($message),
-        ]);
         if (empty($machine) || $machine->status == 0 || $machine->deleted_at != null) {
             $log->warning('机台不存在', [
                 'remote_addr' => $domain,

@@ -106,48 +106,95 @@ LUA;
      */
     private static function evalScript($redis, string $script, array $keys, array $argv)
     {
-        // 计算脚本的 SHA1
+        // 第一次执行：使用 SCRIPT LOAD 加载脚本，获得 SHA
         $sha = sha1($script);
 
-        // 如果已经加载过，直接使用 EVALSHA（节省网络传输）
-        if (isset(self::$scriptShas[$sha])) {
+        if (!isset(self::$scriptShas[$sha])) {
             try {
-                $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+                // 使用 SCRIPT LOAD 加载脚本到 Redis，返回 SHA1
+                $loadedSha = $redis->script('load', $script);
 
-                // 检查 EVALSHA 返回值，false 表示脚本不存在或执行失败
-                if ($result === false) {
-                    $lastError = $redis->getLastError();
-                    \support\Log::warning('EVALSHA 返回 false，脚本可能已失效，降级到 EVAL', [
-                        'sha' => substr($sha, 0, 8),
-                        'last_error' => $lastError,
+                // 验证 SHA 是否一致
+                if ($loadedSha !== $sha) {
+                    \support\Log::warning('Redis SCRIPT LOAD 返回的 SHA 与计算值不一致', [
+                        'expected' => substr($sha, 0, 8),
+                        'actual' => substr($loadedSha, 0, 8),
                     ]);
-                    // 清除 SHA 缓存，强制降级到 EVAL
-                    unset(self::$scriptShas[$sha]);
-                } else {
-                    return $result;
                 }
+
+                // 标记为已加载
+                self::$scriptShas[$sha] = true;
             } catch (\RedisException $e) {
-                // SHA 可能已过期（Redis 重启或脚本被清除），重新加载
-                \support\Log::warning('Redis Lua 脚本 SHA 失效，降级到 EVAL', [
-                    'sha' => substr($sha, 0, 8),
+                \support\Log::error('Redis SCRIPT LOAD 失败，降级到 EVAL', [
                     'error' => $e->getMessage(),
+                    'sha' => substr($sha, 0, 8),
                 ]);
-                unset(self::$scriptShas[$sha]);
+                // 加载失败，直接使用 EVAL
+                return self::evalWithoutCache($redis, $script, $keys, $argv);
             }
         }
 
-        // 第一次执行或 SHA 失效：使用 EVAL
+        // 使用 EVALSHA 执行脚本
         try {
-            $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+            $redis->clearLastError();
+            $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
 
-            // 标记为已加载
-            self::$scriptShas[$sha] = true;
+            // 检查是否有错误
+            $lastError = $redis->getLastError();
+            if ($lastError !== null) {
+                // NOSCRIPT 错误：脚本在 Redis 中不存在（可能 Redis 重启了）
+                if (strpos($lastError, 'NOSCRIPT') !== false) {
+                    \support\Log::info('Redis 脚本缓存失效（可能服务器重启），重新加载', [
+                        'sha' => substr($sha, 0, 8),
+                    ]);
+
+                    // 清除 PHP 端缓存标记
+                    unset(self::$scriptShas[$sha]);
+
+                    // 重新加载脚本
+                    $redis->script('load', $script);
+                    self::$scriptShas[$sha] = true;
+
+                    // 重新执行
+                    $redis->clearLastError();
+                    $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+                } else {
+                    throw new \RedisException('EVALSHA 执行错误: ' . $lastError);
+                }
+            }
 
             return $result;
         } catch (\RedisException $e) {
-            \support\Log::error('Redis Lua 脚本执行失败', [
-                'error' => $e->getMessage(),
+            \support\Log::error('EVALSHA 执行失败，降级到 EVAL', [
                 'sha' => substr($sha, 0, 8),
+                'error' => $e->getMessage(),
+            ]);
+
+            // 清除缓存，下次重新加载
+            unset(self::$scriptShas[$sha]);
+
+            // 降级到 EVAL
+            return self::evalWithoutCache($redis, $script, $keys, $argv);
+        }
+    }
+
+    /**
+     * 直接使用 EVAL 执行脚本（不使用缓存）
+     *
+     * @param \Redis $redis
+     * @param string $script
+     * @param array $keys
+     * @param array $argv
+     * @return mixed
+     * @throws \RuntimeException
+     */
+    private static function evalWithoutCache($redis, string $script, array $keys, array $argv)
+    {
+        try {
+            return $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+        } catch (\RedisException $e) {
+            \support\Log::error('Redis EVAL 执行失败', [
+                'error' => $e->getMessage(),
                 'keys_count' => count($keys),
                 'argv_count' => count($argv),
             ]);

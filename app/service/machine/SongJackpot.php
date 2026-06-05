@@ -359,29 +359,6 @@ class SongJackpot extends MachineServices implements BaseMachine
                 [$nowPoint, $nowRatio, $nowWinNumber, $nowScore, $nowTurn] = self::parseHeartbeat($msg);
                 $nowAuto = substr($msg, 2, 2) == 'c6' ? 1 : 0;
                 $nowRewardStatus = substr($msg, 10, 2) == 'd0' ? 0 : 1;
-                $this->log->error('机台当前数据: ', [
-                    [
-                        'msg' => $msg,
-                        'machine_code' => $this->machine->code,
-                        'nowRewardStatus' => $nowRewardStatus,
-                        'nowAuto' => $nowAuto,
-                        'nowPoint' => $nowPoint,
-                        'nowRatio' => $nowRatio,
-                        'nowWinNumber' => $nowWinNumber,
-                        'nowTurn' => $nowTurn,
-                        'orgNowTurn' => $orgNowTurn,
-                        'nowScore' => $nowScore,
-                    ],
-                    [
-                        'orgRewardStatus' => $orgRewardStatus,
-                        'orgAuto' => $orgAuto,
-                        'orgPoint' => $orgPoint,
-                        'orgTurn' => $orgTurn,
-                        'orgWinNumber' => $orgWinNumber,
-                        'orgNowTurn' => $orgNowTurn,
-                        'orgScore' => $orgScore,
-                    ],
-                ]);
                 $this->point = $nowPoint;
                 $this->auto = $nowAuto;
                 $this->win_number = $nowWinNumber;
@@ -433,17 +410,6 @@ class SongJackpot extends MachineServices implements BaseMachine
 
                         // 检查是否刚执行过上转下转操作（检查缓存标记）
                         $isTurnAction = Cache::get('turn_action_flag_' . $this->machine->id);
-
-                        // 调试日志：记录turn的变化情况
-                        $this->log->info('心跳turn变化检测', [
-                            'machine_code' => $this->machine->code,
-                            'now_turn' => $nowTurn,
-                            'org_turn' => $orgTurn,
-                            'turn_delta' => $turnDelta,
-                            'current_player_win_number' => $this->player_win_number,
-                            'is_turn_action' => $isTurnAction ? 'yes' : 'no'
-                        ]);
-
                         // 如果检测到上转下转标记，跳过本次累加
                         if ($isTurnAction) {
                             $this->log->info('检测到上转/下转操作标记，跳过本次累加', [
@@ -458,13 +424,6 @@ class SongJackpot extends MachineServices implements BaseMachine
                             $playerNumber = $this->player_win_number;
                             $consumed = abs($turnDelta);  // 消耗的转数（绝对值）
                             $this->player_win_number = bcadd($playerNumber, $consumed, 2);
-
-                            $this->log->info('累加玩家使用转数', [
-                                'machine_code' => $this->machine->code,
-                                'turn_delta' => $turnDelta,
-                                'consumed' => $consumed,
-                                'player_win_number' => $this->player_win_number
-                            ]);
                         } else if (bccomp($turnDelta, '-10', 2) < 0) {
                             $this->log->info('turn大幅减少，可能是下转操作，不累加', [
                                 'machine_code' => $this->machine->code,
@@ -556,20 +515,16 @@ class SongJackpot extends MachineServices implements BaseMachine
                             case self::AUTO_MACHINE_POINT:
                                 $point = self::parseScore(substr($msg, 4, 6));
                                 $this->point = $point;
-                                $this->log->error('当前分数', [$point]);
                                 $this->setActionVersion(self::MACHINE_POINT);
                                 break;
                             case self::GET_MACHINE_SCORE:
                                 $score = self::parseScore(substr($msg, 4, 6));
                                 $this->score = $score;
-                                $this->log->error('当前得分', [$score]);
                                 $this->setActionVersion(self::MACHINE_SCORE);
                                 break;
                             case self::GET_MACHINE_TURN:
                                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                                 $this->turn = $turn;
-                                $this->log->error('当前转数', [$turn]);
-
                                 // 检查是否是上转/下转后的主动获取（检查标记）
                                 $isTurnAction = Cache::get('turn_action_flag_' . $this->machine->id);
                                 if ($isTurnAction && !empty($gamingUserId)) {
@@ -578,12 +533,6 @@ class SongJackpot extends MachineServices implements BaseMachine
 
                                     // 清除标记
                                     Cache::delete('turn_action_flag_' . $this->machine->id);
-
-                                    $this->log->info('更新玩家转数基准点', [
-                                        'machine_code' => $this->machine->code,
-                                        'new_base' => $turn,
-                                        'player_win_number' => $this->player_win_number
-                                    ]);
                                 }
 
                                 $this->setActionVersion(self::MACHINE_TURN);
@@ -780,7 +729,6 @@ class SongJackpot extends MachineServices implements BaseMachine
                     // 设置标记：表示这是上转下转后的主动获取
                     Cache::set('turn_action_flag_' . $this->machine->id, true, 5);
                     Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_TURN)));
-                    $this->log->info('全部上转后主动获取转数', ['machine_code' => $this->machine->code]);
                     break;
                 case self::TURN_DOWN_ALL:
                 case self::POINT_TO_TURN:
@@ -793,10 +741,6 @@ class SongJackpot extends MachineServices implements BaseMachine
                     // 设置标记：表示这是上转下转后的主动获取
                     Cache::set('turn_action_flag_' . $this->machine->id, true, 5);
                     Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_TURN)));
-                    $this->log->info('上转/下转后主动获取转数', [
-                        'machine_code' => $this->machine->code,
-                        'command' => $cmd
-                    ]);
                     break;
                 case self::MACHINE_SCORE:
                 case self::MACHINE_POINT:
@@ -806,7 +750,6 @@ class SongJackpot extends MachineServices implements BaseMachine
                     break;
                 case self::OPEN_ANY_POINT:
                     $code = sprintf('%02x', rand(0, 0x63));
-                    $this->log->info('上分编号为', [$code]);
                     $this->openPoint($uid, $cmd . $code, $data, $source, $source_id);
                     break;
                 case self::WASH_ZERO:
@@ -922,7 +865,6 @@ class SongJackpot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('指令超时异常', ['jackpot -> machineAction -> ' . $cmd, [$this->machine->code]]);
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
             usleep(50000);
@@ -946,7 +888,6 @@ class SongJackpot extends MachineServices implements BaseMachine
         $cmd .= $hexString;
         $s1 = self::calculateS1($cmd);
         $s2 = self::calculateS2($cmd, $s1);
-        $this->log->error('发送指令:', [$cmd . $s1 . $s2]);
         return $cmd . $s1 . $s2;
     }
 
@@ -1075,7 +1016,6 @@ class SongJackpot extends MachineServices implements BaseMachine
                 $handleDuration += $sleep;
             }
         } catch (Exception) {
-            $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code]]);
             throw new Exception(trans('machine_action_fail', [], 'message'));
         }
     }
@@ -1129,7 +1069,6 @@ class SongJackpot extends MachineServices implements BaseMachine
         } catch (Exception) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code]]);
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
             usleep(50000);

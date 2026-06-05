@@ -803,6 +803,24 @@ $handlers = [
             ]
         ],
     ],
+    // 机台开分/洗分操作专用日志（与 gk_api 共享同一业务流程）
+    // 记录：指令接收、执行过程、机台状态更新
+    'machine_operations' => [
+        'handlers' => [
+            [
+                'class' => Monolog\Handler\RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/machine_operations.log',
+                    7, // 保留7天，与 gk_api 保持一致
+                    Monolog\Logger::DEBUG,
+                ],
+                'formatter' => [
+                    'class' => Monolog\Formatter\LineFormatter::class,
+                    'constructor' => [null, 'Y-m-d H:i:s', true],
+                ],
+            ]
+        ],
+    ],
 ];
 
 // 如果启用 Telegram 通知，添加到 default 通道
