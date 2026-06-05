@@ -347,28 +347,14 @@ LUA;
                 $redis->script('load', $script);
                 self::$scriptShas[$sha] = true;
             } catch (\RedisException $e) {
-                // 加载失败，直接使用 EVAL
+                // 加载失败，直接使用 EVAL（静默降级）
                 return self::evalDirectly($redis, $script, $keys, $argv, $start);
             }
         }
 
         // 使用 EVALSHA 执行脚本
         try {
-            $redis->clearLastError();
             $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
-
-            // 检查是否有错误
-            $lastError = $redis->getLastError();
-            if ($lastError !== null && strpos($lastError, 'NOSCRIPT') !== false) {
-                // Redis 重启导致脚本丢失，重新加载
-                unset(self::$scriptShas[$sha]);
-                $redis->script('load', $script);
-                self::$scriptShas[$sha] = true;
-
-                // 重新执行
-                $redis->clearLastError();
-                $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
-            }
 
             // 记录慢脚本
             $duration = (microtime(true) - $start) * 1000;
@@ -382,9 +368,23 @@ LUA;
 
             return $result;
         } catch (\RedisException $e) {
-            // EVALSHA 失败，清除缓存并降级到 EVAL
-            unset(self::$scriptShas[$sha]);
-            return self::evalDirectly($redis, $script, $keys, $argv, $start);
+            // 检查是否是 NOSCRIPT 错误
+            $errorMsg = $e->getMessage();
+            if (strpos($errorMsg, 'NOSCRIPT') !== false) {
+                // Redis 可能重启了，清除 PHP 端缓存，下次会重新加载
+                unset(self::$scriptShas[$sha]);
+
+                // 本次直接使用 EVAL 执行（静默降级）
+                return self::evalDirectly($redis, $script, $keys, $argv, $start);
+            }
+
+            // 其他错误：记录日志并抛出异常
+            \support\Log::error('EVALSHA 执行失败', [
+                'sha' => substr($sha, 0, 8),
+                'error' => $errorMsg,
+            ]);
+
+            throw new \RuntimeException('Redis Lua 脚本执行失败: ' . $errorMsg, 0, $e);
         }
     }
 

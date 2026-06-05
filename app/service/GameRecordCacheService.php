@@ -125,56 +125,32 @@ LUA;
                 // 标记为已加载
                 self::$scriptShas[$sha] = true;
             } catch (\RedisException $e) {
-                \support\Log::error('Redis SCRIPT LOAD 失败，降级到 EVAL', [
-                    'error' => $e->getMessage(),
-                    'sha' => substr($sha, 0, 8),
-                ]);
-                // 加载失败，直接使用 EVAL
+                // 加载失败，直接使用 EVAL（不记录日志，静默降级）
                 return self::evalWithoutCache($redis, $script, $keys, $argv);
             }
         }
 
         // 使用 EVALSHA 执行脚本
         try {
-            $redis->clearLastError();
-            $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+            return $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+        } catch (\RedisException $e) {
+            // 检查是否是 NOSCRIPT 错误（脚本在 Redis 中不存在）
+            $errorMsg = $e->getMessage();
+            if (strpos($errorMsg, 'NOSCRIPT') !== false) {
+                // Redis 可能重启了，清除 PHP 端缓存，下次会重新加载
+                unset(self::$scriptShas[$sha]);
 
-            // 检查是否有错误
-            $lastError = $redis->getLastError();
-            if ($lastError !== null) {
-                // NOSCRIPT 错误：脚本在 Redis 中不存在（可能 Redis 重启了）
-                if (strpos($lastError, 'NOSCRIPT') !== false) {
-                    \support\Log::info('Redis 脚本缓存失效（可能服务器重启），重新加载', [
-                        'sha' => substr($sha, 0, 8),
-                    ]);
-
-                    // 清除 PHP 端缓存标记
-                    unset(self::$scriptShas[$sha]);
-
-                    // 重新加载脚本
-                    $redis->script('load', $script);
-                    self::$scriptShas[$sha] = true;
-
-                    // 重新执行
-                    $redis->clearLastError();
-                    $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
-                } else {
-                    throw new \RedisException('EVALSHA 执行错误: ' . $lastError);
-                }
+                // 本次直接使用 EVAL 执行（静默降级，不记录日志）
+                return self::evalWithoutCache($redis, $script, $keys, $argv);
             }
 
-            return $result;
-        } catch (\RedisException $e) {
-            \support\Log::error('EVALSHA 执行失败，降级到 EVAL', [
+            // 其他错误：记录日志并抛出异常
+            \support\Log::error('EVALSHA 执行失败', [
                 'sha' => substr($sha, 0, 8),
-                'error' => $e->getMessage(),
+                'error' => $errorMsg,
             ]);
 
-            // 清除缓存，下次重新加载
-            unset(self::$scriptShas[$sha]);
-
-            // 降级到 EVAL
-            return self::evalWithoutCache($redis, $script, $keys, $argv);
+            throw new \RuntimeException('Redis Lua 脚本执行失败: ' . $errorMsg, 0, $e);
         }
     }
 
