@@ -344,9 +344,25 @@ LUA;
         if (!isset(self::$scriptShas[$sha])) {
             try {
                 // 使用 SCRIPT LOAD 加载脚本到 Redis，返回 SHA1
-                $redis->script('load', $script);
+                $loadResult = $redis->script('load', $script);
+
+                // ✅ 新增：验证 SCRIPT LOAD 返回值
+                if ($loadResult === false || $loadResult === null) {
+                    \support\Log::error('SCRIPT LOAD 返回值异常', [
+                        'sha' => substr($sha, 0, 8),
+                        'load_result' => var_export($loadResult, true),
+                        'redis_connected' => $redis->isConnected() ? 'yes' : 'no',
+                    ]);
+                    // 降级到 EVAL
+                    return self::evalDirectly($redis, $script, $keys, $argv, $start);
+                }
+
                 self::$scriptShas[$sha] = true;
             } catch (\RedisException $e) {
+                \support\Log::warning('SCRIPT LOAD 异常，降级到 EVAL', [
+                    'sha' => substr($sha, 0, 8),
+                    'error' => $e->getMessage(),
+                ]);
                 // 加载失败，直接使用 EVAL（静默降级）
                 return self::evalDirectly($redis, $script, $keys, $argv, $start);
             }
@@ -355,6 +371,37 @@ LUA;
         // 使用 EVALSHA 执行脚本
         try {
             $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+
+            // ✅ 修复：EVALSHA 返回 false 时，检查是否是 NOSCRIPT 错误
+            if ($result === false) {
+                $lastError = $redis->getLastError();
+                $redis->clearLastError();
+
+                // 检查是否是 NOSCRIPT 错误（脚本不存在）
+                if ($lastError && strpos($lastError, 'NOSCRIPT') !== false) {
+                    \support\Log::info('EVALSHA NOSCRIPT，降级到 EVAL', [
+                        'sha' => substr($sha, 0, 8),
+                        'last_error' => $lastError,
+                    ]);
+                    // 清除 PHP 端 SHA 缓存，下次会重新加载
+                    unset(self::$scriptShas[$sha]);
+                    // 降级到 EVAL
+                    return self::evalDirectly($redis, $script, $keys, $argv, $start);
+                }
+
+                // 其他 false 情况（非 NOSCRIPT）
+                \support\Log::warning('EVALSHA 返回 false（非 NOSCRIPT）', [
+                    'sha' => substr($sha, 0, 8),
+                    'method' => 'EVALSHA',
+                    'keys' => $keys,
+                    'keys_count' => count($keys),
+                    'argv_count' => count($argv),
+                    'redis_connected' => $redis->isConnected() ? 'yes' : 'no',
+                    'last_error' => $lastError,
+                    'trace' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3),
+                ]);
+                return $result;
+            }
 
             // 记录慢脚本
             $duration = (microtime(true) - $start) * 1000;
@@ -403,6 +450,23 @@ LUA;
     {
         try {
             $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+
+            // ✅ 新增：记录 EVAL 返回 false 或 null 的情况
+            if ($result === false || $result === null) {
+                \support\Log::warning('EVAL 返回异常值', [
+                    'method' => 'EVAL',
+                    'result_type' => gettype($result),
+                    'result_value' => var_export($result, true),
+                    'keys' => $keys,
+                    'keys_count' => count($keys),
+                    'argv_count' => count($argv),
+                    'redis_connected' => $redis->isConnected() ? 'yes' : 'no',
+                    'last_error' => $redis->getLastError(),
+                    'trace' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3),
+                ]);
+                // 清除 lastError
+                $redis->clearLastError();
+            }
 
             // 记录慢脚本
             $duration = (microtime(true) - $start) * 1000;
@@ -490,6 +554,22 @@ LUA;
 
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
+            // ✅ 新增：详细记录返回值为空时的上下文信息
+            \support\Log::error('[atomicBet] Lua 脚本返回值为空 - 详细诊断', [
+                'player_id' => $playerId,
+                'platform' => $platform,
+                'order_no' => $orderNo,
+                'bet_amount' => $betAmount,
+                'bet_amount_cents' => $betAmountInCents,
+                'result_type' => gettype($result),
+                'result_value' => var_export($result, true),
+                'redis_connected' => $redis->isConnected() ? 'yes' : 'no',
+                'last_error' => $redis->getLastError(),
+                'keys' => $keys,
+                'argv' => $argv,
+            ]);
+            // 清除 lastError
+            $redis->clearLastError();
             throw new \RuntimeException(
                 sprintf('[atomicBet] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s, 下注金额: %s',
                     $playerId, $platform, $orderNo, $betAmount)
@@ -624,6 +704,24 @@ LUA;
 
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
+            // ✅ 新增：详细记录返回值为空时的上下文信息
+            \support\Log::error('[atomicSettle] Lua 脚本返回值为空 - 详细诊断', [
+                'player_id' => $playerId,
+                'platform' => $platform,
+                'order_no' => $orderNo,
+                'win_amount' => $winAmount,
+                'win_amount_cents' => $winAmountInCents,
+                'diff' => $diff,
+                'diff_cents' => $diffInCents,
+                'result_type' => gettype($result),
+                'result_value' => var_export($result, true),
+                'redis_connected' => $redis->isConnected() ? 'yes' : 'no',
+                'last_error' => $redis->getLastError(),
+                'keys' => $keys,
+                'argv' => $argv,
+            ]);
+            // 清除 lastError
+            $redis->clearLastError();
             throw new \RuntimeException(
                 sprintf('[atomicSettle] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s, 赢取金额: %s',
                     $playerId, $platform, $orderNo, $winAmount)
@@ -771,6 +869,22 @@ LUA;
 
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
+            // ✅ 新增：详细记录返回值为空时的上下文信息
+            \support\Log::error('[atomicCancel] Lua 脚本返回值为空 - 详细诊断', [
+                'player_id' => $playerId,
+                'platform' => $platform,
+                'order_no' => $orderNo,
+                'refund_amount' => $refundAmount,
+                'refund_amount_cents' => $refundAmountInCents,
+                'result_type' => gettype($result),
+                'result_value' => var_export($result, true),
+                'redis_connected' => $redis->isConnected() ? 'yes' : 'no',
+                'last_error' => $redis->getLastError(),
+                'keys' => $keys,
+                'argv' => $argv,
+            ]);
+            // 清除 lastError
+            $redis->clearLastError();
             throw new \RuntimeException(
                 sprintf('[atomicCancel] Redis Lua 脚本执行失败，返回值为空。玩家ID: %d, 平台: %s, 订单号: %s, 退款金额: %s',
                     $playerId, $platform, $orderNo, $refundAmount)
