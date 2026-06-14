@@ -3,7 +3,6 @@
 namespace app\model;
 
 use DateTimeInterface;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Webman\Event\Event;
@@ -40,7 +39,6 @@ use Webman\Event\Event;
  */
 class PlayerDeliveryRecord extends Model
 {
-    use HasFactory;
 
     //数据权限字段
     protected $dataAuth = ['department_id' => 'department_id'];
@@ -81,6 +79,7 @@ class PlayerDeliveryRecord extends Model
 
     const TYPE_PREPAY = 31; //预扣金额
     const TYPE_REFUND = 32; //退款
+    const TYPE_LOTTERY_TICKET_REWARD = 33; // ⭐ 摸奖券中奖奖励 (支出类型)
 
     protected $fillable = [
         'player_id',
@@ -197,6 +196,9 @@ class PlayerDeliveryRecord extends Model
                         break;
                     case PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS: // 活动奖励
                         Event::emit('promotion.activityBonus', $deliveryRecord);
+                        break;
+                    case PlayerDeliveryRecord::TYPE_LOTTERY_TICKET_REWARD: // 摸奖券奖励
+                        Event::emit('promotion.lotteryTicketReward', $deliveryRecord);
                         break;
                     default:
                         break;

@@ -2,14 +2,13 @@
 
 namespace app\service;
 
-use addons\webman\Admin;
-use addons\webman\model\Channel;
-use addons\webman\model\Player;
-use addons\webman\model\PlayerDeliveryRecord;
-use addons\webman\model\PlayerPromoter;
-use addons\webman\model\PlayerRechargeRecord;
-use addons\webman\model\PlayGameRecord;
-use addons\webman\model\StoreAgentProfitRecord;
+use app\model\Channel;
+use app\model\Player;
+use app\model\PlayerDeliveryRecord;
+use app\model\PlayerPromoter;
+use app\model\PlayerRechargeRecord;
+use app\model\PlayGameRecord;
+use app\model\StoreAgentProfitRecord;
 use Exception;
 use support\Cache;
 use support\Db;
@@ -97,18 +96,24 @@ class OfflineProfitSettlementServices
                         player_promoter.ratio,
                         sum(IF(player_delivery_record.type = ' . PlayerDeliveryRecord::TYPE_PRESENT_IN . ', player_delivery_record.amount, 0)) as total_in,
                         sum(IF(player_delivery_record.type = ' . PlayerDeliveryRecord::TYPE_PRESENT_OUT . ', player_delivery_record.amount, 0)) as total_out,
-                        sum(IF(player_delivery_record.type = ' . PlayerDeliveryRecord::TYPE_MACHINE . ', player_delivery_record.amount, 0)) as total_point
+                        sum(IF(player_delivery_record.type = ' . PlayerDeliveryRecord::TYPE_MACHINE . ', player_delivery_record.amount, 0)) as total_point,
+                        sum(IF(player_delivery_record.type = ' . PlayerDeliveryRecord::TYPE_LOTTERY . ', player_delivery_record.amount, 0)) as total_lottery,
+                        sum(IF(player_delivery_record.type IN (' . PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS . ',' . PlayerDeliveryRecord::TYPE_LOTTERY_TICKET_REWARD . '), player_delivery_record.amount, 0)) as total_activity
                     ')
                     ->groupBy('player.recommend_id', 'player_promoter.ratio')
                     ->get();
 
                 foreach ($totalData as $item) {
-                    $totalPoint = bcadd($totalPoint,
-                        bcsub(bcadd($item['total_point'], $item['total_in'], 2), $item['total_out'], 2), 2);
+                    // ⭐ 修复盈亏计算: 扣除彩金和活动奖励
+                    $itemProfit = bcsub(
+                        bcadd($item['total_point'], $item['total_in'], 2),
+                        bcadd(bcadd($item['total_out'], $item['total_lottery'] ?? 0, 2), $item['total_activity'] ?? 0, 2),
+                        2
+                    );
+                    $totalPoint = bcadd($totalPoint, $itemProfit, 2);
                     if (($item['ratio'] - $playerPromoter->ratio) > 0) {
                         $selfProfitAmount = bcadd($selfProfitAmount,
-                            bcmul(bcsub(bcadd($item['total_point'], $item['total_in'], 2), $item['total_out'], 2),
-                                ($item['ratio'] - $playerPromoter->ratio) / 100, 2), 2);
+                            bcmul($itemProfit, ($item['ratio'] - $playerPromoter->ratio) / 100, 2), 2);
                     } elseif (($item['ratio'] - $playerPromoter->ratio) < 0) {
                         /** @var PlayerPromoter $agentPromoter */
                         $agentPromoter = PlayerPromoter::query()->where('player_id', $item['recommend_id'])->first();
@@ -154,12 +159,21 @@ class OfflineProfitSettlementServices
                     })->selectRaw('
                     sum(IF(type = ' . PlayerDeliveryRecord::TYPE_PRESENT_IN . ', amount, 0)) as total_in,
                     sum(IF(type = ' . PlayerDeliveryRecord::TYPE_PRESENT_OUT . ', amount, 0)) as total_out,
-                    sum(IF(type = ' . PlayerDeliveryRecord::TYPE_MACHINE . ', amount, 0)) as total_point
+                    sum(IF(type = ' . PlayerDeliveryRecord::TYPE_MACHINE . ', amount, 0)) as total_point,
+                    sum(IF(type = ' . PlayerDeliveryRecord::TYPE_LOTTERY . ', amount, 0)) as total_lottery,
+                    sum(IF(type IN (' . PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS . ',' . PlayerDeliveryRecord::TYPE_LOTTERY_TICKET_REWARD . '), amount, 0)) as total_activity
                 ')->first();
                 $presentInAmount = bcadd(0, $totalData['total_in'] ?? 0, 2);
                 $machinePutPoint = bcadd(0, $totalData['total_point'] ?? 0, 2);
                 $presentOutAmount = bcadd(0, $totalData['total_out'] ?? 0, 2);
-                $totalPoint = bcsub(bcadd($machinePutPoint, $presentInAmount, 2), $presentOutAmount, 2);
+                $lotteryAmount = bcadd(0, $totalData['total_lottery'] ?? 0, 2);
+                $activityAmount = bcadd(0, $totalData['total_activity'] ?? 0, 2);
+                // ⭐ 修复盈亏计算: 扣除彩金和活动奖励
+                $totalPoint = bcsub(
+                    bcadd($machinePutPoint, $presentInAmount, 2),
+                    bcadd(bcadd($presentOutAmount, $lotteryAmount, 2), $activityAmount, 2),
+                    2
+                );
                 if (100 - $playerPromoter->ratio > 0) {
                     $selfProfitAmount = bcmul($totalPoint, (100 - $playerPromoter->ratio) / 100, 2);
                 } elseif (100 - $playerPromoter->ratio < 0) {
@@ -239,12 +253,11 @@ class OfflineProfitSettlementServices
             $storeAgentProfitRecord->adjust_amount = $playerPromoter->adjust_amount;
             $storeAgentProfitRecord->user_name = $data['user_name'] ?? '';
             $storeAgentProfitRecord->settlement_tradeno = createOrderNo();
-            $storeAgentProfitRecord->user_id = $data['user_id'] ?? 0;
             if ($playerPromoter->recommend_id > 0) {
                 $storeAgentProfitRecord->ratio = 100 - $playerPromoter->ratio;
             }
-            $storeAgentProfitRecord->user_id = Admin::id() ?? 0;
-            $storeAgentProfitRecord->user_name = !empty(Admin::user()) ? Admin::user()->toArray()['username'] : '';
+            $storeAgentProfitRecord->user_id = 0;
+            $storeAgentProfitRecord->user_name = '';
             $settlement = $amount = bcadd($storeAgentProfitRecord->profit_amount,
                 $storeAgentProfitRecord->adjust_amount, 2);
             if ($amount > 0) {

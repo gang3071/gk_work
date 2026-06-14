@@ -43,6 +43,7 @@ class ChannelSettlementServices
                 PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_DEDUCT,
                 PlayerDeliveryRecord::TYPE_REGISTER_PRESENT,
                 PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS,
+                PlayerDeliveryRecord::TYPE_LOTTERY_TICKET_REWARD, // ⭐ 摸奖券中奖奖励
                 PlayerDeliveryRecord::TYPE_MACHINE_UP,
                 PlayerDeliveryRecord::TYPE_MACHINE_DOWN,
                 PlayerDeliveryRecord::TYPE_RECHARGE,
@@ -55,7 +56,7 @@ class ChannelSettlementServices
                 SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_ADD . " THEN `amount` ELSE 0 END) AS admin_add_amount,
                 SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_DEDUCT . " THEN `amount` ELSE 0 END) AS admin_deduct_amount,
                 SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_REGISTER_PRESENT . " THEN `amount` ELSE 0 END) AS present_amount,
-                SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS . " THEN `amount` ELSE 0 END) AS bonus_amount,
+                SUM(CASE WHEN `type` IN (" . PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS . "," . PlayerDeliveryRecord::TYPE_LOTTERY_TICKET_REWARD . ") THEN `amount` ELSE 0 END) AS bonus_amount,
                 SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MACHINE_UP . " THEN `amount` ELSE 0 END) AS machine_up_amount,
                 SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MACHINE_DOWN . " THEN `amount` ELSE 0 END) AS machine_down_amount,
                 SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_RECHARGE . " THEN `amount` ELSE 0 END) AS recharge_amount,
