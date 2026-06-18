@@ -383,8 +383,8 @@ LUA;
             'synced_at' => date('Y-m-d H:i:s'),
         ]);
 
-        // 从同步队列移除
-        Redis::zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
+        // 从同步队列移除（使用同一个连接池）
+        self::redis()->zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
     }
 
     /**
@@ -403,12 +403,12 @@ LUA;
 
         // 如果重试次数 < 3，重置为 pending 状态，重新加入队列（延迟10秒）
         if ($retryCount < 3) {
-            // 重置状态为 pending，以便 Lua 脚本可以重新处理
-            Redis::hSet($redisKey, 'status', 'pending');
+            // 重置状态为 pending，以便 Lua 脚本可以重新处理（使用同一个连接池）
+            self::redis()->hSet($redisKey, 'status', 'pending');
             self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time() + 10, $redisKey);
         } else {
-            // 重试次数过多，移除队列，等待人工处理
-            Redis::zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
+            // 重试次数过多，移除队列，等待人工处理（使用同一个连接池）
+            self::redis()->zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
         }
     }
 
@@ -445,9 +445,9 @@ LUA;
     {
         $count = 0;
 
-        // 清理超过7天的同步队列记录
+        // 清理超过7天的同步队列记录（使用同一个连接池）
         $cutoffTime = time() - self::TTL_RECORD;
-        $removed = Redis::zRemRangeByScore(self::PREFIX_SYNC_QUEUE, 0, $cutoffTime);
+        $removed = self::redis()->zRemRangeByScore(self::PREFIX_SYNC_QUEUE, 0, $cutoffTime);
 
         $count += $removed;
 
