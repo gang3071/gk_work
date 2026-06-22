@@ -362,9 +362,26 @@ LUA;
         // 🔍 诊断：检查队列状态（执行Lua之前）
         $redis = self::redis();
         $queueSize = $redis->zCard($queueKey);
+
+        // 🔍 诊断：检查前3条记录的实际状态
+        $sampleKeys = $redis->zRange($queueKey, 0, 2);
+        $sampleStatuses = [];
+        foreach ($sampleKeys as $sampleKey) {
+            $exists = $redis->exists($sampleKey);
+            $status = $exists ? $redis->hGet($sampleKey, 'status') : 'KEY_NOT_EXISTS';
+            $processingTime = $exists ? $redis->hGet($sampleKey, 'processing_time') : null;
+            $sampleStatuses[] = [
+                'key' => $sampleKey,
+                'exists' => $exists,
+                'status' => $status,
+                'processing_time' => $processingTime,
+            ];
+        }
+
         Log::channel('game_bet_record')->debug('[getPendingSyncRecords] 执行前队列状态', [
             'queue_size' => $queueSize,
             'queue_key' => $queueKey,
+            'sample_records' => $sampleStatuses,
         ]);
 
         // ✅ 执行 Lua 脚本（优先使用 EVALSHA，减少网络传输 70%）
