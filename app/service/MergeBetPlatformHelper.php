@@ -2,9 +2,8 @@
 
 namespace app\service;
 
-use app\model\PlayGameRecord;
 use app\model\PlayerDeliveryRecord;
-use app\model\PlayerPlatformCash;
+use app\model\PlayGameRecord;
 use support\Log;
 use support\Redis;
 
@@ -89,9 +88,9 @@ class MergeBetPlatformHelper
                 && isset($record['balance_after']) && $record['balance_after'] !== '';
 
             if ($hasSnapshot) {
-                // 已有快照，确保为浮点数
-                $record['balance_before'] = (float)$record['balance_before'];
-                $record['balance_after'] = (float)$record['balance_after'];
+                // 🎯 单位转换：Redis 存储的是"分"（整数），转换为"元"（小数）
+                $record['balance_before'] = round($record['balance_before'] / 100, 2);
+                $record['balance_after'] = round($record['balance_after'] / 100, 2);
 
                 Log::channel('game_bet_record')->debug('[enrichInsertRecords] 使用已有快照', [
                     'order_no' => $record['order_no'] ?? 'unknown',
@@ -137,9 +136,13 @@ class MergeBetPlatformHelper
      */
     public static function updateMergedBetBalance(PlayGameRecord $existing, array $record): bool
     {
-        if (isset($record['amount']) && $record['amount'] != $existing->bet) {
-            $existing->bet = $record['amount'];
-            return true;
+        if (isset($record['amount'])) {
+            // 🎯 单位转换：Redis 存储的是"分"（整数），MySQL 需要"元"（小数）
+            $betInYuan = round($record['amount'] / 100, 2);
+            if ($betInYuan != $existing->bet) {
+                $existing->bet = $betInYuan;
+                return true;
+            }
         }
 
         return false;
@@ -168,8 +171,9 @@ class MergeBetPlatformHelper
             return;
         }
 
-        $beforeBalance = (float)$beforeBalance;
-        $afterBalance = (float)$afterBalance;
+        // 🎯 单位转换：Redis 存储的是"分"（整数），转换为"元"（小数）
+        $beforeBalance = round($beforeBalance / 100, 2);
+        $afterBalance = round($afterBalance / 100, 2);
 
         $delivery = new PlayerDeliveryRecord();
         $delivery->player_id = $playerId;
@@ -201,7 +205,11 @@ class MergeBetPlatformHelper
         $after = $record['balance_after'] ?? null;
 
         if ($before !== null && $before !== '' && $after !== null && $after !== '') {
-            return ['before' => (float)$before, 'after' => (float)$after];
+            // 🎯 单位转换：Redis 存储的是"分"（整数），转换为"元"（小数）
+            return [
+                'before' => round($before / 100, 2),
+                'after' => round($after / 100, 2)
+            ];
         }
 
         return ['before' => null, 'after' => null];

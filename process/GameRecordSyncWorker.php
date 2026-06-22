@@ -12,6 +12,7 @@ use app\service\MergeBetPlatformHelper;
 use Carbon\Carbon;
 use support\Db;
 use support\Log;
+use support\Redis;
 use Webman\RedisQueue\Client;
 use Workerman\Crontab\Crontab;
 use Workerman\Worker;
@@ -201,12 +202,14 @@ class GameRecordSyncWorker
             // ✅ 批量重新读取Redis最新状态（避免竞态条件）
             // 🚀 性能优化：使用Pipeline批量读取，减少网络往返
             $redis = Redis::connection('work');
+            /** @var \Redis $pipe */
             $pipe = $redis->pipeline();
 
             foreach (array_keys($uniqueKeys) as $redisKey) {
                 $pipe->hGetAll($redisKey);
             }
 
+            /** @var array $results */
             $results = $pipe->execute();
 
             // 组装结果
@@ -379,6 +382,15 @@ class GameRecordSyncWorker
                 ]);
             }
 
+            // 🎯 单位转换：Redis 存储的是"分"（整数），MySQL 需要"元"（小数）
+            $amountInYuan = isset($record['amount']) ? round($record['amount'] / 100, 2) : 0;
+            $winInYuan = isset($record['win']) ? round($record['win'] / 100, 2) : 0;
+            $diffInYuan = isset($record['diff']) ? round($record['diff'] / 100, 2) : 0;
+            $balanceBeforeInYuan = isset($record['balance_before']) && $record['balance_before'] !== ''
+                ? round($record['balance_before'] / 100, 2) : null;
+            $balanceAfterInYuan = isset($record['balance_after']) && $record['balance_after'] !== ''
+                ? round($record['balance_after'] / 100, 2) : null;
+
             $insertData[] = [
                 'player_id' => $playerId,
                 'parent_player_id' => $player->recommend_id ?? 0,
@@ -387,31 +399,32 @@ class GameRecordSyncWorker
                 'department_id' => $player->department_id ?? 0,
                 'order_no' => $record['order_no'],
                 'platform_id' => $record['platform_id'],
-                'bet' => $record['amount'] ?? 0,
-                'win' => $record['win'] ?? 0,
-                'diff' => $record['diff'] ?? 0,
+                'bet' => $amountInYuan,
+                'win' => $winInYuan,
+                'diff' => $diffInYuan,
                 'game_code' => $record['game_code'] ?? '',
                 'settlement_status' => $record['settlement_status'] ?? 0,
                 'order_time' => $record['created_at'] ?? $now,
                 'original_data' => $record['original_data'] ?? '{}',
                 'action_data' => $record['action_data'] ?? null,
                 'platform_action_at' => $record['platform_action_at'] ?? null,
-                'balance_before' => $record['balance_before'] ?? null,
-                'balance_after' => $record['balance_after'] ?? null,
+                'balance_before' => $balanceBeforeInYuan,
+                'balance_after' => $balanceAfterInYuan,
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
 
-            // 🔍 DEBUG: Worker 准备插入 MySQL 的数据
+            // 🔍 DEBUG: Worker 转换后准备插入 MySQL 的数据
             if ($platform === 'MT' || $platform === 'DG' || $platform === 'RSG') {
-                $this->log->info('🔍 [单位追踪-7] Worker 准备插入 MySQL 的数据', [
+                $this->log->info('🔍 [单位追踪-7] Worker 转换后准备插入 MySQL', [
                     'platform' => $platform,
                     'order_no' => $record['order_no'],
-                    'bet' => $insertData[count($insertData) - 1]['bet'],
-                    'win' => $insertData[count($insertData) - 1]['win'],
-                    'diff' => $insertData[count($insertData) - 1]['diff'],
-                    'balance_before' => $insertData[count($insertData) - 1]['balance_before'],
-                    'balance_after' => $insertData[count($insertData) - 1]['balance_after'],
+                    'redis_amount(分)' => $record['amount'] ?? null,
+                    'mysql_bet(元)' => $amountInYuan,
+                    'redis_win(分)' => $record['win'] ?? null,
+                    'mysql_win(元)' => $winInYuan,
+                    'redis_balance_before(分)' => $record['balance_before'] ?? null,
+                    'mysql_balance_before(元)' => $balanceBeforeInYuan,
                 ]);
             }
 
@@ -527,23 +540,29 @@ class GameRecordSyncWorker
                     $needUpdate = true;
                 }
                 // 更新 balance_after 为最新余额（balance_before 保持首次下注前的值不变）
-                if (isset($record['balance_after']) && $record['balance_after'] !== '' && $record['balance_after'] != $existing->balance_after) {
-                    $existing->balance_after = $record['balance_after'];
-                    $needUpdate = true;
-                    $balanceUpdated = true;
+                if (isset($record['balance_after']) && $record['balance_after'] !== '') {
+                    // 🎯 单位转换：Redis 存储的是"分"，转换为"元"
+                    $balanceAfterInYuan = round($record['balance_after'] / 100, 2);
 
-                    // 收集钱包同步信息
-                    $walletSyncNeeded[$existing->player_id] = [
-                        'balance_after' => (float)$record['balance_after'],
-                        'order_no' => $orderNo,
-                    ];
+                    if ($balanceAfterInYuan != $existing->balance_after) {
+                        $existing->balance_after = $balanceAfterInYuan;
+                        $needUpdate = true;
+                        $balanceUpdated = true;
+
+                        // 收集钱包同步信息
+                        $walletSyncNeeded[$existing->player_id] = [
+                            'balance_after' => $balanceAfterInYuan,
+                            'order_no' => $orderNo,
+                        ];
+                    }
                 }
             }
 
             // ✅ 更新结算状态（所有平台）
             if ($settlementStatus == 1) {
-                $existing->win = $record['win'] ?? 0;
-                $existing->diff = $record['diff'] ?? 0;
+                // 🎯 单位转换：Redis 存储的是"分"，MySQL 需要"元"
+                $existing->win = isset($record['win']) ? round($record['win'] / 100, 2) : 0;
+                $existing->diff = isset($record['diff']) ? round($record['diff'] / 100, 2) : 0;
                 $existing->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
 
                 if (isset($record['platform_action_at'])) {
@@ -932,6 +951,7 @@ class GameRecordSyncWorker
 
         try {
             // 1. 检查是否已存在
+            /** @var PlayGameRecord $existing */
             $existing = PlayGameRecord::query()->where('order_no', $orderNo)->first();
 
             if ($existing) {
@@ -952,29 +972,34 @@ class GameRecordSyncWorker
                     }
 
                     // 更新 balance_after 为最新余额（balance_before 保持首次下注前的值不变）
-                    if (isset($record['balance_after']) && $record['balance_after'] !== '' && $record['balance_after'] != $existing->balance_after) {
-                        $oldBalanceAfter = $existing->balance_after;
-                        $existing->balance_after = $record['balance_after'];
-                        $needUpdate = true;
+                    if (isset($record['balance_after']) && $record['balance_after'] !== '') {
+                        // 🎯 单位转换：Redis 存储的是"分"，转换为"元"
+                        $balanceAfterInYuan = round($record['balance_after'] / 100, 2);
 
-                        // 同步钱包余额
-                        $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
-                        if ($snapshot['after'] !== null) {
-                            $wallet = PlayerPlatformCash::query()->where('player_id', $playerId)
-                                ->lockForUpdate()
-                                ->first();
+                        if ($balanceAfterInYuan != $existing->balance_after) {
+                            $oldBalanceAfter = $existing->balance_after;
+                            $existing->balance_after = $balanceAfterInYuan;
+                            $needUpdate = true;
 
-                            if ($wallet) {
-                                $beforeWalletBalance = $wallet->money;
-                                $wallet->money = $snapshot['after'];
-                                $wallet->save();
+                            // 同步钱包余额
+                            $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
+                            if ($snapshot['after'] !== null) {
+                                $wallet = PlayerPlatformCash::query()->where('player_id', $playerId)
+                                    ->lockForUpdate()
+                                    ->first();
 
-                                $this->log->info("{$platform}合并下注：同步钱包余额", [
-                                    'player_id' => $playerId,
-                                    'before' => $beforeWalletBalance,
-                                    'after' => $wallet->money,
-                                    'order_no' => $orderNo,
-                                ]);
+                                if ($wallet) {
+                                    $beforeWalletBalance = $wallet->money;
+                                    $wallet->money = $snapshot['after'];
+                                    $wallet->save();
+
+                                    $this->log->info("{$platform}合并下注：同步钱包余额", [
+                                        'player_id' => $playerId,
+                                        'before' => $beforeWalletBalance,
+                                        'after' => $wallet->money,
+                                        'order_no' => $orderNo,
+                                    ]);
+                                }
                             }
                         }
                     }
@@ -982,8 +1007,9 @@ class GameRecordSyncWorker
 
                 // ✅ 更新结算状态（所有平台）
                 if ($settlementStatus == 1) {
-                    $existing->win = $record['win'] ?? 0;
-                    $existing->diff = $record['diff'] ?? 0;
+                    // 🎯 单位转换：Redis 存储的是"分"，MySQL 需要"元"
+                    $existing->win = isset($record['win']) ? round($record['win'] / 100, 2) : 0;
+                    $existing->diff = isset($record['diff']) ? round($record['diff'] / 100, 2) : 0;
                     $existing->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
                     if (isset($record['platform_action_at'])) {
                         $existing->platform_action_at = $record['platform_action_at'];
