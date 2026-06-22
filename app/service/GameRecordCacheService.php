@@ -181,51 +181,27 @@ LUA;
         $orderNo = $data['order_no'];
         $key = self::PREFIX_BET . "{$platform}:{$orderNo}";
 
-        // 🔍 DEBUG: saveBet 接收到的数据
-        \support\Log::info('🔍 [单位追踪-5] saveBet 接收到的数据', [
-            'platform' => $platform,
-            'order_no' => $orderNo,
-            'amount' => $data['amount'] ?? null,
-            'balance_before' => $data['balance_before'] ?? null,
-            'balance_after' => $data['balance_after'] ?? null,
-        ]);
-
-        $record = [
-            'platform' => $platform,
-            'order_no' => $orderNo,
-            'player_id' => $data['player_id'],
-            'platform_id' => $data['platform_id'],
-            'amount' => $data['amount'],
-            'game_code' => $data['game_code'] ?? '',
-            'game_type' => $data['game_type'] ?? '',
-            'game_name' => $data['game_name'] ?? '',
-            'bet_type' => $data['bet_type'] ?? 'bet',  // bet | prepay
-            'bet_time' => time(),
+        // ✅ 性能优化：saveBet总是在atomicBet之后调用，记录必然已存在
+        // 因此直接追加字段，不需要EXISTS检查（节省一次网络往返）
+        //
+        // ⚠️ 关键：只追加original_data和额外字段，不覆盖Lua脚本保存的balance_before/balance_after
+        // Lua脚本以"分"为单位保存余额，如果这里覆盖会导致SyncWorker重复除以100
+        $updates = [
             'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-            'status' => 'pending',  // pending | synced | failed
-            'settlement_status' => 0,  // 未结算
-            'win' => 0,
-            'diff' => 0,
-            'created_at' => date('Y-m-d H:i:s'),
-            // ✅ 保存余额变化信息（用于 Worker 推送）
-            'balance_before' => $data['balance_before'] ?? '',
-            'balance_after' => $data['balance_after'] ?? '',
         ];
 
-        // 写入 Redis Hash
-        self::redis()->hMSet($key, $record);
-        self::redis()->expire($key, self::TTL_RECORD);
+        // 如果有额外的字段（如belong_order_no, is_sub_order），也追加
+        if (isset($data['belong_order_no'])) {
+            $updates['belong_order_no'] = $data['belong_order_no'];
+        }
+        if (isset($data['is_sub_order'])) {
+            $updates['is_sub_order'] = $data['is_sub_order'];
+        }
 
-        // 🔍 诊断日志：验证 balance 快照是否写入
-        Log::channel('game_bet_record')->info('[saveBet] 写入余额快照', [
-            'key' => $key,
-            'balance_before' => $data['balance_before'] ?? 'NULL',
-            'balance_after' => $data['balance_after'] ?? 'NULL',
-            'balance_before_type' => gettype($data['balance_before'] ?? null),
-            'balance_after_type' => gettype($data['balance_after'] ?? null),
-        ]);
+        // ✅ 直接hMSet追加字段（Redis的hMSet只更新指定字段，不影响其他字段）
+        self::redis()->hMSet($key, $updates);
 
-        // 加入同步队列
+        // 确保在队列中（Lua脚本已经zadd过，这里更新score提升优先级）
         self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
 
         // 记录统计
