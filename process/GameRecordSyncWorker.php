@@ -208,9 +208,8 @@ class GameRecordSyncWorker
                 $pipe->hGetAll($redisKey);
             }
 
-            // phpredis pipeline 确实有 execute() 方法，IDE 类型定义不完善
-            /** @phpstan-ignore-next-line */
-            $results = $pipe->execute();
+            // 原生 PhpRedis pipeline 使用 exec() 方法执行
+            $results = $pipe->exec();
 
             // 组装结果
             $keysList = array_keys($uniqueKeys);

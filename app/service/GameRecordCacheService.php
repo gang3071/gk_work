@@ -95,16 +95,6 @@ LUA;
     }
 
     /**
-     * 获取原生 Redis 客户端（用于 Lua 脚本执行）
-     *
-     * @return \Redis
-     */
-    private static function redisClient()
-    {
-        return Redis::connection('work')->client();
-    }
-
-    /**
      * 执行 Lua 脚本（优先使用 EVALSHA，性能提升 50-70%）
      *
      * @param string $script Lua 脚本内容
@@ -115,8 +105,8 @@ LUA;
      */
     private static function evalScript(string $script, array $keys, array $argv)
     {
-        // 获取原生 Redis 客户端
-        $redis = self::redisClient();
+        // 获取 Redis 连接（在 webman 中直接返回原生 \Redis 对象）
+        $redis = self::redis();
 
         // 计算脚本的 SHA1
         $sha = sha1($script);
