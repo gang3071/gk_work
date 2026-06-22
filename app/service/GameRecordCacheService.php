@@ -329,6 +329,12 @@ LUA;
         if ($betExists) {
             // 更新 bet 记录
             $betAmount = self::redis()->hGet($betKey, 'amount') ?? 0;
+            $currentStatus = self::redis()->hGet($betKey, 'status') ?? 'pending';
+
+            // 🎯 关键修复：不覆盖processing状态，避免竞态条件
+            // 如果当前是processing（Worker正在处理），保持processing
+            // 如果当前是synced（已同步过），改为pending（需要重新同步结算状态）
+            $newStatus = $currentStatus === 'processing' ? 'processing' : 'pending';
 
             self::redis()->hMSet($betKey, [
                 'win' => $data['amount'],
@@ -338,11 +344,12 @@ LUA;
                 'settle_time' => time(),
                 'platform_action_at' => date('Y-m-d H:i:s'),
                 'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-                'status' => 'pending',  // 重新标记待同步
+                'status' => $newStatus,  // ✅ 智能状态管理
                 // ✅ 不覆盖 balance_before/after — 保持下注时 Lua 记录的余额快照
             ]);
 
             // 更新同步队列（提升优先级）
+            // 即使status=processing也要更新score，确保下次能被处理到
             self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
 
         } else {
