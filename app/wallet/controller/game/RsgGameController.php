@@ -415,7 +415,8 @@ class RsgGameController
             // 原因：子订单的 BetAmount 是主订单的投注额，但子订单实际 bet amount = 0
             $redisKey = "game:record:bet:RSG:{$orderNo}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
-            $actualBetAmount = $cachedBet !== false ? (float)$cachedBet : 0;
+            // 🎯 单位转换：Redis 存储的是"分"（整数），转换为"元"（小数）
+            $actualBetAmount = $cachedBet !== false ? round((float)$cachedBet / 100, 2) : 0;
 
             // 🔍 DEBUG: 从 Redis 读取的下注金额
             $this->logger->info('🔍 [单位追踪-RSG-结算-2] Redis 中的下注金额', [

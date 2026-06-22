@@ -68,14 +68,16 @@ if lockExists == 1 then
 end
 
 -- 2. 获取当前余额（✅ 整数：分）
-local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
+local currentBalanceRaw = redis.call('GET', KEYS[1])
+local currentBalance = tonumber(currentBalanceRaw) or 0
 local betAmount = tonumber(ARGV[2]) or 0
 
--- 🔍 DEBUG: 记录 Lua 脚本内部的余额和下注金额
+-- 🔍 DEBUG: 记录 Lua 脚本内部的余额和下注金额（包括原始字符串）
 redis.call('PUBLISH', 'debug:lua:bet', cjson.encode({
     step = 'lua_balance_check',
     player_id = ARGV[1],
     order_no = ARGV[4],
+    currentBalanceRaw = currentBalanceRaw,
     currentBalance = currentBalance,
     betAmount = betAmount
 }))
@@ -572,6 +574,17 @@ LUA;
         // 执行 Lua 脚本（使用 work 连接池，确保 igaming 核心业务稳定）
         // ✅ 性能优化：使用 EVALSHA 代替 EVAL，减少网络传输 70%
         $redis = Redis::connection('work');
+
+        // 🔍 DEBUG: 执行 Lua 前，先读取 Redis 钱包余额的原始值
+        $balanceKeyForDebug = "wallet:balance:{$playerId}";
+        $rawBalanceBeforeLua = $redis->get($balanceKeyForDebug);
+        \support\Log::info('🔍 [单位追踪-Lua执行前] Redis 钱包余额原始值', [
+            'player_id' => $playerId,
+            'order_no' => $orderNo,
+            'raw_balance' => $rawBalanceBeforeLua,
+            'has_decimal' => is_string($rawBalanceBeforeLua) && strpos($rawBalanceBeforeLua, '.') !== false,
+        ]);
+
         $result = self::evalScript($redis, self::LUA_ATOMIC_BET, $keys, $argv);
 
         // 检查 Redis 返回值
