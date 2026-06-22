@@ -202,14 +202,14 @@ class GameRecordSyncWorker
             // ✅ 批量重新读取Redis最新状态（避免竞态条件）
             // 🚀 性能优化：使用Pipeline批量读取，减少网络往返
             $redis = Redis::connection('work');
-            /** @var \Redis $pipe */
             $pipe = $redis->pipeline();
 
             foreach (array_keys($uniqueKeys) as $redisKey) {
                 $pipe->hGetAll($redisKey);
             }
 
-            /** @var array $results */
+            // phpredis pipeline 确实有 execute() 方法，IDE 类型定义不完善
+            /** @phpstan-ignore-next-line */
             $results = $pipe->execute();
 
             // 组装结果
