@@ -2096,7 +2096,7 @@ function getBetAmountWithFallback(string $platform, string $orderNo, ?int $playe
         $betRecord = \support\Redis::hGetAll($betRecordKey);
 
         if (!empty($betRecord) && isset($betRecord['amount'])) {
-            // Redis 的 amount 是"分"（整数），需要转换为"元"
+            // Redis 的 amount 是"分"，转换为"元"
             $betAmount = round((float)$betRecord['amount'] / 100, 2);
             $source = 'redis';
         } else {

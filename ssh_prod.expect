@@ -1,0 +1,6 @@
+#!/usr/bin/expect -f
+set timeout 30
+spawn ssh -o StrictHostKeyChecking=no root@34.80.234.173 {*}$argv
+expect "password:"
+send "gang3071\r"
+expect eof

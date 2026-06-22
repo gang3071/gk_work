@@ -536,7 +536,7 @@ LUA;
             'betAmount_type' => gettype($betAmount),
         ]);
 
-        // ✅ 整数化：将"元"转换为"分"
+        // 第三方传来的是"元"，转换为"分"传给 Lua
         $betAmountInCents = (int)round($betAmount * 100);
 
         // 🔍 DEBUG: 记录转换后的金额
@@ -701,7 +701,7 @@ LUA;
         $timestamp = time();
         $dateTime = date('Y-m-d H:i:s', $timestamp);
 
-        // ✅ 整数化：将"元"转换为"分"
+        // 第三方传来的是"元"，转换为"分"传给 Lua
         $winAmountInCents = (int)round($winAmount * 100);
         $diffInCents = (int)round($diff * 100);
 
@@ -878,6 +878,7 @@ LUA;
         }
 
         // ✅ 整数化：将"元"转换为"分"
+        // 第三方传来的是"元"，转换为"分"传给 Lua
         $refundAmountInCents = (int)round($refundAmount * 100);
 
         // 准备 Keys
