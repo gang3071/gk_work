@@ -142,6 +142,13 @@ class MtGameController
                 return $this->error($this->service->error);
             }
 
+            // 🔍 DEBUG: 第三方平台传入的原始金额
+            Log::channel('mt_server')->info('🔍 [单位追踪-1] 第三方平台传入金额', [
+                'order_no' => $orderNo,
+                'order_money_raw' => $data['order_money'],
+                'order_money_type' => gettype($data['order_money']),
+            ]);
+
             // 3. Lua 原子下注
             $luaParams = [
                 'order_no' => $orderNo,
@@ -163,6 +170,14 @@ class MtGameController
             ], 'atomicBet');
 
             $result = RedisLuaScripts::atomicBet($player->id, 'MT', $luaParams);
+
+            // 🔍 DEBUG: Lua 返回的余额
+            Log::channel('mt_server')->info('🔍 [单位追踪-2] Lua 返回的余额', [
+                'order_no' => $orderNo,
+                'balance' => $result['balance'] ?? null,
+                'old_balance' => $result['old_balance'] ?? null,
+                'ok' => $result['ok'] ?? null,
+            ]);
 
             // 审计日志
             logLuaScriptCall('bet', 'MT', $player->id, $luaParams);

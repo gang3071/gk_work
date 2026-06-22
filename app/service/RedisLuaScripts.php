@@ -71,6 +71,15 @@ end
 local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
 local betAmount = tonumber(ARGV[2]) or 0
 
+-- 🔍 DEBUG: 记录 Lua 脚本内部的余额和下注金额
+redis.call('PUBLISH', 'debug:lua:bet', cjson.encode({
+    step = 'lua_balance_check',
+    player_id = ARGV[1],
+    order_no = ARGV[4],
+    currentBalance = currentBalance,
+    betAmount = betAmount
+}))
+
 -- 3. 余额检查（✅ 整数比较，无需容差）
 if currentBalance < betAmount then
     return cjson.encode({ok = 0, error = 'insufficient_balance', balance = currentBalance})
@@ -518,8 +527,21 @@ LUA;
         $transactionType = $data['transaction_type'] ?? TransactionType::mapFromLegacy($data);
         $createdAt = date('Y-m-d H:i:s');
 
+        // 🔍 DEBUG: 记录转换前的金额
+        \support\Log::info('🔍 [单位追踪-3] atomicBet 接收到的金额', [
+            'order_no' => $orderNo,
+            'betAmount_raw' => $betAmount,
+            'betAmount_type' => gettype($betAmount),
+        ]);
+
         // ✅ 整数化：将"元"转换为"分"
         $betAmountInCents = (int)round($betAmount * 100);
+
+        // 🔍 DEBUG: 记录转换后的金额
+        \support\Log::info('🔍 [单位追踪-4] atomicBet 转换后传给 Lua', [
+            'order_no' => $orderNo,
+            'betAmountInCents' => $betAmountInCents,
+        ]);
 
         // 准备 Keys
         $keys = [

@@ -150,6 +150,15 @@ class RsgGameController
                 return $this->error($this->service->error);
             }
 
+            // 🔍 DEBUG: 第三方平台传入的原始金额
+            $this->logger->info('🔍 [单位追踪-1] 第三方平台传入金额', [
+                'order_no' => $orderNo,
+                'amount_raw' => $data['Amount'] ?? null,
+                'amount_type' => gettype($data['Amount'] ?? null),
+                'betAmount' => $betAmount,
+                'is_sub_order' => $isSubOrder,
+            ]);
+
             // ========== 核心：Lua 原子下注（1次调用完成所有操作）==========
             $luaParams = [
                 'order_no' => $orderNo,
@@ -173,6 +182,14 @@ class RsgGameController
             ], 'atomicBet');
 
             $result = RedisLuaScripts::atomicBet($player->id, 'RSG', $luaParams);
+
+            // 🔍 DEBUG: Lua 返回的余额
+            $this->logger->info('🔍 [单位追踪-2] Lua 返回的余额', [
+                'order_no' => $orderNo,
+                'balance' => $result['balance'] ?? null,
+                'old_balance' => $result['old_balance'] ?? null,
+                'ok' => $result['ok'] ?? null,
+            ]);
 
             // 审计日志
             logLuaScriptCall('bet', 'RSG', $player->id, $luaParams);
@@ -387,11 +404,25 @@ class RsgGameController
             $orderNo = (string)$data['SequenNumber'];
             $winAmount = $data['Amount'] ?? 0;
 
+            // 🔍 DEBUG: 第三方平台传入的结算金额
+            $this->logger->info('🔍 [单位追踪-RSG-结算-1] 第三方平台传入金额', [
+                'order_no' => $orderNo,
+                'amount_raw' => $data['Amount'] ?? null,
+                'amount_type' => gettype($data['Amount'] ?? null),
+            ]);
+
             // ✅ 从 Redis 读取实际的下注金额（而不是使用 BetAmount 字段）
             // 原因：子订单的 BetAmount 是主订单的投注额，但子订单实际 bet amount = 0
             $redisKey = "game:record:bet:RSG:{$orderNo}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
             $actualBetAmount = $cachedBet !== false ? (float)$cachedBet : 0;
+
+            // 🔍 DEBUG: 从 Redis 读取的下注金额
+            $this->logger->info('🔍 [单位追踪-RSG-结算-2] Redis 中的下注金额', [
+                'order_no' => $orderNo,
+                'cached_bet' => $cachedBet,
+                'actual_bet_amount' => $actualBetAmount,
+            ]);
 
             // ✅ 使用实际的下注金额计算 diff
             // 主订单：diff = winAmount - actualBetAmount（如 300 - 125 = 175）
@@ -419,6 +450,14 @@ class RsgGameController
             ], 'atomicSettle');
 
             $result = RedisLuaScripts::atomicSettle($player->id, 'RSG', $luaParams);
+
+            // 🔍 DEBUG: Lua 返回的余额
+            $this->logger->info('🔍 [单位追踪-RSG-结算-3] Lua 返回的余额', [
+                'order_no' => $orderNo,
+                'balance' => $result['balance'] ?? null,
+                'old_balance' => $result['old_balance'] ?? null,
+                'ok' => $result['ok'] ?? null,
+            ]);
 
             // 审计日志
             logLuaScriptCall('settle', 'RSG', $player->id, $luaParams);

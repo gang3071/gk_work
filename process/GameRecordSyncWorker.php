@@ -365,6 +365,20 @@ class GameRecordSyncWorker
                 continue;
             }
 
+            // 🔍 DEBUG: Worker 批量插入前的数据
+            $platform = $record['platform'] ?? '';
+            if ($platform === 'MT' || $platform === 'DG' || $platform === 'RSG') {
+                $this->log->info('🔍 [单位追踪-6] Worker 批量插入前的记录', [
+                    'platform' => $platform,
+                    'order_no' => $record['order_no'],
+                    'amount' => $record['amount'] ?? null,
+                    'win' => $record['win'] ?? null,
+                    'diff' => $record['diff'] ?? null,
+                    'balance_before' => $record['balance_before'] ?? null,
+                    'balance_after' => $record['balance_after'] ?? null,
+                ]);
+            }
+
             $insertData[] = [
                 'player_id' => $playerId,
                 'parent_player_id' => $player->recommend_id ?? 0,
@@ -387,6 +401,19 @@ class GameRecordSyncWorker
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
+
+            // 🔍 DEBUG: Worker 准备插入 MySQL 的数据
+            if ($platform === 'MT' || $platform === 'DG' || $platform === 'RSG') {
+                $this->log->info('🔍 [单位追踪-7] Worker 准备插入 MySQL 的数据', [
+                    'platform' => $platform,
+                    'order_no' => $record['order_no'],
+                    'bet' => $insertData[count($insertData) - 1]['bet'],
+                    'win' => $insertData[count($insertData) - 1]['win'],
+                    'diff' => $insertData[count($insertData) - 1]['diff'],
+                    'balance_before' => $insertData[count($insertData) - 1]['balance_before'],
+                    'balance_after' => $insertData[count($insertData) - 1]['balance_after'],
+                ]);
+            }
 
             // 5. 同步钱包余额（使用 Lua 脚本执行时的余额快照，而非当前 Redis 余额）
             $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);

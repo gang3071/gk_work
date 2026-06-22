@@ -267,6 +267,15 @@ LUA;
         $orderNo = $data['order_no'];
         $key = self::PREFIX_BET . "{$platform}:{$orderNo}";
 
+        // 🔍 DEBUG: saveBet 接收到的数据
+        \support\Log::info('🔍 [单位追踪-5] saveBet 接收到的数据', [
+            'platform' => $platform,
+            'order_no' => $orderNo,
+            'amount' => $data['amount'] ?? null,
+            'balance_before' => $data['balance_before'] ?? null,
+            'balance_after' => $data['balance_after'] ?? null,
+        ]);
+
         // ✅ 性能优化：saveBet总是在atomicBet之后调用，记录必然已存在
         // 因此直接追加字段，不需要EXISTS检查（节省一次网络往返）
         //
