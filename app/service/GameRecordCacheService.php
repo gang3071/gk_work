@@ -234,7 +234,24 @@ LUA;
         ]);
 
         // 加入同步队列
-        self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
+        try {
+            $zAddResult = self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
+
+            // 🔍 诊断日志：验证是否成功加入队列
+            Log::channel('game_bet_record')->debug('[saveBet] 加入同步队列', [
+                'key' => $key,
+                'queue_key' => self::PREFIX_SYNC_QUEUE,
+                'zAdd_result' => $zAddResult,
+                'timestamp' => time(),
+            ]);
+        } catch (\Throwable $e) {
+            // ❌ 记录队列写入失败（这是严重问题！）
+            Log::channel('game_bet_record')->error('[saveBet] ❌ 加入同步队列失败', [
+                'key' => $key,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+        }
 
         // 记录统计
         self::redis()->incr("game:stats:{$platform}:bet:count");
