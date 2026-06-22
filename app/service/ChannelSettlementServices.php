@@ -110,8 +110,12 @@ class ChannelSettlementServices
                 $channelProfitRecord->machine_down_amount = $playerDeliveryRecord[$channel->department_id]['machine_down_amount'] ?? 0;
                 $channelProfitRecord->lottery_amount = $playerDeliveryRecord[$channel->department_id]['lottery_amount'] ?? 0;
                 $channelProfitRecord->machine_amount = $playerWithdrawRecord[$channel->department_id]['machine_amount'] ?? 0;
-                $channelProfitRecord->machine_point = PlayerRechargeRecord::query()->where('type',
-                    PlayerRechargeRecord::TYPE_MACHINE)->where('department_id', $channel->department_id)->sum('point');
+                $channelProfitRecord->machine_point = PlayerRechargeRecord::query()
+                    ->where('type', PlayerRechargeRecord::TYPE_MACHINE)
+                    ->where('department_id', $channel->department_id)
+                    ->where('created_at', '>=', $yesterdayStart)
+                    ->where('created_at', '<=', $yesterdayEnd)
+                    ->sum('point');
                 $channelProfitRecord->game_amount = $playGameRecordData[$channel->department_id] ?? 0;
                 $channelProfitRecord->water_amount = $playerDeliveryRecord[$channel->department_id]['water_amount'] ?? 0;
                 $channelProfitRecord->date = $yesterday;
