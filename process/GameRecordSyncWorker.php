@@ -4,7 +4,6 @@ namespace process;
 
 use app\model\GamePlatform;
 use app\model\Player;
-use app\model\PlayerDeliveryRecord;
 use app\model\PlayerPlatformCash;
 use app\model\PlayGameRecord;
 use app\service\GameRecordCacheService;
@@ -173,11 +172,75 @@ class GameRecordSyncWorker
                 ->get()
                 ->keyBy('order_no');
 
-            // 2. 分组：需要新增 vs 需要更新
+            // 2. 批次内去重：合并同一Redis Key的多次读取
+            // ⚠️ 重要：使用redis_key而不是order_no作为去重标识
+            // 原因：不同平台的order_no语义不同（T9Slot的gameOrderNumber vs transactionId）
+            // Redis Key才是真正的唯一标识
+            //
+            // 支持场景：
+            // - RSG电子：下注→结算（2条记录，同一key）
+            // - DG/SA真人：多次下注→结算（N条记录，同一key累加）
+            // - T9Slot/QT：子订单（不同key，不会被合并）← 关键！
+            $mergedRecords = [];
+            foreach ($records as $record) {
+                $redisKey = $record['redis_key'] ?? '';  // ← 使用Redis Key去重
+                $orderNo = $record['order_no'];  // 仅用于日志
+
+                if (empty($redisKey)) {
+                    // 防御性检查：redis_key缺失（不应该发生）
+                    $this->log->error('记录缺少redis_key', ['record' => $record]);
+                    continue;
+                }
+
+                if (!isset($mergedRecords[$redisKey])) {
+                    // 首次出现，直接记录
+                    $mergedRecords[$redisKey] = $record;
+                } else {
+                    // ✅ 批次内重复：智能合并同一Redis Key的记录
+                    $existing = $mergedRecords[$redisKey];
+                    $existingSettled = ($existing['settlement_status'] ?? 0) == 1;
+                    $currentSettled = ($record['settlement_status'] ?? 0) == 1;
+
+                    if ($currentSettled) {
+                        // ✅ 当前是结算记录 → 直接替换（结算记录包含最终状态）
+                        // 无论之前是下注还是结算，都用最新的结算记录
+                        $mergedRecords[$redisKey] = $record;
+
+                        $this->log->info('批次内合并：保留结算记录', [
+                            'order_no' => $orderNo,
+                            'previous_status' => $existingSettled ? '结算' : '下注',
+                            'final_settlement_status' => 1,
+                        ]);
+                    } else {
+                        // ✅ 当前是下注记录
+                        if ($existingSettled) {
+                            // 已存在结算 → 保留结算（不替换）
+                            // 这种情况理论上不应该发生（结算应该在最后）
+                            $this->log->warning('批次内异常：结算后又读到下注', [
+                                'order_no' => $orderNo,
+                                'keeping' => '结算记录',
+                            ]);
+                            // 保留existing（结算记录），不做任何操作
+                        } else {
+                            // 都是下注记录 → 保留后者（DG/SA同局多次下注，后者有累加后的amount）
+                            // Redis中hMSet只更新字段，不覆盖，所以后读到的记录包含累加后的完整数据
+                            $mergedRecords[$redisKey] = $record;
+
+                            $this->log->debug('批次内合并：多次下注累加', [
+                                'order_no' => $orderNo,
+                                'old_amount' => $existing['amount'] ?? 0,
+                                'new_amount' => $record['amount'] ?? 0,
+                            ]);
+                        }
+                    }
+                }
+            }
+
+            // 3. 分组：需要新增 vs 需要更新
             $toInsert = [];
             $toUpdate = [];
 
-            foreach ($records as $record) {
+            foreach ($mergedRecords as $record) {
                 $orderNo = $record['order_no'];
 
                 if ($existingRecords->has($orderNo)) {

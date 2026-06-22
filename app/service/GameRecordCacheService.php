@@ -30,8 +30,9 @@ class GameRecordCacheService
     private const TTL_BALANCE = 3600;   // 1小时
 
     /**
-     * Lua 脚本 SHA1 缓存（避免重复加载脚本，提升性能）
-     * @var array<string, bool>
+     * Lua 脚本 SHA1 缓存（按连接ID分组，避免连接池导致的EVALSHA失败）
+     * 格式: [connection_id => [sha => true]]
+     * @var array<int, array<string, bool>>
      */
     private static $scriptShas = [];
 
@@ -102,11 +103,16 @@ LUA;
     /**
      * 执行 Lua 脚本（优先使用 EVALSHA，性能提升 50-70%）
      *
-     * 改进的自动降级机制（解决 EVALSHA 持续失败问题）：
-     * 1. 首次调用：使用 SCRIPT LOAD 预加载脚本到 Redis
-     * 2. 后续调用：使用 EVALSHA（快速执行）
-     * 3. EVALSHA 失败：检测返回值/异常，自动降级到 EVAL 并重新加载脚本
-     * 4. 防止循环失败：延迟标记策略，只有成功后才缓存 SHA
+     * 🎯 彻底解决 EVALSHA 持续失败问题：连接级SHA缓存
+     *
+     * 问题根源：
+     * - Redis连接池 + persistent模式 → 可能获取不同的底层连接
+     * - 全局SHA缓存 → 连接A加载的SHA，连接B无法使用
+     *
+     * 解决方案：
+     * 1. 为每个Redis连接维护独立的SHA缓存
+     * 2. 使用连接对象ID作为缓存键
+     * 3. 确保SCRIPT LOAD和EVALSHA在同一连接上执行
      *
      * @param \Redis $redis Redis 连接对象
      * @param string $script Lua 脚本内容
@@ -117,13 +123,18 @@ LUA;
      */
     private static function evalScript($redis, string $script, array $keys, array $argv)
     {
+        // 获取当前连接的唯一标识
+        // 注意：Illuminate Redis的connection()返回的是Connection对象，需要获取底层client
+        $client = $redis->client();
+        $connectionId = spl_object_id($client);
+
         // 计算脚本的 SHA1
         $sha = sha1($script);
 
-        // ✅ 第一步：如果脚本未加载且 SCRIPT LOAD 可用，先预加载
-        if (!isset(self::$scriptShas[$sha]) && !self::$scriptLoadDisabled) {
+        // ✅ 第一步：检查这个连接是否已加载此脚本
+        if (!isset(self::$scriptShas[$connectionId][$sha]) && !self::$scriptLoadDisabled) {
             try {
-                // 预加载脚本到 Redis（避免首次 EVALSHA 失败）
+                // 预加载脚本到 Redis（这个连接）
                 $loadedSha = $redis->script('load', $script);
 
                 // 验证 SHA 一致性
@@ -131,12 +142,13 @@ LUA;
                     \support\Log::warning('SCRIPT LOAD 返回的 SHA 与计算值不一致', [
                         'expected' => substr($sha, 0, 8),
                         'actual' => substr($loadedSha, 0, 8),
+                        'connection_id' => $connectionId,
                     ]);
                 }
 
                 // ⚠️ 延迟标记：稍后在 EVALSHA 成功后再标记
             } catch (\RedisException $e) {
-                // SCRIPT LOAD 失败，标记为不可用（避免反复尝试）
+                // SCRIPT LOAD 失败，标记为全局不可用（避免反复尝试）
                 self::$scriptLoadDisabled = true;
 
                 \support\Log::warning('SCRIPT LOAD 不可用，所有脚本将使用 EVAL 模式', [
@@ -148,8 +160,8 @@ LUA;
             }
         }
 
-        // ✅ 第二步：如果 SHA 已缓存或刚加载，尝试使用 EVALSHA 快速执行
-        if (isset(self::$scriptShas[$sha]) || !self::$scriptLoadDisabled) {
+        // ✅ 第二步：如果这个连接的SHA已缓存或刚加载，尝试使用 EVALSHA
+        if (isset(self::$scriptShas[$connectionId][$sha]) || !self::$scriptLoadDisabled) {
             try {
                 $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
 
@@ -160,30 +172,37 @@ LUA;
 
                     // 检查是否真的是脚本失效（NOSCRIPT 或其他错误）
                     if ($lastError && strpos($lastError, 'NOSCRIPT') !== false) {
-                        // 脚本已失效，清除缓存并降级到 EVAL
-                        unset(self::$scriptShas[$sha]);
+                        // 脚本已失效，清除这个连接的缓存并降级到 EVAL
+                        unset(self::$scriptShas[$connectionId][$sha]);
+
+                        \support\Log::info('连接SHA缓存失效，重新加载', [
+                            'connection_id' => $connectionId,
+                            'sha' => substr($sha, 0, 8),
+                        ]);
+
                         return self::evalWithoutCache($redis, $script, $keys, $argv);
                     }
 
                     // 如果不是 NOSCRIPT 错误，false 可能是合法的返回值（空数组）
-                    // 但为了保险，仍然标记 SHA 为已加载
-                    self::$scriptShas[$sha] = true;
+                    // 标记这个连接的SHA为已加载
+                    self::$scriptShas[$connectionId][$sha] = true;
                     return $result;
                 }
 
-                // ✅ 成功执行，标记 SHA 为已加载（下次直接使用 EVALSHA）
-                self::$scriptShas[$sha] = true;
+                // ✅ 成功执行，标记这个连接的SHA为已加载（下次直接使用 EVALSHA）
+                self::$scriptShas[$connectionId][$sha] = true;
                 return $result;
 
             } catch (\RedisException $e) {
                 // EVALSHA 抛出异常（脚本不存在或其他错误）
                 $errorMsg = $e->getMessage();
 
-                // 清除 SHA 缓存
-                unset(self::$scriptShas[$sha]);
+                // 清除这个连接的SHA缓存
+                unset(self::$scriptShas[$connectionId][$sha]);
 
                 // 降级到 EVAL
                 \support\Log::warning('EVALSHA 执行失败，降级到 EVAL', [
+                    'connection_id' => $connectionId,
                     'sha' => substr($sha, 0, 8),
                     'error' => substr($errorMsg, 0, 100),
                 ]);
