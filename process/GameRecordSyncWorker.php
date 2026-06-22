@@ -385,10 +385,11 @@ class GameRecordSyncWorker
             $amountInYuan = isset($record['amount']) ? round($record['amount'] / 100, 2) : 0;
             $winInYuan = isset($record['win']) ? round($record['win'] / 100, 2) : 0;
             $diffInYuan = isset($record['diff']) ? round($record['diff'] / 100, 2) : 0;
+            // ⚠️ balance_before/after 已经是"元"单位，不需要除以100
             $balanceBeforeInYuan = isset($record['balance_before']) && $record['balance_before'] !== ''
-                ? round($record['balance_before'] / 100, 2) : null;
+                ? round($record['balance_before'], 2) : null;
             $balanceAfterInYuan = isset($record['balance_after']) && $record['balance_after'] !== ''
-                ? round($record['balance_after'] / 100, 2) : null;
+                ? round($record['balance_after'], 2) : null;
 
             $insertData[] = [
                 'player_id' => $playerId,
@@ -541,7 +542,7 @@ class GameRecordSyncWorker
                 // 更新 balance_after 为最新余额（balance_before 保持首次下注前的值不变）
                 if (isset($record['balance_after']) && $record['balance_after'] !== '') {
                     // 🎯 单位转换：Redis 存储的是"分"，转换为"元"
-                    $balanceAfterInYuan = round($record['balance_after'] / 100, 2);
+                    $balanceAfterInYuan = round($record['balance_after'], 2);
 
                     if ($balanceAfterInYuan != $existing->balance_after) {
                         $existing->balance_after = $balanceAfterInYuan;
@@ -973,7 +974,7 @@ class GameRecordSyncWorker
                     // 更新 balance_after 为最新余额（balance_before 保持首次下注前的值不变）
                     if (isset($record['balance_after']) && $record['balance_after'] !== '') {
                         // 🎯 单位转换：Redis 存储的是"分"，转换为"元"
-                        $balanceAfterInYuan = round($record['balance_after'] / 100, 2);
+                        $balanceAfterInYuan = round($record['balance_after'], 2);
 
                         if ($balanceAfterInYuan != $existing->balance_after) {
                             $oldBalanceAfter = $existing->balance_after;
