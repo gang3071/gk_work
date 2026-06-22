@@ -95,24 +95,37 @@ LUA;
     }
 
     /**
+     * 获取原生 Redis 客户端（用于 Lua 脚本执行）
+     *
+     * @return \Redis
+     */
+    private static function redisClient()
+    {
+        return Redis::connection('work')->client();
+    }
+
+    /**
      * 执行 Lua 脚本（优先使用 EVALSHA，性能提升 50-70%）
      *
-     * @param \Redis $redis Redis 连接对象
      * @param string $script Lua 脚本内容
      * @param array $keys KEYS 参数
      * @param array $argv ARGV 参数
      * @return mixed
      * @throws \RuntimeException
      */
-    private static function evalScript($redis, string $script, array $keys, array $argv)
+    private static function evalScript(string $script, array $keys, array $argv)
     {
+        // 获取原生 Redis 客户端
+        $redis = self::redisClient();
+
         // 计算脚本的 SHA1
         $sha = sha1($script);
 
         // 如果已经加载过，直接使用 EVALSHA（节省网络传输）
         if (isset(self::$scriptShas[$sha])) {
             try {
-                $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+                // 原生 PhpRedis 的 evalSha 调用方式：evalSha($sha, [$keys...], $numKeys)
+                $result = $redis->evalSha($sha, array_merge($keys, $argv), count($keys));
 
                 // 检查 EVALSHA 返回值，false 表示脚本不存在或执行失败
                 if ($result === false) {
@@ -138,7 +151,8 @@ LUA;
 
         // 第一次执行或 SHA 失效：使用 EVAL
         try {
-            $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+            // 原生 PhpRedis 的 eval 调用方式：eval($script, [$keys...], $numKeys)
+            $result = $redis->eval($script, array_merge($keys, $argv), count($keys));
 
             // 标记为已加载
             self::$scriptShas[$sha] = true;
@@ -331,8 +345,7 @@ LUA;
         $currentTime = time();
 
         // ✅ 执行 Lua 脚本（优先使用 EVALSHA，减少网络传输 70%）
-        $redis = self::redis();
-        $keys = self::evalScript($redis, self::LUA_GET_PENDING_RECORDS, [$queueKey], [$limit, $currentTime, $processTimeout]);
+        $keys = self::evalScript(self::LUA_GET_PENDING_RECORDS, [$queueKey], [$limit, $currentTime, $processTimeout]);
 
         if (empty($keys)) {
             return [];
