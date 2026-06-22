@@ -2,6 +2,7 @@
 
 namespace app\service;
 
+use support\Log;
 use support\Redis;
 
 /**
@@ -30,17 +31,10 @@ class GameRecordCacheService
     private const TTL_BALANCE = 3600;   // 1小时
 
     /**
-     * Lua 脚本 SHA1 缓存（按连接ID分组，避免连接池导致的EVALSHA失败）
-     * 格式: [connection_id => [sha => true]]
-     * @var array<int, array<string, bool>>
+     * Lua 脚本 SHA1 缓存（避免重复加载脚本，提升性能）
+     * @var array
      */
     private static $scriptShas = [];
-
-    /**
-     * SCRIPT LOAD 不可用标记（避免重复尝试失败的命令）
-     * @var bool
-     */
-    private static $scriptLoadDisabled = false;
 
     /**
      * Lua 脚本：原子获取并标记待同步记录（性能优化版）
@@ -103,17 +97,6 @@ LUA;
     /**
      * 执行 Lua 脚本（优先使用 EVALSHA，性能提升 50-70%）
      *
-     * 🎯 彻底解决 EVALSHA 持续失败问题：连接级SHA缓存
-     *
-     * 问题根源：
-     * - Redis连接池 + persistent模式 → 可能获取不同的底层连接
-     * - 全局SHA缓存 → 连接A加载的SHA，连接B无法使用
-     *
-     * 解决方案：
-     * 1. 为每个Redis连接维护独立的SHA缓存
-     * 2. 使用连接对象ID作为缓存键
-     * 3. 确保SCRIPT LOAD和EVALSHA在同一连接上执行
-     *
      * @param \Redis $redis Redis 连接对象
      * @param string $script Lua 脚本内容
      * @param array $keys KEYS 参数
@@ -123,121 +106,48 @@ LUA;
      */
     private static function evalScript($redis, string $script, array $keys, array $argv)
     {
-        // 获取当前连接的唯一标识
-        // 注意：Illuminate Redis的connection()返回的是Connection对象，需要获取底层client
-        $client = $redis->client();
-        $connectionId = spl_object_id($client);
-
         // 计算脚本的 SHA1
         $sha = sha1($script);
 
-        // ✅ 第一步：检查这个连接是否已加载此脚本
-        if (!isset(self::$scriptShas[$connectionId][$sha]) && !self::$scriptLoadDisabled) {
-            try {
-                // 预加载脚本到 Redis（这个连接）
-                $loadedSha = $redis->script('load', $script);
-
-                // 验证 SHA 一致性
-                if ($loadedSha !== $sha) {
-                    \support\Log::warning('SCRIPT LOAD 返回的 SHA 与计算值不一致', [
-                        'expected' => substr($sha, 0, 8),
-                        'actual' => substr($loadedSha, 0, 8),
-                        'connection_id' => $connectionId,
-                    ]);
-                }
-
-                // ⚠️ 延迟标记：稍后在 EVALSHA 成功后再标记
-            } catch (\RedisException $e) {
-                // SCRIPT LOAD 失败，标记为全局不可用（避免反复尝试）
-                self::$scriptLoadDisabled = true;
-
-                \support\Log::warning('SCRIPT LOAD 不可用，所有脚本将使用 EVAL 模式', [
-                    'error' => $e->getMessage(),
-                ]);
-
-                // 降级到 EVAL
-                return self::evalWithoutCache($redis, $script, $keys, $argv);
-            }
-        }
-
-        // ✅ 第二步：如果这个连接的SHA已缓存或刚加载，尝试使用 EVALSHA
-        if (isset(self::$scriptShas[$connectionId][$sha]) || !self::$scriptLoadDisabled) {
+        // 如果已经加载过，直接使用 EVALSHA（节省网络传输）
+        if (isset(self::$scriptShas[$sha])) {
             try {
                 $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
 
-                // ✅ 关键防御：检查返回值是否为 false
-                // Illuminate Redis 在脚本不存在时可能返回 false 而不抛异常
+                // 检查 EVALSHA 返回值，false 表示脚本不存在或执行失败
                 if ($result === false) {
                     $lastError = $redis->getLastError();
-
-                    // 检查是否真的是脚本失效（NOSCRIPT 或其他错误）
-                    if ($lastError && strpos($lastError, 'NOSCRIPT') !== false) {
-                        // 脚本已失效，清除这个连接的缓存并降级到 EVAL
-                        unset(self::$scriptShas[$connectionId][$sha]);
-
-                        \support\Log::info('连接SHA缓存失效，重新加载', [
-                            'connection_id' => $connectionId,
-                            'sha' => substr($sha, 0, 8),
-                        ]);
-
-                        return self::evalWithoutCache($redis, $script, $keys, $argv);
-                    }
-
-                    // 如果不是 NOSCRIPT 错误，false 可能是合法的返回值（空数组）
-                    // 标记这个连接的SHA为已加载
-                    self::$scriptShas[$connectionId][$sha] = true;
+                    \support\Log::warning('EVALSHA 返回 false，脚本可能已失效，降级到 EVAL', [
+                        'sha' => substr($sha, 0, 8),
+                        'last_error' => $lastError,
+                    ]);
+                    // 清除 SHA 缓存，强制降级到 EVAL
+                    unset(self::$scriptShas[$sha]);
+                } else {
                     return $result;
                 }
-
-                // ✅ 成功执行，标记这个连接的SHA为已加载（下次直接使用 EVALSHA）
-                self::$scriptShas[$connectionId][$sha] = true;
-                return $result;
-
             } catch (\RedisException $e) {
-                // EVALSHA 抛出异常（脚本不存在或其他错误）
-                $errorMsg = $e->getMessage();
-
-                // 清除这个连接的SHA缓存
-                unset(self::$scriptShas[$connectionId][$sha]);
-
-                // 降级到 EVAL
-                \support\Log::warning('EVALSHA 执行失败，降级到 EVAL', [
-                    'connection_id' => $connectionId,
+                // SHA 可能已过期（Redis 重启或脚本被清除），重新加载
+                \support\Log::warning('Redis Lua 脚本 SHA 失效，降级到 EVAL', [
                     'sha' => substr($sha, 0, 8),
-                    'error' => substr($errorMsg, 0, 100),
+                    'error' => $e->getMessage(),
                 ]);
-
-                return self::evalWithoutCache($redis, $script, $keys, $argv);
+                unset(self::$scriptShas[$sha]);
             }
         }
 
-        // ✅ 第三步：如果 SCRIPT LOAD 不可用，直接使用 EVAL
-        return self::evalWithoutCache($redis, $script, $keys, $argv);
-    }
-
-    /**
-     * 直接使用 EVAL 执行脚本（不使用 SHA 缓存）
-     *
-     * @param \Redis $redis
-     * @param string $script
-     * @param array $keys
-     * @param array $argv
-     * @return mixed
-     * @throws \RuntimeException
-     */
-    private static function evalWithoutCache($redis, string $script, array $keys, array $argv)
-    {
+        // 第一次执行或 SHA 失效：使用 EVAL
         try {
             $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
 
-            // ⚠️ EVAL 成功后不立即标记 SHA
-            // 下次调用会重新走 SCRIPT LOAD + EVALSHA 流程
-            // 这样可以在 Redis 重启后自动恢复 EVALSHA 优化
+            // 标记为已加载
+            self::$scriptShas[$sha] = true;
 
             return $result;
         } catch (\RedisException $e) {
-            \support\Log::error('Redis Lua 脚本执行失败（EVAL）', [
+            \support\Log::error('Redis Lua 脚本执行失败', [
                 'error' => $e->getMessage(),
+                'sha' => substr($sha, 0, 8),
                 'keys_count' => count($keys),
                 'argv_count' => count($argv),
             ]);
@@ -276,26 +186,42 @@ LUA;
             'balance_after' => $data['balance_after'] ?? null,
         ]);
 
-        // ✅ 性能优化：saveBet总是在atomicBet之后调用，记录必然已存在
-        // 因此直接追加字段，不需要EXISTS检查（节省一次网络往返）
-        //
-        // 只追加original_data和额外字段，不覆盖Lua脚本保存的balance_before/balance_after
-        $updates = [
+        $record = [
+            'platform' => $platform,
+            'order_no' => $orderNo,
+            'player_id' => $data['player_id'],
+            'platform_id' => $data['platform_id'],
+            'amount' => $data['amount'],
+            'game_code' => $data['game_code'] ?? '',
+            'game_type' => $data['game_type'] ?? '',
+            'game_name' => $data['game_name'] ?? '',
+            'bet_type' => $data['bet_type'] ?? 'bet',  // bet | prepay
+            'bet_time' => time(),
             'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
+            'status' => 'pending',  // pending | synced | failed
+            'settlement_status' => 0,  // 未结算
+            'win' => 0,
+            'diff' => 0,
+            'created_at' => date('Y-m-d H:i:s'),
+            // ✅ 保存余额变化信息（用于 Worker 推送）
+            'balance_before' => $data['balance_before'] ?? '',
+            'balance_after' => $data['balance_after'] ?? '',
         ];
 
-        // 如果有额外的字段（如belong_order_no, is_sub_order），也追加
-        if (isset($data['belong_order_no'])) {
-            $updates['belong_order_no'] = $data['belong_order_no'];
-        }
-        if (isset($data['is_sub_order'])) {
-            $updates['is_sub_order'] = $data['is_sub_order'];
-        }
+        // 写入 Redis Hash
+        self::redis()->hMSet($key, $record);
+        self::redis()->expire($key, self::TTL_RECORD);
 
-        // ✅ 直接hMSet追加字段（Redis的hMSet只更新指定字段，不影响其他字段）
-        self::redis()->hMSet($key, $updates);
+        // 🔍 诊断日志：验证 balance 快照是否写入
+        Log::channel('game_bet_record')->info('[saveBet] 写入余额快照', [
+            'key' => $key,
+            'balance_before' => $data['balance_before'] ?? 'NULL',
+            'balance_after' => $data['balance_after'] ?? 'NULL',
+            'balance_before_type' => gettype($data['balance_before'] ?? null),
+            'balance_after_type' => gettype($data['balance_after'] ?? null),
+        ]);
 
-        // 确保在队列中（Lua脚本已经zadd过，这里更新score提升优先级）
+        // 加入同步队列
         self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
 
         // 记录统计
@@ -331,12 +257,6 @@ LUA;
         if ($betExists) {
             // 更新 bet 记录
             $betAmount = self::redis()->hGet($betKey, 'amount') ?? 0;
-            $currentStatus = self::redis()->hGet($betKey, 'status') ?? 'pending';
-
-            // 🎯 关键修复：不覆盖processing状态，避免竞态条件
-            // 如果当前是processing（Worker正在处理），保持processing
-            // 如果当前是synced（已同步过），改为pending（需要重新同步结算状态）
-            $newStatus = $currentStatus === 'processing' ? 'processing' : 'pending';
 
             self::redis()->hMSet($betKey, [
                 'win' => $data['amount'],
@@ -346,12 +266,11 @@ LUA;
                 'settle_time' => time(),
                 'platform_action_at' => date('Y-m-d H:i:s'),
                 'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-                'status' => $newStatus,  // ✅ 智能状态管理
+                'status' => 'pending',  // 重新标记待同步
                 // ✅ 不覆盖 balance_before/after — 保持下注时 Lua 记录的余额快照
             ]);
 
             // 更新同步队列（提升优先级）
-            // 即使status=processing也要更新score，确保下次能被处理到
             self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
 
         } else {
@@ -425,6 +344,16 @@ LUA;
             $data = self::redis()->hGetAll($key);
             if (!empty($data)) {
                 $data['redis_key'] = $key;
+
+                // 🔍 诊断日志：记录 SyncWorker 读到的原始数据
+                Log::channel('game_bet_record')->info('[getPendingSyncRecords] 读取记录', [
+                    'key' => $key,
+                    'balance_before' => $data['balance_before'] ?? 'NOT_IN_HASH',
+                    'balance_after' => $data['balance_after'] ?? 'NOT_IN_HASH',
+                    'platform' => $data['platform'] ?? 'unknown',
+                    'order_no' => $data['order_no'] ?? 'unknown',
+                ]);
+
                 $records[] = $data;
             }
         }
@@ -443,8 +372,8 @@ LUA;
             'synced_at' => date('Y-m-d H:i:s'),
         ]);
 
-        // 从同步队列移除（使用同一个连接池）
-        self::redis()->zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
+        // 从同步队列移除
+        Redis::zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
     }
 
     /**
@@ -463,12 +392,12 @@ LUA;
 
         // 如果重试次数 < 3，重置为 pending 状态，重新加入队列（延迟10秒）
         if ($retryCount < 3) {
-            // 重置状态为 pending，以便 Lua 脚本可以重新处理（使用同一个连接池）
-            self::redis()->hSet($redisKey, 'status', 'pending');
+            // 重置状态为 pending，以便 Lua 脚本可以重新处理
+            Redis::hSet($redisKey, 'status', 'pending');
             self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time() + 10, $redisKey);
         } else {
-            // 重试次数过多，移除队列，等待人工处理（使用同一个连接池）
-            self::redis()->zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
+            // 重试次数过多，移除队列，等待人工处理
+            Redis::zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
         }
     }
 
@@ -505,9 +434,9 @@ LUA;
     {
         $count = 0;
 
-        // 清理超过7天的同步队列记录（使用同一个连接池）
+        // 清理超过7天的同步队列记录
         $cutoffTime = time() - self::TTL_RECORD;
-        $removed = self::redis()->zRemRangeByScore(self::PREFIX_SYNC_QUEUE, 0, $cutoffTime);
+        $removed = Redis::zRemRangeByScore(self::PREFIX_SYNC_QUEUE, 0, $cutoffTime);
 
         $count += $removed;
 
