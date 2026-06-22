@@ -132,7 +132,19 @@ LUA;
 
         // 使用 EVALSHA 执行脚本
         try {
-            return $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+            $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+
+            // 🔍 诊断：记录EVALSHA调用和返回结果
+            Log::channel('game_bet_record')->debug('[evalScript] EVALSHA执行成功', [
+                'sha' => substr($sha, 0, 8),
+                'keys_count' => count($keys),
+                'argv_count' => count($argv),
+                'result_type' => gettype($result),
+                'result_is_array' => is_array($result),
+                'result_value' => $result,
+            ]);
+
+            return $result;
         } catch (\RedisException $e) {
             // 检查是否是 NOSCRIPT 错误（脚本在 Redis 中不存在）
             $errorMsg = $e->getMessage();
@@ -148,6 +160,8 @@ LUA;
             \support\Log::error('EVALSHA 执行失败', [
                 'sha' => substr($sha, 0, 8),
                 'error' => $errorMsg,
+                'keys' => $keys,
+                'argv' => $argv,
             ]);
 
             throw new \RuntimeException('Redis Lua 脚本执行失败: ' . $errorMsg, 0, $e);
@@ -385,13 +399,55 @@ LUA;
         ]);
 
         // ✅ 执行 Lua 脚本（优先使用 EVALSHA，减少网络传输 70%）
-        $keys = self::evalScript($redis, self::LUA_GET_PENDING_RECORDS, [$queueKey], [$limit, $currentTime, $processTimeout]);
+        try {
+            $keys = self::evalScript($redis, self::LUA_GET_PENDING_RECORDS, [$queueKey], [$limit, $currentTime, $processTimeout]);
 
-        // 🔍 诊断：检查Lua脚本返回结果
-        Log::channel('game_bet_record')->debug('[getPendingSyncRecords] Lua脚本执行结果', [
-            'returned_keys_count' => is_array($keys) ? count($keys) : 0,
-            'keys' => $keys,
-        ]);
+            // 🔍 诊断：检查Lua脚本返回结果
+            Log::channel('game_bet_record')->debug('[getPendingSyncRecords] Lua脚本执行结果', [
+                'returned_keys_count' => is_array($keys) ? count($keys) : 0,
+                'keys_type' => gettype($keys),
+                'keys' => $keys,
+            ]);
+        } catch (\Throwable $e) {
+            Log::channel('game_bet_record')->error('[getPendingSyncRecords] ❌ Lua脚本执行异常', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $keys = false;
+        }
+
+        // 🔧 临时修复：如果Lua脚本返回false，直接用PHP代码处理
+        if ($keys === false || !is_array($keys)) {
+            Log::channel('game_bet_record')->warning('[getPendingSyncRecords] ⚠️ Lua脚本返回非数组，使用PHP fallback', [
+                'keys_type' => gettype($keys),
+                'keys_value' => $keys,
+            ]);
+
+            // 直接获取队列前N条记录
+            $queueItems = $redis->zRange($queueKey, 0, $limit - 1);
+            $keys = [];
+
+            foreach ($queueItems as $key) {
+                if (!$redis->exists($key)) {
+                    continue;
+                }
+
+                $status = $redis->hGet($key, 'status');
+                $processingTime = (int)($redis->hGet($key, 'processing_time') ?: 0);
+
+                // 只处理 pending 状态，或处理超时的记录
+                if ($status === 'pending' || ($status === 'processing' && $currentTime - $processingTime > $processTimeout)) {
+                    // 标记为处理中
+                    $redis->hSet($key, 'status', 'processing');
+                    $redis->hSet($key, 'processing_time', $currentTime);
+                    $keys[] = $key;
+                }
+            }
+
+            Log::channel('game_bet_record')->info('[getPendingSyncRecords] PHP fallback处理完成', [
+                'found_keys' => count($keys),
+            ]);
+        }
 
         if (empty($keys)) {
             return [];
