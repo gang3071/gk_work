@@ -267,34 +267,61 @@ LUA;
         $orderNo = $data['order_no'];
         $key = self::PREFIX_BET . "{$platform}:{$orderNo}";
 
-        $record = [
-            'platform' => $platform,
-            'order_no' => $orderNo,
-            'player_id' => $data['player_id'],
-            'platform_id' => $data['platform_id'],
-            'amount' => $data['amount'],
-            'game_code' => $data['game_code'] ?? '',
-            'game_type' => $data['game_type'] ?? '',
-            'game_name' => $data['game_name'] ?? '',
-            'bet_type' => $data['bet_type'] ?? 'bet',  // bet | prepay
-            'bet_time' => time(),
-            'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-            'status' => 'pending',  // pending | synced | failed
-            'settlement_status' => 0,  // 未结算
-            'win' => 0,
-            'diff' => 0,
-            'created_at' => date('Y-m-d H:i:s'),
-            // ✅ 保存余额变化信息（用于 Worker 推送）
-            'balance_before' => $data['balance_before'] ?? '',
-            'balance_after' => $data['balance_after'] ?? '',
-        ];
+        // ⚠️ 检查记录是否已存在（Lua脚本可能已经创建）
+        $exists = self::redis()->exists($key);
 
-        // 写入 Redis Hash
-        self::redis()->hMSet($key, $record);
-        self::redis()->expire($key, self::TTL_RECORD);
+        if ($exists) {
+            // ✅ 记录已存在（Lua脚本创建），只追加original_data和额外字段
+            // 不覆盖Lua脚本保存的balance_before/balance_after
+            $updates = [
+                'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
+            ];
 
-        // 加入同步队列
-        self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
+            // 如果有额外的字段（如belongs_order_no, is_sub_order），也追加
+            if (isset($data['belong_order_no'])) {
+                $updates['belong_order_no'] = $data['belong_order_no'];
+            }
+            if (isset($data['is_sub_order'])) {
+                $updates['is_sub_order'] = $data['is_sub_order'];
+            }
+
+            self::redis()->hMSet($key, $updates);
+        } else {
+            // ✅ 记录不存在（非Lua流程），创建完整记录
+            $record = [
+                'platform' => $platform,
+                'order_no' => $orderNo,
+                'player_id' => $data['player_id'],
+                'platform_id' => $data['platform_id'],
+                'amount' => $data['amount'],
+                'game_code' => $data['game_code'] ?? '',
+                'game_type' => $data['game_type'] ?? '',
+                'game_name' => $data['game_name'] ?? '',
+                'bet_type' => $data['bet_type'] ?? 'bet',  // bet | prepay
+                'bet_time' => time(),
+                'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
+                'status' => 'pending',  // pending | synced | failed
+                'settlement_status' => 0,  // 未结算
+                'win' => 0,
+                'diff' => 0,
+                'created_at' => date('Y-m-d H:i:s'),
+                // ✅ 保存余额变化信息（用于 Worker 推送）
+                'balance_before' => $data['balance_before'] ?? '',
+                'balance_after' => $data['balance_after'] ?? '',
+            ];
+
+            // 写入 Redis Hash
+            self::redis()->hMSet($key, $record);
+            self::redis()->expire($key, self::TTL_RECORD);
+
+            // 加入同步队列
+            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
+        }
+
+        // 确保在队列中（即使记录已存在）
+        if ($exists) {
+            self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
+        }
 
         // 记录统计
         self::redis()->incr("game:stats:{$platform}:bet:count");
