@@ -359,9 +359,22 @@ LUA;
         $processTimeout = 60; // 处理超时时间（秒）
         $currentTime = time();
 
-        // ✅ 执行 Lua 脚本（优先使用 EVALSHA，减少网络传输 70%）
+        // 🔍 诊断：检查队列状态（执行Lua之前）
         $redis = self::redis();
+        $queueSize = $redis->zCard($queueKey);
+        Log::channel('game_bet_record')->debug('[getPendingSyncRecords] 执行前队列状态', [
+            'queue_size' => $queueSize,
+            'queue_key' => $queueKey,
+        ]);
+
+        // ✅ 执行 Lua 脚本（优先使用 EVALSHA，减少网络传输 70%）
         $keys = self::evalScript($redis, self::LUA_GET_PENDING_RECORDS, [$queueKey], [$limit, $currentTime, $processTimeout]);
+
+        // 🔍 诊断：检查Lua脚本返回结果
+        Log::channel('game_bet_record')->debug('[getPendingSyncRecords] Lua脚本执行结果', [
+            'returned_keys_count' => is_array($keys) ? count($keys) : 0,
+            'keys' => $keys,
+        ]);
 
         if (empty($keys)) {
             return [];
