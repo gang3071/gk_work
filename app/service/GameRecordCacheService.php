@@ -2,7 +2,6 @@
 
 namespace app\service;
 
-use support\Log;
 use support\Redis;
 
 /**
@@ -32,9 +31,15 @@ class GameRecordCacheService
 
     /**
      * Lua 脚本 SHA1 缓存（避免重复加载脚本，提升性能）
-     * @var array
+     * @var array<string, bool>
      */
     private static $scriptShas = [];
+
+    /**
+     * SCRIPT LOAD 不可用标记（避免重复尝试失败的命令）
+     * @var bool
+     */
+    private static $scriptLoadDisabled = false;
 
     /**
      * Lua 脚本：原子获取并标记待同步记录（性能优化版）
@@ -97,6 +102,12 @@ LUA;
     /**
      * 执行 Lua 脚本（优先使用 EVALSHA，性能提升 50-70%）
      *
+     * 改进的自动降级机制（解决 EVALSHA 持续失败问题）：
+     * 1. 首次调用：使用 SCRIPT LOAD 预加载脚本到 Redis
+     * 2. 后续调用：使用 EVALSHA（快速执行）
+     * 3. EVALSHA 失败：检测返回值/异常，自动降级到 EVAL 并重新加载脚本
+     * 4. 防止循环失败：延迟标记策略，只有成功后才缓存 SHA
+     *
      * @param \Redis $redis Redis 连接对象
      * @param string $script Lua 脚本内容
      * @param array $keys KEYS 参数
@@ -106,70 +117,87 @@ LUA;
      */
     private static function evalScript($redis, string $script, array $keys, array $argv)
     {
-        // 第一次执行：使用 SCRIPT LOAD 加载脚本，获得 SHA
+        // 计算脚本的 SHA1
         $sha = sha1($script);
 
-        if (!isset(self::$scriptShas[$sha])) {
+        // ✅ 第一步：如果脚本未加载且 SCRIPT LOAD 可用，先预加载
+        if (!isset(self::$scriptShas[$sha]) && !self::$scriptLoadDisabled) {
             try {
-                // 使用 SCRIPT LOAD 加载脚本到 Redis，返回 SHA1
+                // 预加载脚本到 Redis（避免首次 EVALSHA 失败）
                 $loadedSha = $redis->script('load', $script);
 
-                // 验证 SHA 是否一致
+                // 验证 SHA 一致性
                 if ($loadedSha !== $sha) {
-                    \support\Log::warning('Redis SCRIPT LOAD 返回的 SHA 与计算值不一致', [
+                    \support\Log::warning('SCRIPT LOAD 返回的 SHA 与计算值不一致', [
                         'expected' => substr($sha, 0, 8),
                         'actual' => substr($loadedSha, 0, 8),
                     ]);
                 }
 
-                // 标记为已加载
-                self::$scriptShas[$sha] = true;
+                // ⚠️ 延迟标记：稍后在 EVALSHA 成功后再标记
             } catch (\RedisException $e) {
-                // 加载失败，直接使用 EVAL（不记录日志，静默降级）
+                // SCRIPT LOAD 失败，标记为不可用（避免反复尝试）
+                self::$scriptLoadDisabled = true;
+
+                \support\Log::warning('SCRIPT LOAD 不可用，所有脚本将使用 EVAL 模式', [
+                    'error' => $e->getMessage(),
+                ]);
+
+                // 降级到 EVAL
                 return self::evalWithoutCache($redis, $script, $keys, $argv);
             }
         }
 
-        // 使用 EVALSHA 执行脚本
-        try {
-            $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+        // ✅ 第二步：如果 SHA 已缓存或刚加载，尝试使用 EVALSHA 快速执行
+        if (isset(self::$scriptShas[$sha]) || !self::$scriptLoadDisabled) {
+            try {
+                $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
 
-            // 🔍 诊断：记录EVALSHA调用和返回结果
-            Log::channel('game_bet_record')->debug('[evalScript] EVALSHA执行成功', [
-                'sha' => substr($sha, 0, 8),
-                'keys_count' => count($keys),
-                'argv_count' => count($argv),
-                'result_type' => gettype($result),
-                'result_is_array' => is_array($result),
-                'result_value' => $result,
-            ]);
+                // ✅ 关键防御：检查返回值是否为 false
+                // Illuminate Redis 在脚本不存在时可能返回 false 而不抛异常
+                if ($result === false) {
+                    $lastError = $redis->getLastError();
 
-            return $result;
-        } catch (\RedisException $e) {
-            // 检查是否是 NOSCRIPT 错误（脚本在 Redis 中不存在）
-            $errorMsg = $e->getMessage();
-            if (strpos($errorMsg, 'NOSCRIPT') !== false) {
-                // Redis 可能重启了，清除 PHP 端缓存，下次会重新加载
+                    // 检查是否真的是脚本失效（NOSCRIPT 或其他错误）
+                    if ($lastError && strpos($lastError, 'NOSCRIPT') !== false) {
+                        // 脚本已失效，清除缓存并降级到 EVAL
+                        unset(self::$scriptShas[$sha]);
+                        return self::evalWithoutCache($redis, $script, $keys, $argv);
+                    }
+
+                    // 如果不是 NOSCRIPT 错误，false 可能是合法的返回值（空数组）
+                    // 但为了保险，仍然标记 SHA 为已加载
+                    self::$scriptShas[$sha] = true;
+                    return $result;
+                }
+
+                // ✅ 成功执行，标记 SHA 为已加载（下次直接使用 EVALSHA）
+                self::$scriptShas[$sha] = true;
+                return $result;
+
+            } catch (\RedisException $e) {
+                // EVALSHA 抛出异常（脚本不存在或其他错误）
+                $errorMsg = $e->getMessage();
+
+                // 清除 SHA 缓存
                 unset(self::$scriptShas[$sha]);
 
-                // 本次直接使用 EVAL 执行（静默降级，不记录日志）
+                // 降级到 EVAL
+                \support\Log::warning('EVALSHA 执行失败，降级到 EVAL', [
+                    'sha' => substr($sha, 0, 8),
+                    'error' => substr($errorMsg, 0, 100),
+                ]);
+
                 return self::evalWithoutCache($redis, $script, $keys, $argv);
             }
-
-            // 其他错误：记录日志并抛出异常
-            \support\Log::error('EVALSHA 执行失败', [
-                'sha' => substr($sha, 0, 8),
-                'error' => $errorMsg,
-                'keys' => $keys,
-                'argv' => $argv,
-            ]);
-
-            throw new \RuntimeException('Redis Lua 脚本执行失败: ' . $errorMsg, 0, $e);
         }
+
+        // ✅ 第三步：如果 SCRIPT LOAD 不可用，直接使用 EVAL
+        return self::evalWithoutCache($redis, $script, $keys, $argv);
     }
 
     /**
-     * 直接使用 EVAL 执行脚本（不使用缓存）
+     * 直接使用 EVAL 执行脚本（不使用 SHA 缓存）
      *
      * @param \Redis $redis
      * @param string $script
@@ -181,9 +209,15 @@ LUA;
     private static function evalWithoutCache($redis, string $script, array $keys, array $argv)
     {
         try {
-            return $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+            $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+
+            // ⚠️ EVAL 成功后不立即标记 SHA
+            // 下次调用会重新走 SCRIPT LOAD + EVALSHA 流程
+            // 这样可以在 Redis 重启后自动恢复 EVALSHA 优化
+
+            return $result;
         } catch (\RedisException $e) {
-            \support\Log::error('Redis EVAL 执行失败', [
+            \support\Log::error('Redis Lua 脚本执行失败（EVAL）', [
                 'error' => $e->getMessage(),
                 'keys_count' => count($keys),
                 'argv_count' => count($argv),
@@ -240,32 +274,8 @@ LUA;
         self::redis()->hMSet($key, $record);
         self::redis()->expire($key, self::TTL_RECORD);
 
-        // 🔍 诊断日志：验证 balance 快照是否写入（调试级别，避免高并发日志膨胀）
-        Log::channel('game_bet_record')->debug('[saveBet] 写入余额快照', [
-            'key' => $key,
-            'balance_before' => $data['balance_before'] ?? 'NULL',
-            'balance_after' => $data['balance_after'] ?? 'NULL',
-        ]);
-
         // 加入同步队列
-        try {
-            $zAddResult = self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
-
-            // 🔍 诊断日志：验证是否成功加入队列
-            Log::channel('game_bet_record')->debug('[saveBet] 加入同步队列', [
-                'key' => $key,
-                'queue_key' => self::PREFIX_SYNC_QUEUE,
-                'zAdd_result' => $zAddResult,
-                'timestamp' => time(),
-            ]);
-        } catch (\Throwable $e) {
-            // ❌ 记录队列写入失败（这是严重问题！）
-            Log::channel('game_bet_record')->error('[saveBet] ❌ 加入同步队列失败', [
-                'key' => $key,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-        }
+        self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $key);
 
         // 记录统计
         self::redis()->incr("game:stats:{$platform}:bet:count");
@@ -373,81 +383,9 @@ LUA;
         $processTimeout = 60; // 处理超时时间（秒）
         $currentTime = time();
 
-        // 🔍 诊断：检查队列状态（执行Lua之前）
-        $redis = self::redis();
-        $queueSize = $redis->zCard($queueKey);
-
-        // 🔍 诊断：检查前3条记录的实际状态
-        $sampleKeys = $redis->zRange($queueKey, 0, 2);
-        $sampleStatuses = [];
-        foreach ($sampleKeys as $sampleKey) {
-            $exists = $redis->exists($sampleKey);
-            $status = $exists ? $redis->hGet($sampleKey, 'status') : 'KEY_NOT_EXISTS';
-            $processingTime = $exists ? $redis->hGet($sampleKey, 'processing_time') : null;
-            $sampleStatuses[] = [
-                'key' => $sampleKey,
-                'exists' => $exists,
-                'status' => $status,
-                'processing_time' => $processingTime,
-            ];
-        }
-
-        Log::channel('game_bet_record')->debug('[getPendingSyncRecords] 执行前队列状态', [
-            'queue_size' => $queueSize,
-            'queue_key' => $queueKey,
-            'sample_records' => $sampleStatuses,
-        ]);
-
         // ✅ 执行 Lua 脚本（优先使用 EVALSHA，减少网络传输 70%）
-        try {
-            $keys = self::evalScript($redis, self::LUA_GET_PENDING_RECORDS, [$queueKey], [$limit, $currentTime, $processTimeout]);
-
-            // 🔍 诊断：检查Lua脚本返回结果
-            Log::channel('game_bet_record')->debug('[getPendingSyncRecords] Lua脚本执行结果', [
-                'returned_keys_count' => is_array($keys) ? count($keys) : 0,
-                'keys_type' => gettype($keys),
-                'keys' => $keys,
-            ]);
-        } catch (\Throwable $e) {
-            Log::channel('game_bet_record')->error('[getPendingSyncRecords] ❌ Lua脚本执行异常', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-            $keys = false;
-        }
-
-        // 🔧 临时修复：如果Lua脚本返回false，直接用PHP代码处理
-        if ($keys === false || !is_array($keys)) {
-            Log::channel('game_bet_record')->warning('[getPendingSyncRecords] ⚠️ Lua脚本返回非数组，使用PHP fallback', [
-                'keys_type' => gettype($keys),
-                'keys_value' => $keys,
-            ]);
-
-            // 直接获取队列前N条记录
-            $queueItems = $redis->zRange($queueKey, 0, $limit - 1);
-            $keys = [];
-
-            foreach ($queueItems as $key) {
-                if (!$redis->exists($key)) {
-                    continue;
-                }
-
-                $status = $redis->hGet($key, 'status');
-                $processingTime = (int)($redis->hGet($key, 'processing_time') ?: 0);
-
-                // 只处理 pending 状态，或处理超时的记录
-                if ($status === 'pending' || ($status === 'processing' && $currentTime - $processingTime > $processTimeout)) {
-                    // 标记为处理中
-                    $redis->hSet($key, 'status', 'processing');
-                    $redis->hSet($key, 'processing_time', $currentTime);
-                    $keys[] = $key;
-                }
-            }
-
-            Log::channel('game_bet_record')->info('[getPendingSyncRecords] PHP fallback处理完成', [
-                'found_keys' => count($keys),
-            ]);
-        }
+        $redis = self::redis();
+        $keys = self::evalScript($redis, self::LUA_GET_PENDING_RECORDS, [$queueKey], [$limit, $currentTime, $processTimeout]);
 
         if (empty($keys)) {
             return [];
@@ -459,15 +397,6 @@ LUA;
             $data = self::redis()->hGetAll($key);
             if (!empty($data)) {
                 $data['redis_key'] = $key;
-
-                // 🔍 诊断日志：记录 SyncWorker 读到的原始数据（调试级别）
-                Log::channel('game_bet_record')->debug('[getPendingSyncRecords] 读取记录', [
-                    'key' => $key,
-                    'balance_before' => $data['balance_before'] ?? 'NOT_IN_HASH',
-                    'balance_after' => $data['balance_after'] ?? 'NOT_IN_HASH',
-                    'platform' => $data['platform'] ?? 'unknown',
-                ]);
-
                 $records[] = $data;
             }
         }
