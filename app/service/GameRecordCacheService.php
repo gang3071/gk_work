@@ -105,7 +105,7 @@ LUA;
      */
     private static function evalScript(string $script, array $keys, array $argv)
     {
-        // 获取 Redis 连接（在 webman 中直接返回原生 \Redis 对象）
+        // 获取 Redis 连接（Illuminate Redis 或原生 PhpRedis）
         $redis = self::redis();
 
         // 计算脚本的 SHA1
@@ -114,8 +114,8 @@ LUA;
         // 如果已经加载过，直接使用 EVALSHA（节省网络传输）
         if (isset(self::$scriptShas[$sha])) {
             try {
-                // 原生 PhpRedis 的 evalSha 调用方式：evalSha($sha, [$keys...], $numKeys)
-                $result = $redis->evalSha($sha, array_merge($keys, $argv), count($keys));
+                // Illuminate Redis 的 evalSha 调用方式：evalSha($sha, $numKeys, ...$keysAndArgs)
+                $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
 
                 // 检查 EVALSHA 返回值，false 表示脚本不存在或执行失败
                 if ($result === false) {
@@ -129,7 +129,7 @@ LUA;
                 } else {
                     return $result;
                 }
-            } catch (\RedisException $e) {
+            } catch (\Exception $e) {
                 // SHA 可能已过期（Redis 重启或脚本被清除），重新加载
                 \support\Log::warning('Redis Lua 脚本 SHA 失效，降级到 EVAL', [
                     'sha' => substr($sha, 0, 8),
@@ -141,14 +141,14 @@ LUA;
 
         // 第一次执行或 SHA 失效：使用 EVAL
         try {
-            // 原生 PhpRedis 的 eval 调用方式：eval($script, [$keys...], $numKeys)
-            $result = $redis->eval($script, array_merge($keys, $argv), count($keys));
+            // Illuminate Redis 的 eval 调用方式：eval($script, $numKeys, ...$keysAndArgs)
+            $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
 
             // 标记为已加载
             self::$scriptShas[$sha] = true;
 
             return $result;
-        } catch (\RedisException $e) {
+        } catch (\Exception $e) {
             \support\Log::error('Redis Lua 脚本执行失败', [
                 'error' => $e->getMessage(),
                 'sha' => substr($sha, 0, 8),
