@@ -107,3 +107,4 @@ config/**/*.bak.*
 D:*
 *diagnose_*
 redis_monitor_analysis.sh
+debug_scripts/
