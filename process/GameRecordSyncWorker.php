@@ -600,6 +600,11 @@ class GameRecordSyncWorker
             if ($needUpdate) {
                 $existing->save();
                 $updated++;
+
+                // ✅ 标记为已同步，从 Redis 队列移除
+                if (isset($record['redis_key'])) {
+                    GameRecordCacheService::markAsSynced($record['redis_key'], $existing->id);
+                }
             }
         }
 
