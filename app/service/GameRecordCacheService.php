@@ -235,19 +235,16 @@ LUA;
         $betExists = self::redis()->exists($betKey);
 
         if ($betExists) {
-            // 更新 bet 记录
-            $betAmount = self::redis()->hGet($betKey, 'amount') ?? 0;
-
+            // ⚠️ 关键：不覆盖 Lua 保存的 win/diff（Lua 已经正确保存为"分"）
+            // 只追加 settlement_status, action_data 等补充信息
             self::redis()->hMSet($betKey, [
-                'win' => $data['amount'],
-                'diff' => $data['diff'] ?? bcsub($data['amount'], $betAmount, 2),
                 'settlement_status' => 1,  // 已结算
                 'settle_type' => $data['settle_type'] ?? 'settle',  // settle | refund | jackpot | adjust | reward
                 'settle_time' => time(),
                 'platform_action_at' => date('Y-m-d H:i:s'),
                 'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',  // 重新标记待同步
-                // ✅ 不覆盖 balance_before/after — 保持下注时 Lua 记录的余额快照
+                // ✅ 不覆盖 Lua 保存的 win/diff/balance_before/balance_after
             ]);
 
             // 更新同步队列（提升优先级）
