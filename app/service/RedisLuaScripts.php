@@ -868,11 +868,6 @@ LUA;
                     'bet_amount' => $validation['bet_amount'],
                     'message' => $validation['message'],
                 ]);
-
-                // 🔴 可选：如果要严格拒绝，取消下面的注释
-                // throw new \InvalidArgumentException(
-                //     sprintf('[atomicCancel] %s', $validation['message'])
-                // );
             }
         }
 
