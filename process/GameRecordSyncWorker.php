@@ -76,6 +76,39 @@ class GameRecordSyncWorker
     }
 
     /**
+     * 获取平台专属 logger
+     */
+    private function getPlatformLogger(string $platform): \Monolog\Logger
+    {
+        static $loggers = [];
+
+        if (isset($loggers[$platform])) {
+            return $loggers[$platform];
+        }
+
+        // 平台与 log channel 的映射
+        $channelMap = [
+            'RSG' => 'rsg_server',
+            'ATG' => 'atg_server',
+            'MT' => 'mt_server',
+            'DG' => 'dg_server',
+            'SA' => 'sa_server',
+            'SP' => 'sp_server',
+            'O8' => 'o8_server',
+            'QT' => 'qt_server',
+            'BTG' => 'btg_server',
+            'KT' => 'kt_server',
+            'T9' => 't9_server',
+            'T9SLOT' => 't9_slot_server',
+        ];
+
+        $channel = $channelMap[$platform] ?? 'game_bet_record';
+        $loggers[$platform] = Log::channel($channel);
+
+        return $loggers[$platform];
+    }
+
+    /**
      * Worker 启动时回调
      */
     public function onWorkerStart(Worker $worker): void
@@ -367,30 +400,6 @@ class GameRecordSyncWorker
                 continue;
             }
 
-            // 🔍 DEBUG: Worker 批量插入前的数据
-            $platform = $record['platform'] ?? '';
-            if ($platform === 'MT' || $platform === 'DG' || $platform === 'RSG') {
-                $this->log->info('🔍 [单位追踪-6] Worker 批量插入前的记录', [
-                    'platform' => $platform,
-                    'order_no' => $record['order_no'],
-                    'amount' => $record['amount'] ?? null,
-                    'win' => $record['win'] ?? null,
-                    'diff' => $record['diff'] ?? null,
-                    'balance_before' => $record['balance_before'] ?? null,
-                    'balance_after' => $record['balance_after'] ?? null,
-                ]);
-            }
-
-            // 🔍 DEBUG: 记录 Redis 中的原始值
-            $this->log->info('🔍 [金额追踪-Redis原始] SyncWorker 从 Redis 读取的原始数据', [
-                'order_no' => $record['order_no'],
-                'amount_cents' => $record['amount'] ?? null,
-                'win_cents' => $record['win'] ?? null,
-                'diff_cents' => $record['diff'] ?? null,
-                'balance_before_cents' => $record['balance_before'] ?? null,
-                'balance_after_cents' => $record['balance_after'] ?? null,
-            ]);
-
             // 🎯 单位转换：Redis 存储的是"分"（整数），MySQL 需要"元"（小数）
             // amount/win/diff 存储为"分"，需要转换为"元"
             $amountInYuan = isset($record['amount']) ? round($record['amount'] / 100, 2) : 0;
@@ -402,14 +411,19 @@ class GameRecordSyncWorker
             $balanceAfterInYuan = isset($record['balance_after']) && $record['balance_after'] !== ''
                 ? round($record['balance_after'], 2) : null;
 
-            // 🔍 DEBUG: 记录转换后的值
-            $this->log->info('🔍 [金额追踪-转换后] SyncWorker 转换后准备入库的数据', [
+            // 🔍 统一日志：记录转换后的值（使用平台专属 logger）
+            $platform = $record['platform'] ?? '';
+            $platformLogger = $this->getPlatformLogger($platform);
+            $platformLogger->info('💰 [金额流转-同步] Redis → Database', [
                 'order_no' => $record['order_no'],
+                'amount_cents' => $record['amount'] ?? null,
                 'amount_yuan' => $amountInYuan,
+                'win_cents' => $record['win'] ?? null,
                 'win_yuan' => $winInYuan,
+                'diff_cents' => $record['diff'] ?? null,
                 'diff_yuan' => $diffInYuan,
-                'balance_before_yuan' => $balanceBeforeInYuan,
-                'balance_after_yuan' => $balanceAfterInYuan,
+                'balance_before' => $balanceBeforeInYuan,
+                'balance_after' => $balanceAfterInYuan,
             ]);
 
             $insertData[] = [
@@ -434,20 +448,6 @@ class GameRecordSyncWorker
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
-
-            // 🔍 DEBUG: Worker 转换后准备插入 MySQL 的数据
-            if ($platform === 'MT' || $platform === 'DG' || $platform === 'RSG') {
-                $this->log->info('🔍 [单位追踪-7] Worker 转换后准备插入 MySQL', [
-                    'platform' => $platform,
-                    'order_no' => $record['order_no'],
-                    'redis_amount(分)' => $record['amount'] ?? null,
-                    'mysql_bet(元)' => $amountInYuan,
-                    'redis_win(分)' => $record['win'] ?? null,
-                    'mysql_win(元)' => $winInYuan,
-                    'redis_balance_before(分)' => $record['balance_before'] ?? null,
-                    'mysql_balance_before(元)' => $balanceBeforeInYuan,
-                ]);
-            }
 
             // 5. 同步钱包余额（使用 Lua 脚本执行时的余额快照，而非当前 Redis 余额）
             $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);

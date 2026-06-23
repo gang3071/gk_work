@@ -701,9 +701,10 @@ LUA;
      *   - original_data: 原始数据（可选）
      *   - allow_duplicate_settle: 允许二次结算（可选，布尔值，用于补单场景）
      * @return array
+     * @param \Monolog\Logger|null $logger 可选的日志实例（用于平台专属日志）
      * @throws \InvalidArgumentException 参数验证失败时抛出
      */
-    public static function atomicSettle(int $playerId, string $platform, array $data): array
+    public static function atomicSettle(int $playerId, string $platform, array $data, ?\Monolog\Logger $logger = null): array
     {
         // 参数验证
         validateLuaScriptParams($data, [
@@ -725,14 +726,17 @@ LUA;
         $winAmountInCents = (int)round($winAmount * 100);
         $diffInCents = (int)round($diff * 100);
 
-        // 🔍 DEBUG: 记录转换前后的金额
-        \support\Log::info('🔍 [金额追踪-结算入口] atomicSettle 接收到的金额', [
-            'order_no' => $orderNo,
-            'win_amount_yuan' => $winAmount,
-            'win_amount_cents' => $winAmountInCents,
-            'diff_yuan' => $diff,
-            'diff_cents' => $diffInCents,
-        ]);
+        // 🔍 统一日志：记录金额转换
+        if ($logger) {
+            $logger->info('💰 [金额流转-结算] 第三方 → Lua', [
+                'order_no' => $orderNo,
+                'win_yuan' => $winAmount,
+                'win_cents' => $winAmountInCents,
+                'diff_yuan' => $diff,
+                'diff_cents' => $diffInCents,
+                'player_id' => $playerId,
+            ]);
+        }
 
         // 准备 Keys
         $keys = [

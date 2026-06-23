@@ -2084,7 +2084,7 @@ function getPlatformIdByCode(string $platform): ?int
  * @param int|null $platformId 平台ID（可选，传入后避免子查询）
  * @return float 下注金额，如果未找到返回 0
  */
-function getBetAmountWithFallback(string $platform, string $orderNo, ?int $playerId = null, ?int $platformId = null): float
+function getBetAmountWithFallback(string $platform, string $orderNo, ?int $playerId = null, ?int $platformId = null, ?\Monolog\Logger $logger = null): float
 {
     $startTime = microtime(true);
     $betAmount = 0;
@@ -2101,12 +2101,15 @@ function getBetAmountWithFallback(string $platform, string $orderNo, ?int $playe
             $betAmount = round((float)$betRecord['amount'] / 100, 2);
             $source = 'redis';
 
-            // 🔍 DEBUG: 记录转换
-            \support\Log::info('🔍 [金额追踪-查询下注] getBetAmountWithFallback 从 Redis 读取', [
-                'order_no' => $orderNo,
-                'amount_cents' => $amountInCents,
-                'amount_yuan' => $betAmount,
-            ]);
+            // 🔍 统一日志：记录转换
+            if ($logger) {
+                $logger->info('💰 [金额流转-查询] Redis → Controller', [
+                    'order_no' => $orderNo,
+                    'amount_cents' => $amountInCents,
+                    'amount_yuan' => $betAmount,
+                    'source' => 'redis',
+                ]);
+            }
         } else {
             // 2️⃣ Redis 未命中，从数据库降级查询
             $query = \app\model\PlayGameRecord::query()
