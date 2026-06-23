@@ -511,10 +511,11 @@ LUA;
      *   - game_code: 游戏代码（可选）
      *   - transaction_type: 交易类型（必需）
      *   - original_data: 原始数据（可选）
+     * @param \Monolog\Logger|null $logger 可选的日志实例（用于平台专属日志）
      * @return array 返回结果 {ok: 1, balance: xxx} 或 {ok: 0, error: xxx}
      * @throws \InvalidArgumentException 参数验证失败时抛出
      */
-    public static function atomicBet(int $playerId, string $platform, array $data): array
+    public static function atomicBet(int $playerId, string $platform, array $data, ?\Monolog\Logger $logger = null): array
     {
         // 参数验证
         validateLuaScriptParams($data, [
@@ -529,21 +530,18 @@ LUA;
         $transactionType = $data['transaction_type'] ?? TransactionType::mapFromLegacy($data);
         $createdAt = date('Y-m-d H:i:s');
 
-        // 🔍 DEBUG: 记录转换前的金额
-        \support\Log::info('🔍 [单位追踪-3] atomicBet 接收到的金额', [
-            'order_no' => $orderNo,
-            'betAmount_raw' => $betAmount,
-            'betAmount_type' => gettype($betAmount),
-        ]);
-
         // 第三方传来的是"元"，转换为"分"传给 Lua
         $betAmountInCents = (int)round($betAmount * 100);
 
-        // 🔍 DEBUG: 记录转换后的金额
-        \support\Log::info('🔍 [单位追踪-4] atomicBet 转换后传给 Lua', [
-            'order_no' => $orderNo,
-            'betAmountInCents' => $betAmountInCents,
-        ]);
+        // 🔍 统一日志：记录金额转换
+        if ($logger) {
+            $logger->info('💰 [金额流转-下注] 第三方 → Lua', [
+                'order_no' => $orderNo,
+                'amount_yuan' => $betAmount,
+                'amount_cents' => $betAmountInCents,
+                'player_id' => $playerId,
+            ]);
+        }
 
         // 准备 Keys
         $keys = [
@@ -587,11 +585,13 @@ LUA;
 
         $result = self::evalScript($redis, self::LUA_ATOMIC_BET, $keys, $argv);
 
-        // 🔍 DEBUG: Lua 脚本执行完毕，记录返回值
-        \support\Log::info('🔍 [金额追踪-Lua返回] atomicBet Lua 脚本返回', [
-            'order_no' => $orderNo,
-            'result_raw' => $result,
-        ]);
+        // 🔍 统一日志：Lua 返回值
+        if ($logger) {
+            $logger->debug('[金额流转-下注] Lua 返回原始值', [
+                'order_no' => $orderNo,
+                'result' => $result,
+            ]);
+        }
 
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
@@ -657,14 +657,16 @@ LUA;
                 $decoded['old_balance'] = round((int)$decoded['old_balance'] / 100, 2);
             }
 
-            // 🔍 DEBUG: 记录转换后的余额
-            \support\Log::info('🔍 [金额追踪-返回转换] atomicBet 返回值转换', [
-                'order_no' => $orderNo,
-                'balance_in_cents' => $balanceInCents,
-                'balance_in_yuan' => $decoded['balance'] ?? 0,
-                'old_balance_in_cents' => $oldBalanceInCents,
-                'old_balance_in_yuan' => $decoded['old_balance'] ?? 0,
-            ]);
+            // 🔍 统一日志：返回值转换
+            if ($logger) {
+                $logger->info('💰 [金额流转-下注] Lua → Controller', [
+                    'order_no' => $orderNo,
+                    'balance_cents' => $balanceInCents,
+                    'balance_yuan' => $decoded['balance'] ?? 0,
+                    'old_balance_cents' => $oldBalanceInCents,
+                    'old_balance_yuan' => $decoded['old_balance'] ?? 0,
+                ]);
+            }
 
             // ✅ 实时推送：发布余额变化消息到 Redis Pub/Sub
             self::publishBalanceChange($playerId, $platform, [
