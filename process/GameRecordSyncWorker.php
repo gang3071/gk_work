@@ -392,15 +392,15 @@ class GameRecordSyncWorker
             ]);
 
             // 🎯 单位转换：Redis 存储的是"分"（整数），MySQL 需要"元"（小数）
-            // amount/win/diff/balance_before/balance_after 全部存储为"分"，需要转换为"元"
+            // amount/win/diff 存储为"分"，需要转换为"元"
             $amountInYuan = isset($record['amount']) ? round($record['amount'] / 100, 2) : 0;
             $winInYuan = isset($record['win']) ? round($record['win'] / 100, 2) : 0;
             $diffInYuan = isset($record['diff']) ? round($record['diff'] / 100, 2) : 0;
-            // ✅ balance_before/after 也是"分"（从 wallet:balance 复制），需要除以100
+            // ⚠️ balance_before/after 已经被 enrichInsertRecords 转换为"元"，不需要再除以100
             $balanceBeforeInYuan = isset($record['balance_before']) && $record['balance_before'] !== ''
-                ? round($record['balance_before'] / 100, 2) : null;
+                ? round($record['balance_before'], 2) : null;
             $balanceAfterInYuan = isset($record['balance_after']) && $record['balance_after'] !== ''
-                ? round($record['balance_after'] / 100, 2) : null;
+                ? round($record['balance_after'], 2) : null;
 
             // 🔍 DEBUG: 记录转换后的值
             $this->log->info('🔍 [金额追踪-转换后] SyncWorker 转换后准备入库的数据', [
@@ -562,7 +562,8 @@ class GameRecordSyncWorker
                 }
                 // 更新 balance_after 为最新余额（balance_before 保持首次下注前的值不变）
                 if (isset($record['balance_after']) && $record['balance_after'] !== '') {
-                    // ✅ balance_after 是"分"，转换为"元"
+                    // ⚠️ balance_after 在这里还是 Redis 原始值（分），需要除以100
+                    // 因为 updateMergedBetBalance 没有经过 enrichInsertRecords 转换
                     $balanceAfterInYuan = round($record['balance_after'] / 100, 2);
 
                     if ($balanceAfterInYuan != $existing->balance_after) {
