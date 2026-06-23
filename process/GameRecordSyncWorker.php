@@ -381,6 +381,16 @@ class GameRecordSyncWorker
                 ]);
             }
 
+            // 🔍 DEBUG: 记录 Redis 中的原始值
+            $this->log->info('🔍 [金额追踪-Redis原始] SyncWorker 从 Redis 读取的原始数据', [
+                'order_no' => $record['order_no'],
+                'amount_cents' => $record['amount'] ?? null,
+                'win_cents' => $record['win'] ?? null,
+                'diff_cents' => $record['diff'] ?? null,
+                'balance_before_cents' => $record['balance_before'] ?? null,
+                'balance_after_cents' => $record['balance_after'] ?? null,
+            ]);
+
             // 🎯 单位转换：Redis 存储的是"分"（整数），MySQL 需要"元"（小数）
             // amount/win/diff/balance_before/balance_after 全部存储为"分"，需要转换为"元"
             $amountInYuan = isset($record['amount']) ? round($record['amount'] / 100, 2) : 0;
@@ -391,6 +401,16 @@ class GameRecordSyncWorker
                 ? round($record['balance_before'] / 100, 2) : null;
             $balanceAfterInYuan = isset($record['balance_after']) && $record['balance_after'] !== ''
                 ? round($record['balance_after'] / 100, 2) : null;
+
+            // 🔍 DEBUG: 记录转换后的值
+            $this->log->info('🔍 [金额追踪-转换后] SyncWorker 转换后准备入库的数据', [
+                'order_no' => $record['order_no'],
+                'amount_yuan' => $amountInYuan,
+                'win_yuan' => $winInYuan,
+                'diff_yuan' => $diffInYuan,
+                'balance_before_yuan' => $balanceBeforeInYuan,
+                'balance_after_yuan' => $balanceAfterInYuan,
+            ]);
 
             $insertData[] = [
                 'player_id' => $playerId,

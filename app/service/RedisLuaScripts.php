@@ -587,6 +587,12 @@ LUA;
 
         $result = self::evalScript($redis, self::LUA_ATOMIC_BET, $keys, $argv);
 
+        // 🔍 DEBUG: Lua 脚本执行完毕，记录返回值
+        \support\Log::info('🔍 [金额追踪-Lua返回] atomicBet Lua 脚本返回', [
+            'order_no' => $orderNo,
+            'result_raw' => $result,
+        ]);
+
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
             // ✅ 新增：详细记录返回值为空时的上下文信息
@@ -641,12 +647,24 @@ LUA;
             }
 
             // ✅ 整数化：将"分"转换回"元"
+            $balanceInCents = $decoded['balance'] ?? 0;
+            $oldBalanceInCents = $decoded['old_balance'] ?? 0;
+
             if (isset($decoded['balance'])) {
                 $decoded['balance'] = round((int)$decoded['balance'] / 100, 2);
             }
             if (isset($decoded['old_balance'])) {
                 $decoded['old_balance'] = round((int)$decoded['old_balance'] / 100, 2);
             }
+
+            // 🔍 DEBUG: 记录转换后的余额
+            \support\Log::info('🔍 [金额追踪-返回转换] atomicBet 返回值转换', [
+                'order_no' => $orderNo,
+                'balance_in_cents' => $balanceInCents,
+                'balance_in_yuan' => $decoded['balance'] ?? 0,
+                'old_balance_in_cents' => $oldBalanceInCents,
+                'old_balance_in_yuan' => $decoded['old_balance'] ?? 0,
+            ]);
 
             // ✅ 实时推送：发布余额变化消息到 Redis Pub/Sub
             self::publishBalanceChange($playerId, $platform, [
@@ -704,6 +722,15 @@ LUA;
         // 第三方传来的是"元"，转换为"分"传给 Lua
         $winAmountInCents = (int)round($winAmount * 100);
         $diffInCents = (int)round($diff * 100);
+
+        // 🔍 DEBUG: 记录转换前后的金额
+        \support\Log::info('🔍 [金额追踪-结算入口] atomicSettle 接收到的金额', [
+            'order_no' => $orderNo,
+            'win_amount_yuan' => $winAmount,
+            'win_amount_cents' => $winAmountInCents,
+            'diff_yuan' => $diff,
+            'diff_cents' => $diffInCents,
+        ]);
 
         // 准备 Keys
         $keys = [

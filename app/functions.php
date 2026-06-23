@@ -2097,8 +2097,16 @@ function getBetAmountWithFallback(string $platform, string $orderNo, ?int $playe
 
         if (!empty($betRecord) && isset($betRecord['amount'])) {
             // Redis 的 amount 是"分"，转换为"元"
+            $amountInCents = $betRecord['amount'];
             $betAmount = round((float)$betRecord['amount'] / 100, 2);
             $source = 'redis';
+
+            // 🔍 DEBUG: 记录转换
+            \support\Log::info('🔍 [金额追踪-查询下注] getBetAmountWithFallback 从 Redis 读取', [
+                'order_no' => $orderNo,
+                'amount_cents' => $amountInCents,
+                'amount_yuan' => $betAmount,
+            ]);
         } else {
             // 2️⃣ Redis 未命中，从数据库降级查询
             $query = \app\model\PlayGameRecord::query()
