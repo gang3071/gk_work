@@ -575,20 +575,6 @@ LUA;
 
         // 检查 Redis 返回值
         if ($result === null || $result === false) {
-            // ✅ 新增：详细记录返回值为空时的上下文信息
-            \support\Log::error('[atomicBet] Lua 脚本返回值为空 - 详细诊断', [
-                'player_id' => $playerId,
-                'platform' => $platform,
-                'order_no' => $orderNo,
-                'bet_amount' => $betAmount,
-                'bet_amount_cents' => $betAmountInCents,
-                'result_type' => gettype($result),
-                'result_value' => var_export($result, true),
-                'redis_connected' => $redis->isConnected() ? 'yes' : 'no',
-                'last_error' => $redis->getLastError(),
-                'keys' => $keys,
-                'argv' => $argv,
-            ]);
             // 清除 lastError
             $redis->clearLastError();
             throw new \RuntimeException(
