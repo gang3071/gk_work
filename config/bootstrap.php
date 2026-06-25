@@ -15,4 +15,6 @@
 return [
     support\bootstrap\Session::class,
     support\bootstrap\LaravelDb::class,
+    // 🚀 Redis Lua 脚本预加载（极致性能优化）
+    support\bootstrap\RedisLuaPreload::class,
 ];
