@@ -120,31 +120,75 @@ LUA;
                 // 检查 EVALSHA 返回值，false 表示脚本不存在或执行失败
                 if ($result === false) {
                     $lastError = $redis->getLastError();
-                    \support\Log::warning('EVALSHA 返回 false，脚本可能已失效，降级到 EVAL', [
-                        'sha' => substr($sha, 0, 8),
-                        'last_error' => $lastError,
-                    ]);
-                    // 清除 SHA 缓存，强制降级到 EVAL
-                    unset(self::$scriptShas[$sha]);
+
+                    // 检查是否是 NOSCRIPT 错误（脚本已被清除，Redis重启等原因）
+                    if ($lastError && strpos($lastError, 'NOSCRIPT') !== false) {
+                        // NOSCRIPT 是正常降级场景，使用 INFO 级别
+                        \support\Log::info('EVALSHA NOSCRIPT，脚本已被清除，自动降级到 EVAL 并重新加载', [
+                            'sha' => substr($sha, 0, 8),
+                        ]);
+                        // 清除 SHA 缓存，下次会重新 SCRIPT LOAD
+                        unset(self::$scriptShas[$sha]);
+                    } else {
+                        // 其他 false 情况才是异常，使用 WARNING
+                        \support\Log::warning('EVALSHA 返回 false（非 NOSCRIPT），可能存在异常', [
+                            'sha' => substr($sha, 0, 8),
+                            'last_error' => $lastError,
+                        ]);
+                        unset(self::$scriptShas[$sha]);
+                    }
                 } else {
                     return $result;
                 }
             } catch (\Exception $e) {
-                // SHA 可能已过期（Redis 重启或脚本被清除），重新加载
-                \support\Log::warning('Redis Lua 脚本 SHA 失效，降级到 EVAL', [
-                    'sha' => substr($sha, 0, 8),
-                    'error' => $e->getMessage(),
-                ]);
+                $errorMsg = $e->getMessage();
+
+                // SHA 可能已过期（Redis 重启或脚本被清除）
+                if (strpos($errorMsg, 'NOSCRIPT') !== false) {
+                    // NOSCRIPT 是正常降级场景
+                    \support\Log::info('Redis Lua 脚本 SHA 失效（NOSCRIPT），自动降级到 EVAL', [
+                        'sha' => substr($sha, 0, 8),
+                    ]);
+                } else {
+                    // 其他异常才使用 WARNING
+                    \support\Log::warning('Redis Lua 脚本执行异常，降级到 EVAL', [
+                        'sha' => substr($sha, 0, 8),
+                        'error' => $errorMsg,
+                    ]);
+                }
                 unset(self::$scriptShas[$sha]);
             }
         }
 
-        // 第一次执行或 SHA 失效：使用 EVAL
+        // 第一次执行或 SHA 失效：使用 SCRIPT LOAD + EVALSHA
         try {
-            // Illuminate Redis 的 eval 调用方式：eval($script, $numKeys, ...$keysAndArgs)
+            // ✅ 优化：先使用 SCRIPT LOAD 加载脚本，下次可以直接用 EVALSHA
+            try {
+                $loadedSha = $redis->script('load', $script);
+                if ($loadedSha === $sha) {
+                    // 加载成功，标记为已加载
+                    self::$scriptShas[$sha] = true;
+
+                    // 使用 EVALSHA 执行
+                    $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+
+                    // 如果返回值不是 false，直接返回
+                    if ($result !== false) {
+                        return $result;
+                    }
+                }
+            } catch (\Exception $loadException) {
+                // SCRIPT LOAD 失败，降级到 EVAL
+                \support\Log::debug('SCRIPT LOAD 失败，降级到 EVAL', [
+                    'sha' => substr($sha, 0, 8),
+                    'error' => $loadException->getMessage(),
+                ]);
+            }
+
+            // 降级：使用 EVAL 执行（适用于 SCRIPT LOAD 失败的情况）
             $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
 
-            // 标记为已加载
+            // EVAL 成功后也标记为已加载（下次尝试 EVALSHA）
             self::$scriptShas[$sha] = true;
 
             return $result;
