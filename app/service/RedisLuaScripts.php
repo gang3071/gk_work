@@ -137,7 +137,10 @@ class RedisLuaScripts
             }
 
             // 设置选项（禁用 Nagle 算法，降低延迟）
-            $redis->setOption(\Redis::OPT_TCP_NODELAY, true);
+            // 注意：OPT_TCP_NODELAY 在某些 PhpRedis 版本中可能不存在
+            if (defined('Redis::OPT_TCP_NODELAY')) {
+                $redis->setOption(\Redis::OPT_TCP_NODELAY, true);
+            }
 
             self::$redisInstance = $redis;
 
