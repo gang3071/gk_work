@@ -240,7 +240,8 @@ LUA;
 
         try {
             // 🚀 极致性能：直接使用 EVALSHA（使用 Redis 返回的 SHA1）
-            $result = $redis->evalSha($redisSha, count($keys), ...array_merge($keys, $argv));
+            // 原生 PhpRedis 参数格式：evalSha($sha, $args, $num_keys)
+            $result = $redis->evalSha($redisSha, array_merge($keys, $argv), count($keys));
 
             // ⚠️ 处理 Illuminate Redis 的 false 返回（PhpRedis 会抛异常）
             if ($result === false) {
@@ -281,7 +282,8 @@ LUA;
                     ]);
 
                     // 使用 Redis 返回的 SHA1 重新执行
-                    return $redis->evalSha($newRedisSha, count($keys), ...array_merge($keys, $argv));
+                    // 原生 PhpRedis 参数格式：evalSha($sha, $args, $num_keys)
+                    return $redis->evalSha($newRedisSha, array_merge($keys, $argv), count($keys));
 
                 } catch (\Exception $reloadException) {
                     // SCRIPT LOAD 失败，最终降级到 EVAL

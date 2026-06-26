@@ -508,7 +508,8 @@ LUA;
 
         try {
             // 🚀 极致性能：直接使用 EVALSHA（使用 Redis 返回的 SHA1）
-            $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+            // 原生 PhpRedis 参数格式：evalSha($sha, $args, $num_keys)
+            $result = $redis->evalSha($sha, array_merge($keys, $argv), count($keys));
 
             // ⚠️ 处理 PhpRedis 的 false 返回
             if ($result === false) {
@@ -566,7 +567,8 @@ LUA;
                     ]);
 
                     // 使用 Redis 返回的 SHA1 重新执行
-                    return $redis->evalSha($newRedisSha, count($keys), ...array_merge($keys, $argv));
+                    // 原生 PhpRedis 参数格式：evalSha($sha, $args, $num_keys)
+                    return $redis->evalSha($newRedisSha, array_merge($keys, $argv), count($keys));
 
                 } catch (\RedisException $reloadException) {
                     // SCRIPT LOAD 失败，最终降级到 EVAL
@@ -603,7 +605,8 @@ LUA;
     private static function evalDirectly($redis, string $script, array $keys, array $argv, float $start)
     {
         try {
-            $result = $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+            // 原生 PhpRedis 参数格式：eval($script, $args, $num_keys)
+            $result = $redis->eval($script, array_merge($keys, $argv), count($keys));
 
             // ✅ 新增：记录 EVAL 返回 false 或 null 的情况
             if ($result === false || $result === null) {
