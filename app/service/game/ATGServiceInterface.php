@@ -850,8 +850,8 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             return $this->error = ATGGameController::API_CODE_DECRYPT_ERROR;
         }
 
-        // 从解密数据中获取玩家
-        $player = Player::query()->where('uuid', $result['username'])->first();
+        // 从解密数据中获取玩家（使用缓存减少数据库查询）
+        $player = \app\service\PlayerCacheService::getByUuid($result['username']);
         if (!$player) {
             return $this->error = ATGGameController::API_CODE_PLAYER_NOT_EXIST;
         }

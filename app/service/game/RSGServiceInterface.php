@@ -566,7 +566,8 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             return $this->error = RsgGameController::API_CODE_INVALID_PARAM;
         }
 
-        $player = Player::query()->where('uuid', $data['UserId'])->first();
+        // 使用缓存减少数据库查询
+        $player = \app\service\PlayerCacheService::getByUuid($data['UserId']);
         if (!$player) {
             return $this->error = RsgGameController::API_CODE_PLAYER_NOT_EXIST;
         }

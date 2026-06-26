@@ -753,7 +753,8 @@ class DGServiceInterface extends GameServiceFactory implements GameServiceInterf
      */
     public function decrypt($data): mixed
     {
-        $player = Player::query()->where('uuid', $data['member']['username'])->first();
+        // 使用缓存减少数据库查询
+        $player = \app\service\PlayerCacheService::getByUuid($data['member']['username']);
         if (!$player) {
             return $this->error = DGGameController::API_CODE_DECRYPT_ERROR;
         }

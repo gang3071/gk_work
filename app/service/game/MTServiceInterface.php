@@ -493,7 +493,8 @@ class MTServiceInterface extends GameServiceFactory implements GameServiceInterf
             return $this->error = MtGameController::API_CODE_INVALID_PARAM;
         }
 
-        $player = Player::query()->where('uuid', $data['user_id'])->first();
+        // 使用缓存减少数据库查询
+        $player = \app\service\PlayerCacheService::getByUuid($data['user_id']);
 
         if (!$player) {
             return $this->error = MtGameController::API_CODE_PLAYER_NOT_EXIST;

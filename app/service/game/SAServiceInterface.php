@@ -369,8 +369,8 @@ class SAServiceInterface extends GameServiceFactory implements GameServiceInterf
             return $this->error = SAGameController::API_CODE_DECRYPT_ERROR;
         }
 
-        // 玩家验证
-        $player = Player::query()->where('uuid', $array['username'])->first();
+        // 玩家验证（使用缓存减少数据库查询）
+        $player = \app\service\PlayerCacheService::getByUuid($array['username']);
         if (!$player) {
             return $this->error = SAGameController::API_CODE_PLAYER_NOT_EXIST;
         }
