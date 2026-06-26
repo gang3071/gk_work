@@ -292,7 +292,8 @@ LUA;
                         'error' => $reloadException->getMessage(),
                     ]);
 
-                    return $redis->eval($script, count($keys), ...array_merge($keys, $argv));
+                    // 原生 PhpRedis 参数格式：eval($script, $args, $num_keys)
+                    return $redis->eval($script, array_merge($keys, $argv), count($keys));
                 }
             }
 
