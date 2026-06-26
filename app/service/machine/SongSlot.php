@@ -1067,7 +1067,7 @@ class SongSlot extends MachineServices implements BaseMachine
      * 获取所有属性
      * @return iterable
      */
-    private function getAllData(): iterable
+    public function getAllData(): iterable
     {
         return Cache::getMultiple($this->cacheDataKeyArr, 0);
     }
