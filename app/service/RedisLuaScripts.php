@@ -42,7 +42,8 @@ class RedisLuaScripts
     public static function preloadScripts(): void
     {
         try {
-            $redis = Redis::connection('default');
+            // ⚠️ 必须使用 work 连接（与运行时保持一致）
+            $redis = Redis::connection('work');
 
             // 预加载：原子下注脚本
             $betSha = $redis->script('load', self::LUA_ATOMIC_BET);
