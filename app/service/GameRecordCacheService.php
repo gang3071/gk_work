@@ -288,7 +288,8 @@ LUA;
                 } catch (\Exception $reloadException) {
                     // SCRIPT LOAD 失败，最终降级到 EVAL
                     \support\Log::warning('⚠️ SCRIPT LOAD 失败，降级到 EVAL', [
-                        'sha' => substr($sha, 0, 8),
+                        'original_sha' => substr($redisSha ?? '', 0, 8),
+                        'script_name' => $scriptName,
                         'error' => $reloadException->getMessage(),
                     ]);
 
