@@ -34,17 +34,36 @@ class RedisLuaPreload implements Bootstrap
      */
     public static function start(?Worker $worker): void
     {
-        // 🚀 预加载单一钱包 Lua 脚本（下注/结算/取消）
-        // 适用于：ATG、BTG、DG、MT、O8、QT、RSG 等 20+ 游戏平台
-        RedisLuaScripts::preloadScripts();
+        // ⚠️  重要：预加载必须在 Worker 进程中执行
+        // 如果在主进程执行会导致 Redis 连接错误
+        if (!$worker) {
+            \support\Log::debug('跳过预加载：不在 Worker 进程中');
+            return;
+        }
 
-        // 🚀 预加载游戏记录同步 Lua 脚本
-        // 适用于：游戏记录 Redis → MySQL 批量同步
-        GameRecordCacheService::preloadScripts();
+        try {
+            // 🚀 预加载单一钱包 Lua 脚本（下注/结算/取消）
+            // 适用于：ATG、BTG、DG、MT、O8、QT、RSG 等 20+ 游戏平台
+            RedisLuaScripts::preloadScripts();
 
-        \support\Log::info('🚀 Redis Lua 脚本预加载完成', [
-            'worker_id' => $worker ? $worker->id : 'main',
-            'worker_name' => $worker ? $worker->name : 'main',
-        ]);
+            // 🚀 预加载游戏记录同步 Lua 脚本
+            // 适用于：游戏记录 Redis → MySQL 批量同步
+            GameRecordCacheService::preloadScripts();
+
+            \support\Log::info('🚀 Redis Lua 脚本预加载完成', [
+                'worker_id' => $worker->id,
+                'worker_name' => $worker->name,
+            ]);
+
+        } catch (\Exception $e) {
+            // 预加载失败不应该阻止 Worker 启动
+            // 运行时会自动降级到 EVAL + 自动重新加载
+            \support\Log::error('❌ Redis Lua 脚本预加载失败（运行时会自动降级）', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'worker_id' => $worker->id,
+            ]);
+        }
     }
 }
