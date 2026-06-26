@@ -31,7 +31,13 @@ class GameRecordCacheService
     private const TTL_BALANCE = 3600;   // 1小时
 
     /**
-     * Lua 脚本 SHA1 缓存（避免重复加载脚本，提升性能）
+     * Lua 脚本 SHA1 缓存（Redis 返回的真实 SHA1，不是 PHP 计算的）
+     *
+     * ⚠️ CRITICAL: 必须使用 Redis 返回的 SHA1，不能用 sha1($script)
+     * - PHP 计算的 SHA1 可能因为换行符（CRLF vs LF）导致不一致
+     * - Redis 返回的 SHA1 才是真正存储在服务器上的
+     *
+     * 格式：['script_name' => 'redis_sha1']
      * @var array
      */
     private static $scriptShas = [];
@@ -131,12 +137,13 @@ LUA;
         try {
             $redis = self::redis();
 
-            // 预加载：获取待同步记录脚本
-            $sha = $redis->script('load', self::LUA_GET_PENDING_RECORDS);
-            self::$scriptShas[sha1(self::LUA_GET_PENDING_RECORDS)] = true;
+            // ✅ 预加载：获取待同步记录脚本（使用 Redis 返回的 SHA1，不是 PHP 计算的）
+            $redisSha = $redis->script('load', self::LUA_GET_PENDING_RECORDS);
+            self::$scriptShas['LUA_GET_PENDING_RECORDS'] = $redisSha;  // ← 存储 Redis 返回的 SHA1
 
             \support\Log::info('✅ Worker 进程预加载 Lua 脚本成功', [
-                'sha' => substr($sha, 0, 8),
+                'redis_sha' => substr($redisSha, 0, 8),
+                'php_sha' => substr(sha1(self::LUA_GET_PENDING_RECORDS), 0, 8),  // 对比：PHP 计算的
                 'script' => 'LUA_GET_PENDING_RECORDS',
             ]);
         } catch (\Exception $e) {
@@ -169,12 +176,21 @@ LUA;
     private static function evalScript(string $script, array $keys, array $argv)
     {
         $redis = self::redis();
-        $sha = sha1($script);
+
+        // ✅ 使用 Redis 返回的 SHA1（不是 PHP 计算的）
+        $scriptName = 'LUA_GET_PENDING_RECORDS';  // 当前只有一个脚本
+        $redisSha = self::$scriptShas[$scriptName] ?? null;
+
+        // 如果没有预加载（不应该发生），立即加载
+        if (!$redisSha) {
+            \support\Log::warning('⚠️ 脚本未预加载，立即加载', ['script' => $scriptName]);
+            $redisSha = $redis->script('load', $script);
+            self::$scriptShas[$scriptName] = $redisSha;
+        }
 
         try {
-            // 🚀 极致性能：直接使用 EVALSHA（100% 命中，节省 95% 带宽）
-            // 由于在 WorkerStart 已经预加载，这里绝大多数情况直接成功
-            $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+            // 🚀 极致性能：直接使用 EVALSHA（使用 Redis 返回的 SHA1）
+            $result = $redis->evalSha($redisSha, count($keys), ...array_merge($keys, $argv));
 
             // ⚠️ 处理 Illuminate Redis 的 false 返回（PhpRedis 会抛异常）
             if ($result === false) {
@@ -197,25 +213,25 @@ LUA;
             // 🔧 容错降级：NOSCRIPT 时自动重新加载脚本
             if (strpos($errorMsg, 'NOSCRIPT') !== false) {
                 \support\Log::info('⚠️ Redis Lua 脚本缓存失效（NOSCRIPT），自动重新加载', [
-                    'sha' => substr($sha, 0, 8),
+                    'old_sha' => substr($redisSha, 0, 8),
                     'reason' => 'Redis可能已重启或执行了SCRIPT FLUSH',
                     'msg' => $e->getMessage()
                 ]);
 
                 // 清除 PHP 端缓存
-                unset(self::$scriptShas[$sha]);
+                unset(self::$scriptShas[$scriptName]);
 
-                // 重新加载脚本到 Redis
+                // 重新加载脚本到 Redis（获取 Redis 返回的新 SHA1）
                 try {
-                    $loadedSha = $redis->script('load', $script);
-                    self::$scriptShas[$sha] = true;
+                    $newRedisSha = $redis->script('load', $script);
+                    self::$scriptShas[$scriptName] = $newRedisSha;  // ← 存储 Redis 返回的 SHA1
 
                     \support\Log::info('✅ Lua 脚本重新加载成功', [
-                        'sha' => substr($loadedSha, 0, 8),
+                        'new_redis_sha' => substr($newRedisSha, 0, 8),
                     ]);
 
-                    // 使用 EVALSHA 重新执行
-                    return $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+                    // 使用 Redis 返回的 SHA1 重新执行
+                    return $redis->evalSha($newRedisSha, count($keys), ...array_merge($keys, $argv));
 
                 } catch (\Exception $reloadException) {
                     // SCRIPT LOAD 失败，最终降级到 EVAL
@@ -231,7 +247,7 @@ LUA;
             // 真正的业务逻辑错误
             \support\Log::error('❌ Redis Lua 脚本执行失败', [
                 'error' => $errorMsg,
-                'sha' => substr($sha, 0, 8),
+                'redis_sha' => substr($redisSha ?? '', 0, 8),
                 'keys_count' => count($keys),
                 'argv_count' => count($argv),
             ]);

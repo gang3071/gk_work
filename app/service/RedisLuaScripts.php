@@ -18,7 +18,13 @@ use support\Redis;
 class RedisLuaScripts
 {
     /**
-     * Lua 脚本 SHA1 缓存（避免重复加载脚本，提升性能）
+     * Lua 脚本 SHA1 缓存（Redis 返回的真实 SHA1，不是 PHP 计算的）
+     *
+     * ⚠️ CRITICAL: 必须使用 Redis 返回的 SHA1，不能用 sha1($script)
+     * - PHP 计算的 SHA1 可能因为换行符（CRLF vs LF）导致不一致
+     * - Redis 返回的 SHA1 才是真正存储在服务器上的
+     *
+     * 格式：['LUA_ATOMIC_BET' => 'redis_sha1', ...]
      * @var array
      */
     private static $scriptShas = [];
@@ -57,23 +63,27 @@ class RedisLuaScripts
             // 🔒 使用单例连接（确保预加载和运行时使用同一个连接）
             $redis = self::redis();
 
-            // 预加载：原子下注脚本
+            // ✅ 预加载：原子下注脚本（使用 Redis 返回的 SHA1）
             $betSha = $redis->script('load', self::LUA_ATOMIC_BET);
-            self::$scriptShas[sha1(self::LUA_ATOMIC_BET)] = true;
+            self::$scriptShas['LUA_ATOMIC_BET'] = $betSha;  // ← 存储 Redis 返回的 SHA1
 
-            // 预加载：原子结算脚本
+            // ✅ 预加载：原子结算脚本（使用 Redis 返回的 SHA1）
             $settleSha = $redis->script('load', self::LUA_ATOMIC_SETTLE);
-            self::$scriptShas[sha1(self::LUA_ATOMIC_SETTLE)] = true;
+            self::$scriptShas['LUA_ATOMIC_SETTLE'] = $settleSha;  // ← 存储 Redis 返回的 SHA1
 
-            // 预加载：原子取消脚本
+            // ✅ 预加载：原子取消脚本（使用 Redis 返回的 SHA1）
             $cancelSha = $redis->script('load', self::LUA_ATOMIC_CANCEL);
-            self::$scriptShas[sha1(self::LUA_ATOMIC_CANCEL)] = true;
+            self::$scriptShas['LUA_ATOMIC_CANCEL'] = $cancelSha;  // ← 存储 Redis 返回的 SHA1
 
             \support\Log::info('✅ Worker 进程预加载单一钱包 Lua 脚本成功', [
                 'bet_sha' => substr($betSha, 0, 8),
                 'settle_sha' => substr($settleSha, 0, 8),
                 'cancel_sha' => substr($cancelSha, 0, 8),
                 'scripts' => ['LUA_ATOMIC_BET', 'LUA_ATOMIC_SETTLE', 'LUA_ATOMIC_CANCEL'],
+                // 对比：PHP 计算的 SHA1（用于诊断）
+                'bet_php_sha' => substr(sha1(self::LUA_ATOMIC_BET), 0, 8),
+                'settle_php_sha' => substr(sha1(self::LUA_ATOMIC_SETTLE), 0, 8),
+                'cancel_php_sha' => substr(sha1(self::LUA_ATOMIC_CANCEL), 0, 8),
             ]);
         } catch (\Exception $e) {
             \support\Log::error('❌ Worker 进程预加载单一钱包 Lua 脚本失败', [
@@ -411,6 +421,8 @@ LUA;
      * 2. NOSCRIPT 时自动重新加载（容错兜底）
      * 3. 慢脚本监控（> 50ms 记录 WARNING）
      *
+     * ⚠️ CRITICAL: 使用 Redis 返回的 SHA1，不是 PHP 计算的
+     *
      * 适用场景：
      * - 单一钱包 API（每秒数千次下注/结算）
      * - 对延迟要求极高（< 10ms）
@@ -426,10 +438,32 @@ LUA;
     private static function evalScript($redis, string $script, array $keys, array $argv)
     {
         $start = microtime(true);
-        $sha = sha1($script);
+
+        // ✅ 根据脚本内容判断是哪个脚本（用于获取 Redis 返回的 SHA1）
+        $scriptName = null;
+        if ($script === self::LUA_ATOMIC_BET) {
+            $scriptName = 'LUA_ATOMIC_BET';
+        } elseif ($script === self::LUA_ATOMIC_SETTLE) {
+            $scriptName = 'LUA_ATOMIC_SETTLE';
+        } elseif ($script === self::LUA_ATOMIC_CANCEL) {
+            $scriptName = 'LUA_ATOMIC_CANCEL';
+        }
+
+        // 获取 Redis 返回的 SHA1（不是 PHP 计算的）
+        $redisSha = $scriptName ? (self::$scriptShas[$scriptName] ?? null) : null;
+
+        // 如果没有预加载（不应该发生），立即加载
+        if (!$redisSha && $scriptName) {
+            \support\Log::warning('⚠️ 脚本未预加载，立即加载', ['script' => $scriptName]);
+            $redisSha = $redis->script('load', $script);
+            self::$scriptShas[$scriptName] = $redisSha;
+        }
+
+        // 最终降级：如果还是没有 SHA（未知脚本），使用 PHP 计算的
+        $sha = $redisSha ?: sha1($script);
 
         try {
-            // 🚀 极致性能：直接使用 EVALSHA（100% 命中，节省 95% 带宽）
+            // 🚀 极致性能：直接使用 EVALSHA（使用 Redis 返回的 SHA1）
             $result = $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
 
             // ⚠️ 处理 PhpRedis 的 false 返回
@@ -464,25 +498,31 @@ LUA;
             // 🔧 容错降级：NOSCRIPT 时自动重新加载脚本
             if (strpos($errorMsg, 'NOSCRIPT') !== false) {
                 \support\Log::info('⚠️ Redis Lua 脚本缓存失效（NOSCRIPT），自动重新加载', [
-                    'sha' => substr($sha, 0, 8),
+                    'old_sha' => substr($sha, 0, 8),
+                    'script_name' => $scriptName ?? 'unknown',
                     'reason' => 'Redis可能已重启或执行了SCRIPT FLUSH',
                     'msg' => $e->getMessage()
                 ]);
 
                 // 清除 PHP 端缓存
-                unset(self::$scriptShas[$sha]);
+                if ($scriptName) {
+                    unset(self::$scriptShas[$scriptName]);
+                }
 
-                // 重新加载脚本到 Redis
+                // 重新加载脚本到 Redis（获取 Redis 返回的新 SHA1）
                 try {
-                    $loadedSha = $redis->script('load', $script);
-                    self::$scriptShas[$sha] = true;
+                    $newRedisSha = $redis->script('load', $script);
+                    if ($scriptName) {
+                        self::$scriptShas[$scriptName] = $newRedisSha;  // ← 存储 Redis 返回的 SHA1
+                    }
 
                     \support\Log::info('✅ Lua 脚本重新加载成功', [
-                        'sha' => substr($loadedSha, 0, 8),
+                        'new_redis_sha' => substr($newRedisSha, 0, 8),
+                        'script_name' => $scriptName ?? 'unknown',
                     ]);
 
-                    // 使用 EVALSHA 重新执行
-                    return $redis->evalSha($sha, count($keys), ...array_merge($keys, $argv));
+                    // 使用 Redis 返回的 SHA1 重新执行
+                    return $redis->evalSha($newRedisSha, count($keys), ...array_merge($keys, $argv));
 
                 } catch (\RedisException $reloadException) {
                     // SCRIPT LOAD 失败，最终降级到 EVAL
