@@ -85,13 +85,35 @@ return result
 LUA;
 
     /**
-     * 获取 Redis 连接（使用 work 连接池，确保 igaming 核心业务稳定）
+     * 单例 Redis 连接（避免连接池导致脚本丢失）
+     *
+     * ⚠️ CRITICAL: 必须使用单例模式，否则连接池会导致 NOSCRIPT 错误
+     * - Illuminate Redis 使用连接池，每次 connection('work') 可能返回不同实例
+     * - Lua 脚本加载到连接 A，但运行时可能使用连接 B/C/D
+     * - 单例确保预加载和运行时使用同一个连接
+     *
+     * @var \Illuminate\Redis\Connections\Connection|null
+     */
+    private static $redisInstance = null;
+
+    /**
+     * 获取 Redis 连接（单例模式，确保脚本持久化）
      *
      * @return \Illuminate\Redis\Connections\Connection
      */
     private static function redis()
     {
-        return Redis::connection('work');
+        // 🔒 单例模式：确保整个 Worker 生命周期使用同一个连接
+        if (self::$redisInstance === null) {
+            self::$redisInstance = Redis::connection('work');
+
+            \support\Log::debug('🔌 创建 Redis 单例连接', [
+                'class' => get_class(self::$redisInstance),
+                'worker_pid' => posix_getpid(),
+            ]);
+        }
+
+        return self::$redisInstance;
     }
 
     /**
@@ -177,6 +199,7 @@ LUA;
                 \support\Log::info('⚠️ Redis Lua 脚本缓存失效（NOSCRIPT），自动重新加载', [
                     'sha' => substr($sha, 0, 8),
                     'reason' => 'Redis可能已重启或执行了SCRIPT FLUSH',
+                    'msg' => $e->getMessage()
                 ]);
 
                 // 清除 PHP 端缓存
