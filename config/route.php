@@ -9,23 +9,23 @@ Route::options('[{path:.+}]', function () {
 // API v1 路由（接收来自 gk_api 的代理请求 - 玩家端，需要 JWT Token）
 Route::group('/api', function () {
     Route::group('/v1', function () {
-// 进入游戏
+        // 进入游戏
         Route::post('/enter-game', [\app\api\v1\GamePlatformProxyController::class, 'enterGame']);
-// 进入游戏大厅
+        // 进入游戏大厅
         Route::post('/lobby-login', [\app\api\v1\GamePlatformProxyController::class, 'lobbyLogin']);
-// 平台转出到电子游戏
+        // 平台转出到电子游戏
         Route::post('/wallet-transfer-out', [\app\api\v1\GamePlatformProxyController::class, 'walletTransferOut']);
-// 电子游戏转入到平台
+        // 电子游戏转入到平台
         Route::post('/wallet-transfer-in', [\app\api\v1\GamePlatformProxyController::class, 'walletTransferIn']);
-// 查询电子游戏平台余额
+        // 查询电子游戏平台余额
         Route::post('/get-balance', [\app\api\v1\GamePlatformProxyController::class, 'getBalance']);
-// 查询所有电子游戏平台余额
+        // 查询所有电子游戏平台余额
         Route::post('/get-wallet', [\app\api\v1\GamePlatformProxyController::class, 'getWallet']);
-// 全部转出
+        // 全部转出
         Route::post('/withdrawAmountAll', [\app\api\v1\GamePlatformProxyController::class, 'withdrawAmountAll']);
-// 快速转出电子游戏钱包余额
+        // 快速转出电子游戏钱包余额
         Route::post('/fast-transfer', [\app\api\v1\GamePlatformProxyController::class, 'fastTransfer']);
-// 获取游戏列表（保留兼容性，建议使用 admin 接口）
+        // 获取游戏列表（保留兼容性，建议使用 admin 接口）
         Route::post('/get-game-list', [\app\api\v1\GamePlatformProxyController::class, 'getGameList']);
 
         // 推送测试接口
@@ -53,15 +53,14 @@ Route::group('/api', function () {
 // Admin API 路由（接收来自 gk_admin 的请求 - 管理后台，使用 X-Player-Id）
 Route::group('/api', function () {
     Route::group('/admin', function () {
-// 管理后台 - 进入游戏大厅
+        // 管理后台 - 进入游戏大厅
         Route::post('/lobby-login', [\app\api\v1\AdminGamePlatformController::class, 'lobbyLogin']);
-// 管理后台 - 获取游戏列表
+        // 管理后台 - 获取游戏列表
         Route::post('/get-game-list', [\app\api\v1\AdminGamePlatformController::class, 'getGameList']);
-// 管理后台 - 进入游戏
+        // 管理后台 - 进入游戏
         Route::post('/enter-game', [\app\api\v1\AdminGamePlatformController::class, 'enterGame']);
-// 管理后台 - 游戏回放
+        // 管理后台 - 游戏回放
         Route::post('/replay', [\app\api\v1\AdminGamePlatformController::class, 'replay']);
-
         // 管理后台 - 机台操作 API
         Route::group('/machine', function () {
             // 发送机台指令
