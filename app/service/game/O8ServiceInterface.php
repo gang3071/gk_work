@@ -158,14 +158,17 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
         $response = Http::timeout(7)
             ->asForm()
             ->post($this->config['api_domain'] . '/api/oauth/token', $params);
-
+        Log::info('🔍 Admin lobby-login received', [
+            $response
+        ]);
         if (!$response->ok()) {
             throw new GameException(trans('system_busy', [], 'message'));
         }
 
         $res = json_decode($response->body(), true);
-
-
+        Log::info('🔍 Admin lobby-login received', [
+            $res
+        ]);
         if (empty($res)) {
             throw new Exception(trans('system_busy', [], 'message'));
         }
