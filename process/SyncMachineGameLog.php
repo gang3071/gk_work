@@ -3,114 +3,169 @@
  * 机台游戏日志同步进程
  *
  * 功能：
- * 1. 每10秒同步一次机台游戏日志
- * 2. 记录玩家游戏行为
- * 3. 统计游戏数据
- * 4. 用于后续数据分析
+ * 1. 每天凌晨1点同步一次每日累积转数/压/得
+ * 2. 统计7天和30天的数据
+ * 3. 针对钢珠机和老虎机分别处理
  */
 
 namespace process;
 
+use app\model\GameType;
 use app\model\Machine;
 use app\model\MachineGamingLog;
-use Workerman\Timer;
+use app\model\MachineOpenCard;
+use app\service\MachineServices;
+use Exception;
 use support\Log;
-use support\Db;
+use Workerman\Crontab\Crontab;
+use Workerman\Worker;
 
 class SyncMachineGameLog
 {
     /**
+     * @var Worker
+     */
+    private Worker $worker;
+
+    /**
+     * @var \Psr\Log\LoggerInterface
+     */
+    private $log;
+
+    public function __construct()
+    {
+        $this->log = Log::channel('machine_log');
+    }
+
+    /**
      * Worker 启动时执行
      * @return void
      */
-    public function onWorkerStart(): void
+    public function onWorkerStart(Worker $worker): void
     {
-        $log = Log::channel('machine');
-        $log->info('SyncMachineGameLog Worker 启动');
+        $this->worker = $worker;
 
-        // 获取配置的同步间隔（默认10秒）
-        $interval = config('machine.sync.log_interval', 10);
+        $this->log->info('SyncMachineGameLog Worker 启动');
 
-        // 定时执行日志同步
-        Timer::add($interval, function () use ($log) {
-            try {
-                $this->syncGameLogs($log);
-            } catch (\Exception $e) {
-                $log->error('SyncMachineGameLog 执行失败: ' . $e->getMessage(), [
-                    'file' => $e->getFile(),
-                    'line' => $e->getLine(),
-                    'trace' => $e->getTraceAsString(),
-                ]);
-            }
+        // 显式绑定 $this，避免闭包作用域问题
+        $self = $this;
+
+        // 每天凌晨1点执行（避开高峰期）
+        new Crontab('0 1 * * *', function () use ($self) {
+            $self->syncMachineGamingLog();
         });
 
-        $log->info("SyncMachineGameLog 定时器已设置，间隔: {$interval}秒");
+        $this->log->info('SyncMachineGameLog 定时器已设置：每天凌晨1点执行');
     }
 
     /**
-     * 同步游戏日志
-     * @param $log
+     * 写入每日累积转数/压/得
      * @return void
      */
-    private function syncGameLogs($log): void
+    private function syncMachineGamingLog(): void
     {
-        // 获取所有游戏中的机台
-        $machines = Machine::query()
-            ->where('gaming', 1)
-            ->where('gaming_user_id', '>', 0)
-            ->where('status', 1)
+        $this->log->info('开始同步机台游戏日志');
+
+        $machines = Machine::where('status', 1)
+            ->orderBy('type', 'asc')
             ->get();
 
-        if ($machines->isEmpty()) {
-            return;
-        }
+        $date = date('Y-m-d');
+        $successCount = 0;
+        $errorCount = 0;
 
-        $log->debug('开始同步游戏日志', ['count' => $machines->count()]);
-
+        /** @var Machine $machine */
         foreach ($machines as $machine) {
             try {
-                $this->createGameLog($machine);
-            } catch (\Exception $e) {
-                $log->error("机台 {$machine->code} 日志同步失败: " . $e->getMessage());
+                // 获取开卡记录（用于确定统计起始点）
+                /** @var MachineOpenCard $machineOpenCard */
+                $machineOpenCard = MachineOpenCard::where('machine_id', $machine->id)
+                    ->orderBy('id', 'desc')
+                    ->first();
+
+                // 获取7天前的记录
+                if (!empty($machineOpenCard)) {
+                    $seventh = MachineGamingLog::where('machine_id', $machine->id)
+                        ->where('updated_at', '>=', $machineOpenCard->created_at)
+                        ->orderBy('date', 'desc')
+                        ->limit(7)
+                        ->get()
+                        ->last();
+                } else {
+                    $seventh = MachineGamingLog::where('machine_id', $machine->id)
+                        ->orderBy('date', 'desc')
+                        ->limit(7)
+                        ->get()
+                        ->last();
+                }
+
+                // 获取30天前的记录
+                if (!empty($machineOpenCard)) {
+                    $thirty = MachineGamingLog::where('machine_id', $machine->id)
+                        ->where('updated_at', '>=', $machineOpenCard->created_at)
+                        ->orderBy('date', 'desc')
+                        ->limit(30)
+                        ->get()
+                        ->last();
+                } else {
+                    $thirty = MachineGamingLog::where('machine_id', $machine->id)
+                        ->orderBy('date', 'desc')
+                        ->limit(30)
+                        ->get()
+                        ->last();
+                }
+
+                // 钢珠机处理
+                if ($machine->type == GameType::TYPE_STEEL_BALL) {
+                    $services = MachineServices::createServices($machine);
+                    MachineGamingLog::updateOrCreate([
+                        'machine_id' => $machine->id,
+                        'type' => $machine->type,
+                        'date' => $date,
+                    ], [
+                        'turn_point' => $services->win_number ?? 0,
+                        'seventh_turn_point' => $seventh->turn_point ?? 0,
+                        'thirty_turn_point' => $thirty->turn_point ?? 0,
+                    ]);
+                    $successCount++;
+                }
+
+                // 老虎机处理
+                if ($machine->type == GameType::TYPE_SLOT) {
+                    $services = MachineServices::createServices($machine);
+                    $services->sendCmd($services::READ_BET, 0, 'admin', 0, 1);
+                    $services->sendCmd($services::READ_WIN, 0, 'admin', 0, 1);
+                    MachineGamingLog::query()->updateOrCreate([
+                        'machine_id' => $machine->id,
+                        'type' => $machine->type,
+                        'date' => $date,
+                    ], [
+                        'pressure' => $services->bet,
+                        'score' => $services->win,
+                        'seventh_pressure' => $seventh->pressure ?? 0,
+                        'seventh_score' => $seventh->score ?? 0,
+                        'thirty_pressure' => $thirty->pressure ?? 0,
+                        'thirty_score' => $thirty->score ?? 0,
+                    ]);
+                    $successCount++;
+                }
+            } catch (Exception $e) {
+                $errorCount++;
+                $this->log->error('syncMachineGamingLog 机台处理失败', [
+                    'machine_id' => $machine->id,
+                    'machine_code' => $machine->code,
+                    'type' => $machine->type,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+                continue;
             }
         }
-    }
 
-    /**
-     * 创建游戏日志
-     * @param Machine $machine
-     * @return void
-     */
-    private function createGameLog(Machine $machine): void
-    {
-        // 检查是否已有最近的日志记录
-        $lastLog = MachineGamingLog::query()
-            ->where('machine_id', $machine->id)
-            ->where('player_id', $machine->gaming_user_id)
-            ->where('created_at', '>=', date('Y-m-d H:i:s', time() - 60)) // 1分钟内
-            ->first();
-
-        // 如果1分钟内已有记录，跳过
-        if ($lastLog) {
-            return;
-        }
-
-        // 创建新的游戏日志
-        Db::transaction(function () use ($machine) {
-            MachineGamingLog::create([
-                'machine_id' => $machine->id,
-                'player_id' => $machine->gaming_user_id,
-                'department_id' => $machine->gamingPlayer->department_id ?? 0,
-                'type' => $machine->type,
-                'pressure' => $machine->pressure ?? 0,
-                'score' => $machine->score ?? 0,
-                'point' => $machine->point ?? 0,
-                'turn' => $machine->now_turn_point ?? 0,
-                'gaming_time' => time() - ($machine->last_game_at ? strtotime($machine->last_game_at) : time()),
-                'created_at' => date('Y-m-d H:i:s'),
-            ]);
-        });
-
-        Log::channel('machine')->debug("机台 {$machine->code} 游戏日志已创建");
+        $this->log->info('同步机台游戏日志完成', [
+            'total' => $machines->count(),
+            'success' => $successCount,
+            'error' => $errorCount,
+        ]);
     }
 }
