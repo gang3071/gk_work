@@ -251,21 +251,55 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         // 记录实际使用的营运账号（仅在获取token时记录，避免日志过多）
         if (empty($token)) {
+            $tokenUrl = $config['api_domain'] . '/token';
+
+            $this->log->info('ATG 获取Token - 请求报文', [
+                'url' => $tokenUrl,
+                'headers' => [
+                    'X-Operator' => $config['operator'],
+                    'X-key' => substr($config['key'], 0, 10) . '...' // 只显示前10位，保护密钥
+                ],
+            ]);
+
             $tokenResponse = Http::timeout(7)
                 ->withHeaders([
                     'X-Operator' => $config['operator'],
                     'X-key' => $config['key'],
                 ])
-                ->get($config['api_domain'] . '/token');
+                ->get($tokenUrl);
+
+            $this->log->info('ATG 获取Token - 响应报文', [
+                'url' => $tokenUrl,
+                'status_code' => $tokenResponse->status(),
+                'body' => $tokenResponse->body(),
+            ]);
+
             if (!$tokenResponse->ok()) {
-                throw new GameException(trans('system_busy', [], 'message'));
+                $this->log->error('ATG 获取Token失败 - HTTP错误', [
+                    'url' => $tokenUrl,
+                    'status_code' => $tokenResponse->status(),
+                    'response_body' => $tokenResponse->body(),
+                    'operator' => $config['operator'],
+                ]);
+                throw new GameException('ATG获取Token失败: HTTP ' . $tokenResponse->status());
             }
+
             $data = $tokenResponse->json();
             if (empty($data['data']['token'])) {
-                throw new GameException(trans('system_busy', [], 'message'));
+                $this->log->error('ATG 获取Token失败 - 响应无token', [
+                    'url' => $tokenUrl,
+                    'response' => $data,
+                    'operator' => $config['operator'],
+                ]);
+                throw new GameException('ATG获取Token失败: 响应中没有token');
             }
             $token = $data['data']['token'];
             Cache::set($cacheKey, $token, 4 * 60);
+
+            $this->log->info('ATG Token缓存成功', [
+                'operator' => $config['operator'],
+                'cache_key' => $cacheKey,
+            ]);
         }
         $request = Http::timeout(7)
             ->withHeaders([
@@ -279,6 +313,17 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         if (!$response->ok()) {
             $res = $response->json();
+
+            // 记录详细错误信息
+            $this->log->error('ATG API请求失败', [
+                'url' => $url,
+                'method' => strtoupper($mode),
+                'status_code' => $response->status(),
+                'params' => $params,
+                'response' => $res,
+                'operator' => $config['operator'],
+            ]);
+
             if ($res['status'] == '400' && $res['message'] == 'user exists') {
                 return [];
             }
