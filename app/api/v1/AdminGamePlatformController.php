@@ -116,6 +116,13 @@ class AdminGamePlatformController
                 return $this->fail(trans('game_platform_id_required', [], 'admin_game_platform'));
             }
 
+            // 🔍 调试日志：记录收到的 game_platform_id
+            Log::info('🔍 Admin lobby-login received', [
+                'game_platform_id' => $data['game_platform_id'],
+                'player_id' => $player->id,
+                'all_data' => $data,
+            ]);
+
             /** @var GamePlatform $gamePlatform */
             $gamePlatform = GamePlatform::query()->find($data['game_platform_id']);
 
@@ -127,14 +134,23 @@ class AdminGamePlatformController
                 return $this->fail(trans('game_platform_disabled', [], 'admin_game_platform'));
             }
 
+            // 🔍 调试日志：记录查询到的平台信息
+            Log::info('🔍 Admin lobby-login platform found', [
+                'platform_id' => $gamePlatform->id,
+                'platform_code' => $gamePlatform->code,
+                'platform_name' => $gamePlatform->name,
+            ]);
+
             // 调用游戏服务获取大厅URL
             $gameService = GameServiceFactory::createService(strtoupper($gamePlatform->code), $player);
             $lobbyUrl = $gameService->lobbyLogin(['lang' => $this->getGameLang($lang)]);
 
-            Log::info('Admin enter lobby', [
+            // 🔍 调试日志：记录返回的URL
+            Log::info('🔍 Admin lobby-login URL generated', [
                 'player_id' => $player->id,
                 'platform_id' => $gamePlatform->id,
-                'platform' => $gamePlatform->code,
+                'platform_code' => $gamePlatform->code,
+                'url' => $lobbyUrl,
             ]);
 
             return $this->success([

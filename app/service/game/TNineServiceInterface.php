@@ -107,8 +107,9 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
             throw new Exception($errorMsg);
         }
 
-        if ($res['Error']['Code'] != 0) {
-            $errorCode = $res['Error']['Code'] ?? '未知错误码';
+        // ✅ 修复：检查错误码（支持整数和字符串格式）
+        $errorCode = $res['Error']['Code'] ?? null;
+        if ($errorCode !== null && $errorCode != 0 && $errorCode !== '0') {
             $errorMessage = $res['Error']['Message'] ?? $response->body();
             $errorMsg = "T9 API错误 Code:{$errorCode} - {$errorMessage}";
             $this->log->error($url, ['params' => $params, 'response' => $response->body(), 'error_code' => $errorCode]);
