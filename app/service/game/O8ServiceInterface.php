@@ -156,18 +156,33 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
             'scope' => 'playerapi',
         ];
 
+        // 构建请求体（URL-encoded 格式）
+        $requestBody = http_build_query($params);
+
         // 打印请求报文
         Log::channel('o8_server')->info('O8 获取Token - 请求报文', [
             'url' => $url,
             'method' => 'POST',
             'headers' => [
                 'Content-Type' => 'application/x-www-form-urlencoded',
+                'Accept' => 'application/json',
             ],
             'params' => $params,
-            'body' => http_build_query($params),
+            'body' => $requestBody,
+            'config_check' => [
+                'has_api_domain' => !empty($this->config['api_domain']),
+                'has_client_id' => !empty($this->config['client_id']),
+                'has_client_secret' => !empty($this->config['client_secret']),
+                'api_domain_value' => $this->config['api_domain'] ?? 'NOT_SET',
+            ],
         ]);
 
+        // 发送请求（严格按照 API 文档）
         $response = Http::timeout(7)
+            ->withHeaders([
+                'Content-Type' => 'application/x-www-form-urlencoded',
+                'Accept' => 'application/json',
+            ])
             ->asForm()
             ->post($url, $params);
 
@@ -184,8 +199,15 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'url' => $url,
                 'status_code' => $response->status(),
                 'response_body' => $response->body(),
+                'response_headers' => $response->headers(),
+                'possible_issues' => [
+                    'invalid_credentials' => 'client_id 或 client_secret 错误',
+                    'wrong_url' => 'api_domain 配置错误或不可访问',
+                    'network_issue' => '网络连接问题或服务器不可达',
+                    'ssl_issue' => 'HTTPS 证书问题（如果使用 https）',
+                ],
             ]);
-            throw new GameException(trans('system_busy', [], 'message'));
+            throw new GameException('O8获取Token失败: HTTP ' . $response->status());
         }
 
         $res = json_decode($response->body(), true);
