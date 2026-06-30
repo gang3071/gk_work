@@ -177,14 +177,16 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
             ],
         ]);
 
-        // 发送请求（严格按照 API 文档）
+        // 发送请求（严格按照 API 文档：POST + application/x-www-form-urlencoded）
+        // ❌ 不能用 asForm()，它会变成 multipart/form-data
+        // ✅ 必须手动构建 URL-encoded body
         $response = Http::timeout(7)
             ->withHeaders([
                 'Content-Type' => 'application/x-www-form-urlencoded',
                 'Accept' => 'application/json',
             ])
-            ->asForm()
-            ->post($url, $params);
+            ->withBody($requestBody, 'application/x-www-form-urlencoded')
+            ->post($url);
 
         // 打印响应报文
         Log::channel('o8_server')->info('O8 获取Token - 响应报文', [
