@@ -14,7 +14,7 @@ use app\model\GameType;
 use app\model\Machine;
 use app\model\MachineGamingLog;
 use app\model\MachineOpenCard;
-use app\service\MachineServices;
+use app\service\machine\MachineServices;
 use Exception;
 use support\Log;
 use Workerman\Crontab\Crontab;
