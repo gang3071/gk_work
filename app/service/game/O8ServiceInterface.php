@@ -185,8 +185,7 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'Content-Type' => 'application/x-www-form-urlencoded',
                 'Accept' => 'application/json',
             ])
-            ->withBody($requestBody, 'application/x-www-form-urlencoded')
-            ->post($url);
+            ->post($url, $params);
 
         // 打印响应报文
         Log::channel('o8_server')->info('O8 获取Token - 响应报文', [
