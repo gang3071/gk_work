@@ -145,13 +145,9 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
     public function getToken(): mixed
     {
         if (Cache::has('O8_SERVICE_ACCESS_TOKEN')) {
-            Log::channel('o8_server')->info('O8 使用缓存Token');
             return Cache::get('O8_SERVICE_ACCESS_TOKEN');
         }
 
-        Log::channel('o8_server')->info('O8 开始获取新Token（缓存未命中）');
-
-        $url = $this->config['api_domain'] . '/api/oauth/token';
         $params = [
             'client_id' => $this->config['client_id'],
             'client_secret' => $this->config['client_secret'],
@@ -159,88 +155,24 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
             'scope' => 'playerapi',
         ];
 
-        // 构建请求体（URL-encoded 格式）
-        $requestBody = http_build_query($params);
-
-        // 打印请求报文
-        Log::channel('o8_server')->info('O8 获取Token - 请求报文', [
-            'url' => $url,
-            'method' => 'POST',
-            'headers' => [
-                'Content-Type' => 'application/x-www-form-urlencoded',
-                'Accept' => 'application/json',
-            ],
-            'params' => $params,
-            'body' => $requestBody,
-            'config_check' => [
-                'has_api_domain' => !empty($this->config['api_domain']),
-                'has_client_id' => !empty($this->config['client_id']),
-                'has_client_secret' => !empty($this->config['client_secret']),
-                'api_domain_value' => $this->config['api_domain'] ?? 'NOT_SET',
-            ],
-        ]);
-
-        // 发送请求（严格按照 API 文档：POST + application/x-www-form-urlencoded）
-        // ❌ 不能用 asForm()，它会变成 multipart/form-data
-        // ❌ 不能用 ->post($url, $params)，这会被 Guzzle 自动转换成其他格式
-        // ✅ 必须用 withBody() 手动发送 URL-encoded body
         $response = Http::timeout(7)
-            ->withHeaders([
-                'Content-Type' => 'application/x-www-form-urlencoded',
-                'Accept' => 'application/json',
-            ])
-            ->withBody($requestBody, 'application/x-www-form-urlencoded')
-            ->post($url);
-
-        // 打印响应报文
-        Log::channel('o8_server')->info('O8 获取Token - 响应报文', [
-            'url' => $url,
-            'status_code' => $response->status(),
-            'headers' => $response->headers(),
-            'body' => $response->body(),
-        ]);
+            ->asForm()
+            ->post($this->config['api_domain'] . '/api/oauth/token', $params);
 
         if (!$response->ok()) {
-            Log::channel('o8_server')->error('O8 获取Token失败', [
-                'url' => $url,
-                'status_code' => $response->status(),
-                'response_body' => $response->body(),
-                'response_headers' => $response->headers(),
-                'possible_issues' => [
-                    'invalid_credentials' => 'client_id 或 client_secret 错误',
-                    'wrong_url' => 'api_domain 配置错误或不可访问',
-                    'network_issue' => '网络连接问题或服务器不可达',
-                    'ssl_issue' => 'HTTPS 证书问题（如果使用 https）',
-                ],
-            ]);
-            throw new GameException('O8获取Token失败: HTTP ' . $response->status());
+            throw new GameException(trans('system_busy', [], 'message'));
         }
 
         $res = json_decode($response->body(), true);
 
-        if (empty($res)) {
-            Log::channel('o8_server')->error('O8 获取Token响应为空', [
-                'url' => $url,
-                'response_body' => $response->body(),
-            ]);
-            throw new Exception(trans('system_busy', [], 'message'));
-        }
 
-        if (empty($res['access_token'])) {
-            Log::channel('o8_server')->error('O8 获取Token响应中没有access_token', [
-                'url' => $url,
-                'response' => $res,
-            ]);
-            throw new Exception('access_token not found');
+        if (empty($res)) {
+            throw new Exception(trans('system_busy', [], 'message'));
         }
 
         $accessToken = $res['access_token'];
 
         Cache::set('O8_SERVICE_ACCESS_TOKEN', $accessToken, $res['expires_in']);
-
-        Log::channel('o8_server')->info('O8 Token缓存成功', [
-            'expires_in' => $res['expires_in'],
-        ]);
 
         return $accessToken;
     }
