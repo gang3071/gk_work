@@ -154,7 +154,9 @@ class O8ServiceInterface extends GameServiceFactory implements GameServiceInterf
             'grant_type' => 'client_credentials',
             'scope' => 'playerapi',
         ];
-
+        Log::info('🔍 Admin lobby-login received', [
+            $params
+        ]);
         $response = Http::timeout(7)
             ->asForm()
             ->post($this->config['api_domain'] . '/api/oauth/token', $params);
