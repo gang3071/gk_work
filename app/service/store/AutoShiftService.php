@@ -352,13 +352,21 @@ class AutoShiftService
         ];
 
         $machineAmount = bcdiv($data['machine_put_point'], $currency->rate, 2);
-        $totalProfit = bcsub($data['present_in_amount'], $data['present_out_amount'], 2);
+
+        // 计算总收入 = 开分 + 投钞金额
+        $totalIn = bcadd($data['present_in_amount'], $machineAmount, 2);
+
+        // 计算总支出 = 洗分（已包含彩金，不需要重复计算）
+        $totalOut = $data['present_out_amount'];
+
+        // 计算利润 = 总收入 - 总支出
+        $totalProfit = bcsub($totalIn, $totalOut, 2);
 
         return [
             'machine_amount' => (float)$machineAmount,
             'machine_point' => (int)$data['machine_put_point'],
-            'total_in' => (float)$data['present_in_amount'],
-            'total_out' => (float)$data['present_out_amount'],
+            'total_in' => (float)$totalIn,
+            'total_out' => (float)$totalOut,
             'total_profit' => (float)$totalProfit
         ];
     }
