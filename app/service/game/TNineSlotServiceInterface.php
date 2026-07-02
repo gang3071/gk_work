@@ -88,14 +88,41 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
         $params['apiKey'] = $key;
         $params['platform'] = 'T9SlotSeamless';
 
+        $fullUrl = $this->config['api_domain'] . $url;
+
+        // 打印请求报文（隐藏敏感信息）
+        $this->log->info('T9 API请求报文', [
+            'url' => $fullUrl,
+            'method' => 'POST',
+            'headers' => [
+                'Content-Type' => 'application/json',
+            ],
+            'params' => array_merge($params, [
+                'apiKey' => substr($key, 0, 10) . '...', // 只显示前10位
+            ]),
+        ]);
+
         $response = Http::timeout(10)
             ->asJson()
-            ->post($this->config['api_domain'] . $url, $params);
+            ->post($fullUrl, $params);
 
+        // 打印响应报文
+        $this->log->info('T9 API响应报文', [
+            'url' => $fullUrl,
+            'status_code' => $response->status(),
+            'headers' => $response->headers(),
+            'body' => $response->body(),
+        ]);
 
         if (!$response->ok()) {
             $errorMsg = 'T9 API请求失败 HTTP ' . $response->status() . ': ' . $response->body();
-            $this->log->error($url, ['params' => $params, 'response' => $response->body(), 'status' => $response->status()]);
+            $this->log->error('T9 API请求失败 - HTTP错误', [
+                'url' => $fullUrl,
+                'status' => $response->status(),
+                'params' => $params,
+                'response_body' => $response->body(),
+                'response_headers' => $response->headers(),
+            ]);
             throw new GameException($errorMsg);
         }
 
@@ -103,14 +130,29 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
 
         if (empty($res)) {
             $errorMsg = 'T9 API响应为空: ' . $response->body();
-            $this->log->error($url, ['params' => $params, 'response' => $response->body()]);
+            $this->log->error('T9 API响应为空', [
+                'url' => $fullUrl,
+                'params' => $params,
+                'response_body' => $response->body(),
+            ]);
             throw new Exception($errorMsg);
         }
 
         $resultCode = $res['resultCode'] ?? '';
         if ($resultCode != 'OK' && !in_array($resultCode, $acceptCodes)) {
             $errorMsg = 'T9 API错误: ' . ($res['resultCode'] ?? '未知错误') . ' - ' . ($res['message'] ?? $response->body());
-            $this->log->error($url, ['params' => $params, 'response' => $response->body(), 'result_code' => $res['resultCode'] ?? 'null']);
+
+            // 详细记录错误
+            $this->log->error('T9 API返回错误', [
+                'url' => $fullUrl,
+                'params' => $params,
+                'result_code' => $res['resultCode'] ?? 'null',
+                'error_message' => $res['message'] ?? '',
+                'error_msg' => $res['errorMsg'] ?? '',
+                'data' => $res['data'] ?? null,
+                'full_response' => $response->body(),
+            ]);
+
             throw new Exception($errorMsg);
         }
 
