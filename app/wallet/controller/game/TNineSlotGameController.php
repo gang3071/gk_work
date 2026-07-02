@@ -86,7 +86,22 @@ class TNineSlotGameController
 
             $user = $params['gameAccount'];
             $userId = explode('_', $user)[0];
-            $this->service->player = Player::query()->where('uuid', $userId)->first();
+
+            // 查询玩家
+            $player = Player::query()->where('uuid', $userId)->first();
+
+            // 玩家不存在时返回错误
+            if (!$player) {
+                $this->logger->error('TNineSlot 余额查询失败：玩家不存在', [
+                    'params' => $params,
+                    'gameAccount' => $user,
+                    'uuid' => $userId,
+                ]);
+                $this->sendTelegramAlert('TNINE_SLOT', '余额查询异常：玩家不存在', new Exception("Player not found: {$userId}"), ['params' => $params]);
+                return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
+            }
+
+            $this->service->player = $player;
             $balance = $this->service->balance();
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
@@ -124,8 +139,21 @@ class TNineSlotGameController
 
             $user = $params['gameAccount'];
             $userId = explode('_', $user)[0];
-            $this->service->player = Player::query()->where('uuid', $userId)->first();
-            $player = $this->service->player;
+
+            // 查询玩家
+            $player = Player::query()->where('uuid', $userId)->first();
+
+            // 玩家不存在时返回错误
+            if (!$player) {
+                $this->logger->error('TNineSlot 下注失败：玩家不存在', [
+                    'params' => $params,
+                    'gameAccount' => $user,
+                    'uuid' => $userId,
+                ]);
+                return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
+            }
+
+            $this->service->player = $player;
 
             // ✅ 使用 transactionId 作为唯一订单号（而不是 gameOrderNumber）
             // gameOrderNumber 是主订单号，多个子订单共享
@@ -349,8 +377,21 @@ class TNineSlotGameController
 
             $user = $params['gameAccount'];
             $userId = explode('_', $user)[0];
-            $this->service->player = Player::query()->where('uuid', $userId)->first();
-            $player = $this->service->player;
+
+            // 查询玩家
+            $player = Player::query()->where('uuid', $userId)->first();
+
+            // 玩家不存在时返回错误
+            if (!$player) {
+                $this->logger->error('TNineSlot 取消下注失败：玩家不存在', [
+                    'params' => $params,
+                    'gameAccount' => $user,
+                    'uuid' => $userId,
+                ]);
+                return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
+            }
+
+            $this->service->player = $player;
 
             $orderNo = (string)($params['betId'] ?? $params['roundId'] ?? '');
             $refundAmount = $params['betAmount'] ?? 0;
