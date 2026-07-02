@@ -98,8 +98,8 @@ class GameRecordSyncWorker
             'QT' => 'qt_server',
             'BTG' => 'btg_server',
             'KT' => 'kt_server',
-            'T9' => 't9_server',
-            'T9SLOT' => 't9_slot_server',
+            'T9' => 'tnine_server',
+            'T9SLOT' => 'tnine_slot_server',
         ];
 
         $channel = $channelMap[$platform] ?? 'game_bet_record';
@@ -977,6 +977,34 @@ class GameRecordSyncWorker
         $platformId = $record['platform_id'];
         $settlementStatus = $record['settlement_status'] ?? 0;
 
+        // 🎯 单位转换：Redis 存储的是"分"（整数），MySQL 需要"元"（小数）
+        // ⚠️ 重要：fallback 路径传入的 $record 是原始 Redis 数据，未经过 enrichInsertRecords 转换
+        // 必须在这里手动转换所有金额字段
+        $amountInYuan = isset($record['amount']) ? round($record['amount'] / 100, 2) : 0;
+        $winInYuan = isset($record['win']) ? round($record['win'] / 100, 2) : 0;
+        $diffInYuan = isset($record['diff']) ? round($record['diff'] / 100, 2) : 0;
+        $balanceBeforeInYuan = isset($record['balance_before']) && $record['balance_before'] !== ''
+            ? round($record['balance_before'] / 100, 2) : null;
+        $balanceAfterInYuan = isset($record['balance_after']) && $record['balance_after'] !== ''
+            ? round($record['balance_after'] / 100, 2) : null;
+
+        // 🔍 诊断日志：fallback路径金额转换
+        $platform = $record['platform'] ?? '';
+        $platformLogger = $this->getPlatformLogger($platform);
+        $platformLogger->info('💰 [金额流转-Fallback] Redis → Database', [
+            'order_no' => $orderNo,
+            'amount_cents' => $record['amount'] ?? null,
+            'amount_yuan' => $amountInYuan,
+            'win_cents' => $record['win'] ?? null,
+            'win_yuan' => $winInYuan,
+            'diff_cents' => $record['diff'] ?? null,
+            'diff_yuan' => $diffInYuan,
+            'balance_before_cents' => $record['balance_before'] ?? null,
+            'balance_before_yuan' => $balanceBeforeInYuan,
+            'balance_after_cents' => $record['balance_after'] ?? null,
+            'balance_after_yuan' => $balanceAfterInYuan,
+        ]);
+
         // 开启事务
         Db::beginTransaction();
 
@@ -992,7 +1020,9 @@ class GameRecordSyncWorker
 
                 // ✅ 合并下注平台：允许未结算状态下更新bet和balance_after（DG/RSGLIVE同局多笔下注累加）
                 if (MergeBetPlatformHelper::isMergePlatform($platform) && $settlementStatus == 0) {
-                    if (MergeBetPlatformHelper::updateMergedBetBalance($existing, $record)) {
+                    // 🎯 使用已转换的金额
+                    if ($amountInYuan != $existing->bet) {
+                        $existing->bet = $amountInYuan;
                         $needUpdate = true;
 
                         $this->log->info("{$platform}合并下注：更新累计金额", [
@@ -1003,25 +1033,23 @@ class GameRecordSyncWorker
                     }
 
                     // 更新 balance_after 为最新余额（balance_before 保持首次下注前的值不变）
-                    if (isset($record['balance_after']) && $record['balance_after'] !== '') {
-                        // 🎯 单位转换：Redis 存储的是"分"，转换为"元"
-                        $balanceAfterInYuan = round($record['balance_after'], 2);
+                    if ($balanceAfterInYuan !== null) {
+                        // 🎯 使用已转换的余额
 
                         if ($balanceAfterInYuan != $existing->balance_after) {
                             $oldBalanceAfter = $existing->balance_after;
                             $existing->balance_after = $balanceAfterInYuan;
                             $needUpdate = true;
 
-                            // 同步钱包余额
-                            $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
-                            if ($snapshot['after'] !== null) {
+                            // 同步钱包余额（使用已转换的余额）
+                            if ($balanceAfterInYuan !== null) {
                                 $wallet = PlayerPlatformCash::query()->where('player_id', $playerId)
                                     ->lockForUpdate()
                                     ->first();
 
                                 if ($wallet) {
                                     $beforeWalletBalance = $wallet->money;
-                                    $wallet->money = $snapshot['after'];
+                                    $wallet->money = $balanceAfterInYuan;
                                     $wallet->save();
 
                                     $this->log->info("{$platform}合并下注：同步钱包余额", [
@@ -1038,9 +1066,9 @@ class GameRecordSyncWorker
 
                 // ✅ 更新结算状态（所有平台）
                 if ($settlementStatus == 1) {
-                    // 🎯 单位转换：Redis 存储的是"分"，MySQL 需要"元"
-                    $existing->win = isset($record['win']) ? round($record['win'] / 100, 2) : 0;
-                    $existing->diff = isset($record['diff']) ? round($record['diff'] / 100, 2) : 0;
+                    // 🎯 使用已转换的金额
+                    $existing->win = $winInYuan;
+                    $existing->diff = $diffInYuan;
                     $existing->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
                     if (isset($record['platform_action_at'])) {
                         $existing->platform_action_at = $record['platform_action_at'];
@@ -1074,9 +1102,8 @@ class GameRecordSyncWorker
                 }
 
                 // 2. 钱包同步（使用 Lua 脚本执行时的余额快照，而非当前 Redis 余额）
-                $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
-
-                if ($settlementStatus == 0 && ($record['amount'] ?? 0) > 0 && $snapshot['after'] !== null) {
+                // 🎯 使用已转换的金额判断
+                if ($settlementStatus == 0 && $amountInYuan > 0 && $balanceAfterInYuan !== null) {
                     /** @var PlayerPlatformCash $wallet */
                     $wallet = PlayerPlatformCash::query()->where('player_id', $playerId)
                         ->lockForUpdate()
@@ -1084,7 +1111,7 @@ class GameRecordSyncWorker
 
                     if ($wallet) {
                         $beforeBalance = $wallet->money;
-                        $wallet->money = $snapshot['after'];
+                        $wallet->money = $balanceAfterInYuan;
                         $wallet->save();
 
                         $this->log->info("同步钱包余额（快照）", [
@@ -1105,13 +1132,17 @@ class GameRecordSyncWorker
                 $gameRecord->department_id = $player->department_id ?? 0;
                 $gameRecord->order_no = $orderNo;
                 $gameRecord->platform_id = $platformId;
-                $gameRecord->bet = $record['amount'] ?? 0;
-                $gameRecord->win = $record['win'] ?? 0;
-                $gameRecord->diff = $record['diff'] ?? 0;
+                // 🎯 使用已转换的金额（元）
+                $gameRecord->bet = $amountInYuan;
+                $gameRecord->win = $winInYuan;
+                $gameRecord->diff = $diffInYuan;
                 $gameRecord->game_code = $record['game_code'] ?? '';
                 $gameRecord->settlement_status = $settlementStatus;
                 $gameRecord->order_time = $record['created_at'] ?? Carbon::now()->toDateTimeString();
                 $gameRecord->original_data = $record['original_data'] ?? '{}';
+                // 🎯 使用已转换的余额快照
+                $gameRecord->balance_before = $balanceBeforeInYuan;
+                $gameRecord->balance_after = $balanceAfterInYuan;
 
                 if (isset($record['action_data'])) {
                     $gameRecord->action_data = $record['action_data'];

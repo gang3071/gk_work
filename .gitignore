@@ -108,3 +108,5 @@ D:*
 *diagnose_*
 redis_monitor_analysis.sh
 debug_scripts/
+/.env.release
+/.env.pro

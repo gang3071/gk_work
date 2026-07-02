@@ -174,6 +174,7 @@ class MergeBetPlatformHelper
         // 🎯 单位转换：Redis 存储的是"分"（整数），转换为"元"（小数）
         $beforeBalance = round($beforeBalance / 100, 2);
         $afterBalance = round($afterBalance / 100, 2);
+        $amountInYuan = isset($record['amount']) ? round($record['amount'] / 100, 2) : 0;
 
         $delivery = new PlayerDeliveryRecord();
         $delivery->player_id = $playerId;
@@ -184,7 +185,7 @@ class MergeBetPlatformHelper
         $delivery->type = PlayerDeliveryRecord::TYPE_BET;
         $delivery->source = 'player_bet';
         $delivery->remark = '游戏下注';
-        $delivery->amount = (float)($record['amount'] ?? 0);
+        $delivery->amount = $amountInYuan;
         $delivery->amount_before = $beforeBalance;
         $delivery->amount_after = $afterBalance;
         $delivery->tradeno = $record['order_no'] ?? '';
@@ -205,10 +206,11 @@ class MergeBetPlatformHelper
         $after = $record['balance_after'] ?? null;
 
         if ($before !== null && $before !== '' && $after !== null && $after !== '') {
-            // 🎯 单位转换：Redis 存储的是"分"（整数），转换为"元"（小数）
+            // ✅ 注意：$record 已经被 enrichInsertRecords 转换为"元"，这里直接使用
+            // enrichInsertRecords 会在处理前将"分"转为"元"，这里不需要再次转换
             return [
-                'before' => round($before / 100, 2),
-                'after' => round($after / 100, 2)
+                'before' => round($before, 2),
+                'after' => round($after, 2)
             ];
         }
 
