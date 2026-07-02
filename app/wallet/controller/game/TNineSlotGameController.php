@@ -29,6 +29,7 @@ class TNineSlotGameController
     public const API_CODE_SIGN_ERROR = 3;
     public const API_CODE_INSUFFICIENT_BALANCE = 108;
     public const API_CODE_ORDER_NOT_FOUND = 110;
+    public const API_CODE_PLAYER_NOT_EXIST = 116;
 
 
     // 2. 将状态码映射移到私有常量或属性
@@ -38,7 +39,7 @@ class TNineSlotGameController
         self::API_CODE_SIGN_ERROR => '簽名錯誤',
         self::API_CODE_INSUFFICIENT_BALANCE => '會員餘額不足',
         self::API_CODE_ORDER_NOT_FOUND => '檔案不存在',
-
+        self::API_CODE_PLAYER_NOT_EXIST => '玩家不存在',
     ];
 
     public const ORDER_STATUS_SUCCESS = 1; //已派彩/贈禮成功
