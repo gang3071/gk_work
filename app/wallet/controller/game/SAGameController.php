@@ -215,7 +215,9 @@ class SAGameController
             }
 
             // ✅ 从 Redis 读取原始下注金额
-            $originalBetAmount = (float)\support\Redis::hGet($betRecordKey, 'amount');
+            // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
+            $amountInCents = (int)\support\Redis::hGet($betRecordKey, 'amount');
+            $originalBetAmount = round($amountInCents / 100, 2);
             if ($originalBetAmount <= 0) {
                 Log::channel('sa_server')->error('SA取消下注失败：无法读取原始下注金额', [
                     'order_no' => $orderNo,
@@ -790,7 +792,9 @@ class SAGameController
                 }
 
                 // ✅ 从 Redis 读取原始金额
-                $originalAmount = (float)\support\Redis::hGet($betRecordKey, 'amount');
+                // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
+                $amountInCents = (int)\support\Redis::hGet($betRecordKey, 'amount');
+                $originalAmount = round($amountInCents / 100, 2);
                 if ($originalAmount <= 0) {
                     Log::channel('sa_server')->error('SA调整取消失败：无法读取原始金额', [
                         'cancel_txnid' => $cancelTxnId,

@@ -2,8 +2,8 @@
 
 namespace app\service;
 
-use support\Redis;
 use support\Log;
+use support\Redis;
 
 /**
  * RSGLIVE 游戏记录聚合处理器
@@ -62,12 +62,19 @@ class RSGLiveGameRecordHandler
 
         if (!$exists) {
             // 首次下注：创建聚合记录
+            // 🎯 单位转换：Controller传入的是"元"，Redis必须存"分"（整数）
+            $amountInCents = (int)round($data['amount'] * 100);
+            $balanceBeforeInCents = isset($data['balance_before']) && $data['balance_before'] !== ''
+                ? (int)round($data['balance_before'] * 100) : '';
+            $balanceAfterInCents = isset($data['balance_after']) && $data['balance_after'] !== ''
+                ? (int)round($data['balance_after'] * 100) : '';
+
             $record = [
                 'platform' => $platform,
                 'order_no' => $referenceId,
                 'player_id' => $data['player_id'],
                 'platform_id' => $data['platform_id'],
-                'amount' => $data['amount'],
+                'amount' => $amountInCents,
                 'game_code' => $data['game_code'] ?? '',
                 'game_type' => '',
                 'game_name' => $data['game_name'] ?? '',
@@ -79,8 +86,8 @@ class RSGLiveGameRecordHandler
                 'win' => 0,
                 'diff' => 0,
                 'created_at' => date('Y-m-d H:i:s'),
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
+                'balance_before' => $balanceBeforeInCents,
+                'balance_after' => $balanceAfterInCents,
             ];
 
             $redis->hMSet($aggKey, $record);
@@ -89,19 +96,25 @@ class RSGLiveGameRecordHandler
 
             Log::channel('rsglive_server')->info('RSGLive聚合记录创建', [
                 'referenceId' => $referenceId,
-                'amount' => $data['amount'],
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
+                'amount_yuan' => $data['amount'],
+                'amount_cents' => $amountInCents,
+                'balance_before_cents' => $balanceBeforeInCents,
+                'balance_after_cents' => $balanceAfterInCents,
             ]);
         } else {
             // 后续下注：累加金额 + 更新 balance_after（记录最新余额）
+            // 🎯 单位转换：Controller传入的是"元"，需要转换为"分"再累加
+            $addAmountInCents = (int)round($data['amount'] * 100);
+            $balanceAfterInCents = isset($data['balance_after']) && $data['balance_after'] !== ''
+                ? (int)round($data['balance_after'] * 100) : '';
+
             $oldBalanceAfter = $redis->hGet($aggKey, 'balance_after');
-            $redis->hIncrByFloat($aggKey, 'amount', $data['amount']);
+            $redis->hIncrBy($aggKey, 'amount', $addAmountInCents);  // 使用整数累加
             $redis->hSet($aggKey, 'status', 'pending');
             $redis->hSet($aggKey, 'original_data', json_encode($data['original_data'] ?? [], JSON_UNESCAPED_UNICODE));
             // ✅ 更新 balance_after 为最新余额（balance_before 保持首次下注前的值不变）
-            if (!empty($data['balance_after'])) {
-                $redis->hSet($aggKey, 'balance_after', $data['balance_after']);
+            if ($balanceAfterInCents !== '') {
+                $redis->hSet($aggKey, 'balance_after', $balanceAfterInCents);
             }
             $redis->zAdd(self::PREFIX_SYNC_QUEUE, time(), $aggKey);
 
@@ -109,11 +122,13 @@ class RSGLiveGameRecordHandler
             $newBalanceAfter = $redis->hGet($aggKey, 'balance_after');
             Log::channel('rsglive_server')->info('RSGLive聚合记录累加', [
                 'referenceId' => $referenceId,
-                'added' => $data['amount'],
-                'total' => $newAmount,
-                'input_balance_after' => $data['balance_after'] ?? 'null',
-                'old_balance_after' => $oldBalanceAfter,
-                'new_balance_after' => $newBalanceAfter,
+                'added_yuan' => $data['amount'],
+                'added_cents' => $addAmountInCents,
+                'total_cents' => $newAmount,
+                'input_balance_after_yuan' => $data['balance_after'] ?? 'null',
+                'balance_after_cents' => $balanceAfterInCents,
+                'old_balance_after_cents' => $oldBalanceAfter,
+                'new_balance_after_cents' => $newBalanceAfter,
             ]);
         }
 
@@ -138,11 +153,22 @@ class RSGLiveGameRecordHandler
         $exists = $redis->exists($aggKey);
 
         if ($exists) {
-            $betAmount = (float)$redis->hGet($aggKey, 'amount');
+            // 🎯 单位转换：Controller传入的是"元"，Redis必须存"分"（整数）
+            $winInCents = (int)round($data['amount'] * 100);
+
+            // 优先使用 Controller 传入的 diff（已正确计算）
+            // 只有在未提供时才从 Redis 读取 amount 计算
+            if (isset($data['diff'])) {
+                $diffInCents = (int)round($data['diff'] * 100);
+            } else {
+                // 从 Redis 读取 bet（"分"），计算 diff
+                $betAmountInCents = (int)$redis->hGet($aggKey, 'amount');
+                $diffInCents = $winInCents - $betAmountInCents;
+            }
 
             $redis->hMSet($aggKey, [
-                'win' => $data['amount'],
-                'diff' => $data['diff'] ?? bcsub((string)$data['amount'], (string)$betAmount, 2),
+                'win' => $winInCents,
+                'diff' => $diffInCents,
                 'settlement_status' => 1,
                 'settle_type' => $data['settle_type'] ?? 'settle',
                 'settle_time' => time(),
@@ -156,9 +182,10 @@ class RSGLiveGameRecordHandler
 
             Log::channel('rsglive_server')->info('RSGLive聚合记录结算', [
                 'referenceId' => $referenceId,
-                'bet' => $betAmount,
-                'win' => $data['amount'],
-                'diff' => $data['diff'] ?? bcsub((string)$data['amount'], (string)$betAmount, 2),
+                'win_yuan' => $data['amount'],
+                'win_cents' => $winInCents,
+                'diff_yuan' => isset($data['diff']) ? $data['diff'] : round($diffInCents / 100, 2),
+                'diff_cents' => $diffInCents,
             ]);
         } else {
             Log::channel('rsglive_server')->warning('RSGLive聚合记录不存在（结算）', [
@@ -186,12 +213,15 @@ class RSGLiveGameRecordHandler
 
         if ($exists) {
             // 减少聚合金额
-            $currentAmount = (float)$redis->hGet($aggKey, 'amount');
-            $refundAmount = (float)($data['refund_amount'] ?? 0);
-            $newAmount = max(0, bcsub((string)$currentAmount, (string)$refundAmount, 2));
+            // 🎯 单位转换：Redis存储的是"分"，Controller传入的是"元"
+            // 需要将两者统一为"分"进行计算
+            $currentAmountInCents = (int)$redis->hGet($aggKey, 'amount');
+            $refundAmountInYuan = (float)($data['refund_amount'] ?? 0);
+            $refundAmountInCents = (int)round($refundAmountInYuan * 100);
+            $newAmountInCents = max(0, $currentAmountInCents - $refundAmountInCents);
 
             $redis->hMSet($aggKey, [
-                'amount' => $newAmount,
+                'amount' => $newAmountInCents,
                 'cancel_type' => $data['cancel_type'] ?? 'cancel',
                 'cancel_time' => time(),
                 'action_data' => json_encode($data['original_data'] ?? [], JSON_UNESCAPED_UNICODE),
@@ -203,9 +233,10 @@ class RSGLiveGameRecordHandler
 
             Log::channel('rsglive_server')->info('RSGLive聚合记录取消', [
                 'referenceId' => $referenceId,
-                'refund' => $refundAmount,
-                'amount_before' => $currentAmount,
-                'amount_after' => $newAmount,
+                'refund_yuan' => $refundAmountInYuan,
+                'refund_cents' => $refundAmountInCents,
+                'amount_before_cents' => $currentAmountInCents,
+                'amount_after_cents' => $newAmountInCents,
             ]);
         } else {
             Log::channel('rsglive_server')->warning('RSGLive聚合记录不存在（取消）', [

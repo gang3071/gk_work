@@ -172,6 +172,41 @@ LUA;
     }
 
     /**
+     * 使用 SCAN 命令扫描匹配的键（替代阻塞的 KEYS 命令）
+     *
+     * 性能优势：
+     * - SCAN 是非阻塞的，不会影响其他操作
+     * - 分批迭代，每次只扫描少量键
+     * - 适合生产环境大规模使用
+     *
+     * @param string $pattern 匹配模式（如 "game:record:bet:KT:123_*"）
+     * @return array 匹配的键列表
+     */
+    private static function scanKeys(string $pattern): array
+    {
+        $redis = self::redis();
+        $keys = [];
+        $cursor = null;
+
+        // SCAN 迭代：每次返回一批键，直到 cursor 为 0
+        do {
+            // scan(cursor, pattern, count)
+            // cursor: 迭代游标，首次传 null 或 0
+            // pattern: 匹配模式
+            // count: 每次扫描的键数量提示（Redis可能返回更多或更少）
+            $result = $redis->scan($cursor, $pattern, 100);
+
+            if ($result === false) {
+                break;
+            }
+
+            $keys = array_merge($keys, $result);
+        } while ($cursor > 0);
+
+        return $keys;
+    }
+
+    /**
      * Worker 进程启动时预加载 Lua 脚本到 Redis
      *
      * 性能优势：
@@ -403,7 +438,16 @@ LUA;
 
         } else {
             // bet 记录不存在，创建独立 settle 记录
+            // ⚠️ 重要：这个路径绕过了Lua脚本，必须手动转换"元"→"分"
             $settleKey = self::PREFIX_SETTLE . "{$platform}:{$orderNo}";
+
+            // 🎯 单位转换：Controller传入的是"元"，Redis必须存"分"（整数）
+            $winInCents = (int)round(($data['amount'] ?? 0) * 100);
+            $diffInCents = (int)round(($data['diff'] ?? $data['amount'] ?? 0) * 100);
+            $balanceBeforeInCents = isset($data['balance_before']) && $data['balance_before'] !== ''
+                ? (int)round($data['balance_before'] * 100) : '';
+            $balanceAfterInCents = isset($data['balance_after']) && $data['balance_after'] !== ''
+                ? (int)round($data['balance_after'] * 100) : '';
 
             $record = [
                 'platform' => $platform,
@@ -411,8 +455,8 @@ LUA;
                 'player_id' => $data['player_id'],
                 'platform_id' => $data['platform_id'],
                 'amount' => 0,
-                'win' => $data['amount'],
-                'diff' => $data['amount'],
+                'win' => $winInCents,
+                'diff' => $diffInCents,
                 'game_code' => $data['game_code'] ?? '',
                 'game_type' => $data['game_type'] ?? '',
                 'settlement_status' => 1,
@@ -421,9 +465,9 @@ LUA;
                 'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',
                 'created_at' => date('Y-m-d H:i:s'),
-                // ✅ 保存余额变化信息（统一字段名）
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
+                // ✅ 保存余额变化信息（已转换为"分"）
+                'balance_before' => $balanceBeforeInCents,
+                'balance_after' => $balanceAfterInCents,
             ];
 
             self::redis()->hMSet($settleKey, $record);
@@ -762,27 +806,36 @@ LUA;
             self::redis()->del($settleKey);
         }
 
+        // 🎯 单位转换：KT不走Lua脚本，必须手动转换"元"→"分"（整数）
+        $amountInCents = (int)round(($data['amount'] ?? 0) * 100);
+        $winInCents = (int)round(($data['win'] ?? 0) * 100);
+        $diffInCents = (int)round(($data['diff'] ?? 0) * 100);
+        $balanceBeforeInCents = isset($data['balance_before']) && $data['balance_before'] !== ''
+            ? (int)round($data['balance_before'] * 100) : '';
+        $balanceAfterInCents = isset($data['balance_after']) && $data['balance_after'] !== ''
+            ? (int)round($data['balance_after'] * 100) : '';
+
         // ✅ 检查bet记录是否已存在
         $exists = self::redis()->exists($key);
 
         if ($exists) {
-            // 记录已存在，更新必要字段（包括amount，确保存储的是原始Bet值）
+            // 记录已存在，更新必要字段（使用已转换的"分"值）
             self::redis()->hMSet($key, [
-                'amount' => $data['amount'],  // ✅ 更新为KT的原始Bet值
-                'win' => $data['win'] ?? 0,
-                'diff' => $data['diff'] ?? 0,
+                'amount' => $amountInCents,
+                'win' => $winInCents,
+                'diff' => $diffInCents,
                 'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
+                'balance_before' => $balanceBeforeInCents,
+                'balance_after' => $balanceAfterInCents,
             ]);
         } else {
-            // 记录不存在，创建完整记录
+            // 记录不存在，创建完整记录（使用已转换的"分"值）
             $record = [
                 'platform' => $platform,
                 'order_no' => $orderNo,
                 'player_id' => $data['player_id'],
                 'platform_id' => $data['platform_id'],
-                'amount' => $data['amount'],
+                'amount' => $amountInCents,
                 'game_code' => $data['game_code'] ?? '',
                 'game_type' => $data['game_type'] ?? '',
                 'game_name' => $data['game_name'] ?? '',
@@ -791,11 +844,11 @@ LUA;
                 'original_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',
                 'settlement_status' => 0,  // 未结算
-                'win' => $data['win'] ?? 0,
-                'diff' => $data['diff'] ?? 0,
+                'win' => $winInCents,
+                'diff' => $diffInCents,
                 'created_at' => date('Y-m-d H:i:s'),
-                'balance_before' => $data['balance_before'] ?? '',
-                'balance_after' => $data['balance_after'] ?? '',
+                'balance_before' => $balanceBeforeInCents,
+                'balance_after' => $balanceAfterInCents,
             ];
 
             self::redis()->hMSet($key, $record);
@@ -824,12 +877,13 @@ LUA;
         $currentOrderNo = $currentRecordData['order_no'];
 
         // ✅ KT专用：清理可能存在的settle记录（包括SubTxID=0和SubTxID>0）
+        // 🎯 性能优化：使用 SCAN 替代 KEYS，避免阻塞Redis
         $settlePatterns = [
             "game:record:settle:{$platform}:{$mainTxID}",      // SubTxID=0
             "game:record:settle:{$platform}:{$mainTxID}_*",    // SubTxID>0
         ];
         foreach ($settlePatterns as $pattern) {
-            $settleKeys = $redis->keys($pattern);
+            $settleKeys = self::scanKeys($pattern);
             foreach ($settleKeys as $settleKey) {
                 $redis->zRem(self::PREFIX_SYNC_QUEUE, $settleKey);
                 $redis->del($settleKey);
@@ -846,8 +900,9 @@ LUA;
         }
 
         // 查找 SubTxID>0 的订单（订单号 = MainTxID_SubTxID）
+        // 🎯 性能优化：使用 SCAN 替代 KEYS
         $patternN = self::PREFIX_BET . "{$platform}:{$mainTxID}_*";
-        $keysN = $redis->keys($patternN);
+        $keysN = self::scanKeys($patternN);
         $keys = array_merge($keys, $keysN);
 
         $settledCount = 0;

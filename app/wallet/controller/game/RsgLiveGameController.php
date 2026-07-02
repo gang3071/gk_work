@@ -335,9 +335,14 @@ class RsgLiveGameController
             }
 
             // 从 Redis 聚合记录读取实际下注金额（referenceId 作为聚合键）
+            // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
             $redisKey = "game:record:bet:RSGLIVE:{$referenceId}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
-            $betAmount = $cachedBet !== false ? (float)$cachedBet : 0;
+            $betAmount = 0;
+            if ($cachedBet !== false) {
+                $amountInCents = (int)$cachedBet;
+                $betAmount = round($amountInCents / 100, 2);
+            }
 
             // Redis 未命中，从数据库降级获取
             if ($betAmount == 0 && $cachedBet === false) {
@@ -475,9 +480,14 @@ class RsgLiveGameController
             }
 
             // 从 Redis 读取该笔下注的实际金额（通过 targetId 查找单条记录）
+            // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
             $redisKey = "game:record:bet:RSGLIVE:{$targetId}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
-            $actualRefundAmount = $cachedBet !== false ? (float)$cachedBet : 0;
+            $actualRefundAmount = 0;
+            if ($cachedBet !== false) {
+                $amountInCents = (int)$cachedBet;
+                $actualRefundAmount = round($amountInCents / 100, 2);
+            }
 
             // Redis 未命中，从数据库降级获取
             if ($actualRefundAmount == 0 && $cachedBet === false) {

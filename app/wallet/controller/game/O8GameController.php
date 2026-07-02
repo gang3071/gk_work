@@ -377,7 +377,10 @@ class O8GameController
                     }
 
                     // 从 Redis 读取原始下注金额
-                    $originalBetAmount = (float)\support\Redis::hGet($betRecordKey, 'amount');
+                    // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
+                    $amountInCents = (int)\support\Redis::hGet($betRecordKey, 'amount');
+                    $originalBetAmount = round($amountInCents / 100, 2);
+
                     if ($originalBetAmount <= 0) {
                         $this->logger->error('O8取消交易失败：无法读取原始下注金额', [
                             'refptxid' => $orderNo,
@@ -511,9 +514,12 @@ class O8GameController
                 // 计算实际变化金额（用于统计）
                 // diff = 派彩金额 - 下注金额 = amt - (从Redis读取的原始下注金额)
                 $betRecordKey = "game:record:bet:O8:{$orderNo}";
-                $originalBetAmount = \support\Redis::exists($betRecordKey)
-                    ? (float)\support\Redis::hGet($betRecordKey, 'amount')
-                    : 0;
+                $originalBetAmount = 0;
+                if (\support\Redis::exists($betRecordKey)) {
+                    // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
+                    $amountInCents = (int)\support\Redis::hGet($betRecordKey, 'amount');
+                    $originalBetAmount = round($amountInCents / 100, 2);
+                }
                 $diffAmount = bcsub($settleAmount, $originalBetAmount, 2);
 
                 // Lua 原子结算

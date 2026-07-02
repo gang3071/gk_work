@@ -258,9 +258,14 @@ class RsgGameController
             $orderNo = (string)($data['SequenNumber'] ?? '');
 
             // ✅ 从 Redis 读取实际的下注金额（子订单实际 bet = 0，应退 0）
+            // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
             $redisKey = "game:record:bet:RSG:{$orderNo}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
-            $actualRefundAmount = $cachedBet !== false ? (float)$cachedBet : 0;
+            $actualRefundAmount = 0;
+            if ($cachedBet !== false) {
+                $amountInCents = (int)$cachedBet;
+                $actualRefundAmount = round($amountInCents / 100, 2);
+            }
 
             // ========== 核心：Lua 原子取消 ==========
             $luaParams = [
@@ -539,9 +544,14 @@ class RsgGameController
             $orderNo = (string)($data['SequenNumber'] ?? '');
 
             // ✅ 从 Redis 读取实际的下注金额
+            // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
             $redisKey = "game:record:bet:RSG:{$orderNo}";
             $cachedBet = \support\Redis::connection()->hGet($redisKey, 'amount');
-            $actualBetAmount = $cachedBet !== false ? (float)$cachedBet : 0;
+            $actualBetAmount = 0;
+            if ($cachedBet !== false) {
+                $amountInCents = (int)$cachedBet;
+                $actualBetAmount = round($amountInCents / 100, 2);
+            }
 
             // ✅ 使用实际的下注金额计算 diff
             $totalWin = $data['Amount'] ?? 0;
