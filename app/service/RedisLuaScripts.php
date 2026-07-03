@@ -178,7 +178,7 @@ class RedisLuaScripts
      * ARGV[8] = 游戏名称
      * ARGV[9] = 交易类型
      * ARGV[10] = 当前时间戳
-     * ARGV[11] = 记录TTL (3600 = 1小时，极限内存优化)
+     * ARGV[11] = 记录TTL (10800 = 3小时，给SyncWorker故障恢复足够缓冲时间)
      * ARGV[12] = (已废弃) 余额TTL - 余额已改为永不过期
      * ARGV[13] = 创建时间字符串
      *
@@ -711,7 +711,7 @@ LUA;
             $data['game_name'] ?? '',                        // ARGV[8]
             $transactionType,                                // ARGV[9]
             time(),                                          // ARGV[10]
-            3600,                                            // ARGV[11] - 押注记录 TTL (1小时)
+            10800,                                           // ARGV[11] - 押注记录 TTL (3小时，给SyncWorker故障恢复缓冲)
             0,                                               // ARGV[12] - 已废弃：余额已改为永不过期
             $createdAt,                                      // ARGV[13]
         ];
