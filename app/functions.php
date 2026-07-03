@@ -118,7 +118,40 @@ function machineKeepOutPlayer(): void
             }
             /** @var Player $player */
             $player = $machine->gamingPlayer;
+
+            // ⚠️ 数据一致性检查：如果玩家不存在，说明数据库和Redis状态不一致
+            if (!$player) {
+                $log->warning('PlayOutMachine: 机台gaming状态异常 - 玩家不存在', [
+                    'machine_id' => $machine->id,
+                    'machine_code' => $machine->code,
+                    'db_gaming' => $machine->gaming,
+                    'db_gaming_user_id' => $machine->gaming_user_id,
+                ]);
+
+                // 修复数据库状态（设为非游戏中）
+                $machine->gaming = 0;
+                $machine->gaming_user_id = 0;
+                $machine->save();
+                continue;
+            }
+
             $services = MachineServices::createServices($machine);
+
+            // ⚠️ Redis缓存一致性检查：gaming_user_id必须一致
+            $cachedGamingUserId = $services->gaming_user_id ?? 0;
+            if ($cachedGamingUserId != $machine->gaming_user_id) {
+                $log->warning('PlayOutMachine: Redis缓存与数据库gaming_user_id不一致', [
+                    'machine_id' => $machine->id,
+                    'machine_code' => $machine->code,
+                    'db_gaming_user_id' => $machine->gaming_user_id,
+                    'cache_gaming_user_id' => $cachedGamingUserId,
+                    'player_id' => $player->id,
+                ]);
+
+                // 修复Redis缓存（以数据库为准）
+                $services->gaming_user_id = $machine->gaming_user_id;
+            }
+
             if ($services->has_lock == 1) {
                 $log->info('PlayOutMachine: 机台锁定跳过' . $machine->code);
                 continue;
