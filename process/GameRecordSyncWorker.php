@@ -702,6 +702,7 @@ class GameRecordSyncWorker
         // 1. 检查新插入的已结算记录
         // ✅ 直接从 $existingRecords 获取完整信息（已在 syncBatchRecords 中统一查询）
         foreach ($insertedRecords as $record) {
+            // ✅ 只处理正常结算的记录，排除取消记录
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
                 $orderNo = $record['order_no'];
                 /** @var PlayGameRecord $dbRecord */
@@ -722,7 +723,8 @@ class GameRecordSyncWorker
 
         // 2. 检查更新后的已结算记录
         foreach ($updatedRecords as $record) {
-            if (($record['settlement_status'] ?? 0) == 1) {
+            // ✅ 只处理正常结算的记录，排除取消记录
+            if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
                 /** @var PlayGameRecord $existing */
                 $existing = $existingRecords[$record['order_no']] ?? null;
 

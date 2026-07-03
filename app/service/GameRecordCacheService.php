@@ -640,6 +640,7 @@ LUA;
             self::redis()->hMSet($betKey, [
                 'cancel_type' => $data['cancel_type'] ?? 'cancel',
                 'cancel_time' => time(),
+                'settlement_status' => \app\model\PlayGameRecord::SETTLEMENT_STATUS_CANCELLED,  // ✅ 设置为已取消状态
                 'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',
                 // ✅ 不覆盖 balance_before/after — 保持下注时 Lua 记录的余额快照
