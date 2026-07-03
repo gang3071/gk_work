@@ -352,21 +352,22 @@ class SPGameController
 
             // ✅ PlayerWin/PlayerLost 使用外层 amount 和 txnid 进行单次结算
             if (!empty($txnId) && $payoutAmount > 0) {
-                // ✅ 检查 betlist 中的下注订单是否存在
+                // ✅ 检查 betlist 中的下注订单是否存在，并获取正确的下注订单号
+                $betOrderNo = null;
                 if (!empty($betList)) {
                     foreach ($betList as $betInfo) {
                         // 优先检查 transferlist（捕鱼游戏等多人游戏）
                         if (isset($betInfo['transferlist']) && is_array($betInfo['transferlist'])) {
                             foreach ($betInfo['transferlist'] as $transfer) {
-                                $betOrderNo = (string)($transfer['txnid'] ?? '');
-                                if (empty($betOrderNo)) {
+                                $tmpBetOrderNo = (string)($transfer['txnid'] ?? '');
+                                if (empty($tmpBetOrderNo)) {
                                     continue;
                                 }
-                                $betRecordKey = "game:record:bet:SP:{$betOrderNo}";
+                                $betRecordKey = "game:record:bet:SP:{$tmpBetOrderNo}";
                                 if (!\support\Redis::exists($betRecordKey)) {
                                     Log::channel('sp_server')->warning('SP结算失败：transferlist中的下注订单不存在', [
                                         'settle_txnid' => $txnId,
-                                        'bet_txnid' => $betOrderNo
+                                        'bet_txnid' => $tmpBetOrderNo
                                     ]);
                                     $currentBalance = WalletService::getBalance($player->id);
                                     return $this->error(self::API_CODE_GENERAL_ERROR, [
@@ -375,18 +376,22 @@ class SPGameController
                                         'amount' => round((float)$currentBalance, 2),
                                     ]);
                                 }
+                                // ✅ 记录第一个找到的下注订单号
+                                if ($betOrderNo === null) {
+                                    $betOrderNo = $tmpBetOrderNo;
+                                }
                             }
                         } else {
                             // 普通游戏，检查 betlist 中的 txnid
-                            $betOrderNo = (string)($betInfo['txnid'] ?? '');
-                            if (empty($betOrderNo)) {
+                            $tmpBetOrderNo = (string)($betInfo['txnid'] ?? '');
+                            if (empty($tmpBetOrderNo)) {
                                 continue;
                             }
-                            $betRecordKey = "game:record:bet:SP:{$betOrderNo}";
+                            $betRecordKey = "game:record:bet:SP:{$tmpBetOrderNo}";
                             if (!\support\Redis::exists($betRecordKey)) {
                                 Log::channel('sp_server')->warning('SP结算失败：下注订单不存在', [
                                     'settle_txnid' => $txnId,
-                                    'bet_txnid' => $betOrderNo
+                                    'bet_txnid' => $tmpBetOrderNo
                                 ]);
                                 $currentBalance = WalletService::getBalance($player->id);
                                 return $this->error(self::API_CODE_GENERAL_ERROR, [
@@ -395,12 +400,16 @@ class SPGameController
                                     'amount' => round((float)$currentBalance, 2),
                                 ]);
                             }
+                            // ✅ 记录第一个找到的下注订单号
+                            if ($betOrderNo === null) {
+                                $betOrderNo = $tmpBetOrderNo;
+                            }
                         }
                     }
                 }
 
-                // 单次派彩处理（使用外层 txnid 作为结算订单号）
-                $orderNo = $txnId;
+                // ✅ 修复：使用betlist中的下注订单号，而不是外层的结算订单号
+                $orderNo = $betOrderNo ?? $txnId;
                 $resultAmount = $payoutAmount;
 
                 // Lua 原子结算
