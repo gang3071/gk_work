@@ -315,7 +315,7 @@ local currentBalance = tonumber(redis.call('GET', KEYS[1])) or 0
 local winAmount = tonumber(ARGV[1]) or 0
 local diffAmount = tonumber(ARGV[2]) or 0
 
--- 3. 补单场景：重新结算逻辑（✅ 整数运算）
+-- 3. 补单场景 + BTG/QT修复：重新结算逻辑（✅ 整数运算）
 local balanceChange = winAmount
 if allowDuplicateSettle and betExists == 1 then
     -- ✅ 补单：获取原结算金额，计算调整差额
@@ -323,6 +323,10 @@ if allowDuplicateSettle and betExists == 1 then
     balanceChange = winAmount - originalWin  -- 调整差额（可正可负）
 
     -- 重新计算 diff（基于原下注金额）
+    local originalBet = tonumber(redis.call('HGET', KEYS[2], 'amount') or 0)
+    diffAmount = winAmount - originalBet
+elseif betExists == 1 then
+    -- ✅ BTG/QT修复：正常结算时也要重新计算diff（diff = win - bet）
     local originalBet = tonumber(redis.call('HGET', KEYS[2], 'amount') or 0)
     diffAmount = winAmount - originalBet
 end
