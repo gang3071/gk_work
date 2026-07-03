@@ -271,6 +271,58 @@ class GameRecordSyncWorker
 
             foreach ($mergedRecords as $record) {
                 $orderNo = $record['order_no'];
+                $settlementStatus = $record['settlement_status'] ?? 0;
+                $platform = $record['platform'] ?? '';
+                $betTime = $record['bet_time'] ?? 0;
+
+                // ⚠️ 时序竞争防护：快速结算游戏跳过未结算记录
+                //
+                // 问题场景：电子游戏下注后立即结算（<1秒）
+                // - T1: 下注完成 → Redis: settlement_status=0
+                // - T2: SyncWorker读取 → 读到未结算状态
+                // - T3: 结算完成 → Redis: settlement_status=1, win/diff已更新
+                // - T4: SyncWorker写入 → 使用T2读到的旧数据（win=0）
+                //
+                // 解决策略：
+                // 1. 快速结算游戏（RSG、MT等）：跳过未结算记录，等待结算完成
+                // 2. 长周期游戏（真人、体育）：立即同步未结算记录，后续更新
+                // 3. 超时记录（>60秒未结算）：强制同步，避免永久pending
+                //
+                // ✅ 快速结算平台列表（通常<5秒内结算）
+                $fastSettlePlatforms = ['RSG', 'RSGLIVE', 'MT', 'BTG', 'SP', 'SPSDY', 'KT', 'JDB', 'KY', 'DG'];
+                $isFastSettle = in_array($platform, $fastSettlePlatforms);
+
+                // 计算记录年龄
+                $recordAge = $betTime > 0 ? (time() - $betTime) : 0;
+
+                if ($settlementStatus == 0) {
+                    // 快速结算游戏 + 新记录（<60秒）→ 跳过，等待结算
+                    if ($isFastSettle && $recordAge < 60) {
+                        $this->log->debug('跳过未结算记录（快速结算游戏，等待结算）', [
+                            'order_no' => $orderNo,
+                            'platform' => $platform,
+                            'record_age' => $recordAge,
+                            'amount' => isset($record['amount']) ? round($record['amount'] / 100, 2) : 0,
+                        ]);
+
+                        // 标记回pending状态，允许下次同步
+                        $redisKey = $record['redis_key'] ?? '';
+                        if ($redisKey) {
+                            Redis::connection('work')->hSet($redisKey, 'status', 'pending');
+                        }
+                        continue;
+                    }
+
+                    // 其他情况：立即同步未结算记录
+                    // - 长周期游戏（真人、体育等）
+                    // - 超时记录（>60秒未结算，可能是长周期或异常）
+                    $this->log->info('同步未结算记录', [
+                        'order_no' => $orderNo,
+                        'platform' => $platform,
+                        'record_age' => $recordAge,
+                        'reason' => $isFastSettle ? 'timeout' : 'long_cycle_game',
+                    ]);
+                }
 
                 if ($existingRecords->has($orderNo)) {
                     // 已存在，准备更新
