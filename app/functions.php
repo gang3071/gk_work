@@ -47,22 +47,40 @@ function machineKeepOutPlayer(): void
 {
     $log = Log::channel('machine_keeping');
     //機台例行維護中
-    if (machineMaintaining()) {
-        $log->info('PlayOutMachine: 全站维护中');
-        return;
+    try {
+        if (machineMaintaining()) {
+            $log->info('PlayOutMachine: 全站维护中');
+            return;
+        }
+    } catch (\Exception $e) {
+        // 数据库连接失败时不应中断整个流程，继续执行保留倒计时和踢人逻辑
+        $log->warning('检查维护状态失败，继续执行保留倒计时', [
+            'error' => $e->getMessage()
+        ]);
     }
     /** @var SystemSetting $setting */
-    $setting = SystemSetting::query()->where('feature', 'pending_minutes')->where('status', 1)->first();
-    if (!$setting || $setting->num <= 0) {
-        $settingMinutes = 2; // 默认2分钟进入保留状态
-    } else {
-        $settingMinutes = $setting->num;
+    try {
+        $setting = SystemSetting::query()->where('feature', 'pending_minutes')->where('status', 1)->first();
+        if (!$setting || $setting->num <= 0) {
+            $settingMinutes = 2; // 默认2分钟进入保留状态
+        } else {
+            $settingMinutes = $setting->num;
+        }
+    } catch (\Exception $e) {
+        // 数据库连接失败时使用默认值
+        $log->warning('获取保留时长配置失败，使用默认值2分钟', ['error' => $e->getMessage()]);
+        $settingMinutes = 2;
     }
 
     // 不扣保留时间设置
     $isFreeTime = false;
     /** @var SystemSetting $keepingSetting */
-    $keepingSetting = SystemSetting::query()->where('feature', 'keeping_off')->where('status', 1)->first();
+    try {
+        $keepingSetting = SystemSetting::query()->where('feature', 'keeping_off')->where('status', 1)->first();
+    } catch (\Exception $e) {
+        $log->warning('获取免费保留配置失败', ['error' => $e->getMessage()]);
+        $keepingSetting = null;
+    }
     if (!empty($keepingSetting)) {
         $offStart = $keepingSetting['date_start'] ?? '';
         $offEnd = $keepingSetting['date_end'] ?? '';
@@ -81,11 +99,17 @@ function machineKeepOutPlayer(): void
         }
     }
     //遊戲中玩家
-    $gamingMachines = Machine::query()
-        ->where('gaming', 1)
-        ->where('gaming_user_id', '!=', 0)
-        ->orderBy('type')
-        ->get();
+    try {
+        $gamingMachines = Machine::query()
+            ->where('gaming', 1)
+            ->where('gaming_user_id', '!=', 0)
+            ->orderBy('type')
+            ->get();
+    } catch (\Exception $e) {
+        // 数据库连接失败时中止，避免后续操作异常
+        $log->error('获取游戏中机台列表失败', ['error' => $e->getMessage()]);
+        return;
+    }
     /** @var Machine $machine */
     foreach ($gamingMachines as $machine) {
         try {
