@@ -156,6 +156,32 @@ LUA;
     }
 
     /**
+     * 使用 SCAN 迭代查找匹配的 keys（非阻塞，替代 KEYS 命令）
+     *
+     * @param string $pattern 匹配模式（支持通配符）
+     * @return array 匹配的 key 列表
+     */
+    private static function scanKeys(string $pattern): array
+    {
+        $redis = self::redis();
+        $keys = [];
+        $iterator = null;  // SCAN 游标（引用传递，由 Redis 自动更新）
+
+        // SCAN 迭代：$iterator 由 Redis 自动更新，初始为 null，完成时变为 0
+        // 注意：scan 可能返回空数组，但 $iterator 仍在继续，需要用 do-while
+        do {
+            $result = $redis->scan($iterator, $pattern, 100);
+
+            // 合并本次迭代的结果（可能为空数组）
+            if (is_array($result) && !empty($result)) {
+                $keys = array_merge($keys, $result);
+            }
+        } while ($iterator !== 0);  // iterator=0 表示迭代完成
+
+        return $keys;
+    }
+
+    /**
      * 保存下注记录到 Redis
      *
      * @param string $platform 平台代码（RSG, MT, BTG 等）
@@ -693,7 +719,8 @@ LUA;
             "game:record:settle:{$platform}:{$mainTxID}_*",    // SubTxID>0
         ];
         foreach ($settlePatterns as $pattern) {
-            $settleKeys = $redis->keys($pattern);
+            // 🎯 性能优化：使用 SCAN 替代 KEYS（非阻塞）
+            $settleKeys = self::scanKeys($pattern);
             foreach ($settleKeys as $settleKey) {
                 $redis->zRem(self::PREFIX_SYNC_QUEUE, $settleKey);
                 $redis->del($settleKey);
@@ -711,7 +738,8 @@ LUA;
 
         // 查找 SubTxID>0 的订单（订单号 = MainTxID_SubTxID）
         $patternN = self::PREFIX_BET . "{$platform}:{$mainTxID}_*";
-        $keysN = $redis->keys($patternN);
+        // 🎯 性能优化：使用 SCAN 替代 KEYS（非阻塞）
+        $keysN = self::scanKeys($patternN);
         $keys = array_merge($keys, $keysN);
 
         $settledCount = 0;

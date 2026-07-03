@@ -81,11 +81,17 @@ function machineKeepOutPlayer(): void
         }
     }
     //遊戲中玩家
-    $gamingMachines = Machine::query()
-        ->where('gaming', 1)
-        ->where('gaming_user_id', '!=', 0)
-        ->orderBy('type')
-        ->get();
+    try {
+        $gamingMachines = Machine::query()
+            ->where('gaming', 1)
+            ->where('gaming_user_id', '!=', 0)
+            ->orderBy('type')
+            ->get();
+    } catch (\Exception $e) {
+        // 数据库连接失败时中止，避免后续操作异常
+        $log->error('获取游戏中机台列表失败', ['error' => $e->getMessage()]);
+        return;
+    }
     /** @var Machine $machine */
     foreach ($gamingMachines as $machine) {
         try {
