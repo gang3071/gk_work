@@ -212,18 +212,20 @@ function machineKeepOutPlayer(): void
                 }
                 $log->info('PlayOutMachine: 扣除保留时间', ['keeping_setting' => $keepingSetting, 'keep_seconds' => $keepSeconds]);
                 $services->keep_seconds = max(bcsub($keepSeconds, 10), 0);
+                // ✅ 修复：发送扣减后的新值
+                $newKeepSeconds = $services->keep_seconds;
                 sendSocketMessage('player-' . $machine->gaming_user_id . '-' . $machine->id, [
                     'msg_type' => 'player_machine_keeping',
                     'player_id' => $machine->gaming_user_id,
                     'machine_id' => $machine->id,
-                    'keep_seconds' => $keepSeconds,
+                    'keep_seconds' => $newKeepSeconds,
                     'keeping' => $services->keeping
                 ]);
                 sendSocketMessage('player-' . $machine->gaming_user_id, [
                     'msg_type' => 'player_machine_keeping',
                     'player_id' => $machine->gaming_user_id,
                     'machine_id' => $machine->id,
-                    'keep_seconds' => $keepSeconds,
+                    'keep_seconds' => $newKeepSeconds,
                     'keeping' => $services->keeping
                 ]);
             } else {
