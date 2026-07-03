@@ -345,12 +345,33 @@ class TNineServiceInterface extends GameServiceFactory implements GameServiceInt
 
     public function verifySign($data)
     {
+        // 验证必需字段
+        if (!isset($data['AgentId'])) {
+            \support\Log::channel('tnine_server')->error('TNine签名验证失败：缺少AgentId', ['data' => $data]);
+            return $this->error = TNinegameController::API_CODE_ERROR;
+        }
+
+        if (!isset($data['RequestTime'])) {
+            \support\Log::channel('tnine_server')->error('TNine签名验证失败：缺少RequestTime', ['data' => $data]);
+            return $this->error = TNinegameController::API_CODE_ERROR;
+        }
+
+        if (!isset($data['Sign'])) {
+            \support\Log::channel('tnine_server')->error('TNine签名验证失败：缺少Sign', ['data' => $data]);
+            return $this->error = TNinegameController::API_CODE_ERROR;
+        }
+
         $agentId = $data['AgentId'];
         $time = $data['RequestTime'];
         $key = $this->config['api_key'];
 
         $sign = strtolower(md5("$agentId&$time&$key"));
         if ($sign !== $data['Sign']) {
+            \support\Log::channel('tnine_server')->error('TNine签名验证失败：签名不匹配', [
+                'expected' => $sign,
+                'received' => $data['Sign'],
+                'data' => $data
+            ]);
             return $this->error = TNinegameController::API_CODE_SIGN_ERROR;
         }
 
