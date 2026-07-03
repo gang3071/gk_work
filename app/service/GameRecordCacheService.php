@@ -922,17 +922,25 @@ LUA;
 
             // ✅ 如果是当前订单，使用完整的结算数据
             if ($orderNo === $currentOrderNo) {
+                // 🎯 单位转换：Controller传入的是"元"，Redis必须存"分"
+                $winInCents = (int)round(($currentRecordData['win'] ?? 0) * 100);
+                $diffInCents = (int)round(($currentRecordData['diff'] ?? 0) * 100);
+                $balanceBeforeInCents = isset($currentRecordData['balance_before']) && $currentRecordData['balance_before'] !== ''
+                    ? (int)round($currentRecordData['balance_before'] * 100) : '';
+                $balanceAfterInCents = isset($currentRecordData['balance_after']) && $currentRecordData['balance_after'] !== ''
+                    ? (int)round($currentRecordData['balance_after'] * 100) : '';
+
                 $redis->hMSet($key, [
-                    'win' => $currentRecordData['win'] ?? 0,
-                    'diff' => $currentRecordData['diff'] ?? 0,
+                    'win' => $winInCents,
+                    'diff' => $diffInCents,
                     'settlement_status' => 1,
                     'settle_type' => 'settle',
                     'settle_time' => time(),
                     'platform_action_at' => date('Y-m-d H:i:s'),
                     'action_data' => json_encode($currentRecordData['original_data'] ?? [], JSON_UNESCAPED_UNICODE),
                     'status' => 'pending',
-                    'balance_before' => $currentRecordData['balance_before'] ?? '',
-                    'balance_after' => $currentRecordData['balance_after'] ?? '',
+                    'balance_before' => $balanceBeforeInCents,
+                    'balance_after' => $balanceAfterInCents,
                 ]);
             } else {
                 // 其他子订单：只更新结算状态
