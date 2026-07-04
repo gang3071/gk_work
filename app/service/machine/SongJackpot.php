@@ -344,11 +344,7 @@ class SongJackpot extends MachineServices implements BaseMachine
             $fun1 = substr($msg, 0, 4);
             $gamingUserId = $this->machine->gaming_user_id;
             $orgRewardStatus = $this->reward_status; // 开奖
-            $orgAuto = $this->auto; // 自动
-            $orgPoint = $this->point; // 原始分数
             $orgTurn = $this->turn; // 原始转数
-            $orgScore = $this->score; // 原始转数
-            $orgNowTurn = $this->now_turn; // 原始中中对接次数
             $orgWinNumber = $this->win_number; // 中洞兑奖次数
             if ($len == '36' && ($fun1 == self::TESTING || $fun1 == self::TESTING2)) {
                 if (substr($msg, 18, 2) != 'da') {
