@@ -182,13 +182,33 @@ LUA;
      * @param string $pattern 匹配模式（如 "game:record:bet:KT:123_*"）
      * @return array 匹配的键列表
      */
-    private static function scanKeys(string $pattern): array
+    /**
+     * 使用 SCAN 迭代查找匹配的 keys（非阻塞，替代 KEYS 命令）
+     *
+     * ⚠️ 安全限制：
+     * - 最多扫描500次迭代（防止无限循环导致CPU 100%）
+     * - 最多返回5000个key（防止内存爆炸，约5MB）
+     * - 超出限制时记录ERROR日志并抛异常（防止静默失败）
+     *
+     * 💡 业务分析：
+     * - KT平台单个MainTxID通常只有1-10个SubTxID
+     * - 极端情况可能到几十个，超过100个非常罕见
+     * - 5000的限制足以覆盖99.99%的正常场景
+     *
+     * @param string $pattern Redis key匹配模式
+     * @param int $maxKeys 最大返回key数量（默认5000）
+     * @param int $maxIterations 最大迭代次数（默认500）
+     * @return array
+     * @throws \RuntimeException 达到限制时抛出异常，防止静默失败
+     */
+    private static function scanKeys(string $pattern, int $maxKeys = 5000, int $maxIterations = 500): array
     {
         $redis = self::redis();
         $keys = [];
         $cursor = null;
+        $iterations = 0;
 
-        // SCAN 迭代：每次返回一批键，直到 cursor 为 0
+        // ✅ 限制迭代次数，防止CPU 100%
         do {
             // scan(cursor, pattern, count)
             // cursor: 迭代游标，首次传 null 或 0
@@ -201,6 +221,33 @@ LUA;
             }
 
             $keys = array_merge($keys, $result);
+
+            // ✅ 限制返回数量，防止内存爆炸
+            if (count($keys) >= $maxKeys) {
+                $errorMsg = '[scanKeys] 达到最大key数量限制，可能导致数据处理不完整';
+                \support\Log::error($errorMsg, [
+                    'pattern' => $pattern,
+                    'found_keys' => count($keys),
+                    'max_keys' => $maxKeys,
+                    'iterations' => $iterations,
+                    'worker_pid' => posix_getpid(),
+                ]);
+                throw new \RuntimeException($errorMsg . ": pattern={$pattern}, found=" . count($keys));
+            }
+
+            $iterations++;
+
+            // ✅ 防止死循环
+            if ($iterations >= $maxIterations) {
+                $errorMsg = '[scanKeys] 达到最大迭代次数限制，可能导致数据处理不完整';
+                \support\Log::error($errorMsg, [
+                    'pattern' => $pattern,
+                    'found_keys' => count($keys),
+                    'max_iterations' => $maxIterations,
+                    'worker_pid' => posix_getpid(),
+                ]);
+                throw new \RuntimeException($errorMsg . ": pattern={$pattern}, iterations={$iterations}");
+            }
         } while ($cursor > 0);
 
         return $keys;
