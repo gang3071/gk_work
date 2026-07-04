@@ -159,16 +159,22 @@ LUA;
      * 使用 SCAN 迭代查找匹配的 keys（非阻塞，替代 KEYS 命令）
      *
      * ⚠️ 安全限制：
-     * - 最多扫描100次迭代（防止无限循环导致CPU 100%）
-     * - 最多返回1000个key（防止内存爆炸）
-     * - 超出限制时记录警告日志
+     * - 最多扫描500次迭代（防止无限循环导致CPU 100%）
+     * - 最多返回5000个key（防止内存爆炸，约5MB）
+     * - 超出限制时记录ERROR日志并抛异常（防止静默失败）
+     *
+     * 💡 业务分析：
+     * - KT平台单个MainTxID通常只有1-10个SubTxID
+     * - 极端情况可能到几十个，超过100个非常罕见
+     * - 5000的限制足以覆盖99.99%的正常场景
      *
      * @param string $pattern 匹配模式（支持通配符）
-     * @param int $maxKeys 最大返回key数量（默认1000）
-     * @param int $maxIterations 最大迭代次数（默认100）
+     * @param int $maxKeys 最大返回key数量（默认5000，约5MB内存）
+     * @param int $maxIterations 最大迭代次数（默认500，约50ms）
      * @return array 匹配的 key 列表
+     * @throws \RuntimeException 当达到限制时抛出异常
      */
-    private static function scanKeys(string $pattern, int $maxKeys = 1000, int $maxIterations = 100): array
+    private static function scanKeys(string $pattern, int $maxKeys = 5000, int $maxIterations = 500): array
     {
         $redis = self::redis();
         $keys = [];
@@ -184,13 +190,15 @@ LUA;
 
                 // ✅ 限制返回数量，防止内存爆炸
                 if (count($keys) >= $maxKeys) {
-                    \support\Log::warning('[scanKeys] 达到最大key数量限制', [
+                    $errorMsg = '[scanKeys] 达到最大key数量限制，可能导致数据处理不完整';
+                    \support\Log::error($errorMsg, [
                         'pattern' => $pattern,
                         'found_keys' => count($keys),
                         'max_keys' => $maxKeys,
                         'iterations' => $iterations,
+                        'action' => '已抛出异常，终止处理',
                     ]);
-                    break;
+                    throw new \RuntimeException($errorMsg . ": pattern={$pattern}, found={count($keys)}");
                 }
             }
 
@@ -198,12 +206,14 @@ LUA;
 
             // ✅ 防止死循环
             if ($iterations >= $maxIterations) {
-                \support\Log::warning('[scanKeys] 达到最大迭代次数限制', [
+                $errorMsg = '[scanKeys] 达到最大迭代次数限制，可能导致数据处理不完整';
+                \support\Log::error($errorMsg, [
                     'pattern' => $pattern,
                     'found_keys' => count($keys),
                     'max_iterations' => $maxIterations,
+                    'action' => '已抛出异常，终止处理',
                 ]);
-                break;
+                throw new \RuntimeException($errorMsg . ": pattern={$pattern}, iterations={$iterations}");
             }
         } while ($iterator !== 0);
 
