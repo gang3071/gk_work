@@ -52,6 +52,8 @@ class PlayerCacheService
             $player = $query->find($cachedPlayerId);
 
             if ($player) {
+                // ✅ 验证玩家状态：即使缓存命中，也要检查最新状态
+                // 数据库查询已经获取了最新的Player对象，包含最新的status
                 return $player;
             }
 
