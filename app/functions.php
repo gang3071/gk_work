@@ -232,10 +232,42 @@ function machineKeepOutPlayer(): void
                 // 保留时间为0时踢出玩家
                 // ✅ 从 Redis 读取实时余额
                 $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
-                if (machineWash($player, $machine, 'leave', 1)) {
+
+                // ✅ 记录踢出前的机台状态
+                $machineStatus = [
+                    'machine_id' => $machine->id,
+                    'machine_code' => $machine->code,
+                    'machine_type' => $machine->type,
+                    'player_id' => $player->id,
+                    'player_uuid' => $player->uuid,
+                    'before_balance' => $beforeGameAmount,
+                ];
+                $log->info('PlayOutMachine: 准备踢出玩家', $machineStatus);
+
+                try {
+                    $washResult = machineWash($player, $machine, 'leave', 1);
+
                     //寫入踢人log
                     $afterGameAmount = \app\service\WalletService::getBalance($player->id);
                     $wash_point = abs($afterGameAmount - $beforeGameAmount);
+
+                    // ⚠️ 异常检测：退分为0时记录警告
+                    if ($wash_point == 0) {
+                        $log->warning('PlayOutMachine: 踢出玩家但退分为0，请检查硬件通信', array_merge($machineStatus, [
+                            'after_balance' => $afterGameAmount,
+                            'wash_point' => $wash_point,
+                            'wash_result' => $washResult,
+                        ]));
+                    } else {
+                        $log->info('PlayOutMachine: 踢出成功并退分', [
+                            'machine_id' => $machine->id,
+                            'player_id' => $player->id,
+                            'wash_point' => $wash_point,
+                            'before_balance' => $beforeGameAmount,
+                            'after_balance' => $afterGameAmount,
+                        ]);
+                    }
+
                     $machineKickLog = new MachineKickLog;
                     $machineKickLog->player_id = $player->id;
                     $machineKickLog->machine_id = $machine->id;
@@ -243,10 +275,11 @@ function machineKeepOutPlayer(): void
                     $machineKickLog->wash_point = $wash_point;
                     $machineKickLog->before_game_amount = $beforeGameAmount;
                     $machineKickLog->after_game_amount = $afterGameAmount;
-
                     $machineKickLog->save();
+
                     // 更新保留日志
                     updateKeepingLog($machine->id, $player->id);
+
                     // 发送踢人消息
                     sendSocketMessage('player-' . $player->id . '-' . $machine->id, [
                         'msg_type' => 'kick_out',
@@ -264,8 +297,18 @@ function machineKeepOutPlayer(): void
                         'keep_seconds' => '0',
                         'keeping' => '0'
                     ]);
+
                     // 清理赠点缓存
                     Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+
+                } catch (Exception $washException) {
+                    // ❌ 退分失败，记录详细错误
+                    $log->error('PlayOutMachine: 踢出玩家时退分失败', array_merge($machineStatus, [
+                        'error' => $washException->getMessage(),
+                        'trace' => $washException->getTraceAsString(),
+                    ]));
+                    // 重新抛出异常，让外层catch捕获
+                    throw $washException;
                 }
             }
         } catch (Exception $e) {
