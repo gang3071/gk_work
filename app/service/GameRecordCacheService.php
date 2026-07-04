@@ -746,7 +746,7 @@ LUA;
         $currentMax = (int)self::redis()->get($maxSubTxIDKey);
         if ($subTxID > $currentMax) {
             self::redis()->set($maxSubTxIDKey, $subTxID);
-            self::redis()->expire($maxSubTxIDKey, self::TTL_RECORD);  // 7天过期，与订单记录一致
+            self::redis()->expire($maxSubTxIDKey, 3600);  // 1小时过期（结算通常在几分钟内完成）
         }
 
         // 记录在线玩家
@@ -884,6 +884,9 @@ LUA;
 
         // 记录统计
         self::redis()->incr("game:stats:{$platform}:settle:count");
+
+        // ✅ 批量结算完成后，删除max_subtx记录（已无用，节省内存）
+        $redis->del($maxSubTxIDKey);
 
         return $settledCount;
     }
