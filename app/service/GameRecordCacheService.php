@@ -785,16 +785,17 @@ LUA;
         $redis->del($settleKey0);
 
         // 清理SubTxID>0的settle记录（有限循环）
+        $settleMisses = 0;  // ✅ 使用局部变量，不累积
         for ($i = 1; $i <= $maxSubTxID; $i++) {
             $settleKey = "game:record:settle:{$platform}:{$mainTxID}_{$i}";
             if ($redis->exists($settleKey)) {
                 $redis->zRem(self::PREFIX_SYNC_QUEUE, $settleKey);
                 $redis->del($settleKey);
+                $settleMisses = 0;  // 找到了，重置计数器
             } else {
+                $settleMisses++;
                 // 如果连续10个SubTxID不存在，认为后面也没有了
-                static $consecutiveMisses = 0;
-                $consecutiveMisses++;
-                if ($consecutiveMisses >= 10) {
+                if ($settleMisses >= 10) {
                     break;
                 }
             }
