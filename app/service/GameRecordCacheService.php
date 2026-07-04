@@ -682,6 +682,12 @@ LUA;
         $orderNo = $data['order_no'];
         $key = self::PREFIX_BET . "{$platform}:{$orderNo}";
 
+        // 🎯 提取MainTxID和SubTxID（用于记录最大SubTxID）
+        // orderNo格式：MainTxID 或 MainTxID_SubTxID
+        $parts = explode('_', $orderNo);
+        $mainTxID = $parts[0];
+        $subTxID = isset($parts[1]) ? (int)$parts[1] : 0;
+
         // ✅ KT专用：清理可能由Lua创建的settle记录（防止重复）
         $settleKey = "game:record:settle:{$platform}:{$orderNo}";
         if (self::redis()->exists($settleKey)) {
@@ -735,6 +741,14 @@ LUA;
         // 记录统计
         self::redis()->incr("game:stats:{$platform}:bet:count");
 
+        // 🎯 KT专用：记录最大SubTxID（用于后续精确查找，避免循环遍历）
+        $maxSubTxIDKey = "game:record:kt:max_subtx:{$mainTxID}";
+        $currentMax = (int)self::redis()->get($maxSubTxIDKey);
+        if ($subTxID > $currentMax) {
+            self::redis()->set($maxSubTxIDKey, $subTxID);
+            self::redis()->expire($maxSubTxIDKey, self::TTL_RECORD);  // 7天过期，与订单记录一致
+        }
+
         // 记录在线玩家
         self::recordOnlinePlayer($platform, $data);
     }
@@ -752,9 +766,18 @@ LUA;
         $redis = self::redis();
         $currentOrderNo = $currentRecordData['order_no'];
 
-        // ✅ KT专用：清理可能存在的settle记录（包括SubTxID=0和SubTxID>0）
-        // 🎯 优化：使用有限循环替代SCAN，假设SubTxID < 1000（覆盖99.99%场景）
-        $maxSubTxID = 1000;
+        // 🎯 优化：读取实际的最大SubTxID，避免盲目循环
+        $maxSubTxIDKey = "game:record:kt:max_subtx:{$mainTxID}";
+        $maxSubTxID = (int)$redis->get($maxSubTxIDKey);
+
+        // 如果没有记录（老数据），则使用默认值5000
+        if ($maxSubTxID === 0) {
+            $maxSubTxID = 5000;  // 兜底值
+            \support\Log::info('[KT平台] 未找到max_subtx记录，使用默认值', [
+                'main_tx_id' => $mainTxID,
+                'default_max' => $maxSubTxID,
+            ]);
+        }
 
         // 清理SubTxID=0的settle记录
         $settleKey0 = "game:record:settle:{$platform}:{$mainTxID}";
@@ -788,10 +811,12 @@ LUA;
 
         // 查找 SubTxID>0 的订单（有限循环，避免SCAN）
         $consecutiveMisses = 0;
+        $maxFoundSubTxID = 0;  // 记录找到的最大SubTxID
         for ($i = 1; $i <= $maxSubTxID; $i++) {
             $keyN = self::PREFIX_BET . "{$platform}:{$mainTxID}_{$i}";
             if ($redis->exists($keyN)) {
                 $keys[] = $keyN;
+                $maxFoundSubTxID = $i;  // 更新最大SubTxID
                 $consecutiveMisses = 0;  // 重置计数器
             } else {
                 $consecutiveMisses++;
@@ -801,6 +826,15 @@ LUA;
                 }
             }
         }
+
+        // 📊 记录子订单数量（用于监控和优化）
+        $subOrderCount = count($keys);
+        \support\Log::info('[KT平台] 批量结算子订单', [
+            'main_tx_id' => $mainTxID,
+            'sub_order_count' => $subOrderCount,  // 实际找到的订单数
+            'max_sub_tx_id' => $maxFoundSubTxID,  // 最大的SubTxID
+            'expected_max' => $maxSubTxID,        // 预期的最大值
+        ]);
 
         $settledCount = 0;
         foreach ($keys as $key) {
