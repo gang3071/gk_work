@@ -70,6 +70,25 @@ class MtGameController
     }
 
     /**
+     * 从MT平台user_id中提取真实的玩家uuid
+     *
+     * MT平台传入的user_id格式：{system_code}_{uuid}
+     * 例如：yjbmt_29 → 29
+     *
+     * @param string $mtUserId MT平台的user_id
+     * @return string 玩家的真实uuid
+     */
+    private function extractPlayerUuid(string $mtUserId): string
+    {
+        // 如果包含下划线，去掉前缀
+        if (str_contains($mtUserId, '_')) {
+            return substr($mtUserId, strpos($mtUserId, '_') + 1);
+        }
+        // 兼容旧格式（无前缀）
+        return $mtUserId;
+    }
+
+    /**
      * 获取玩家钱包
      * @param Request $request
      * @return Response
@@ -129,7 +148,7 @@ class MtGameController
             }
 
             // 3. 查询玩家
-            $player = Player::where('uuid', $data['user_id'])->first();
+            $player = Player::where('uuid', $this->extractPlayerUuid($data['user_id']))->first();
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -269,7 +288,7 @@ class MtGameController
             }
 
             // 3. 查询玩家
-            $player = Player::where('uuid', $data['user_id'])->first();
+            $player = Player::where('uuid', $this->extractPlayerUuid($data['user_id']))->first();
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -378,7 +397,7 @@ class MtGameController
             }
 
             // 3. 查询玩家
-            $player = Player::where('uuid', $data['user_id'])->first();
+            $player = Player::where('uuid', $this->extractPlayerUuid($data['user_id']))->first();
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -506,7 +525,7 @@ class MtGameController
             }
 
             // 3. 查询玩家
-            $player = Player::where('uuid', $data['user_id'])->first();
+            $player = Player::where('uuid', $this->extractPlayerUuid($data['user_id']))->first();
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -632,7 +651,7 @@ class MtGameController
             }
 
             // 3. 查询玩家
-            $player = Player::where('uuid', $data['user_id'])->first();
+            $player = Player::where('uuid', $this->extractPlayerUuid($data['user_id']))->first();
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
