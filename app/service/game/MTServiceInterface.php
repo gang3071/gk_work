@@ -160,7 +160,7 @@ class MTServiceInterface extends GameServiceFactory implements GameServiceInterf
             $playerGamePlatform->player_id = $this->player->id;
             $playerGamePlatform->platform_id = $this->platform->id;
             $playerGamePlatform->player_name = $this->player->name;
-            $playerGamePlatform->player_code = $this->player->uuid;
+            $playerGamePlatform->player_code = $this->getMTUserId();  // ✅ 保持与MT平台一致
             $playerGamePlatform->web_id = $this->getWebId();
             $playerGamePlatform->save();
         }
