@@ -753,16 +753,27 @@ LUA;
         $currentOrderNo = $currentRecordData['order_no'];
 
         // ✅ KT专用：清理可能存在的settle记录（包括SubTxID=0和SubTxID>0）
-        $settlePatterns = [
-            "game:record:settle:{$platform}:{$mainTxID}",      // SubTxID=0
-            "game:record:settle:{$platform}:{$mainTxID}_*",    // SubTxID>0
-        ];
-        foreach ($settlePatterns as $pattern) {
-            // 🎯 性能优化：使用 SCAN 替代 KEYS（非阻塞）
-            $settleKeys = self::scanKeys($pattern);
-            foreach ($settleKeys as $settleKey) {
+        // 🎯 优化：使用有限循环替代SCAN，假设SubTxID < 1000（覆盖99.99%场景）
+        $maxSubTxID = 1000;
+
+        // 清理SubTxID=0的settle记录
+        $settleKey0 = "game:record:settle:{$platform}:{$mainTxID}";
+        $redis->zRem(self::PREFIX_SYNC_QUEUE, $settleKey0);
+        $redis->del($settleKey0);
+
+        // 清理SubTxID>0的settle记录（有限循环）
+        for ($i = 1; $i <= $maxSubTxID; $i++) {
+            $settleKey = "game:record:settle:{$platform}:{$mainTxID}_{$i}";
+            if ($redis->exists($settleKey)) {
                 $redis->zRem(self::PREFIX_SYNC_QUEUE, $settleKey);
                 $redis->del($settleKey);
+            } else {
+                // 如果连续10个SubTxID不存在，认为后面也没有了
+                static $consecutiveMisses = 0;
+                $consecutiveMisses++;
+                if ($consecutiveMisses >= 10) {
+                    break;
+                }
             }
         }
 
@@ -775,11 +786,21 @@ LUA;
             $keys[] = $key0;
         }
 
-        // 查找 SubTxID>0 的订单（订单号 = MainTxID_SubTxID）
-        $patternN = self::PREFIX_BET . "{$platform}:{$mainTxID}_*";
-        // 🎯 性能优化：使用 SCAN 替代 KEYS（非阻塞）
-        $keysN = self::scanKeys($patternN);
-        $keys = array_merge($keys, $keysN);
+        // 查找 SubTxID>0 的订单（有限循环，避免SCAN）
+        $consecutiveMisses = 0;
+        for ($i = 1; $i <= $maxSubTxID; $i++) {
+            $keyN = self::PREFIX_BET . "{$platform}:{$mainTxID}_{$i}";
+            if ($redis->exists($keyN)) {
+                $keys[] = $keyN;
+                $consecutiveMisses = 0;  // 重置计数器
+            } else {
+                $consecutiveMisses++;
+                // 如果连续10个SubTxID不存在，认为后面也没有了
+                if ($consecutiveMisses >= 10) {
+                    break;
+                }
+            }
+        }
 
         $settledCount = 0;
         foreach ($keys as $key) {
