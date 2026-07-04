@@ -7,6 +7,7 @@ use app\model\Player;
 use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
+use app\service\PlayerCacheService;
 use app\service\RedisLuaScripts;
 use Exception;
 use support\Log;
@@ -148,7 +149,7 @@ class MtGameController
             }
 
             // 3. 查询玩家
-            $player = Player::where('uuid', $this->extractPlayerUuid($data['user_id']))->first();
+            $player = PlayerCacheService::getByUuid($this->extractPlayerUuid($data['user_id']));
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -288,7 +289,7 @@ class MtGameController
             }
 
             // 3. 查询玩家
-            $player = Player::where('uuid', $this->extractPlayerUuid($data['user_id']))->first();
+            $player = PlayerCacheService::getByUuid($this->extractPlayerUuid($data['user_id']));
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -397,7 +398,7 @@ class MtGameController
             }
 
             // 3. 查询玩家
-            $player = Player::where('uuid', $this->extractPlayerUuid($data['user_id']))->first();
+            $player = PlayerCacheService::getByUuid($this->extractPlayerUuid($data['user_id']));
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -525,7 +526,7 @@ class MtGameController
             }
 
             // 3. 查询玩家
-            $player = Player::where('uuid', $this->extractPlayerUuid($data['user_id']))->first();
+            $player = PlayerCacheService::getByUuid($this->extractPlayerUuid($data['user_id']));
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
@@ -651,7 +652,7 @@ class MtGameController
             }
 
             // 3. 查询玩家
-            $player = Player::where('uuid', $this->extractPlayerUuid($data['user_id']))->first();
+            $player = PlayerCacheService::getByUuid($this->extractPlayerUuid($data['user_id']));
             if (!$player) {
                 return $this->error(self::API_CODE_PLAYER_NOT_EXIST);
             }
