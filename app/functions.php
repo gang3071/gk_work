@@ -290,6 +290,16 @@ function machineKeepOutPlayer(): void
                         'before_game_amount' => $beforeGameAmount,
                         'after_game_amount' => $afterGameAmount
                     ]);
+                    // 发送踢人消息
+                    sendSocketMessage('player-' . $player->id, [
+                        'msg_type' => 'kick_out',
+                        'machine_id' => $machine->id,
+                        'machine_name' => $machine->name,
+                        'machine_code' => $machine->code,
+                        'wash_point' => $wash_point,
+                        'before_game_amount' => $beforeGameAmount,
+                        'after_game_amount' => $afterGameAmount
+                    ]);
                     sendSocketMessage('player-' . $player->id, [
                         'msg_type' => 'player_machine_keeping',
                         'player_id' => $player->id,
