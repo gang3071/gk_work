@@ -158,25 +158,54 @@ LUA;
     /**
      * 使用 SCAN 迭代查找匹配的 keys（非阻塞，替代 KEYS 命令）
      *
+     * ⚠️ 安全限制：
+     * - 最多扫描100次迭代（防止无限循环导致CPU 100%）
+     * - 最多返回1000个key（防止内存爆炸）
+     * - 超出限制时记录警告日志
+     *
      * @param string $pattern 匹配模式（支持通配符）
+     * @param int $maxKeys 最大返回key数量（默认1000）
+     * @param int $maxIterations 最大迭代次数（默认100）
      * @return array 匹配的 key 列表
      */
-    private static function scanKeys(string $pattern): array
+    private static function scanKeys(string $pattern, int $maxKeys = 1000, int $maxIterations = 100): array
     {
         $redis = self::redis();
         $keys = [];
-        $iterator = null;  // SCAN 游标（引用传递，由 Redis 自动更新）
+        $iterator = null;
+        $iterations = 0;
 
-        // SCAN 迭代：$iterator 由 Redis 自动更新，初始为 null，完成时变为 0
-        // 注意：scan 可能返回空数组，但 $iterator 仍在继续，需要用 do-while
+        // ✅ 限制迭代次数，防止CPU 100%
         do {
             $result = $redis->scan($iterator, $pattern, 100);
 
-            // 合并本次迭代的结果（可能为空数组）
             if (is_array($result) && !empty($result)) {
                 $keys = array_merge($keys, $result);
+
+                // ✅ 限制返回数量，防止内存爆炸
+                if (count($keys) >= $maxKeys) {
+                    \support\Log::warning('[scanKeys] 达到最大key数量限制', [
+                        'pattern' => $pattern,
+                        'found_keys' => count($keys),
+                        'max_keys' => $maxKeys,
+                        'iterations' => $iterations,
+                    ]);
+                    break;
+                }
             }
-        } while ($iterator !== 0);  // iterator=0 表示迭代完成
+
+            $iterations++;
+
+            // ✅ 防止死循环
+            if ($iterations >= $maxIterations) {
+                \support\Log::warning('[scanKeys] 达到最大迭代次数限制', [
+                    'pattern' => $pattern,
+                    'found_keys' => count($keys),
+                    'max_iterations' => $maxIterations,
+                ]);
+                break;
+            }
+        } while ($iterator !== 0);
 
         return $keys;
     }
