@@ -27,7 +27,7 @@ class GameRecordCacheService
     /**
      * TTL 配置
      */
-    private const TTL_RECORD = 43200;  // 12小时
+    private const TTL_RECORD = 604800;  // 7天
     private const TTL_BALANCE = 3600;   // 1小时
 
     /**
@@ -652,7 +652,7 @@ LUA;
     {
         $count = 0;
 
-        // 清理超过TTL的同步队列记录
+        // 清理超过7天的同步队列记录
         $cutoffTime = time() - self::TTL_RECORD;
         $removed = Redis::zRemRangeByScore(self::PREFIX_SYNC_QUEUE, 0, $cutoffTime);
 
