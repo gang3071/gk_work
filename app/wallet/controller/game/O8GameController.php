@@ -205,7 +205,7 @@ class O8GameController
                 $this->service->player = $player;
 
                 $orderNo = $order['ptxid'];
-                $betInYuan = $order['amt'];  // 下注金额（元）
+                $bet = $order['amt'];
 
                 //判断当前设备是否爆机
                 if ($this->service->checkAndHandleMachineCrash()) {
@@ -217,14 +217,11 @@ class O8GameController
                     ->where('code', $order['gamecode'])
                     ->value('platform_id') ?? $this->service->platform->id;
 
-                // 🎯 关键修复：转换为"分"再传给 Lua 脚本
-                $betInCents = (int)round($betInYuan * 100);
-
                 // Lua 原子下注
                 $luaParams = [
                     'order_no' => $orderNo,
                     'platform_id' => $platformId,
-                    'amount' => $betInCents,  // ✅ 传入"分"
+                    'amount' => $bet,
                     'game_code' => $order['gamecode'],
                     'transaction_type' => TransactionType::BET,
                     'original_data' => $order,
@@ -276,7 +273,7 @@ class O8GameController
                     if ($result['error'] === 'insufficient_balance') {
                         $this->logger->warning('O8下注失败：余额不足', [
                             'order_no' => $orderNo,
-                            'bet_amount' => $betInYuan,  // ✅ 日志记录用"元"，便于阅读
+                            'bet_amount' => $bet,
                             'balance' => $result['balance']
                         ]);
                         // ✅ 部分失败：在该 transaction 中返回 err（不包括 bal, cur, dup）
@@ -304,7 +301,7 @@ class O8GameController
                         'order_no' => $orderNo,
                         'player_id' => $player->id,
                         'platform_id' => $platformId,
-                        'amount' => $betInCents,  // ✅ 使用"分"（与 Lua 一致）
+                        'amount' => $bet,
                         'game_code' => $order['gamecode'] ?? '',
                         'original_data' => $order,
                         'balance_before' => $result['old_balance'] ?? 0,
@@ -380,10 +377,11 @@ class O8GameController
                     }
 
                     // 从 Redis 读取原始下注金额
-                    // 🎯 单位转换：Redis存储的是"分"，直接使用"分"
-                    $originalBetAmountInCents = (int)\support\Redis::hGet($betRecordKey, 'amount');
+                    // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
+                    $amountInCents = (int)\support\Redis::hGet($betRecordKey, 'amount');
+                    $originalBetAmount = round($amountInCents / 100, 2);
 
-                    if ($originalBetAmountInCents <= 0) {
+                    if ($originalBetAmount <= 0) {
                         $this->logger->error('O8取消交易失败：无法读取原始下注金额', [
                             'refptxid' => $orderNo,
                             'redis_key' => $betRecordKey
@@ -401,26 +399,25 @@ class O8GameController
                         continue;
                     }
 
-                    // 验证平台传入的金额是否一致（仅用于日志，转换为"元"便于阅读）
+                    // 验证平台传入的金额是否一致
                     $platformAmt = $order['amt'] ?? 0;
-                    $originalBetAmountInYuan = round($originalBetAmountInCents / 100, 2);
-                    if (abs($platformAmt - $originalBetAmountInYuan) > 0.01) {
+                    if (abs($platformAmt - $originalBetAmount) > 0.01) {
                         $this->logger->warning('O8取消交易：平台传入金额与原始下注金额不一致', [
                             'refptxid' => $orderNo,
                             'platform_amt' => $platformAmt,
-                            'original_bet_amount' => $originalBetAmountInYuan,
-                            'diff' => $platformAmt - $originalBetAmountInYuan
+                            'original_bet_amount' => $originalBetAmount,
+                            'diff' => $platformAmt - $originalBetAmount
                         ]);
                     }
 
-                    // 使用原始下注金额作为退款金额（单位：分）
-                    $refundAmountInCents = $originalBetAmountInCents;
+                    // 使用原始下注金额作为退款金额
+                    $refundAmount = $originalBetAmount;
 
                     // Lua 原子取消
                     $luaParams = [
                         'order_no' => $orderNo,
                         'platform_id' => $this->service->platform->id,
-                        'refund_amount' => $refundAmountInCents,  // ✅ 传入"分"
+                        'refund_amount' => $refundAmount,
                         'transaction_type' => TransactionType::CANCEL_REFUND,
                         'original_data' => $order,
                     ];
@@ -488,7 +485,7 @@ class O8GameController
                             'order_no' => $orderNo,
                             'player_id' => $player->id,
                             'platform_id' => $this->service->platform->id,
-                            'refund_amount' => $refundAmountInCents,  // ✅ 使用"分"
+                            'refund_amount' => $refundAmount,
                             'original_data' => $order,
                             'balance_before' => $result['old_balance'] ?? 0,
                             'balance_after' => $result['balance'],
@@ -514,9 +511,6 @@ class O8GameController
                 // - ggr: 累计GGR（统计用）
                 $settleAmountInYuan = $order['amt'] ?? 0;  // 派彩金额（元）
 
-                // 🎯 关键修复：先转换为"分"，再做整数运算（避免浮点精度问题）
-                $settleAmountInCents = (int)round($settleAmountInYuan * 100);
-
                 // 计算实际变化金额（用于统计）
                 // diff = 派彩金额 - 下注金额 = amt - (从Redis读取的原始下注金额)
                 $betRecordKey = "game:record:bet:O8:{$orderNo}";
@@ -525,10 +519,12 @@ class O8GameController
                     // 🎯 单位转换：Redis存储的是"分"，读取出来也是"分"
                     $originalBetAmountInCents = (int)\support\Redis::hGet($betRecordKey, 'amount');
                 }
+                $originalBetAmountInYuan = round($originalBetAmountInCents / 100, 2);
+                $diffAmountInYuan = bcsub($settleAmountInYuan, $originalBetAmountInYuan, 2);
 
-                // ✅ 直接用"分"计算 diff，避免浮点数精度问题
-                // 例如：派彩 101 分 - 下注 100 分 = +1 分（赢了1分）
-                $diffAmountInCents = $settleAmountInCents - $originalBetAmountInCents;
+                // 🎯 关键修复：转换为"分"再传给 Lua 脚本
+                $settleAmountInCents = (int)round($settleAmountInYuan * 100);
+                $diffAmountInCents = (int)round($diffAmountInYuan * 100);
 
                 // Lua 原子结算
                 $luaParams = [
@@ -642,10 +638,7 @@ class O8GameController
                 }
 
                 $refPtxid = $order['refptxid'];
-                $refundAmountInYuan = $order['amt'] ?? 0;
-
-                // 🎯 关键修复：转换为"分"再传给 Lua 脚本
-                $refundAmountInCents = (int)round($refundAmountInYuan * 100);
+                $refundAmount = $order['amt'] ?? 0;
 
                 // UGS规范：检查订单是否存在（Lua未返回此错误）
                 $betRecordKey = "game:record:bet:O8:{$refPtxid}";
@@ -685,7 +678,7 @@ class O8GameController
                 $luaParams = [
                     'order_no' => $refPtxid,
                     'platform_id' => $this->service->platform->id,
-                    'refund_amount' => $refundAmountInCents,  // ✅ 传入"分"
+                    'refund_amount' => $refundAmount,
                     'transaction_type' => TransactionType::CANCEL_REFUND,
                     'original_data' => $order,
                 ];
@@ -726,7 +719,7 @@ class O8GameController
 
                 $this->logger->info('O8取消交易成功（Lua原子）', [
                     'refptxid' => $refPtxid,
-                    'refund_amount' => $refundAmountInYuan,  // ✅ 日志记录用"元"，便于阅读
+                    'refund_amount' => $refundAmount,
                     'balance_before' => $result['old_balance'],
                     'balance_after' => $result['balance'],
                 ]);
@@ -737,7 +730,7 @@ class O8GameController
                         'order_no' => $refPtxid,
                         'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
-                        'refund_amount' => $refundAmountInCents,  // ✅ 使用"分"
+                        'refund_amount' => $refundAmount,
                         'original_data' => $order,
                         'balance_before' => $result['old_balance'] ?? 0,
                         'balance_after' => $result['balance'],
