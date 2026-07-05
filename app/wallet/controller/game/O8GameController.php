@@ -509,25 +509,29 @@ class O8GameController
                 // - amt: 派彩金额（返还给玩家的总金额，包括本金）
                 // - turnover: 累计流水（统计用）
                 // - ggr: 累计GGR（统计用）
-                $settleAmount = $order['amt'] ?? 0;  // 派彩金额
+                $settleAmountInYuan = $order['amt'] ?? 0;  // 派彩金额（元）
 
                 // 计算实际变化金额（用于统计）
                 // diff = 派彩金额 - 下注金额 = amt - (从Redis读取的原始下注金额)
                 $betRecordKey = "game:record:bet:O8:{$orderNo}";
-                $originalBetAmount = 0;
+                $originalBetAmountInCents = 0;
                 if (\support\Redis::exists($betRecordKey)) {
-                    // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
-                    $amountInCents = (int)\support\Redis::hGet($betRecordKey, 'amount');
-                    $originalBetAmount = round($amountInCents / 100, 2);
+                    // 🎯 单位转换：Redis存储的是"分"，读取出来也是"分"
+                    $originalBetAmountInCents = (int)\support\Redis::hGet($betRecordKey, 'amount');
                 }
-                $diffAmount = bcsub($settleAmount, $originalBetAmount, 2);
+                $originalBetAmountInYuan = round($originalBetAmountInCents / 100, 2);
+                $diffAmountInYuan = bcsub($settleAmountInYuan, $originalBetAmountInYuan, 2);
+
+                // 🎯 关键修复：转换为"分"再传给 Lua 脚本
+                $settleAmountInCents = (int)round($settleAmountInYuan * 100);
+                $diffAmountInCents = (int)round($diffAmountInYuan * 100);
 
                 // Lua 原子结算
                 $luaParams = [
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
-                    'amount' => $settleAmount,  // ✅ 使用派彩金额
-                    'diff' => $diffAmount,      // ✅ 派彩 - 下注
+                    'amount' => $settleAmountInCents,  // ✅ 传入"分"
+                    'diff' => $diffAmountInCents,      // ✅ 传入"分"
                     'transaction_type' => TransactionType::SETTLE,
                     'original_data' => $order,
                 ];
@@ -564,8 +568,8 @@ class O8GameController
                         'order_no' => $orderNo,
                         'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
-                        'amount' => $settleAmount,  // ✅ 使用派彩金额
-                        'diff' => $diffAmount,      // ✅ 使用计算的差值
+                        'amount' => $settleAmountInCents,  // ✅ 使用"分"（与 Lua 一致）
+                        'diff' => $diffAmountInCents,      // ✅ 使用"分"（与 Lua 一致）
                         'game_code' => $order['gamecode'] ?? '',
                         'original_data' => $order,
                         'balance_before' => $result['old_balance'] ?? 0,
