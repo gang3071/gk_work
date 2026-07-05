@@ -313,8 +313,10 @@ class MTServiceInterface extends GameServiceFactory implements GameServiceInterf
                 $currentPage = $data['current_page'];
                 if ($data['list']) {
                     foreach ($data['list'] as $item) {
+                        // 🎯 提取真实 UUID
+                        $playerUuid = $this->extractPlayerUuid($item['user_id']);
                         /** @var Player $player */
-                        $player = Player::withTrashed()->where('uuid', $item['user_id'])->first();
+                        $player = Player::withTrashed()->where('uuid', $playerUuid)->first();
                         $list[] = [
                             'player_id' => $player->id,
                             'parent_player_id' => $player->recommend_id ?? 0,
@@ -337,8 +339,10 @@ class MTServiceInterface extends GameServiceFactory implements GameServiceInterf
                         $nextData = $this->getGameHistories($page);
                         if ($nextData['list']) {
                             foreach ($nextData['list'] as $item) {
+                                // 🎯 提取真实 UUID
+                                $playerUuid = $this->extractPlayerUuid($item['user_id']);
                                 /** @var Player $player */
-                                $player = Player::withTrashed()->where('uuid', $item['user_id'])->first();
+                                $player = Player::withTrashed()->where('uuid', $playerUuid)->first();
                                 $list[] = [
                                     'player_id' => $player->id,
                                     'parent_player_id' => $player->recommend_id ?? 0,
@@ -485,6 +489,24 @@ class MTServiceInterface extends GameServiceFactory implements GameServiceInterf
         throw new \RuntimeException('平台不支持 gift() 功能');
     }
 
+    /**
+     * 从MT平台user_id中提取真实的玩家uuid
+     *
+     * MT平台传入的user_id格式：{system_code}_{uuid}
+     * 例如：yjbmt_29 → 29
+     *
+     * @param string $mtUserId MT平台的user_id
+     * @return string 玩家的真实uuid
+     */
+    private function extractPlayerUuid(string $mtUserId): string
+    {
+        // 如果包含下划线，去掉前缀
+        if (str_contains($mtUserId, '_')) {
+            return substr($mtUserId, strpos($mtUserId, '_') + 1);
+        }
+        // 兼容旧格式（无前缀）
+        return $mtUserId;
+    }
 
     /**
      * 解密数据
@@ -501,13 +523,16 @@ class MTServiceInterface extends GameServiceFactory implements GameServiceInterf
         if (empty($data)) {
             return $this->error = MtGameController::API_CODE_DECRYPT_ERROR;
         }
-
         if (empty($data['system_code']) || $data['system_code'] != $this->config['system_code']) {
             return $this->error = MtGameController::API_CODE_INVALID_PARAM;
         }
 
+        // 🎯 MT平台user_id格式：{system_code}_{uuid}，需要提取真实uuid
+        // 例如：yjbmt_29 → 29
+        $playerUuid = $this->extractPlayerUuid($data['user_id']);
+
         // 使用缓存减少数据库查询
-        $player = \app\service\PlayerCacheService::getByUuid($data['user_id']);
+        $player = \app\service\PlayerCacheService::getByUuid($playerUuid);
 
         if (!$player) {
             return $this->error = MtGameController::API_CODE_PLAYER_NOT_EXIST;
