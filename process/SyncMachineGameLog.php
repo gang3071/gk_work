@@ -34,7 +34,7 @@ class SyncMachineGameLog
 
     public function __construct()
     {
-        $this->log = Log::channel('machine_log');
+        $this->log = Log::channel('machine');
     }
 
     /**
