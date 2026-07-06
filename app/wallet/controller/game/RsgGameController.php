@@ -80,14 +80,15 @@ class RsgGameController
     {
         try {
             $params = $request->post();
-
             $this->logger->info('RSG余额查询请求', ['params' => $params]);
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG余额查询（解密后）', ['params' => $data]);
 
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            // 校验并解密
+            $data = $this->validateAndDecrypt($params, '余额查询');
+            if ($data === null) {
+                return $this->error(self::API_CODE_INVALID_PARAM, '缺少Msg参数或解密失败');
             }
+
+            $this->logger->info('RSG余额查询（解密后）', ['params' => $data]);
 
             $balance = $this->service->balance();
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], ['Balance' => round((float)$balance, 2)]);
@@ -113,12 +114,12 @@ class RsgGameController
             $params = $request->post();
 
             // 1. 解密和验证
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG下注请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
-
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            $data = $this->validateAndDecrypt($params, '下注');
+            if ($data === null) {
+                return $this->error(self::API_CODE_INVALID_PARAM, '缺少Msg参数或解密失败');
             }
+
+            $this->logger->info('RSG下注请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             // 2. 查询玩家
             /** @var Player $player */
@@ -242,12 +243,12 @@ class RsgGameController
             $params = $request->post();
 
             // 1. 解密和验证
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG取消下注请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
-
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            $data = $this->validateAndDecrypt($params, '取消下注');
+            if ($data === null) {
+                return $this->error(self::API_CODE_INVALID_PARAM, '缺少Msg参数或解密失败');
             }
+
+            $this->logger->info('RSG取消下注请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             // 2. 查询玩家
             $player = Player::query()->where('uuid', $data['UserId'])->first();
@@ -367,12 +368,12 @@ class RsgGameController
         try {
             $params = $request->post();
             // 1. 解密和验证
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG结算请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
-
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            $data = $this->validateAndDecrypt($params, '结算');
+            if ($data === null) {
+                return $this->error(self::API_CODE_INVALID_PARAM, '缺少Msg参数或解密失败');
             }
+
+            $this->logger->info('RSG结算请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             // 2. 查询玩家
             /** @var Player $player */
@@ -527,12 +528,12 @@ class RsgGameController
             $params = $request->post();
 
             // 1. 解密和验证
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG重新结算请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
-
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            $data = $this->validateAndDecrypt($params, '重新结算');
+            if ($data === null) {
+                return $this->error(self::API_CODE_INVALID_PARAM, '缺少Msg参数或解密失败');
             }
+
+            $this->logger->info('RSG重新结算请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             // 2. 查询玩家
             /** @var Player $player */
@@ -620,12 +621,12 @@ class RsgGameController
             $params = $request->post();
 
             // 1. 解密和验证
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG Jackpot中奖请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
-
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            $data = $this->validateAndDecrypt($params, 'Jackpot中奖');
+            if ($data === null) {
+                return $this->error(self::API_CODE_INVALID_PARAM, '缺少Msg参数或解密失败');
             }
+
+            $this->logger->info('RSG Jackpot中奖请求（Lua原子）', ['order_no' => $data['SequenNumber'] ?? '']);
 
             // 2. 查询玩家
             /** @var Player $player */
@@ -727,12 +728,12 @@ class RsgGameController
             $params = $request->post();
 
             // 1. 解密和验证
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG打鱼机预扣金额请求（Lua原子）', ['session_id' => $data['SessionId'] ?? '']);
-
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            $data = $this->validateAndDecrypt($params, '打鱼机预扣金额');
+            if ($data === null) {
+                return $this->error(self::API_CODE_INVALID_PARAM, '缺少Msg参数或解密失败');
             }
+
+            $this->logger->info('RSG打鱼机预扣金额请求（Lua原子）', ['session_id' => $data['SessionId'] ?? '']);
 
             // 2. 查询玩家
             /** @var Player $player */
@@ -888,12 +889,12 @@ class RsgGameController
             $params = $request->post();
 
             // 1. 解密和验证
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG打鱼机退款请求（Lua原子）', ['session_id' => $data['SessionId'] ?? '']);
-
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+            $data = $this->validateAndDecrypt($params, '打鱼机退款');
+            if ($data === null) {
+                return $this->error(self::API_CODE_INVALID_PARAM, '缺少Msg参数或解密失败');
             }
+
+            $this->logger->info('RSG打鱼机退款请求（Lua原子）', ['session_id' => $data['SessionId'] ?? '']);
 
             // 2. 查询玩家
             $player = Player::query()->where('uuid', $data['UserId'])->first();
@@ -972,11 +973,14 @@ class RsgGameController
     {
         try {
             $params = $request->post();
-            $data = $this->service->decrypt($params['Msg']);
-            $this->logger->info('RSG检查交易请求', ['params' => $data]);
-            if ($this->service->error) {
-                return $this->error($this->service->error);
+
+            // 解密和验证
+            $data = $this->validateAndDecrypt($params, '检查交易');
+            if ($data === null) {
+                return $this->error(self::API_CODE_INVALID_PARAM, '缺少Msg参数或解密失败');
             }
+
+            $this->logger->info('RSG检查交易请求', ['params' => $data]);
             $result = $this->service->checkTransaction($data);
             if ($this->service->error) {
                 return $this->error($this->service->error);
@@ -990,6 +994,36 @@ class RsgGameController
             $this->sendTelegramAlert('RSG', '检查交易异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_INVALID_PARAM, $e->getMessage());
         }
+    }
+
+    /**
+     * 校验并解密请求参数
+     *
+     * @param array $params 请求参数
+     * @param string $action 操作名称（用于日志）
+     * @return array|null 解密后的数据，失败返回null
+     */
+    private function validateAndDecrypt(array $params, string $action): ?array
+    {
+        // 参数校验
+        if (empty($params['Msg'])) {
+            $this->logger->error("RSG{$action}：缺少Msg参数", ['params' => $params]);
+            return null;
+        }
+
+        // 解密
+        $data = $this->service->decrypt($params['Msg']);
+
+        // 检查解密是否成功
+        if ($this->service->error) {
+            $this->logger->error("RSG{$action}：解密失败", [
+                'params' => $params,
+                'error' => $this->service->error
+            ]);
+            return null;
+        }
+
+        return $data;
     }
 
     /**
