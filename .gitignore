@@ -110,3 +110,18 @@ redis_monitor_analysis.sh
 debug_scripts/
 /.env.release
 /.env.pro
+
+# ============================
+# 诊断和修复脚本（不提交）
+# ============================
+
+# 所有临时SQL脚本
+check_*.sql
+fix_*.sql
+verify_*.sql
+diagnose_*.sql
+cleanup_*.sql
+restore_*.sql
+get_*.sql
+find_*.sql
+list_*.sql
