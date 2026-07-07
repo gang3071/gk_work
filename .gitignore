@@ -125,3 +125,24 @@ restore_*.sql
 get_*.sql
 find_*.sql
 list_*.sql
+
+# 临时PHP和Shell脚本
+find_*.sh
+find_*.php
+list_*.php
+check_*.php
+diagnose_*.php
+
+# 临时文档和说明（中文文档）
+*修复*.md
+*优化*.md
+*说明*.md
+*清单*.md
+*验证*.md
+*总结*.md
+*指南*.md
+*文档*.md
+*清理*.md
+*记录*.md
+*检查*.md
+*统计*.md
