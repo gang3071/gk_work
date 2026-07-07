@@ -487,8 +487,6 @@ class GameRecordSyncWorker
                 'balance_after' => $balanceAfterInYuan,
             ]);
 
-            $settlementStatus = $record['settlement_status'] ?? 0;
-
             $insertData[] = [
                 'player_id' => $playerId,
                 'parent_player_id' => $player->recommend_id ?? 0,
@@ -501,8 +499,8 @@ class GameRecordSyncWorker
                 'win' => $winInYuan,
                 'diff' => $diffInYuan,
                 'game_code' => $record['game_code'] ?? '',
-                'settlement_status' => $settlementStatus,
-                'status' => $settlementStatus == 1 ? PlayGameRecord::STATUS_SETTLED : PlayGameRecord::STATUS_UNSETTLED, // ✅ 根据结算状态同步分佣状态
+                'settlement_status' => $record['settlement_status'] ?? 0,
+                // ⚠️ status 字段由分佣结算流程单独处理，不在此设置
                 'order_time' => $record['created_at'] ?? $now,
                 'original_data' => $record['original_data'] ?? '{}',
                 'action_data' => $record['action_data'] ?? null,
@@ -650,7 +648,7 @@ class GameRecordSyncWorker
                 $existing->win = isset($record['win']) ? round($record['win'] / 100, 2) : 0;
                 $existing->diff = isset($record['diff']) ? round($record['diff'] / 100, 2) : 0;
                 $existing->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_SETTLED;
-                $existing->status = PlayGameRecord::STATUS_SETTLED; // ✅ 同时更新分佣状态为已结算
+                // ⚠️ status 字段（分佣状态）由专门的分佣结算流程处理，不在此更新
 
                 if (isset($record['platform_action_at'])) {
                     $existing->platform_action_at = $record['platform_action_at'];
