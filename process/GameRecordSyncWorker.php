@@ -289,9 +289,12 @@ class GameRecordSyncWorker
                 // 3. 超时记录（>60秒未结算）：强制同步，避免永久pending
                 //
                 // ✅ 快速结算平台列表（通常<5秒内结算）
-                // 电子游戏平台：RSG, MT, ATG, BTG, SP, KT, JDB, KY, SlotMill, Hacksaw
-                // 真人平台：DG, RSGLIVE, GClub
-                $fastSettlePlatforms = ['RSG', 'RSGLIVE', 'MT', 'ATG', 'BTG', 'SP', 'SPSDY', 'KT', 'JDB', 'KY', 'DG', 'SlotMill', 'Hacksaw', 'GClub'];
+                // 电子游戏：RSG, MT, ATG, O8(含STM/HS), BTG, SP, KT, TNINE_SLOT, QT
+                // 真人：DG, RSGLIVE, SA, TNINE
+                $fastSettlePlatforms = [
+                    'RSG', 'RSGLIVE', 'MT', 'ATG', 'O8', 'STM', 'HS',  // O8及其供应商
+                    'BTG', 'SP', 'KT', 'DG', 'SA', 'TNINE', 'TNINE_SLOT', 'QT'
+                ];
                 $isFastSettle = in_array($platform, $fastSettlePlatforms);
 
                 // 计算记录年龄
