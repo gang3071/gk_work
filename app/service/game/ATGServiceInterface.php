@@ -104,7 +104,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
      * 完全参考RSG平台的实现逻辑
      * @return array|null 返回限红配置数组，包含ATG营运账号信息，如果没有配置则返回null
      */
-    private function getLimitRedConfig(): ?array
+    protected function getLimitRedConfig(): ?array
     {
         // 使用 Trait 中的通用方法获取限红组配置
         $limitGroupConfig = $this->getLimitGroupConfig('atg_server');
