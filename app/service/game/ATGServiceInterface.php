@@ -55,7 +55,17 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
      */
     public function __construct(Player $player = null)
     {
-        $this->platform = GamePlatform::query()->where('code', 'ATG')->first();
+        // ✅ 使用缓存避免重复查询（1小时过期）
+        $cacheKey = 'game_platform:ATG';
+        $this->platform = \support\Cache::get($cacheKey);
+
+        if (!$this->platform) {
+            $this->platform = GamePlatform::query()->where('code', 'ATG')->first();
+            if ($this->platform) {
+                \support\Cache::set($cacheKey, $this->platform, 3600);
+            }
+        }
+
         $this->player = $player;
         $this->log = Log::channel('atg_server');
 
