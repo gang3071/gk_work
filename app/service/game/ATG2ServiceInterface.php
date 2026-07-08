@@ -948,35 +948,60 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
         // 重新获取玩家的限红组配置（参考RSG逻辑）
         $playerLimitConfig = $this->getLimitRedConfig();
 
-        // 玩家必须有限红组配置
-        if (!$playerLimitConfig || !isset($playerLimitConfig['operator']) || !isset($playerLimitConfig['key'])) {
-            return $this->error = ATG2GameController::API_CODE_FAIL;
-        }
-
-        // 验证配置完整性（必须包含所有字段）
-        $requiredFields = ['operator', 'key', 'providerId'];
-        $missingFields = [];
-        foreach ($requiredFields as $field) {
-            if (empty($playerLimitConfig[$field])) {
-                $missingFields[] = $field;
-            }
-        }
-
-        if (!empty($missingFields)) {
-            return $this->error = ATG2GameController::API_CODE_FAIL;
-        }
-
-        // 获取配置文件中的 api_domain（固定使用配置文件，不使用数据库）
-        // ⚠️ 根据平台代码动态读取配置（支持 ATG/ATG_1/ATG_2）
+        // 获取配置文件中的配置（用于 api_domain 和 fallback）
         $platformCode = $this->platform->code ?? 'ATG2';
         $configFile = config('game_platform.' . $platformCode);
 
-        $this->config = [
-            'api_domain' => $configFile['api_domain'],  // 固定使用配置文件的 api_domain
-            'operator' => $playerLimitConfig['operator'],
-            'providerId' => $playerLimitConfig['providerId'],
-            'key' => $playerLimitConfig['key'],
-        ];
+        // ✅ 如果没有限红组配置，使用配置文件 fallback（与构造函数逻辑一致）
+        if (!$playerLimitConfig || !isset($playerLimitConfig['operator']) || !isset($playerLimitConfig['key'])) {
+            $this->log->info('ATG2 decrypt: 未配置限红组，使用配置文件 fallback', [
+                'player_id' => $player->id,
+                'username' => $result['username'],
+            ]);
+
+            // 验证配置文件完整性
+            $requiredFields = ['operator', 'key', 'providerId'];
+            $missingFields = [];
+            foreach ($requiredFields as $field) {
+                if (empty($configFile[$field])) {
+                    $missingFields[] = $field;
+                }
+            }
+
+            if (!empty($missingFields)) {
+                $this->log->error('ATG2 配置文件不完整', [
+                    'missing_fields' => $missingFields,
+                ]);
+                return $this->error = ATG2GameController::API_CODE_FAIL;
+            }
+
+            // 使用配置文件
+            $this->config = $configFile;
+        } else {
+            // 验证限红组配置完整性
+            $requiredFields = ['operator', 'key', 'providerId'];
+            $missingFields = [];
+            foreach ($requiredFields as $field) {
+                if (empty($playerLimitConfig[$field])) {
+                    $missingFields[] = $field;
+                }
+            }
+
+            if (!empty($missingFields)) {
+                $this->log->error('ATG2 限红组配置不完整', [
+                    'missing_fields' => $missingFields,
+                ]);
+                return $this->error = ATG2GameController::API_CODE_FAIL;
+            }
+
+            // 使用限红组配置
+            $this->config = [
+                'api_domain' => $configFile['api_domain'],  // 固定使用配置文件的 api_domain
+                'operator' => $playerLimitConfig['operator'],
+                'providerId' => $playerLimitConfig['providerId'],
+                'key' => $playerLimitConfig['key'],
+            ];
+        }
 
         $this->apiDomain = $this->config['api_domain'];
         $this->providerId = $this->config['providerId'];
