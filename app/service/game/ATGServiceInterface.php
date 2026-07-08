@@ -925,7 +925,9 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         }
 
         // 获取配置文件中的 api_domain（固定使用配置文件，不使用数据库）
-        $configFile = config('game_platform.ATG');
+        // ⚠️ 根据平台代码动态读取配置（支持 ATG/ATG_1/ATG_2）
+        $platformCode = $this->platform->code ?? 'ATG';
+        $configFile = config('game_platform.' . $platformCode);
 
         $this->config = [
             'api_domain' => $configFile['api_domain'],  // 固定使用配置文件的 api_domain
