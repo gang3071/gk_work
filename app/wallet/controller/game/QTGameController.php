@@ -524,11 +524,16 @@ class QTGameController
                 }
 
                 // 结算派彩（Lua 原子操作）
+                // ✅ 修复：从Redis获取原始下注金额，计算正确的diff (win - bet)
+                $betRecordKey = "game:record:bet:QT:{$orderNo}";
+                $originalBetAmount = (float)\support\Redis::hGet($betRecordKey, 'amount');
+                $diffAmount = $amount - $originalBetAmount;
+
                 $luaParams = [
                     'order_no' => $orderNo,  // ✅ 使用关联的下注订单号
                     'platform_id' => $this->service->platform->id,
                     'amount' => max($amount, 0),  // 派彩金额不能为负
-                    'diff' => $amount,
+                    'diff' => $diffAmount,
                     'transaction_type' => TransactionType::SETTLE,
                     'original_data' => $params,
                 ];
@@ -558,7 +563,7 @@ class QTGameController
                         'player_id' => $player->id,
                         'platform_id' => $this->service->platform->id,
                         'amount' => max($amount, 0),
-                        'diff' => $amount,
+                        'diff' => $diffAmount,
                         'game_code' => $params['gameId'] ?? '',
                         'original_data' => $params,
                         'balance_before' => $result['old_balance'] ?? 0,
