@@ -147,7 +147,7 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
             'LoginHall' => true,
             'AgentName' => $this->config['agent'],
             'Lang' => 'zh-cht',
-            'PlayerType' => 4,
+            'PlayerType' => 1,
         ];
         $res = $this->doCurl('/login', $params, 'get');
         $this->log->info('lobbyLogin', [$res]);
@@ -204,7 +204,7 @@ class KTServiceInterface extends GameServiceFactory implements GameServiceInterf
             'GameID' => $game->game_extend->code,
             'AgentName' => $this->config['agent'],
             'Lang' => 'zh-cht',
-            'PlayerType' => 4,
+            'PlayerType' => 1,
         ];
         $res = $this->doCurl('/login', $params, 'get');
         $this->log->info('lobbyLogin', [$res]);
