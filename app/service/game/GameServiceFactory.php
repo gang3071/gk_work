@@ -57,9 +57,12 @@ class GameServiceFactory
 
     /**
      * 创建服务
+     * @param string $type 平台类型
+     * @param Player|null $player 玩家对象
+     * @param \app\model\GamePlatform|null $platform 游戏平台对象（可选，传入可避免重复查询数据库）
      * @throws Exception
      */
-    public static function createService(string $type, $player = null): GameServiceInterface|SingleWalletServiceInterface
+    public static function createService(string $type, $player = null, $platform = null): GameServiceInterface|SingleWalletServiceInterface
     {
         switch ($type) {
             case self::TYPE_BTG:
@@ -75,9 +78,9 @@ class GameServiceFactory
             case self::TYPE_ATG:
                 return new ATGServiceInterface($player);
             case self::TYPE_ATG2:
-                return new ATG2ServiceInterface($player);
+                return new ATG2ServiceInterface($player, $platform);
             case self::TYPE_ATG3:
-                return new ATG3ServiceInterface($player);
+                return new ATG3ServiceInterface($player, $platform);
             case self::TYPE_DG:
                 return new DGServiceInterface($player);
             case self::TYPE_JDB:

@@ -19,4 +19,12 @@ return [
 
     // Success messages
     'game_list_updated' => 'Game list updated',
+
+    // ATG2/ATG3 platform specific errors
+    'atg2_platform_not_configured' => 'ATG2 platform not configured',
+    'atg2_platform_config_missing' => 'ATG2 platform configuration file missing',
+    'atg3_platform_not_configured' => 'ATG3 platform not configured',
+    'atg3_platform_config_missing' => 'ATG3 platform configuration file missing',
+    'platform_not_configured' => 'Game platform not configured',
+    'platform_config_incomplete' => 'Game platform configuration incomplete: missing :fields',
 ];

@@ -19,4 +19,12 @@ return [
 
     // 成功消息
     'game_list_updated' => '遊戲列表已更新',
+
+    // ATG2/ATG3 平台特定錯誤
+    'atg2_platform_not_configured' => 'ATG2 平台未配置',
+    'atg2_platform_config_missing' => 'ATG2 平台配置文件缺失',
+    'atg3_platform_not_configured' => 'ATG3 平台未配置',
+    'atg3_platform_config_missing' => 'ATG3 平台配置文件缺失',
+    'platform_not_configured' => '遊戲平台未配置',
+    'platform_config_incomplete' => '遊戲平台配置不完整: 缺少 :fields',
 ];

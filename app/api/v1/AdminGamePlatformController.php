@@ -199,7 +199,8 @@ class AdminGamePlatformController
             }
 
             // 调用游戏服务获取游戏列表并保存到数据库
-            $gameService = GameServiceFactory::createService(strtoupper($gamePlatform->code), $player);
+            // 传入 $gamePlatform 对象，避免服务内部再次查询数据库
+            $gameService = GameServiceFactory::createService(strtoupper($gamePlatform->code), $player, $gamePlatform);
             $gameService->getGameList($this->getGameLang($lang));
 
             Log::info('Admin get game list', [
