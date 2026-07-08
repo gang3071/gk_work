@@ -78,9 +78,9 @@ class GameServiceFactory
             case self::TYPE_ATG:
                 return new ATGServiceInterface($player);
             case self::TYPE_ATG2:
-                return new ATG2ServiceInterface($player, $platform);
+                return new ATG2ServiceInterface($player);
             case self::TYPE_ATG3:
-                return new ATG3ServiceInterface($player, $platform);
+                return new ATG3ServiceInterface($player);
             case self::TYPE_DG:
                 return new DGServiceInterface($player);
             case self::TYPE_JDB:

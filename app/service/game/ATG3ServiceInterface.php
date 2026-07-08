@@ -81,7 +81,7 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
         }
 
         if (!empty($missingConfigFields)) {
-            $this->log->error('ATG 配置文件不完整，请检查 .env 文件', [
+            $this->log->error('ATG3 配置文件不完整，请检查 .env 文件', [
                 'missing_fields' => $missingConfigFields,
                 'config' => $config,
             ]);
@@ -140,7 +140,7 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
     /**
      * 获取玩家的限红配置（ATG使用营运账号分组）
      * 完全参考RSG平台的实现逻辑
-     * @return array|null 返回限红配置数组，包含ATG营运账号信息，如果没有配置则返回null
+     * @return array|null 返回限红配置数组，包含ATG3营运账号信息，如果没有配置则返回null
      */
     protected function getLimitRedConfig(): ?array
     {
@@ -154,7 +154,7 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
 
         $configData = $limitGroupConfig->config_data;
 
-        // 构建ATG限红参数（ATG使用营运账号：operator, key, providerId）
+        // 构建ATG3限红参数（ATG3使用营运账号：operator, key, providerId）
         // 支持多种字段命名方式：key/operator_key, providerId/provider_id
         // 注意：api_domain 固定使用配置文件，不从数据库读取
         $limitConfig = [];
@@ -198,7 +198,7 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
     /**
      * 检查玩家（支持多营运账号）
      *
-     * ATG平台特性：
+     * ATG3平台特性：
      * - 每个营运账号(operator)下的玩家数据是独立的
      * - 玩家切换限红组 = 切换营运账号
      * - 需要在每个营运账号下单独注册
@@ -295,7 +295,7 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
         if (empty($token)) {
             $tokenUrl = $config['api_domain'] . '/token';
 
-            $this->log->info('ATG 获取Token - 请求报文', [
+            $this->log->info('ATG3 获取Token - 请求报文', [
                 'url' => $tokenUrl,
                 'headers' => [
                     'X-Operator' => $config['operator'],
@@ -310,25 +310,25 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
                 ])
                 ->get($tokenUrl);
 
-            $this->log->info('ATG 获取Token - 响应报文', [
+            $this->log->info('ATG3 获取Token - 响应报文', [
                 'url' => $tokenUrl,
                 'status_code' => $tokenResponse->status(),
                 'body' => $tokenResponse->body(),
             ]);
 
             if (!$tokenResponse->ok()) {
-                $this->log->error('ATG 获取Token失败 - HTTP错误', [
+                $this->log->error('ATG3 获取Token失败 - HTTP错误', [
                     'url' => $tokenUrl,
                     'status_code' => $tokenResponse->status(),
                     'response_body' => $tokenResponse->body(),
                     'operator' => $config['operator'],
                 ]);
-                throw new GameException('ATG3获取Token失败: HTTP ' . $tokenResponse->status());
+                throw new GameException('ATG33获取Token失败: HTTP ' . $tokenResponse->status());
             }
 
             $data = $tokenResponse->json();
             if (empty($data['data']['token'])) {
-                $this->log->error('ATG 获取Token失败 - 响应无token', [
+                $this->log->error('ATG3 获取Token失败 - 响应无token', [
                     'url' => $tokenUrl,
                     'response' => $data,
                     'operator' => $config['operator'],
@@ -338,7 +338,7 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
             $token = $data['data']['token'];
             Cache::set($cacheKey, $token, 4 * 60);
 
-            $this->log->info('ATG Token缓存成功', [
+            $this->log->info('ATG3 Token缓存成功', [
                 'operator' => $config['operator'],
                 'cache_key' => $cacheKey,
             ]);
@@ -694,7 +694,7 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
         // 如果失败，不影响后续正常解密流程
         try {
             // 快速检查：如果data字段中包含明显的username模式
-            // ATG的data解密后格式: {"username":"xxx","gameCode":"xxx",...}
+            // ATG3的data解密后格式: {"username":"xxx","gameCode":"xxx",...}
             // 某些场景下可能可以通过部分解密或模式匹配快速获取
 
             // 由于加密数据无法直接提取，这里返回null
