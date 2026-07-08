@@ -172,7 +172,11 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         $operator = $this->config['operator'] ?? null;
 
         if (empty($operator)) {
-            throw new GameException('游戏平台配置错误');
+            $this->log->error('ATG 平台配置错误：operator 为空', [
+                'config' => $this->config,
+                'player_id' => $this->player->id ?? null,
+            ]);
+            throw new GameException('游戏平台配置错误：运营商账号（operator）未配置');
         }
 
         // 检查玩家在当前营运账号下是否已注册
