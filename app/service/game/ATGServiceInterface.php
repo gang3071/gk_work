@@ -21,10 +21,10 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
     public $method = 'POST';
 
-    private $apiDomain;
-    private $providerId;
+    protected $apiDomain;
+    protected $providerId;
 
-    private $path = [
+    protected $path = [
         'getToken' => '/token',
         'createPlayer' => '/register',
         'getBalance' => '/game-providers/{providerId}/balance',
@@ -37,7 +37,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         'getGameList' => '/games',
     ];
 
-    private $lang = [
+    protected $lang = [
         'zh-CN' => 'zh-cn',
         'zh-TW' => 'zh-tw',
         'jp' => 'jp',
