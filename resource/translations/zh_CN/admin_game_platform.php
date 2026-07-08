@@ -21,10 +21,10 @@ return [
     'game_list_updated' => '游戏列表已更新',
 
     // ATG2/ATG3 平台特定错误
-    'atg2_platform_not_configured' => 'ATG2 平台未配置',
-    'atg2_platform_config_missing' => 'ATG2 平台配置文件缺失',
-    'atg3_platform_not_configured' => 'ATG3 平台未配置',
-    'atg3_platform_config_missing' => 'ATG3 平台配置文件缺失',
-    'platform_not_configured' => '游戏平台未配置',
-    'platform_config_incomplete' => '游戏平台配置不完整: 缺少 :fields',
+    'atg2_platform_not_configured' => 'ATG2 平台未在数据库中配置，请先在游戏平台管理中添加',
+    'atg2_platform_config_missing' => 'ATG2 平台配置缺失，请检查 .env 文件中的 ATG2_* 配置项',
+    'atg3_platform_not_configured' => 'ATG3 平台未在数据库中配置，请先在游戏平台管理中添加',
+    'atg3_platform_config_missing' => 'ATG3 平台配置缺失，请检查 .env 文件中的 ATG3_* 配置项',
+    'platform_not_configured' => '游戏平台限红组未配置，已自动使用配置文件',
+    'platform_config_incomplete' => '游戏平台配置不完整，缺少必需字段: :fields',
 ];

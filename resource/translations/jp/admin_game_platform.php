@@ -21,10 +21,10 @@ return [
     'game_list_updated' => 'ゲームリスト更新済み',
 
     // ATG2/ATG3 platform specific errors
-    'atg2_platform_not_configured' => 'ATG2プラットフォームが設定されていません',
-    'atg2_platform_config_missing' => 'ATG2プラットフォーム設定ファイルが見つかりません',
-    'atg3_platform_not_configured' => 'ATG3プラットフォームが設定されていません',
-    'atg3_platform_config_missing' => 'ATG3プラットフォーム設定ファイルが見つかりません',
-    'platform_not_configured' => 'ゲームプラットフォームが設定されていません',
-    'platform_config_incomplete' => 'ゲームプラットフォーム設定が不完全です: :fieldsが不足しています',
+    'atg2_platform_not_configured' => 'ATG2プラットフォームがデータベースに設定されていません。ゲームプラットフォーム管理で追加してください',
+    'atg2_platform_config_missing' => 'ATG2プラットフォーム設定が見つかりません。.envファイルのATG2_*設定を確認してください',
+    'atg3_platform_not_configured' => 'ATG3プラットフォームがデータベースに設定されていません。ゲームプラットフォーム管理で追加してください',
+    'atg3_platform_config_missing' => 'ATG3プラットフォーム設定が見つかりません。.envファイルのATG3_*設定を確認してください',
+    'platform_not_configured' => 'ゲームプラットフォームの制限グループが設定されていません。設定ファイルを使用します',
+    'platform_config_incomplete' => 'ゲームプラットフォーム設定が不完全です。必須フィールドが不足しています: :fields',
 ];
