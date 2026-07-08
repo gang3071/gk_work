@@ -76,6 +76,8 @@ class ATG2ServiceInterface extends ATGServiceInterface
                 $this->log->info('ATG2 平台未配置限红组，使用配置文件 fallback', [
                     'player_id' => $player->id,
                     'store_admin_id' => $player->store_admin_id ?? null,
+                    'config' => $config,  // 记录配置内容
+                    'operator' => $config['operator'] ?? 'NULL',
                 ]);
                 $this->config = $config;
             } else {
