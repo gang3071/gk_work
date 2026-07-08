@@ -25,6 +25,8 @@ class GameServiceFactory
     const TYPE_RSG = 'RSG'; // RSG
     const TYPE_RSG_LIVE = 'RSGLIVE'; // RSG真人
     const TYPE_ATG = 'ATG'; // ATG
+    const TYPE_ATG_1 = 'ATG_1'; // ATG运营商2
+    const TYPE_ATG_2 = 'ATG_2'; // ATG运营商3
     const TYPE_DG = 'DG'; // DG
     const TYPE_JDB = 'JDB'; // DG
     const TYPE_KY = 'KY'; // KY
@@ -72,6 +74,10 @@ class GameServiceFactory
                 return new RSGLiveServiceInterface($player);
             case self::TYPE_ATG:
                 return new ATGServiceInterface($player);
+            case self::TYPE_ATG_1:
+                return new ATG1ServiceInterface($player);
+            case self::TYPE_ATG_2:
+                return new ATG2ServiceInterface($player);
             case self::TYPE_DG:
                 return new DGServiceInterface($player);
             case self::TYPE_JDB:

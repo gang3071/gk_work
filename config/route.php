@@ -139,6 +139,18 @@ Route::group('/single-wallet', function () {
         Route::post('/settlement', [\app\wallet\controller\game\ATGGameController::class, 'betResult']);
         Route::post('/refund', [\app\wallet\controller\game\ATGGameController::class, 'refund']);
     });
+    Route::group('/atg1-channel', function () {
+        Route::post('/balance', [\app\wallet\controller\game\ATG1GameController::class, 'balance']);
+        Route::post('/betting', [\app\wallet\controller\game\ATG1GameController::class, 'bet']);
+        Route::post('/settlement', [\app\wallet\controller\game\ATG1GameController::class, 'betResult']);
+        Route::post('/refund', [\app\wallet\controller\game\ATG1GameController::class, 'refund']);
+    });
+    Route::group('/atg2-channel', function () {
+        Route::post('/balance', [\app\wallet\controller\game\ATG2GameController::class, 'balance']);
+        Route::post('/betting', [\app\wallet\controller\game\ATG2GameController::class, 'bet']);
+        Route::post('/settlement', [\app\wallet\controller\game\ATG2GameController::class, 'betResult']);
+        Route::post('/refund', [\app\wallet\controller\game\ATG2GameController::class, 'refund']);
+    });
     Route::group('/ug-channel', function () {
         Route::post('/wallet/token', [\app\wallet\controller\game\O8GameController::class, 'token']);
         Route::post('/wallet/balance', [\app\wallet\controller\game\O8GameController::class, 'balance']);

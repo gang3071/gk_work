@@ -52,6 +52,18 @@ return [
         'providerId' => env('ATG_PROVIDERID'),
         'key' => env('ATG_KEY'),
     ],
+    'ATG_1' => [
+        'api_domain' => env('ATG_1_API_DOMAIN', env('ATG_API_DOMAIN')), // 默认使用ATG域名
+        'operator' => env('ATG_1_OPERATOR'),
+        'providerId' => env('ATG_1_PROVIDERID'),
+        'key' => env('ATG_1_KEY'),
+    ],
+    'ATG_2' => [
+        'api_domain' => env('ATG_2_API_DOMAIN', env('ATG_API_DOMAIN')), // 默认使用ATG域名
+        'operator' => env('ATG_2_OPERATOR'),
+        'providerId' => env('ATG_2_PROVIDERID'),
+        'key' => env('ATG_2_KEY'),
+    ],
     'DG' => [
         'api_domain' => env('DG_API_DOMAIN'),
         'domain' => '',
