@@ -44,7 +44,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         'en' => 'en',
     ];
 
-    private array $config = [];
+    protected array $config = [];
 
 
     public ?\Monolog\Logger $log = null;
