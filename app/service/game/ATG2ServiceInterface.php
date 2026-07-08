@@ -8,7 +8,7 @@ use app\model\Player;
 use Exception;
 
 /**
- * ATG_2 平台服务（运营商组3）
+ * ATG2 平台服务（运营商组2）
  *
  * 继承ATGServiceInterface，只修改平台代码和配置源
  * 其他逻辑（限红组查询、解密、API调用）完全复用
@@ -21,21 +21,21 @@ class ATG2ServiceInterface extends ATGServiceInterface
      */
     public function __construct(Player $player = null)
     {
-        // ========== 关键差异：使用 ATG_2 平台 ==========
-        $this->platform = GamePlatform::query()->where('code', 'ATG_2')->first();
+        // ========== 关键差异：使用 ATG2 平台 ==========
+        $this->platform = GamePlatform::query()->where('code', 'ATG2')->first();
 
         if (!$this->platform) {
-            throw new GameException('ATG_2 平台未配置');
+            throw new GameException('ATG2 平台未配置');
         }
 
         $this->player = $player;
         $this->log = \support\Log::channel('atg_server');
 
-        // ========== 关键差异：读取 ATG_2 配置 ==========
-        $config = config('game_platform.ATG_2');
+        // ========== 关键差异：读取 ATG2 配置 ==========
+        $config = config('game_platform.ATG2');
 
         if (!$config) {
-            throw new GameException('ATG_2 平台配置文件缺失');
+            throw new GameException('ATG2 平台配置文件缺失');
         }
 
         // ========== 以下逻辑与父类完全相同 ==========
