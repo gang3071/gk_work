@@ -261,11 +261,16 @@ class BTGGameController
 
                 case 'end':
                     // 结算派彩
+                    // ✅ 修复：从Redis获取原始下注金额，计算正确的diff (win - bet)
+                    $betRecordKey = "game:record:bet:BTG:{$orderId}";
+                    $originalBetAmount = (float)\support\Redis::hGet($betRecordKey, 'amount');
+                    $diffAmount = $amount - $originalBetAmount;
+
                     $luaParams = [
                         'order_no' => $orderId,
                         'platform_id' => $this->service->platform->id,
                         'amount' => $amount,
-                        'diff' => $amount,
+                        'diff' => $diffAmount,
                         'game_code' => $params['game_code'] ?? '',  // ✅ 添加 game_code
                         'transaction_type' => TransactionType::SETTLE,
                         'original_data' => $params,
@@ -292,7 +297,7 @@ class BTGGameController
                             'player_id' => $player->id,
                             'platform_id' => $this->service->platform->id,
                             'amount' => $amount,
-                            'diff' => $amount,
+                            'diff' => $diffAmount,
                             'game_code' => $params['game_code'] ?? '',
                             'original_data' => $params,
                             'balance_before' => $result['old_balance'] ?? 0,
