@@ -64,6 +64,17 @@ class GameServiceFactory
      */
     public static function createService(string $type, $player = null, $platform = null): GameServiceInterface|SingleWalletServiceInterface
     {
+        // 记录Service创建日志，方便排查
+        if (in_array($type, ['ATG', 'ATG2', 'ATG3'])) {
+            \support\Log::channel('atg_server')->info("创建 {$type} Service", [
+                'type' => $type,
+                'player_id' => $player->id ?? null,
+                'platform_id' => $platform->id ?? null,
+                'platform_code' => $platform->code ?? null,
+                'trace' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3),
+            ]);
+        }
+
         switch ($type) {
             case self::TYPE_BTG:
                 return new BTGServiceInterface($player);
