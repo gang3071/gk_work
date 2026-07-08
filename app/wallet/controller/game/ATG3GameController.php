@@ -15,7 +15,8 @@ class ATG3GameController extends ATGGameController
     public function __construct()
     {
         // 关键差异：使用 ATG3 Service
-        $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_ATG3);
+        // 注意：控制器初始化时没有 player 和 platform 对象，Service 内部会查询数据库
+        $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_ATG3, null, null);
         $this->log = \support\Log::channel('atg_server');
     }
 }
