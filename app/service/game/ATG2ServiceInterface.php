@@ -759,9 +759,10 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
     /**
      * 解密
      * 由于解密前不知道玩家信息，需要尝试所有可能的配置进行解密
+     * @param $data
      * @return mixed
      */
-    public function decrypt($data)
+    public function decrypt($data): mixed
     {
         $token = $data['token'];
         $timestamp = $data['timestamp'] ?? 0;
@@ -791,6 +792,11 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
         $timestampStr = $data['timestamp'];
         $dataStr = $data['data'];
         $crypted = base64_decode($dataStr); // base64解码只需一次
+
+        // 初始化变量
+        $result = null;
+        $successConfig = null;
+        $usedOperator = null;
 
         // ✅ 优化4: 快速路径 - 先用 .env 配置尝试（最常见的配置，避免查询数据库）
         $result = $this->tryDecrypt($this->config, $token, $timestampStr, $dataStr, $crypted);
@@ -886,5 +892,4 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
 
         return $result;
     }
-
 }

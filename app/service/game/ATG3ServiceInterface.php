@@ -792,6 +792,11 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
         $dataStr = $data['data'];
         $crypted = base64_decode($dataStr); // base64解码只需一次
 
+        // 初始化变量
+        $result = null;
+        $successConfig = null;
+        $usedOperator = null;
+
         // ✅ 优化4: 快速路径 - 先用 .env 配置尝试（最常见的配置，避免查询数据库）
         $result = $this->tryDecrypt($this->config, $token, $timestampStr, $dataStr, $crypted);
         if ($result !== null) {
