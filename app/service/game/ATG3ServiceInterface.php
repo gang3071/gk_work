@@ -797,7 +797,6 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
      */
     public function decrypt($data)
     {
-        $decryptStartTime = microtime(true);
         $token = $data['token'];
         $timestamp = $data['timestamp'] ?? 0;
 
@@ -892,7 +891,6 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
         $crypted = base64_decode($dataStr); // ⚡ base64解码只需一次（所有配置共用）
 
         $tryCount = 0;
-        $successIndex = -1;
         $usedOperator = null;
 
         // ✅ 优化4: 根据历史统计 + username映射 动态调整配置顺序
@@ -926,7 +924,6 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
             if (!empty($decryptResult) && isset($decryptResult['username'])) {
                 // 解密成功
                 $result = $decryptResult;
-                $successIndex = $index;
                 $usedOperator = $operator;
                 break;
             }
