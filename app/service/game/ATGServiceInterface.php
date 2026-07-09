@@ -883,6 +883,7 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         $tryCount = 0;
         $usedOperator = null;
+        $successConfig = null;  // 保存解密成功的完整配置
 
         // ✅ 优化4: 根据历史统计 + username映射 动态调整配置顺序
         $configsToTry = $this->optimizeConfigOrder($configsToTry, $cachedOperator);
@@ -913,9 +914,17 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             $decryptResult = json_decode($decode, true);
 
             if (!empty($decryptResult) && isset($decryptResult['username'])) {
-                // 解密成功
+                // 解密成功，保存完整配置
                 $result = $decryptResult;
                 $usedOperator = $operator;
+
+                // ✅ 保存解密成功的完整配置（后续操作必须使用此配置）
+                $successConfig = [
+                    'api_domain' => $config['api_domain'] ?? $this->config['api_domain'],
+                    'operator' => $config['operator'],
+                    'key' => $config['key'],
+                    'providerId' => $config['providerId'],
+                ];
                 break;
             }
         }
@@ -933,53 +942,9 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         $this->player = $player;
 
-        // 重新获取玩家的限红组配置（参考RSG逻辑）
-        $playerLimitConfig = $this->getLimitRedConfig();
-
-        // 获取配置文件中的配置（用于 api_domain 和 fallback）
-        $platformCode = $this->platform->code ?? 'ATG';
-        $configFile = config('game_platform.' . $platformCode);
-
-        // ✅ 如果没有限红组配置，使用配置文件 fallback（与构造函数逻辑一致）
-        if (!$playerLimitConfig || !isset($playerLimitConfig['operator']) || !isset($playerLimitConfig['key'])) {
-            // 验证配置文件完整性
-            $requiredFields = ['operator', 'key', 'providerId'];
-            $missingFields = [];
-            foreach ($requiredFields as $field) {
-                if (empty($configFile[$field])) {
-                    $missingFields[] = $field;
-                }
-            }
-
-            if (!empty($missingFields)) {
-                return $this->error = ATGGameController::API_CODE_FAIL;
-            }
-
-            // 使用配置文件
-            $this->config = $configFile;
-        } else {
-            // 验证限红组配置完整性
-            $requiredFields = ['operator', 'key', 'providerId'];
-            $missingFields = [];
-            foreach ($requiredFields as $field) {
-                if (empty($playerLimitConfig[$field])) {
-                    $missingFields[] = $field;
-                }
-            }
-
-            if (!empty($missingFields)) {
-                return $this->error = ATGGameController::API_CODE_FAIL;
-            }
-
-            // 使用限红组配置
-            $this->config = [
-                'api_domain' => $configFile['api_domain'],  // 固定使用配置文件的 api_domain
-                'operator' => $playerLimitConfig['operator'],
-                'providerId' => $playerLimitConfig['providerId'],
-                'key' => $playerLimitConfig['key'],
-            ];
-        }
-
+        // ✅ 直接使用解密成功的配置（不要重新查询）
+        // 原因：解密成功 = 配置正确，游戏平台回调基于此配置生成，响应也必须用同一配置
+        $this->config = $successConfig;
         $this->apiDomain = $this->config['api_domain'];
         $this->providerId = $this->config['providerId'];
 
