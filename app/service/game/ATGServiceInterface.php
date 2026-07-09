@@ -94,10 +94,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
             if (!$limitConfig) {
                 // 如果数据库没有配置限红组，fallback 到配置文件
-                $this->log->info('ATG 平台未配置限红组，使用配置文件 fallback', [
-                    'player_id' => $player->id,
-                    'store_admin_id' => $player->store_admin_id ?? null,
-                ]);
                 $this->config = $config;
             } else {
                 // 验证配置完整性（必须包含所有字段）
@@ -120,11 +116,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
                     'providerId' => $limitConfig['providerId'],
                     'key' => $limitConfig['key'],
                 ];
-
-                $this->log->info('ATG 平台使用限红组配置', [
-                    'player_id' => $player->id,
-                    'operator' => $limitConfig['operator'],
-                ]);
             }
 
         } else {
@@ -951,11 +942,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         // ✅ 如果没有限红组配置，使用配置文件 fallback（与构造函数逻辑一致）
         if (!$playerLimitConfig || !isset($playerLimitConfig['operator']) || !isset($playerLimitConfig['key'])) {
-            $this->log->info('ATG decrypt: 未配置限红组，使用配置文件 fallback', [
-                'player_id' => $player->id,
-                'username' => $result['username'],
-            ]);
-
             // 验证配置文件完整性
             $requiredFields = ['operator', 'key', 'providerId'];
             $missingFields = [];
@@ -966,9 +952,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
 
             if (!empty($missingFields)) {
-                $this->log->error('ATG 配置文件不完整', [
-                    'missing_fields' => $missingFields,
-                ]);
                 return $this->error = ATGGameController::API_CODE_FAIL;
             }
 
@@ -985,9 +968,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
             }
 
             if (!empty($missingFields)) {
-                $this->log->error('ATG 限红组配置不完整', [
-                    'missing_fields' => $missingFields,
-                ]);
                 return $this->error = ATGGameController::API_CODE_FAIL;
             }
 
