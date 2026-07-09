@@ -2003,7 +2003,14 @@ function checkAndNotifyCrashUnlock(Player $player, float $previousAmount): void
  */
 function logLuaScriptCall(string $operation, string $platform, int $playerId, array $params, ?string $channel = null): void
 {
-    $channel = $channel ?? strtolower($platform) . '_server';
+    // ATG/ATG2/ATG3 共享 atg_server 日志通道
+    if ($channel === null) {
+        if (in_array($platform, ['ATG', 'ATG2', 'ATG3'])) {
+            $channel = 'atg_server';
+        } else {
+            $channel = strtolower($platform) . '_server';
+        }
+    }
 
     // 提取关键参数
     $logData = [
