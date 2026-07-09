@@ -678,22 +678,49 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
      * @param array $data 请求数据
      * @return string|null 提取到的username，失败返回null
      */
-    private function tryExtractUsername(array $data): ?string
+    /**
+     * 尝试用指定配置解密
+     *
+     * @param array $config 配置数组（必须包含 operator, key）
+     * @param string $token 令牌
+     * @param string $timestampStr 时间戳字符串
+     * @param string $dataStr 加密数据字符串
+     * @param string $crypted base64解码后的加密数据
+     * @return array|null 解密成功返回数据数组，失败返回null
+     */
+    private function tryDecrypt(array $config, string $token, string $timestampStr, string $dataStr, string $crypted): ?array
     {
-        // 注意：这是尝试性提取，不保证100%成功
-        // 如果失败，不影响后续正常解密流程
-        try {
-            // 快速检查：如果data字段中包含明显的username模式
-            // ATG2的data解密后格式: {"username":"xxx","gameCode":"xxx",...}
-            // 某些场景下可能可以通过部分解密或模式匹配快速获取
+        $operator = $config['operator'] ?? null;
+        $key = $config['key'] ?? null;
 
-            // 由于加密数据无法直接提取，这里返回null
-            // 实际优化依赖于解密成功后保存映射缓存
-            return null;
-
-        } catch (\Exception $e) {
+        if (!$operator || !$key) {
             return null;
         }
+
+        // ⚡ 快速验证：先做最快的token验证，快速排除不匹配的配置
+        // token = md5(operator + timestamp + data)
+        if ($token !== md5($operator . $timestampStr . $dataStr)) {
+            return null; // token不匹配
+        }
+
+        // Token匹配，继续解密
+        $key2 = strlen($key) > 16 ? substr($key, 0, 16) : str_pad($key, 16, '0');
+        $iv2 = strlen($operator) > 16 ? substr($operator, 0, 16) : str_pad($operator, 16, '0');
+
+        // 使用 openssl_decrypt 进行解密
+        $decode = openssl_decrypt($crypted, 'AES-128-CBC', $key2, OPENSSL_RAW_DATA, $iv2);
+
+        if ($decode === false) {
+            return null; // 解密失败
+        }
+
+        $decryptResult = json_decode($decode, true);
+
+        if (!empty($decryptResult) && isset($decryptResult['username'])) {
+            return $decryptResult; // 解密成功
+        }
+
+        return null;
     }
 
     /**
@@ -711,57 +738,6 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
         $cacheKey = "atg2:player_operator:{$username}";
         // 缓存24小时（玩家切换限红组的频率很低）
         \support\Cache::set($cacheKey, $operator, 86400);
-    }
-
-    /**
-     * 优化配置尝试顺序（基于历史统计 + username映射）
-     * 把最常用的operator配置放在前面，减少平均尝试次数
-     *
-     * @param array $configs 配置数组
-     * @param string|null $preferredOperator 优先尝试的operator（从username映射获取）
-     * @return array 排序后的配置数组
-     */
-    private function optimizeConfigOrder(array $configs, ?string $preferredOperator = null): array
-    {
-        if (count($configs) <= 1) {
-            return $configs;  // 只有1个配置，无需排序
-        }
-
-        // 从Redis读取每个operator的使用频率
-        $operatorStats = [];
-        foreach ($configs as $config) {
-            $operator = $config['operator'] ?? '';
-            if ($operator) {
-                $statsKey = "atg2:operator_stats:{$operator}";
-                $count = (int)\support\Cache::get($statsKey, 0);
-                $operatorStats[$operator] = $count;
-            }
-        }
-
-        // 按优先级排序：
-        // 1. 优先级最高：preferredOperator（从username映射缓存获取）
-        // 2. 优先级次高：使用频率
-        usort($configs, function ($a, $b) use ($operatorStats, $preferredOperator) {
-            $operatorA = $a['operator'] ?? '';
-            $operatorB = $b['operator'] ?? '';
-
-            // 如果有preferred operator，优先排序
-            if ($preferredOperator) {
-                if ($operatorA === $preferredOperator && $operatorB !== $preferredOperator) {
-                    return -1;  // A优先
-                }
-                if ($operatorB === $preferredOperator && $operatorA !== $preferredOperator) {
-                    return 1;   // B优先
-                }
-            }
-
-            // 否则按使用频率排序
-            $countA = $operatorStats[$operatorA] ?? 0;
-            $countB = $operatorStats[$operatorB] ?? 0;
-            return $countB - $countA;  // 降序：高频在前
-        });
-
-        return $configs;
     }
 
     /**
@@ -811,93 +787,64 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
             }
         }
 
-        // ✅ 新优化3: username预解析 (通过data字段快速提取username,缩小配置范围)
-        // 原理: 虽然data加密,但可以尝试快速解密获取username,然后从缓存查找对应operator
-        // 这样可以直接定位到正确配置,避免遍历所有配置
-        $cachedOperator = null;  // 用于传递给 optimizeConfigOrder
-        $usernameHint = $this->tryExtractUsername($data);
-        if ($usernameHint) {
-            $operatorCacheKey = "atg2:player_operator:{$usernameHint}";
-            $cachedOperator = \support\Cache::get($operatorCacheKey);
-        }
+        // ✅ 优化3: 提前计算固定值（减少循环内重复计算）
+        $timestampStr = $data['timestamp'];
+        $dataStr = $data['data'];
+        $crypted = base64_decode($dataStr); // base64解码只需一次
 
-        $result = null;
-        $configsToTry = [];
+        // ✅ 优化4: 快速路径 - 先用 .env 配置尝试（最常见的配置，避免查询数据库）
+        $result = $this->tryDecrypt($this->config, $token, $timestampStr, $dataStr, $crypted);
+        if ($result !== null) {
+            // ✅ .env 配置解密成功！直接使用，跳过数据库查询
+            $successConfig = $this->config;
+            $usedOperator = $this->config['operator'];
+        } else {
+            // ✅ 优化5: 慢速路径 - .env 失败，查询数据库所有限红组配置
+            $cacheKey = 'platform_limit_configs:' . $this->platform->id;
+            $limitGroupConfigs = \support\Cache::get($cacheKey);
 
-        // 获取所有启用的限红组配置（✅ 缓存优化：30分钟）
-        $cacheKey = 'platform_limit_configs:' . $this->platform->id;
-        $limitGroupConfigs = \support\Cache::get($cacheKey);
+            if ($limitGroupConfigs === null) {
+                $limitGroupConfigs = PlatformLimitGroupConfig::query()
+                    ->where('platform_id', $this->platform->id)
+                    ->where('status', 1)
+                    ->get();
+                \support\Cache::set($cacheKey, $limitGroupConfigs, 1800);
+            }
 
-        if ($limitGroupConfigs === null) {
-            $limitGroupConfigs = PlatformLimitGroupConfig::query()
-                ->where('platform_id', $this->platform->id)
-                ->where('status', 1)
-                ->get();
-            \support\Cache::set($cacheKey, $limitGroupConfigs, 1800);
-        }
+            // 遍历所有限红组配置尝试解密
+            foreach ($limitGroupConfigs as $limitGroupConfig) {
+                if (empty($limitGroupConfig->config_data)) {
+                    continue;
+                }
 
-        foreach ($limitGroupConfigs as $limitGroupConfig) {
-            if (!empty($limitGroupConfig->config_data)) {
                 $configData = $limitGroupConfig->config_data;
                 $operator = $configData['operator'] ?? null;
                 $key = $configData['key'] ?? $configData['operator_key'] ?? null;
+                $providerId = $configData['providerId'] ?? $configData['provider_id'] ?? null;
 
-                if ($operator && $key) {
-                    $configsToTry[] = [
-                        'operator' => $operator,
-                        'key' => $key,
-                        'providerId' => $configData['providerId'] ?? $configData['provider_id'] ?? null,
-                        'limit_group_id' => $limitGroupConfig->limit_group_id,
-                        'source' => 'limit_group',
-                    ];
+                if (!$operator || !$key) {
+                    continue;
+                }
+
+                $config = [
+                    'operator' => $operator,
+                    'key' => $key,
+                    'providerId' => $providerId,
+                    'api_domain' => $this->config['api_domain'], // api_domain 固定使用 .env
+                ];
+
+                $result = $this->tryDecrypt($config, $token, $timestampStr, $dataStr, $crypted);
+                if ($result !== null) {
+                    // 解密成功
+                    $successConfig = $config;
+                    $usedOperator = $operator;
+                    break;
                 }
             }
         }
 
-        // ✅ 优化3: 提前计算固定值（减少循环内重复计算）
-        $timestampStr = $data['timestamp'];  // 字符串缓存
-        $dataStr = $data['data'];            // 字符串缓存
-        $crypted = base64_decode($dataStr); // ⚡ base64解码只需一次（所有配置共用）
-        $usedOperator = null;
-        $successConfig = null;  // 保存解密成功的完整配置
-        // ✅ 优化4: 根据历史统计 + username映射 动态调整配置顺序
-        $configsToTry = $this->optimizeConfigOrder($configsToTry, $cachedOperator);
-        // 逐个尝试配置进行解密
-        foreach ($configsToTry as $config) {
-            $operator = $config['operator'];
-            $key = $config['key'];
-            // ⚡ 优化：先做最快的token验证，快速排除不匹配的配置
-            // token = md5(operator + timestamp + data)
-            if ($token !== md5($operator . $timestampStr . $dataStr)) {
-                continue; // token不匹配，跳过此配置（省略后续计算）
-            }
-            // Token匹配，继续解密
-            $key2 = strlen($key) > 16 ? substr($key, 0, 16) : str_pad($key, 16, '0');
-            $iv2 = strlen($operator) > 16 ? substr($operator, 0, 16) : str_pad($operator, 16, '0');
-            // 使用 openssl_decrypt 進行解密
-            $decode = openssl_decrypt($crypted, 'AES-128-CBC', $key2, OPENSSL_RAW_DATA, $iv2);
-            if ($decode === false) {
-                continue; // 解密失败，尝试下一个
-            }
-            $decryptResult = json_decode($decode, true);
-            if (!empty($decryptResult) && isset($decryptResult['username'])) {
-                // 解密成功，保存完整配置
-                $result = $decryptResult;
-                $usedOperator = $operator;
-
-                // ✅ 保存解密成功的完整配置（后续操作必须使用此配置）
-                $successConfig = [
-                    'api_domain' => $config['api_domain'] ?? $this->config['api_domain'],
-                    'operator' => $config['operator'],
-                    'key' => $config['key'],
-                    'providerId' => $config['providerId'],
-                ];
-                break;
-            }
-        }
-
         // 所有配置都尝试失败
-        if (empty($result)) {
+        if ($result === null) {
             return $this->error = ATG2GameController::API_CODE_DECRYPT_ERROR;
         }
 
