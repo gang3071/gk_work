@@ -83,7 +83,7 @@ class ATGGameController
             $balance = $this->service->balance();
             return $this->success(['balance' => $balance]);
         } catch (Exception $e) {
-            Log::error('ATG balance failed', ['error' => $e->getMessage()]);
+            $this->log->error('ATG balance failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '余额查询异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_FAIL);
         }
@@ -366,7 +366,7 @@ class ATGGameController
 
             return $this->success(['balanceOld' => $result['old_balance'], 'balance' => $result['balance']]);
         } catch (Exception $e) {
-            Log::error('ATG refund failed', ['error' => $e->getMessage()]);
+            $this->log->error('ATG refund failed', ['error' => $e->getMessage()]);
             $this->sendTelegramAlert('ATG', '退款异常', $e, ['params' => $request->post()]);
             return $this->error(self::API_CODE_FAIL);
         }
