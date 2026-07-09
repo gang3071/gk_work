@@ -1006,5 +1006,4 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
 
         return $result;
     }
-
 }
