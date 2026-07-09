@@ -854,24 +854,13 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
                 $key = $configData['key'] ?? $configData['operator_key'] ?? null;
 
                 if ($operator && $key) {
-                    // 避免重复添加相同的配置
-                    $isDuplicate = false;
-                    foreach ($configsToTry as $existing) {
-                        if ($existing['operator'] === $operator && $existing['key'] === $key) {
-                            $isDuplicate = true;
-                            break;
-                        }
-                    }
-
-                    if (!$isDuplicate) {
-                        $configsToTry[] = [
-                            'operator' => $operator,
-                            'key' => $key,
-                            'providerId' => $configData['providerId'] ?? $configData['provider_id'] ?? null,
-                            'limit_group_id' => $limitGroupConfig->limit_group_id,
-                            'source' => 'limit_group',
-                        ];
-                    }
+                    $configsToTry[] = [
+                        'operator' => $operator,
+                        'key' => $key,
+                        'providerId' => $configData['providerId'] ?? $configData['provider_id'] ?? null,
+                        'limit_group_id' => $limitGroupConfig->limit_group_id,
+                        'source' => 'limit_group',
+                    ];
                 }
             }
         }

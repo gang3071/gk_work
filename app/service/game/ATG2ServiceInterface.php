@@ -803,7 +803,7 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
 
         if ($cachedResult !== null) {
             // 恢复玩家和配置信息
-            $this->player = Player::query()->find($cachedResult['player_id']);
+            $this->player = \app\service\PlayerCacheService::getByUuid($cachedResult['uuid']);
             if ($this->player) {
                 $this->config = $cachedResult['config'];
                 $this->apiDomain = $this->config['api_domain'];
@@ -854,24 +854,13 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
                 $key = $configData['key'] ?? $configData['operator_key'] ?? null;
 
                 if ($operator && $key) {
-                    // 避免重复添加相同的配置
-                    $isDuplicate = false;
-                    foreach ($configsToTry as $existing) {
-                        if ($existing['operator'] === $operator && $existing['key'] === $key) {
-                            $isDuplicate = true;
-                            break;
-                        }
-                    }
-
-                    if (!$isDuplicate) {
-                        $configsToTry[] = [
-                            'operator' => $operator,
-                            'key' => $key,
-                            'providerId' => $configData['providerId'] ?? $configData['provider_id'] ?? null,
-                            'limit_group_id' => $limitGroupConfig->limit_group_id,
-                            'source' => 'limit_group',
-                        ];
-                    }
+                    $configsToTry[] = [
+                        'operator' => $operator,
+                        'key' => $key,
+                        'providerId' => $configData['providerId'] ?? $configData['provider_id'] ?? null,
+                        'limit_group_id' => $limitGroupConfig->limit_group_id,
+                        'source' => 'limit_group',
+                    ];
                 }
             }
         }
@@ -880,39 +869,28 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
         $timestampStr = $data['timestamp'];  // 字符串缓存
         $dataStr = $data['data'];            // 字符串缓存
         $crypted = base64_decode($dataStr); // ⚡ base64解码只需一次（所有配置共用）
-
-        $tryCount = 0;
         $usedOperator = null;
         $successConfig = null;  // 保存解密成功的完整配置
-
         // ✅ 优化4: 根据历史统计 + username映射 动态调整配置顺序
         $configsToTry = $this->optimizeConfigOrder($configsToTry, $cachedOperator);
-
         // 逐个尝试配置进行解密
-        foreach ($configsToTry as $index => $config) {
-            $tryCount++;
+        foreach ($configsToTry as $config) {
             $operator = $config['operator'];
             $key = $config['key'];
-
             // ⚡ 优化：先做最快的token验证，快速排除不匹配的配置
             // token = md5(operator + timestamp + data)
             if ($token !== md5($operator . $timestampStr . $dataStr)) {
                 continue; // token不匹配，跳过此配置（省略后续计算）
             }
-
             // Token匹配，继续解密
             $key2 = strlen($key) > 16 ? substr($key, 0, 16) : str_pad($key, 16, '0');
             $iv2 = strlen($operator) > 16 ? substr($operator, 0, 16) : str_pad($operator, 16, '0');
-
             // 使用 openssl_decrypt 進行解密
             $decode = openssl_decrypt($crypted, 'AES-128-CBC', $key2, OPENSSL_RAW_DATA, $iv2);
-
             if ($decode === false) {
                 continue; // 解密失败，尝试下一个
             }
-
             $decryptResult = json_decode($decode, true);
-
             if (!empty($decryptResult) && isset($decryptResult['username'])) {
                 // 解密成功，保存完整配置
                 $result = $decryptResult;
@@ -954,6 +932,7 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
         if ($cacheTTL > 0) {
             \support\Cache::set($tokenCacheKey, [
                 'player_id' => $player->id,
+                'uuid' => $player->uuid,
                 'config' => $this->config,
                 'decrypt_data' => $result,
             ], $cacheTTL);
