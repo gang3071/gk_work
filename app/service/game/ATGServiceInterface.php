@@ -120,7 +120,6 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
 
         } else {
             // player=null时（控制器初始化或公共API调用），使用配置文件
-            // decrypt方法会在解密成功后从数据库重新获取配置
             $this->config = $config;
         }
 
@@ -823,19 +822,9 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
         }
 
         $result = null;
-        // 准备所有可能的配置
         $configsToTry = [];
 
-        // 1. 先尝试当前实例的配置（可能是默认配置或已有的限红组配置）
-        $configsToTry[] = [
-            'operator' => $this->config['operator'],
-            'key' => $this->config['key'],
-            'providerId' => $this->config['providerId'],
-            'api_domain' => $this->config['api_domain'],
-            'source' => 'current',
-        ];
-
-        // 2. 获取所有启用的限红组配置（✅ 缓存优化：30分钟）
+        // 获取所有启用的限红组配置（✅ 缓存优化：30分钟）
         $cacheKey = 'platform_limit_configs:' . $this->platform->id;
         $limitGroupConfigs = \support\Cache::get($cacheKey);
 
