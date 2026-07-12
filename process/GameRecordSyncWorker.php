@@ -48,26 +48,19 @@ class GameRecordSyncWorker
     private const BATCH_SIZE = 100;
 
     /**
-     * 真人视讯和体育平台代码列表
-     * 这些平台：
-     * 1. 不触发彩金累加和中奖检查（只保留电子游戏平台参与彩金）
-     * 2. 不发送高分广播消息
-     * 根据平台唯一 code 识别
+     * 获取排除的平台代码列表
+     * 从配置文件读取，便于统一管理
+     *
+     * @return array
      */
-    private const LIVE_CASINO_CODES = [
-        'WM',      // WM真人
-        'DG',      // DG真人
-        'SA',      // SA真人
-        'RSGLIVE', // GClub真人
-        'MT',      // MT真人
-        'O8',      // EEAI真人
-        'TNINE',   // TNINE真人
-        'KY',      // KY棋牌（混合平台，包含真人类别）
-        'KYS',     // KYSport
-        'OB',      // OB
-        'SPS',     // SPSport
-        'SPS_DY',  // SPSport单一钱包
-    ];
+    private function getExcludedPlatformCodes(): array
+    {
+        return config('platform_filter.excluded_platforms', [
+            // 默认值（防止配置文件不存在）
+            'WM', 'DG', 'SA', 'RSGLIVE', 'MT', 'O8', 'TNINE',
+            'KY', 'KYS', 'OB', 'SPS', 'SPS_DY'
+        ]);
+    }
 
     /**
      * 执行锁标志
@@ -647,7 +640,7 @@ class GameRecordSyncWorker
 
             foreach ($platforms as $platform) {
                 // 通过平台唯一 code 判断是否是真人视讯
-                if (in_array($platform->code, self::LIVE_CASINO_CODES)) {
+                if (in_array($platform->code, $this->getExcludedPlatformCodes())) {
                     $livePlatformIds[] = $platform->id;
                     $this->log->debug('真人视讯平台跳过高分广播', [
                         'platform_id' => $platform->id,
@@ -793,7 +786,7 @@ class GameRecordSyncWorker
         }
 
         // 2. 过滤真人视讯和体育平台（只保留电子游戏平台参与彩金）
-        if (in_array($platformCode, self::LIVE_CASINO_CODES)) {
+        if (in_array($platformCode, $this->getExcludedPlatformCodes())) {
             return false;
         }
 
@@ -990,7 +983,7 @@ class GameRecordSyncWorker
                     try {
                         // 检查是否是真人视讯平台（通过 code 识别）
                         $platform = GamePlatform::query()->find($gameRecord->platform_id);
-                        if ($platform && in_array($platform->code, self::LIVE_CASINO_CODES)) {
+                        if ($platform && in_array($platform->code, $this->getExcludedPlatformCodes())) {
                             // 真人视讯平台不发送高分广播
                             $this->log->debug('真人视讯平台跳过高分广播', [
                                 'record_id' => $gameRecord->id,
