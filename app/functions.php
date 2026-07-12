@@ -196,6 +196,21 @@ function machineKeepOutPlayer(): void
             }
             if ($services->keeping == 0) {
                 $log->info('PlayOutMachine: 非保留状态跳过' . $machine->code);
+                // ✅ 修复：发送消息通知客户端取消保留状态（避免客户端显示不一致）
+                sendSocketMessage('player-' . $machine->gaming_user_id . '-' . $machine->id, [
+                    'msg_type' => 'player_machine_keeping',
+                    'player_id' => $machine->gaming_user_id,
+                    'machine_id' => $machine->id,
+                    'keep_seconds' => 0,
+                    'keeping' => 0
+                ]);
+                sendSocketMessage('player-' . $machine->gaming_user_id, [
+                    'msg_type' => 'player_machine_keeping',
+                    'player_id' => $machine->gaming_user_id,
+                    'machine_id' => $machine->id,
+                    'keep_seconds' => 0,
+                    'keeping' => 0
+                ]);
                 continue;
             }
             if ($isFreeTime && $services->keep_seconds > 1800) {
