@@ -48,7 +48,10 @@ class GameRecordSyncWorker
     private const BATCH_SIZE = 100;
 
     /**
-     * 真人视讯平台代码列表（这些平台不发送高分广播）
+     * 真人视讯和体育平台代码列表
+     * 这些平台：
+     * 1. 不触发彩金累加和中奖检查（只保留电子游戏平台参与彩金）
+     * 2. 不发送高分广播消息
      * 根据平台唯一 code 识别
      */
     private const LIVE_CASINO_CODES = [
@@ -59,6 +62,7 @@ class GameRecordSyncWorker
         'MT',      // MT真人
         'O8',      // EEAI真人
         'TNINE',   // TNINE真人
+        'KY',      // KY棋牌（混合平台，包含真人类别）
         'KYS',     // KYSport
         'OB',      // OB
         'SPS',     // SPSport
@@ -742,15 +746,44 @@ class GameRecordSyncWorker
                         'bet' => $existing->bet,
                         'original_data' => $existing->original_data ?? '{}',
                         'record_id' => $existing->id,
+                        'platform_id' => $existing->platform_id,
                     ];
                 }
             }
         }
 
+        // ✅ 性能优化：批量预加载平台信息（避免 N+1 查询）
+        $platformIds = array_unique(array_column($lotteryTriggers, 'platform_id'));
+        $platforms = [];
+        if (!empty($platformIds)) {
+            $platforms = \app\model\GamePlatform::query()
+                ->whereIn('id', $platformIds)
+                ->get()
+                ->keyBy('id');
+        }
+
         // 3. 批量发送到彩金队列
+        $sentCount = 0;
+        $filteredCount = 0;
+
         foreach ($lotteryTriggers as $trigger) {
+            // 获取平台code
+            $platform = $platforms[$trigger['platform_id']] ?? null;
+            $platformCode = $platform->code ?? '';
+
+            // ✅ 安全检查：未知平台（platformCode为空）一律拦截，防止意外触发彩金
+            if (empty($platformCode)) {
+                $this->log->warning('⚠️ 未知平台拦截彩金触发', [
+                    'order_no' => $trigger['order_no'],
+                    'platform_id' => $trigger['platform_id'],
+                ]);
+                $filteredCount++;
+                continue;
+            }
+
             // 应用过滤规则
-            if (!$this->shouldTriggerLotteryFromData($trigger)) {
+            if (!$this->shouldTriggerLotteryFromData($trigger, $platformCode)) {
+                $filteredCount++;
                 continue;
             }
 
@@ -760,6 +793,7 @@ class GameRecordSyncWorker
                     'bet' => $trigger['bet'],
                     'play_game_record_id' => $trigger['record_id'] ?? 0,
                 ]);
+                $sentCount++;
             } catch (\Throwable $e) {
                 $this->log->warning('⚠️ 彩金队列触发失败', [
                     'order_no' => $trigger['order_no'],
@@ -770,7 +804,9 @@ class GameRecordSyncWorker
 
         if (count($lotteryTriggers) > 0) {
             $this->log->info('🎰 批量触发彩金检查', [
-                'count' => count($lotteryTriggers),
+                'total' => count($lotteryTriggers),
+                'sent' => $sentCount,
+                'filtered' => $filteredCount,
             ]);
         }
     }
@@ -966,14 +1002,19 @@ class GameRecordSyncWorker
     /**
      * 检查是否应该触发彩金（从原始数据）
      */
-    private function shouldTriggerLotteryFromData(array $data): bool
+    private function shouldTriggerLotteryFromData(array $data, string $platformCode = ''): bool
     {
         // 1. 下注金额必须大于0
         if (($data['bet'] ?? 0) <= 0) {
             return false;
         }
 
-        // 2. 过滤BTG鱼机游戏
+        // 2. 过滤真人视讯和体育平台（只保留电子游戏平台参与彩金）
+        if (in_array($platformCode, self::LIVE_CASINO_CODES)) {
+            return false;
+        }
+
+        // 3. 过滤BTG鱼机游戏
         $originalData = json_decode($data['original_data'] ?? '{}', true);
         if (is_array($originalData)) {
             // 处理关联数组和索引数组两种情况
