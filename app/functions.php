@@ -1275,6 +1275,16 @@ function machineWash(
                     false, $path == 'leave');
             }
         }
+
+        // ✅ 修复：在数据库事务提交前立即更新Redis缓存状态
+        // 避免API查询时读取到不一致的状态（DB已更新但Redis未更新）
+        if ($path == 'leave') {
+            $services->keeping_user_id = 0;
+            $services->keeping = 0;
+            $services->last_keep_at = 0;
+            $services->keep_seconds = 0;
+        }
+
         DB::commit();
         // 执行下分操作
         switch ($machine->type) {
@@ -1311,10 +1321,7 @@ function machineWash(
     if ($path == 'leave') {
         $services->gaming_user_id = 0;
         $services->gaming = 0;
-        $services->keeping_user_id = 0;
-        $services->keeping = 0;
-        $services->last_keep_at = 0;
-        $services->keep_seconds = 0;
+        // ✅ keeping相关字段已在DB事务提交前更新，此处无需重复
         if ($machine->type == GameType::TYPE_SLOT) {
             $services->player_pressure = 0;
             $services->player_score = 0;
