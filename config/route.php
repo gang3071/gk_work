@@ -86,6 +86,14 @@ Route::group('/api', function () {
             // 更新机台状态
             Route::post('/update-state', [\app\api\v1\AdminMachineController::class, 'updateMachineState']);
         });
+
+        // 管理后台 - 媒体服务器代理 API
+        Route::group('/media-proxy', function () {
+            // 通用代理接口
+            Route::post('', [\app\api\v1\MediaServerProxyController::class, 'proxy']);
+            // 健康检查
+            Route::get('/health', [\app\api\v1\MediaServerProxyController::class, 'health']);
+        });
     });
 });
 
