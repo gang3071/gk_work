@@ -823,24 +823,6 @@ $handlers = [
     ],
 ];
 
-// 媒体代理日志
-$handlers['media_proxy'] = [
-    'handlers' => [
-        [
-            'class' => Monolog\Handler\RotatingFileHandler::class,
-            'constructor' => [
-                runtime_path() . '/logs/media_proxy.log',
-                7, //$maxFiles
-                Monolog\Logger::DEBUG,
-            ],
-            'formatter' => [
-                'class' => Monolog\Formatter\LineFormatter::class,
-                'constructor' => [null, 'Y-m-d H:i:s', true],
-            ],
-        ]
-    ],
-];
-
 // 如果启用 Telegram 通知，添加到 default 通道
 if (env('TELEGRAM_ENABLED', false)) {
     $botToken = env('TELEGRAM_BOT_TOKEN', '');
