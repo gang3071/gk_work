@@ -87,12 +87,28 @@ Route::group('/api', function () {
             Route::post('/update-state', [\app\api\v1\AdminMachineController::class, 'updateMachineState']);
         });
 
-        // 管理后台 - 媒体服务器代理 API
+        // 管理后台 - 媒体服务器代理 API（通用HTTP代理）
         Route::group('/media-proxy', function () {
             // 通用代理接口
             Route::post('', [\app\api\v1\MediaServerProxyController::class, 'proxy']);
             // 健康检查
             Route::get('/health', [\app\api\v1\MediaServerProxyController::class, 'health']);
+        });
+
+        // 管理后台 - 媒体服务器 API（业务接口）
+        Route::group('/media-server', function () {
+            // 删除机台流
+            Route::post('/delete-machine-stream', [\app\api\v1\MediaServerController::class, 'deleteMachineStream']);
+            // 创建机台流
+            Route::post('/create-machine-stream', [\app\api\v1\MediaServerController::class, 'createMachineStream']);
+            // 添加 RTMP 节点
+            Route::post('/rtmp-endpoint', [\app\api\v1\MediaServerController::class, 'rtmpEndpoint']);
+            // 删除 RTMP 节点
+            Route::post('/delete-rtmp-endpoint', [\app\api\v1\MediaServerController::class, 'deleteRtmpEndpoint']);
+            // 获取观看人数
+            Route::post('/get-viewers', [\app\api\v1\MediaServerController::class, 'getViewers']);
+            // 获取流信息
+            Route::post('/get-broadcasts', [\app\api\v1\MediaServerController::class, 'getBroadcasts']);
         });
     });
 });
