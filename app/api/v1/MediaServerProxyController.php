@@ -70,7 +70,9 @@ class MediaServerProxyController
             Log::channel('media_proxy')->info('[媒体代理] 请求', [
                 'method' => $method,
                 'url' => $url,
+                'headers' => $headers,
                 'body' => $body,
+                'use_json' => !empty($headers['Content-Type']) && $headers['Content-Type'] === 'application/json',
             ]);
 
             // 构建 HTTP 客户端
@@ -85,6 +87,10 @@ class MediaServerProxyController
             $useJson = !empty($headers['Content-Type']) && $headers['Content-Type'] === 'application/json';
             if ($useJson) {
                 $httpClient = $httpClient->asJson();
+                // asJson() 会自动设置 Content-Type 和 Accept，但为了确保一致性，显式添加
+                if (!isset($headers['Accept'])) {
+                    $headers['Accept'] = 'application/json';
+                }
             }
 
             // 根据方法发起请求
@@ -102,7 +108,8 @@ class MediaServerProxyController
                     break;
 
                 case 'DELETE':
-                    $response = $httpClient->delete($url);
+                    // DELETE 请求也可能需要传递 body（如认证参数）
+                    $response = $httpClient->delete($url, $body);
                     break;
 
                 default:
@@ -129,6 +136,7 @@ class MediaServerProxyController
                 'status' => $statusCode,
                 'url' => $url,
                 'response_size' => strlen($responseBody),
+                'response_preview' => $statusCode >= 400 ? substr($responseBody, 0, 500) : '(success)',
             ]);
 
             return json([
