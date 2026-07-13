@@ -2,7 +2,7 @@
 
 namespace app\api\v1;
 
-use addons\webman\service\MediaServer;
+use app\service\MediaServer;
 use support\Request;
 use support\Response;
 use support\Log;
