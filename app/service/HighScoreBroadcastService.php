@@ -296,8 +296,8 @@ class HighScoreBroadcastService
      */
     private static function buildMessage(Player $player, Channel $channel, PlayGameRecord $record): array
     {
-        // 获取玩家名称并脱敏
-        $rawName = $player->nickname ?? ($player->name ?? 'Unknown');
+        // 获取玩家名称并脱敏（统一使用 name 字段）
+        $rawName = $player->name ?? 'Unknown';
         $nameLength = mb_strlen($rawName);
         if ($nameLength <= 2) {
             // 1-2个字：显示第1个字 + *，如 "张*"
