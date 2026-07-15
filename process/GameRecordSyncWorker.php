@@ -201,8 +201,10 @@ class GameRecordSyncWorker
 
         try {
             // 1. 批量查询已存在的记录（一次性查询）
+            // ✅ 强制使用 idx_order_no 索引，避免优化器在某些情况下选择错误的复合索引
             $orderNos = array_column($records, 'order_no');
             $existingRecords = PlayGameRecord::query()
+                ->fromRaw('play_game_record USE INDEX (idx_order_no)')
                 ->whereIn('order_no', $orderNos)
                 ->get()
                 ->keyBy('order_no');
@@ -350,6 +352,7 @@ class GameRecordSyncWorker
             if (!empty($toInsert)) {
                 $insertedOrderNos = array_column($toInsert, 'order_no');
                 $newlyInserted = PlayGameRecord::query()
+                    ->fromRaw('play_game_record USE INDEX (idx_order_no)')
                     ->whereIn('order_no', $insertedOrderNos)
                     ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id', 'bet', 'win', 'original_data')
                     ->get()
@@ -567,6 +570,7 @@ class GameRecordSyncWorker
         if (!empty($deliveryRecords)) {
             $orderNos = array_keys($deliveryRecords);
             $newRecords = PlayGameRecord::query()
+                ->fromRaw('play_game_record USE INDEX (idx_order_no)')
                 ->whereIn('order_no', $orderNos)
                 ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id')
                 ->get()
