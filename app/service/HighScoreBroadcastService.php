@@ -315,9 +315,9 @@ class HighScoreBroadcastService
         }
 
         // 获取店家名称
-        $storeName = '未知店家';
+        $storeName = '';
         if ($player->storeAdmin) {
-            $storeName = $player->storeAdmin->nickname ?? ($player->storeAdmin->username ?? '未知店家');
+            $storeName = $player->storeAdmin->nickname ?? ($player->storeAdmin->username ?? '');
         }
 
         // 根据渠道语言返回不同的文本
@@ -331,21 +331,40 @@ class HighScoreBroadcastService
         // 转换语言格式：zh-TW -> zh_TW（翻译目录使用下划线）
         $lang = str_replace('-', '_', $channelLang);
 
-        // ✅ 优化：使用翻译文件，支持运营自行修改文案
-        try {
-            $message = trans('message', [
-                'device_name' => $deviceName,
-                'game_name' => $gameName,
-                'score' => $score,
-                'store_name' => $storeName,
-            ], 'high_score_broadcast', $lang);
-        } catch (\Throwable $e) {
-            // 降级：如果翻译失败，使用默认繁体中文
-            $message = "高分報喜：讓我們恭喜【{$storeName}】的優秀玩家（{$deviceName}），在《{$gameName}》遊戲中榮獲 {$score} 分的佳績！";
-            Log::warning('高分广播翻译失败，使用默认文案', [
-                'lang' => $lang,
-                'error' => $e->getMessage(),
-            ]);
+        // ✅ 优化：根据是否有店名使用不同文案
+        if (!empty($storeName)) {
+            // 有店家：使用带店名的文案
+            try {
+                $message = trans('message_with_store', [
+                    'device_name' => $deviceName,
+                    'game_name' => $gameName,
+                    'score' => $score,
+                    'store_name' => $storeName,
+                ], 'high_score_broadcast', $lang);
+            } catch (\Throwable $e) {
+                // 降级：如果翻译失败，使用默认繁体中文
+                $message = "高分報喜：讓我們恭喜【{$storeName}】的優秀玩家（{$deviceName}），在《{$gameName}》遊戲中榮獲 {$score} 分的佳績！";
+                Log::warning('高分广播翻译失败，使用默认文案', [
+                    'lang' => $lang,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        } else {
+            // 无店家：使用不带店名的文案
+            try {
+                $message = trans('message_no_store', [
+                    'device_name' => $deviceName,
+                    'game_name' => $gameName,
+                    'score' => $score,
+                ], 'high_score_broadcast', $lang);
+            } catch (\Throwable $e) {
+                // 降级：如果翻译失败，使用默认繁体中文
+                $message = "高分報喜：讓我們恭喜優秀玩家（{$deviceName}），在《{$gameName}》遊戲中榮獲 {$score} 分的佳績！";
+                Log::warning('高分广播翻译失败，使用默认文案', [
+                    'lang' => $lang,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         return [
