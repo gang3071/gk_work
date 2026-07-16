@@ -91,7 +91,7 @@ class HighScoreBroadcastService
                 return false;
             }
 
-            // 5. 加载关联数据
+            // 5. 加载关联数据（包括店家信息）
             $player = $record->player;
             $channel = $record->channel;
 
@@ -104,6 +104,11 @@ class HighScoreBroadcastService
                 return false;
             }
 
+            // 加载店家信息（如果还没有加载）
+            if (!$player->relationLoaded('storeAdmin')) {
+                $player->load('storeAdmin');
+            }
+
             // 6. 构建广播消息
             $messageData = self::buildMessage($player, $channel, $record);
 
@@ -113,6 +118,8 @@ class HighScoreBroadcastService
             Log::info('高分广播成功', [
                 'player_id' => $record->player_id,
                 'player_nickname' => $player->name ?? '',
+                'store_admin_id' => $player->store_admin_id ?? null,
+                'store_name' => $player->storeAdmin->nickname ?? ($player->storeAdmin->username ?? null),
                 'game_code' => $record->game_code ?? '',
                 'win' => $record->win,
                 'threshold' => $threshold,
@@ -307,6 +314,12 @@ class HighScoreBroadcastService
             $deviceName = mb_substr($rawName, 0, 1) . '***';
         }
 
+        // 获取店家名称
+        $storeName = '未知店家';
+        if ($player->storeAdmin) {
+            $storeName = $player->storeAdmin->nickname ?? ($player->storeAdmin->username ?? '未知店家');
+        }
+
         // 根据渠道语言返回不同的文本
         $channelLang = $channel->lang ?? 'zh-TW';
 
@@ -324,10 +337,11 @@ class HighScoreBroadcastService
                 'device_name' => $deviceName,
                 'game_name' => $gameName,
                 'score' => $score,
+                'store_name' => $storeName,
             ], 'high_score_broadcast', $lang);
         } catch (\Throwable $e) {
             // 降级：如果翻译失败，使用默认繁体中文
-            $message = "高分報喜：恭喜（{$deviceName}）於（{$gameName}）贏得{$score}分";
+            $message = "高分報喜：恭喜（{$storeName}）店家玩家（{$deviceName}）於（{$gameName}）贏得{$score}分";
             Log::warning('高分广播翻译失败，使用默认文案', [
                 'lang' => $lang,
                 'error' => $e->getMessage(),
