@@ -343,7 +343,7 @@ class HighScoreBroadcastService
                 ], 'high_score_broadcast', $lang);
             } catch (\Throwable $e) {
                 // 降级：如果翻译失败，使用默认繁体中文
-                $message = "高分報喜：讓我們恭喜【{$storeName}】的優秀玩家（{$deviceName}），在《{$gameName}》遊戲中榮獲 {$score} 分的佳績！";
+                $message = "🎉 高分報喜：讓我們恭喜【{$storeName}】的優秀玩家（{$deviceName}），在《{$gameName}》遊戲中榮獲 {$score} 分的佳績！";
                 Log::warning('高分广播翻译失败，使用默认文案', [
                     'lang' => $lang,
                     'error' => $e->getMessage(),
@@ -359,7 +359,7 @@ class HighScoreBroadcastService
                 ], 'high_score_broadcast', $lang);
             } catch (\Throwable $e) {
                 // 降级：如果翻译失败，使用默认繁体中文
-                $message = "高分報喜：讓我們恭喜優秀玩家（{$deviceName}），在《{$gameName}》遊戲中榮獲 {$score} 分的佳績！";
+                $message = "🎉 高分報喜：讓我們恭喜優秀玩家（{$deviceName}），在《{$gameName}》遊戲中榮獲 {$score} 分的佳績！";
                 Log::warning('高分广播翻译失败，使用默认文案', [
                     'lang' => $lang,
                     'error' => $e->getMessage(),
