@@ -1419,7 +1419,7 @@ function machineWashZero(
                 $ratio = ($machine->odds_x ?? 1) / ($machine->odds_y ?? 1);
                 $playerGameLog->chip_amount = bcmul($gamingPressure, $ratio, 2);
             } elseif ($machine->type == GameType::TYPE_STEEL_BALL) {
-                $playerGameLog->chip_amount = bcmul($machine->machineCategory->turn_used_point, $gamingTurnPoint);
+                $playerGameLog->chip_amount = bcmul($machine->machineCategory?->turn_used_point ?? 0, $gamingTurnPoint);
             }
             extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint, $adminId, $adminUsername);
 
@@ -1504,21 +1504,21 @@ function addPlayerGameLog(
 {
     $odds = $machine->odds_x . ':' . $machine->odds_y;
     if ($machine->type == GameType::TYPE_STEEL_BALL) {
-        $odds = $machine->machineCategory->name;
+        $odds = $machine->machineCategory?->name ?? '未知机种';
     }
     $playerGameLog = new PlayerGameLog;
     $playerGameLog->player_id = $player->id;
     $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
-    $playerGameLog->agent_player_id = $player->recommend_promoter->recommend_id ?? 0;
+    $playerGameLog->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
     $playerGameLog->department_id = $player->department_id;
     $playerGameLog->machine_id = $machine->id;
     $playerGameLog->game_record_id = isset($gameRecord) && !empty($gameRecord->id) ? $gameRecord->id : 0;
-    $playerGameLog->game_id = $machine->machineCategory->game_id;
+    $playerGameLog->game_id = $machine->machineCategory?->game_id ?? 0;
     $playerGameLog->type = $machine->type;
     $playerGameLog->odds = $odds;
     $playerGameLog->control_open_point = $control_open_point;
     $playerGameLog->open_point = 0;
-    $playerGameLog->turn_used_point = $machine->machineCategory->turn_used_point;
+    $playerGameLog->turn_used_point = $machine->machineCategory?->turn_used_point ?? 0;
     $playerGameLog->is_test = $player->is_test; //标记测试数据
 
     return $playerGameLog;
@@ -2480,7 +2480,7 @@ if (!function_exists('machineOpenAnyFree')) {
             //上任意分
             $odds = $machine->odds_x . ':' . $machine->odds_y;
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
-                $odds = $machine->machineCategory->name;
+                $odds = $machine->machineCategory?->name ?? '未知机种';
             }
             /** @var PlayerPlatformCash $player_platform_wallet */
             $player_platform_wallet = PlayerPlatformCash::query()->where([
@@ -2491,8 +2491,8 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerGameLog->player_id = $player->id;
             $playerGameLog->department_id = $player->department_id;
             $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
-            $playerGameLog->agent_player_id = $player->recommend_promoter->recommend_id ?? 0;
-            $playerGameLog->game_id = $machine->machineCategory->game_id;
+            $playerGameLog->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
+            $playerGameLog->game_id = $machine->machineCategory?->game_id ?? 0;
             $playerGameLog->machine_id = $machine->id;
             $playerGameLog->type = $machine->type;
             $playerGameLog->odds = $odds;
@@ -2628,16 +2628,16 @@ if (!function_exists('resetMachineTrans')) {
             }
             $odds = $machine->odds_x . ':' . $machine->odds_y;
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
-                $odds = $machine->machineCategory->name;
+                $odds = $machine->machineCategory?->name ?? '未知机种';
             }
             //添加机台点数转换记录
             $playerGameLog = new PlayerGameLog;
             $playerGameLog->player_id = $machine->gaming_user_id;
             $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
-            $playerGameLog->agent_player_id = $player->recommend_promoter->recommend_id ?? 0;
+            $playerGameLog->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
             $playerGameLog->department_id = $player->department_id;
             $playerGameLog->machine_id = $machine->id;
-            $playerGameLog->game_id = $machine->machineCategory->game_id;
+            $playerGameLog->game_id = $machine->machineCategory?->game_id ?? 0;
             $playerGameLog->game_record_id = $gameRecord->id ?? 0;
             $playerGameLog->type = $machine->type;
             $playerGameLog->odds = $odds;
