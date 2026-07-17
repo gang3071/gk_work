@@ -85,6 +85,13 @@ Route::group('/api', function () {
             Route::post('/batch-status', [\app\api\v1\AdminMachineController::class, 'batchGetMachineStatus']);
             // 更新机台状态
             Route::post('/update-state', [\app\api\v1\AdminMachineController::class, 'updateMachineState']);
+            // ✅ 高级操作（踢出玩家、开分等）
+            // 踢出玩家（洗分）
+            Route::post('/kick-player', [\app\api\v1\AdminMachineController::class, 'kickPlayer']);
+            // 强制踢出玩家（不返还分数）
+            Route::post('/force-kick-player', [\app\api\v1\AdminMachineController::class, 'forceKickPlayer']);
+            // 自定义开分
+            Route::post('/custom-open-score', [\app\api\v1\AdminMachineController::class, 'customOpenScore']);
         });
 
         // 管理后台 - 媒体服务器 API（业务接口）

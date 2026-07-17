@@ -856,4 +856,197 @@ class AdminMachineController
             ]);
         }
     }
+
+    /**
+     * 踢出玩家（洗分）
+     * POST /api/admin/machine/kick-player
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function kickPlayer(Request $request): Response
+    {
+        try {
+            $lang = $this->setLanguage($request);
+            $adminId = $this->getAdminId($request);
+
+            // 验证参数
+            $machineId = (int)$request->post('machine_id');
+            $playerId = (int)$request->post('player_id');
+            $path = $request->post('path', 'leave'); // leave 或 down
+
+            if ($machineId <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+            if ($playerId <= 0) {
+                return $this->fail('无效的玩家ID', 400);
+            }
+
+            // 查询机台和玩家
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            $player = \app\model\Player::find($playerId);
+            if (!$player) {
+                return $this->fail('玩家不存在', 404);
+            }
+
+            // 调用洗分函数
+            // 注意：这里需要确保 gk_work 中也有 machineWash 函数
+            // 如果没有，需要从 gk_admin 迁移过来
+            if (!function_exists('machineWash')) {
+                return $this->fail('machineWash 函数未定义，请联系技术支持', 500);
+            }
+
+            machineWash($player, $machine, $path);
+
+            Log::info('【管理员操作】踢出玩家', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId,
+                'machine_id' => $machineId,
+                'player_id' => $playerId,
+                'path' => $path
+            ]);
+
+            return $this->success([], '踢出玩家成功');
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '【管理员操作】踢出玩家失败', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId ?? 0,
+                'machine_id' => $machineId ?? null,
+                'player_id' => $playerId ?? null
+            ]);
+        }
+    }
+
+    /**
+     * 强制踢出玩家（不返还分数）
+     * POST /api/admin/machine/force-kick-player
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function forceKickPlayer(Request $request): Response
+    {
+        try {
+            $lang = $this->setLanguage($request);
+            $adminId = $this->getAdminId($request);
+
+            // 验证参数
+            $machineId = (int)$request->post('machine_id');
+            $playerId = (int)$request->post('player_id');
+
+            if ($machineId <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+            if ($playerId <= 0) {
+                return $this->fail('无效的玩家ID', 400);
+            }
+
+            // 查询机台和玩家
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            $player = \app\model\Player::find($playerId);
+            if (!$player) {
+                return $this->fail('玩家不存在', 404);
+            }
+
+            // 调用强制重置函数
+            if (!function_exists('resetMachineTrans')) {
+                return $this->fail('resetMachineTrans 函数未定义，请联系技术支持', 500);
+            }
+
+            resetMachineTrans($machine, $player);
+
+            Log::info('【管理员操作】强制踢出玩家', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId,
+                'machine_id' => $machineId,
+                'player_id' => $playerId
+            ]);
+
+            return $this->success([], '强制踢出玩家成功');
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '【管理员操作】强制踢出玩家失败', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId ?? 0,
+                'machine_id' => $machineId ?? null,
+                'player_id' => $playerId ?? null
+            ]);
+        }
+    }
+
+    /**
+     * 自定义开分
+     * POST /api/admin/machine/custom-open-score
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function customOpenScore(Request $request): Response
+    {
+        try {
+            $lang = $this->setLanguage($request);
+            $adminId = $this->getAdminId($request);
+
+            // 验证参数
+            $machineId = (int)$request->post('machine_id');
+            $playerId = (int)$request->post('player_id');
+            $openScore = (int)$request->post('open_score');
+
+            if ($machineId <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+            if ($playerId <= 0) {
+                return $this->fail('无效的玩家ID', 400);
+            }
+            if ($openScore <= 0) {
+                return $this->fail('开分数值必须大于0', 400);
+            }
+
+            // 查询机台和玩家
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            $player = \app\model\Player::find($playerId);
+            if (!$player) {
+                return $this->fail('玩家不存在', 404);
+            }
+
+            // 调用自定义开分函数
+            if (!function_exists('machineOpenAnyFree')) {
+                return $this->fail('machineOpenAnyFree 函数未定义，请联系技术支持', 500);
+            }
+
+            machineOpenAnyFree($player, $machine, $openScore);
+
+            Log::info('【管理员操作】自定义开分', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId,
+                'machine_id' => $machineId,
+                'player_id' => $playerId,
+                'open_score' => $openScore
+            ]);
+
+            return $this->success([], '自定义开分成功');
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '【管理员操作】自定义开分失败', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId ?? 0,
+                'machine_id' => $machineId ?? null,
+                'player_id' => $playerId ?? null,
+                'open_score' => $openScore ?? null
+            ]);
+        }
+    }
 }
