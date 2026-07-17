@@ -28,9 +28,11 @@ use app\model\StoreSetting;
 use app\model\SystemSetting;
 use app\service\ActivityServices;
 use app\service\LotteryServices;
+use app\service\machine\Jackpot;
 use app\service\machine\MachineServices;
 use app\service\machine\Slot;
 use app\service\MediaServer;
+use GatewayWorker\Lib\Gateway;
 use support\Cache;
 use support\Db;
 use support\Log;
@@ -2405,5 +2407,290 @@ function clearMachineCrashCache(int $playerId): bool
         ]);
 
         return false;
+    }
+}
+
+if (!function_exists('checkMachineOpenAny')) {
+    /**
+     * 上任意分
+     * @param Machine $machine
+     * @param int $money
+     * @param int $giftScore
+     * @return float|int
+     * @throws Exception
+     */
+    function checkMachineOpenAny(Machine $machine, int $money, int $giftScore): float|int
+    {
+        if (!is_numeric($money) || $money <= 0) {
+            throw new InvalidArgumentException('Invalid money value');
+        }
+        if (!is_numeric($machine->odds_x) || $machine->odds_x <= 0) {
+            throw new InvalidArgumentException('Invalid odds_x value');
+        }
+        if (!is_numeric($machine->odds_y) || $machine->odds_y <= 0) {
+            throw new InvalidArgumentException('Invalid odds_y value');
+        }
+        if ($machine->odds_x == 0) {
+            throw new Exception('机台赔率配置错误');
+        }
+        $yx = $machine->odds_y / $machine->odds_x;
+        if ($machine->odds_y > $machine->odds_x && floor($yx) != $yx) {
+            throw new Exception('机台赔率配置错误');
+        }
+        $open_score = $money * $machine->odds_y / $machine->odds_x;
+
+        return floor($open_score) + $giftScore;
+    }
+}
+
+if (!function_exists('machineOpenAnyFree')) {
+    /**
+     * 任意開分免扣點
+     * @param Player $player
+     * @param Machine $machine
+     * @param int $openScore
+     * @param int $adminId
+     * @param string $adminUsername
+     * @return bool
+     * @throws Exception
+     */
+    function machineOpenAnyFree(Player $player, Machine $machine, int $openScore, int $adminId = 0, string $adminUsername = ''): bool
+    {
+        DB::beginTransaction();
+        try {
+            $lang = locale() ?? 'zh_CN';
+            $services = MachineServices::createServices($machine, $lang);
+            if (strtotime($services->last_point_at) + 5 >= time()) {
+                throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
+            }
+            $openScore = checkMachineOpenAny($machine, $openScore, 0);
+            //測試連線
+            if ($machine->type == GameType::TYPE_STEEL_BALL) {
+            } else {
+                if ($services->point + $openScore > 4000) {
+                    throw new Exception('机台洗分限制，累计分数不能超过4000');
+                }
+            }
+            //上任意分
+            $odds = $machine->odds_x . ':' . $machine->odds_y;
+            if ($machine->type == GameType::TYPE_STEEL_BALL) {
+                $odds = $machine->machineCategory->name;
+            }
+            /** @var PlayerPlatformCash $player_platform_wallet */
+            $player_platform_wallet = PlayerPlatformCash::query()->where([
+                'player_id' => $player->id,
+                'platform_id' => PlayerPlatformCash::PLATFORM_SELF
+            ])->first();
+            $playerGameLog = new PlayerGameLog;
+            $playerGameLog->player_id = $player->id;
+            $playerGameLog->department_id = $player->department_id;
+            $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
+            $playerGameLog->agent_player_id = $player->recommend_promoter->recommend_id ?? 0;
+            $playerGameLog->game_id = $machine->machineCategory->game_id;
+            $playerGameLog->machine_id = $machine->id;
+            $playerGameLog->type = $machine->type;
+            $playerGameLog->odds = $odds;
+            $playerGameLog->control_open_point = $machine->control_open_point;
+            $playerGameLog->open_point = $openScore;
+            $playerGameLog->wash_point = 0;
+            $playerGameLog->gift_point = 0;
+            $playerGameLog->game_amount = 0;
+            $playerGameLog->before_game_amount = $player_platform_wallet->money ?? 0;
+            $playerGameLog->after_game_amount = $player_platform_wallet->money ?? 0;
+            $playerGameLog->user_id = $adminId;
+            $playerGameLog->action = PlayerGameLog::ACTION_OPEN;
+            $playerGameLog->user_name = $adminUsername;
+            $playerGameLog->is_test = $player->is_test; //标记测试数据
+            $playerGameLog->save();
+            //首次上分
+            if ($machine->gaming_user_id == 0) {
+                //斯洛 移分off
+                if ($machine->type == GameType::TYPE_SLOT && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
+                    $services->sendCmd($services::MOVE_POINT_OFF, 0, 'admin', $adminId);
+                }
+            }
+            //累計該玩家開分
+            $services->gaming = 1;
+            $services->gaming_user_id = $player->id;
+            $services->player_open_point = bcadd($services->player_open_point, $openScore);
+            $services->last_point_at = time();
+
+            $machine->gaming = 1;
+            $machine->gaming_user_id = $player->id;
+            $machine->save();
+            $services->sendCmd($services::OPEN_ANY_POINT, $openScore, 'admin', $adminId);
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollback();
+            throw new Exception($e->getMessage());
+        }
+
+        return true;
+    }
+}
+
+if (!function_exists('resetMachineTrans')) {
+    /**
+     * 重置机台(开启事务)
+     * @param Machine $machine
+     * @param Player $player
+     * @param int $adminId
+     * @param string $adminUsername
+     * @return true
+     * @throws Exception
+     */
+    function resetMachineTrans(Machine $machine, Player $player, int $adminId = 0, string $adminUsername = ''): bool
+    {
+        DB::beginTransaction();
+        try {
+            $lang = locale() ?? 'zh_CN';
+            /** @var Jackpot|Slot $services */
+            $services = MachineServices::createServices($machine, $lang);
+            $gamingTurn = 0;
+            $gamingScore = 0;
+            $gamingPressure = 0;
+            $isOnLine = true;
+            $uid = $machine->domain . ':' . $machine->port;
+            if (!Gateway::isUidOnline($uid)) {
+                $isOnLine = false;
+            }
+            //取得玩家遊玩轉數/得分
+            if ($machine->type == GameType::TYPE_STEEL_BALL) {
+                // 根据机器类型选择不同的计算方式
+                if ($machine->control_type == Machine::CONTROL_TYPE_SONG) {
+                    // 小淞机器：使用实时追踪的 player_win_number
+                    $gamingTurn = $services->player_win_number;
+                } else {
+                    // 双美机器：使用原有逻辑（基于 win_number 和 player_turn_point）
+                    $gamingTurn = bcsub($services->win_number, $machine->player_turn_point);
+                }
+            }
+            if ($machine->type == GameType::TYPE_SLOT) {
+                $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
+                $gamingScore = bcsub($services->win, $services->player_score);
+                $gamingPressure = bcsub($services->bet, $services->player_pressure);
+                if (!Gateway::isUidOnline($autoUid)) {
+                    $isOnLine = false;
+                }
+            }
+            if ($isOnLine) {
+                switch ($machine->type) {
+                    case GameType::TYPE_STEEL_BALL:
+                        if ($machine->control_type == Machine::CONTROL_TYPE_MEI) {
+                            $services->sendCmd($services::PUSH . $services::PUSH_STOP, 0, 'player', $player->id);
+                        }
+                        if ($services->auto == 1) {
+                            $services->sendCmd($services::AUTO_UP_TURN, 0, 'player', $player->id);
+                        }
+                        if ($services->score > 0) {
+                            $services->sendCmd($services::SCORE_TO_POINT, 0, 'player', $player->id);
+                        }
+                        if ($services->turn > 0) {
+                            $services->sendCmd($services::TURN_DOWN_ALL, 0, 'player', $player->id);
+                        }
+                        break;
+                    case GameType::TYPE_SLOT:
+                        if ($services->move_point == 1 && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
+                            $services->sendCmd($services::MOVE_POINT_OFF, 0, 'player', $player->id);
+                        }
+                        if ($services->auto == 1) {
+                            $services->sendCmd($services::OUT_OFF, 0, 'player', $player->id);
+                        } else {
+                            $services->sendCmd($services::STOP_ONE, 0, 'player', $player->id);
+                            $services->sendCmd($services::STOP_TWO, 0, 'player', $player->id);
+                            $services->sendCmd($services::STOP_THREE, 0, 'player', $player->id);
+                        }
+                        break;
+                }
+            }
+
+            $player_platform_wallet = PlayerPlatformCash::query()->where([
+                'player_id' => $player->id,
+                'platform_id' => PlayerPlatformCash::PLATFORM_SELF,
+            ])->first();
+
+            //记录游戏局记录
+            /** @var PlayerGameRecord $gameRecord */
+            $gameRecord = PlayerGameRecord::query()->where('machine_id', $machine->id)
+                ->where('player_id', $player->id)
+                ->where('status', PlayerGameRecord::STATUS_START)
+                ->orderBy('created_at', 'desc')
+                ->first();
+            if (!empty($gameRecord)) {
+                $gameRecord->status = PlayerGameRecord::STATUS_END;
+                $gameRecord->save();
+            }
+            $odds = $machine->odds_x . ':' . $machine->odds_y;
+            if ($machine->type == GameType::TYPE_STEEL_BALL) {
+                $odds = $machine->machineCategory->name;
+            }
+            //添加机台点数转换记录
+            $playerGameLog = new PlayerGameLog;
+            $playerGameLog->player_id = $machine->gaming_user_id;
+            $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
+            $playerGameLog->agent_player_id = $player->recommend_promoter->recommend_id ?? 0;
+            $playerGameLog->department_id = $player->department_id;
+            $playerGameLog->machine_id = $machine->id;
+            $playerGameLog->game_id = $machine->machineCategory->game_id;
+            $playerGameLog->game_record_id = $gameRecord->id ?? 0;
+            $playerGameLog->type = $machine->type;
+            $playerGameLog->odds = $odds;
+            $playerGameLog->control_open_point = $machine->control_open_point;
+            $playerGameLog->open_point = 0;
+            $playerGameLog->wash_point = 0;
+            $playerGameLog->gift_point = 0;
+            $playerGameLog->game_amount = 0;
+            $playerGameLog->pressure = max($gamingPressure, 0);
+            $playerGameLog->score = max($gamingScore, 0);
+            $playerGameLog->turn_point = max($gamingTurn, 0);
+            $playerGameLog->before_game_amount = $player_platform_wallet->money ?? 0;
+            $playerGameLog->after_game_amount = $player_platform_wallet->money ?? 0;
+            $playerGameLog->is_system = 1;
+            $playerGameLog->action = PlayerGameLog::ACTION_LEAVE;
+            $playerGameLog->user_id = $adminId;
+            $playerGameLog->user_name = $adminUsername;
+            $playerGameLog->is_test = $player->is_test; //标记测试数据
+            $playerGameLog->save();
+
+            $machine->gaming_user_id = 0;
+            $machine->gaming = 0;
+            $machine->player_turn_point = 0;
+            $machine->player_seven_turn_point = 0;
+            $machine->player_pressure = 0;
+            $machine->player_score = 0;
+            $machine->wash_limit = 0;
+            $machine->open_point = 0;
+            $machine->push_auto = 0;
+            $machine->bonus_accumulate = 0;
+            $machine->keep_seconds = 0;
+            $machine->amount = 0;
+            $machine->is_open = 0;
+            $machine->save();
+
+            $services->gaming_user_id = 0;
+            $services->gaming = 0;
+            $services->keeping_user_id = 0;
+            $services->keeping = 0;
+            $services->last_keep_at = 0;
+            $services->keep_seconds = 0;
+            if ($machine->type == GameType::TYPE_SLOT) {
+                $services->player_pressure = 0;
+                $services->player_score = 0;
+            }
+            if ($machine->type == GameType::TYPE_STEEL_BALL) {
+                $services->player_win_number = 0;
+            }
+            $services->player_open_point = 0;
+            $services->player_wash_point = 0;
+            // 下分参与活动结束
+            $activityServices = new ActivityServices($machine, $player);
+            $activityServices->playerFinishActivity(true);
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollback();
+            throw new Exception($e->getMessage());
+        }
+
+        return true;
     }
 }

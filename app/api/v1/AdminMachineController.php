@@ -962,11 +962,15 @@ class AdminMachineController
                 return $this->fail('resetMachineTrans 函数未定义，请联系技术支持', 500);
             }
 
-            resetMachineTrans($machine, $player);
+            // 获取管理员用户名（如果有的话）
+            $adminUsername = $request->post('admin_username', '');
+
+            resetMachineTrans($machine, $player, $adminId, $adminUsername);
 
             Log::info('【管理员操作】强制踢出玩家', [
                 'operator_type' => 'admin',
                 'admin_id' => $adminId,
+                'admin_username' => $adminUsername,
                 'machine_id' => $machineId,
                 'player_id' => $playerId
             ]);
@@ -1027,11 +1031,15 @@ class AdminMachineController
                 return $this->fail('machineOpenAnyFree 函数未定义，请联系技术支持', 500);
             }
 
-            machineOpenAnyFree($player, $machine, $openScore);
+            // 获取管理员用户名（如果有的话）
+            $adminUsername = $request->post('admin_username', '');
+
+            machineOpenAnyFree($player, $machine, $openScore, $adminId, $adminUsername);
 
             Log::info('【管理员操作】自定义开分', [
                 'operator_type' => 'admin',
                 'admin_id' => $adminId,
+                'admin_username' => $adminUsername,
                 'machine_id' => $machineId,
                 'player_id' => $playerId,
                 'open_score' => $openScore
