@@ -1127,7 +1127,9 @@ function machineWash(
     Machine $machine,
     string  $path = 'leave',
     int     $is_system = 0,
-    bool    $hasLottery = false
+    bool    $hasLottery = false,
+    int     $adminId = 0,
+    string  $adminUsername = ''
 ): PlayerLotteryRecord|bool|array
 {
     try {
@@ -1234,7 +1236,7 @@ function machineWash(
     try {
         if ($money >= 0) {
             $machine = machineWashZero($player, $machine, $money, $is_system, max($gamingPressure, 0),
-                max($gamingScore, 0), max($gamingTurnPoint, 0), $path);
+                max($gamingScore, 0), max($gamingTurnPoint, 0), $path, $adminId, $adminUsername);
         }
         if ($path == 'leave') {
             if ($services->keeping == 1) {
@@ -1358,7 +1360,9 @@ function machineWashZero(
     int     $gamingPressure = 0,
     int     $gamingScore = 0,
     int     $gamingTurnPoint = 0,
-    string  $action = 'leave'
+    string  $action = 'leave',
+    int     $adminId = 0,
+    string  $adminUsername = ''
 ): Machine
 {
     try {
@@ -1417,7 +1421,7 @@ function machineWashZero(
             } elseif ($machine->type == GameType::TYPE_STEEL_BALL) {
                 $playerGameLog->chip_amount = bcmul($machine->machineCategory->turn_used_point, $gamingTurnPoint);
             }
-            extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint);
+            extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint, $adminId, $adminUsername);
 
             //寫入金流明細
             $playerDeliveryRecord = new PlayerDeliveryRecord;
@@ -1436,8 +1440,8 @@ function machineWashZero(
             $playerDeliveryRecord->amount_after = $afterGameAmount;
             $playerDeliveryRecord->tradeno = $playerGameLog->tradeno ?? '';
             $playerDeliveryRecord->remark = $playerGameLog->remark ?? '';
-            $playerDeliveryRecord->user_id = 0;
-            $playerDeliveryRecord->user_name = '';
+            $playerDeliveryRecord->user_id = $adminId;
+            $playerDeliveryRecord->user_name = $adminUsername;
             $playerDeliveryRecord->save();
 
             //保存下分時間
@@ -1455,7 +1459,7 @@ function machineWashZero(
             $playerGameLog->before_game_amount = $beforeGameAmount;
             $playerGameLog->after_game_amount = $beforeGameAmount;
             $playerGameLog->action = ($action == 'leave' ? PlayerGameLog::ACTION_LEAVE : PlayerGameLog::ACTION_DOWN);
-            extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint);
+            extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint, $adminId, $adminUsername);
 
             if (!empty($gameRecord)) {
                 $gameRecord->after_game_amount = $beforeGameAmount;
@@ -1534,15 +1538,17 @@ function extracted(
     PlayerGameLog $playerGameLog,
     int           $gamingPressure,
     int           $gamingScore,
-    int           $gamingTurnPoint
+    int           $gamingTurnPoint,
+    int           $adminId = 0,
+    string        $adminUsername = ''
 ): void
 {
     $playerGameLog->is_system = $is_system;
     $playerGameLog->pressure = $gamingPressure;
     $playerGameLog->score = $gamingScore;
     $playerGameLog->turn_point = $gamingTurnPoint;
-    $playerGameLog->user_id = 0;
-    $playerGameLog->user_name = '';
+    $playerGameLog->user_id = $adminId;
+    $playerGameLog->user_name = $adminUsername;
     $playerGameLog->save();
 }
 
@@ -2460,7 +2466,7 @@ if (!function_exists('machineOpenAnyFree')) {
         try {
             $lang = locale() ?? 'zh_CN';
             $services = MachineServices::createServices($machine, $lang);
-            if (strtotime($services->last_point_at) + 5 >= time()) {
+            if ($services->last_point_at + 5 >= time()) {
                 throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
             }
             $openScore = checkMachineOpenAny($machine, $openScore, 0);

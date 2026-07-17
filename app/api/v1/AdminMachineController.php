@@ -900,11 +900,15 @@ class AdminMachineController
                 return $this->fail('machineWash 函数未定义，请联系技术支持', 500);
             }
 
-            machineWash($player, $machine, $path);
+            // 获取管理员用户名（如果有的话）
+            $adminUsername = $request->post('admin_username', '');
+
+            machineWash($player, $machine, $path, 0, false, $adminId, $adminUsername);
 
             Log::info('【管理员操作】踢出玩家', [
                 'operator_type' => 'admin',
                 'admin_id' => $adminId,
+                'admin_username' => $adminUsername,
                 'machine_id' => $machineId,
                 'player_id' => $playerId,
                 'path' => $path
