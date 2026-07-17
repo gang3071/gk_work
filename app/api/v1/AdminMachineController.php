@@ -881,6 +881,9 @@ class AdminMachineController
             if ($playerId <= 0) {
                 return $this->fail('无效的玩家ID', 400);
             }
+            if (!in_array($path, ['leave', 'down'])) {
+                return $this->fail('无效的操作类型，必须是 leave 或 down', 400);
+            }
 
             // 查询机台和玩家
             $machine = Machine::find($machineId);
@@ -1017,6 +1020,9 @@ class AdminMachineController
             }
             if ($openScore <= 0) {
                 return $this->fail('开分数值必须大于0', 400);
+            }
+            if ($openScore > 100000) {
+                return $this->fail('开分数值过大，单次最多10万分', 400);
             }
 
             // 查询机台和玩家
