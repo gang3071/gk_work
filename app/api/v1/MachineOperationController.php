@@ -337,4 +337,232 @@ class MachineOperationController extends BaseController
             return $this->handleException($e, '获取操作列表失败');
         }
     }
+
+    /**
+     * 机台洗分（只执行硬件操作）
+     *
+     * POST /api/v1/machine/wash-point
+     *
+     * 请求参数：
+     * - machine_id: int 机台 ID（必填）
+     * - player_id: int 玩家 ID（必填）
+     * - action: string 操作类型 (leave/down)（必填）
+     * - machine_context: array 机台上下文信息（必填）
+     * - wash_id: string 洗分唯一ID（必填）
+     *
+     * 职责：只负责硬件层操作
+     * 1. 发送机台指令
+     * 2. 读取机台状态
+     * 3. 返回洗分数量
+     *
+     * 不负责：
+     * - 数据库事务（由 gk_api 处理）
+     * - 钱包操作（由 gk_api 处理）
+     * - 游戏记录（由 gk_api 处理）
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function washPoint(Request $request): Response
+    {
+        $washId = null;
+        try {
+            // 1. 获取请求参数
+            $machineId = $request->post('machine_id');
+            $playerId = $request->post('player_id');
+            $action = $request->post('action', 'leave');
+            $machineContext = $request->post('machine_context', []);
+            $washId = $request->post('wash_id');
+            $lang = $request->post('lang', 'zh_TW');
+
+            locale($lang);
+
+            // 2. 参数验证
+            if (empty($machineId) || empty($playerId) || empty($washId)) {
+                return $this->fail('缺少必填参数', 400);
+            }
+
+            Log::channel('machine_operations')->info('[WashPoint] 收到洗分请求', [
+                'wash_id' => $washId,
+                'machine_id' => $machineId,
+                'player_id' => $playerId,
+                'action' => $action,
+            ]);
+
+            // 3. 查询机台和玩家
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            $player = Player::find($playerId);
+            if (!$player) {
+                return $this->fail('玩家不存在', 404);
+            }
+
+            // 4. 创建机台服务（用于发送指令）
+            $services = \app\service\machine\MachineServices::createServices($machine, $lang);
+
+            // 5. 根据机台类型执行不同的洗分指令
+            $washPoint = 0;
+            $gamingTurnPoint = 0;
+            $gamingPressure = 0;
+            $gamingScore = 0;
+
+            switch ($machine->type) {
+                case \app\model\GameType::TYPE_STEEL_BALL:
+                    // 钢珠机洗分
+                    $washPoint = $this->washSteelBall($machine, $services, $action, $playerId);
+                    $gamingTurnPoint = $services->player_win_number;
+                    break;
+
+                case \app\model\GameType::TYPE_SLOT:
+                    // 斯洛机洗分
+                    $result = $this->washSlot($machine, $services, $playerId);
+                    $washPoint = $result['wash_point'];
+                    $gamingPressure = $result['pressure'];
+                    $gamingScore = $result['score'];
+                    break;
+
+                default:
+                    return $this->fail('不支持的机台类型', 400);
+            }
+
+            Log::channel('machine_operations')->info('[WashPoint] 洗分完成', [
+                'wash_id' => $washId,
+                'machine_id' => $machineId,
+                'wash_point' => $washPoint,
+                'gaming_turn_point' => $gamingTurnPoint,
+                'gaming_pressure' => $gamingPressure,
+                'gaming_score' => $gamingScore,
+            ]);
+
+            // 6. 返回洗分结果
+            return $this->success([
+                'wash_point' => $washPoint,
+                'gaming_turn_point' => $gamingTurnPoint,
+                'gaming_pressure' => $gamingPressure,
+                'gaming_score' => $gamingScore,
+            ]);
+
+        } catch (Exception $e) {
+            Log::channel('machine_operations')->error('[WashPoint] 洗分失败', [
+                'wash_id' => $washId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return $this->handleException($e, '机台洗分失败');
+        }
+    }
+
+    /**
+     * 钢珠机洗分（只执行硬件操作）
+     *
+     * @param Machine $machine
+     * @param \app\service\machine\MachineServices $services
+     * @param string $action
+     * @param int $playerId
+     * @return int
+     * @throws Exception
+     */
+    private function washSteelBall(
+        Machine $machine,
+        \app\service\machine\MachineServices $services,
+        string $action,
+        int $playerId
+    ): int {
+        // 弃台需要下转,下珠
+        if ($action == 'leave') {
+            if ($machine->control_type == Machine::CONTROL_TYPE_MEI) {
+                // 双美：停止推珠 + 自动上转 + 得分转分 + 全部下转
+                $services->sendCmd($services::PUSH . $services::PUSH_STOP, 0, 'player', $playerId);
+                if ($services->auto == 1) {
+                    $services->sendCmd($services::AUTO_UP_TURN, 0, 'player', $playerId);
+                }
+                if ($services->score > 0) {
+                    $services->sendCmd($services::SCORE_TO_POINT, 0, 'player', $playerId);
+                }
+                if ($services->turn > 0) {
+                    $services->sendCmd($services::TURN_DOWN_ALL, 0, 'player', $playerId);
+                }
+            }
+
+            if ($machine->control_type == Machine::CONTROL_TYPE_SONG) {
+                // 小淞：自动上转 + 读取转数 + 读取得分 + 得分转分 + 全部下转
+                if ($services->auto == 1) {
+                    $services->sendCmd($services::AUTO_UP_TURN, 0, 'player', $playerId);
+                }
+                $services->sendCmd($services::MACHINE_TURN, 0, 'player', $playerId);
+                $services->sendCmd($services::MACHINE_SCORE, 0, 'player', $playerId);
+                if ($services->score > 0) {
+                    $services->sendCmd($services::SCORE_TO_POINT, 0, 'player', $playerId);
+                }
+                if ($services->turn > 0) {
+                    $services->sendCmd($services::TURN_DOWN_ALL, 0, 'player', $playerId);
+                }
+            }
+        }
+
+        // 读取机台分数和中奖数
+        $services->sendCmd($services::MACHINE_POINT, 0, 'player', $playerId);
+        $services->sendCmd($services::WIN_NUMBER, 0, 'player', $playerId);
+
+        // 返回洗分数量（不扣除赠点，由 gk_api 处理）
+        return $services->point;
+    }
+
+    /**
+     * 斯洛机洗分（只执行硬件操作）
+     *
+     * @param Machine $machine
+     * @param \app\service\machine\MachineServices $services
+     * @param int $playerId
+     * @return array
+     * @throws Exception
+     */
+    private function washSlot(
+        Machine $machine,
+        \app\service\machine\MachineServices $services,
+        int $playerId
+    ): array {
+        // 关闭移点（双美）
+        if ($services->move_point == 1 && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
+            $services->sendCmd($services::MOVE_POINT_OFF, 0, 'player', $playerId);
+        }
+
+        // 关闭自动
+        if ($services->auto == 1) {
+            $services->sendCmd($services::OUT_OFF, 0, 'player', $playerId);
+        }
+
+        // 停止所有轴
+        $services->sendCmd($services::STOP_ONE, 0, 'player', $playerId);
+        $services->sendCmd($services::STOP_TWO, 0, 'player', $playerId);
+        $services->sendCmd($services::STOP_THREE, 0, 'player', $playerId);
+
+        // 读取得分
+        $services->sendCmd($services::READ_SCORE, 0, 'player', $playerId);
+
+        // 读取押分
+        $services->sendCmd($services::READ_BET, 0, 'player', $playerId);
+
+        // 计算压分和得分（不扣除 player_pressure 和 player_score，由 gk_api 处理）
+        $gamingPressure = bcsub($services->bet, $services->player_pressure ?? 0);
+        $gamingScore = bcsub($services->win, $services->player_score ?? 0);
+
+        Log::channel('slot_machine')->info('[WashSlot] 斯洛机洗分', [
+            'machine_code' => $machine->code,
+            'point' => $services->point,
+            'bet' => $services->bet,
+            'win' => $services->win,
+            'gaming_pressure' => $gamingPressure,
+            'gaming_score' => $gamingScore,
+        ]);
+
+        return [
+            'wash_point' => $services->point,
+            'pressure' => max($gamingPressure, 0),
+            'score' => max($gamingScore, 0),
+        ];
+    }
 }

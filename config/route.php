@@ -40,6 +40,9 @@ Route::group('/api', function () {
             Route::post('/execute', [\app\api\v1\MachineOperationController::class, 'execute']);
             Route::post('/batch-execute', [\app\api\v1\MachineOperationController::class, 'batchExecute']);
             Route::get('/operations', [\app\api\v1\MachineOperationController::class, 'getOperations']);
+
+            // 机台洗分接口（硬件层操作）
+            Route::post('/wash-point', [\app\api\v1\MachineOperationController::class, 'washPoint']);
         });
     });
 });
