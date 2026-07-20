@@ -36,16 +36,10 @@ Route::group('/api', function () {
 
         // 玩家机台操作 API（来自 gk_api，使用 JWT Token 或 X-Player-Id）
         Route::group('/machine', function () {
-            // ✅ 统一操作接口
+            // 统一操作接口
             Route::post('/execute', [\app\api\v1\MachineOperationController::class, 'execute']);
+            Route::post('/batch-execute', [\app\api\v1\MachineOperationController::class, 'batchExecute']);
             Route::get('/operations', [\app\api\v1\MachineOperationController::class, 'getOperations']);
-
-            // ⚠️ 保留的特殊接口
-            Route::post('/send-cmd', [\app\api\v1\PlayerMachineController::class, 'sendCmd']);
-            Route::post('/status', [\app\api\v1\PlayerMachineController::class, 'getMachineStatus']);
-            Route::post('/check-online', [\app\api\v1\PlayerMachineController::class, 'checkOnline']);
-            Route::post('/batch-check-online', [\app\api\v1\PlayerMachineController::class, 'batchCheckOnline']);
-            Route::post('/get-description', [\app\api\v1\PlayerMachineController::class, 'getDescription']);
         });
     });
 });
