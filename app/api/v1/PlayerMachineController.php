@@ -715,19 +715,24 @@ class PlayerMachineController
 
             $services = new $serviceClass($machine, $lang);
 
+            // 确定操作者信息（用于日志追踪）
+            $operatorType = $player ? 'player' : 'system';
+            $operatorId = $player ? $player->id : 0;
+
             Log::channel('machine_operations')->info('[HandleSlotAction] 开始处理', [
                 'machine_id' => $machine->id,
                 'action' => $action,
                 'control_type' => $controlType,
                 'move_point' => $movePoint,
-                'player_id' => $player ? $player->id : null,
+                'operator_type' => $operatorType,
+                'operator_id' => $operatorId,
             ]);
 
             switch ($action) {
                 case 'start':
                     // 条件1: 移分开关（仅双美）
                     if ($controlType === Machine::CONTROL_TYPE_MEI && $movePoint == 0) {
-                        $services->sendCmd($services::MOVE_POINT_ON, 0, 'system', 0);
+                        $services->sendCmd($services::MOVE_POINT_ON, 0, $operatorType, $operatorId);
                         Log::channel('machine_operations')->info('[HandleSlotAction] 发送 MOVE_POINT_ON', [
                             'machine_id' => $machine->id,
                         ]);
@@ -735,14 +740,14 @@ class PlayerMachineController
 
                     // 条件2: 压分读取（仅双美）
                     if ($controlType === Machine::CONTROL_TYPE_MEI) {
-                        $services->sendCmd($services::PRESSURE, 0, 'system', 0);
+                        $services->sendCmd($services::PRESSURE, 0, $operatorType, $operatorId);
                         Log::channel('machine_operations')->info('[HandleSlotAction] 发送 PRESSURE', [
                             'machine_id' => $machine->id,
                         ]);
                     }
 
                     // 条件3: 开始指令（所有斯洛机）
-                    $services->sendCmd($services::START, 0, 'system', 0);
+                    $services->sendCmd($services::START, 0, $operatorType, $operatorId);
                     Log::channel('machine_operations')->info('[HandleSlotAction] 发送 START', [
                         'machine_id' => $machine->id,
                         'control_type' => $controlType,
@@ -752,14 +757,14 @@ class PlayerMachineController
                 case 'auto':
                     // 条件1: 移分开关（仅双美）
                     if ($controlType === Machine::CONTROL_TYPE_MEI && $movePoint == 0) {
-                        $services->sendCmd($services::MOVE_POINT_ON, 0, 'system', 0);
+                        $services->sendCmd($services::MOVE_POINT_ON, 0, $operatorType, $operatorId);
                         Log::channel('machine_operations')->info('[HandleSlotAction] 发送 MOVE_POINT_ON', [
                             'machine_id' => $machine->id,
                         ]);
                     }
 
                     // 条件2: 开启自动出分（所有斯洛机）
-                    $services->sendCmd($services::OUT_ON, 0, 'system', 0);
+                    $services->sendCmd($services::OUT_ON, 0, $operatorType, $operatorId);
                     Log::channel('machine_operations')->info('[HandleSlotAction] 发送 OUT_ON', [
                         'machine_id' => $machine->id,
                         'control_type' => $controlType,
@@ -768,7 +773,7 @@ class PlayerMachineController
 
                 case 'stop_auto':
                     // 关闭自动出分（所有斯洛机）
-                    $services->sendCmd($services::OUT_OFF, 0, 'system', 0);
+                    $services->sendCmd($services::OUT_OFF, 0, $operatorType, $operatorId);
                     Log::channel('machine_operations')->info('[HandleSlotAction] 发送 OUT_OFF', [
                         'machine_id' => $machine->id,
                         'control_type' => $controlType,
@@ -779,13 +784,13 @@ class PlayerMachineController
                     // 出1脉冲（根据厂商选择不同指令）
                     if ($controlType === Machine::CONTROL_TYPE_SONG) {
                         // 小淞：REWARD_SWITCH
-                        $services->sendCmd($services::REWARD_SWITCH, 0, 'system', 0);
+                        $services->sendCmd($services::REWARD_SWITCH, 0, $operatorType, $operatorId);
                         Log::channel('machine_operations')->info('[HandleSlotAction] 发送 REWARD_SWITCH (小淞)', [
                             'machine_id' => $machine->id,
                         ]);
                     } else {
                         // 双美：OUTPUT + U1_PULSE
-                        $services->sendCmd($services::OUTPUT . $services::U1_PULSE, 0, 'system', 0);
+                        $services->sendCmd($services::OUTPUT . $services::U1_PULSE, 0, $operatorType, $operatorId);
                         Log::channel('machine_operations')->info('[HandleSlotAction] 发送 OUTPUT+U1_PULSE (双美)', [
                             'machine_id' => $machine->id,
                         ]);
@@ -794,7 +799,7 @@ class PlayerMachineController
 
                 case 'stop_1':
                     // 停止转轴1（所有斯洛机）
-                    $services->sendCmd($services::STOP_ONE, 0, 'system', 0);
+                    $services->sendCmd($services::STOP_ONE, 0, $operatorType, $operatorId);
                     Log::channel('machine_operations')->info('[HandleSlotAction] 发送 STOP_ONE', [
                         'machine_id' => $machine->id,
                     ]);
@@ -802,7 +807,7 @@ class PlayerMachineController
 
                 case 'stop_2':
                     // 停止转轴2（所有斯洛机）
-                    $services->sendCmd($services::STOP_TWO, 0, 'system', 0);
+                    $services->sendCmd($services::STOP_TWO, 0, $operatorType, $operatorId);
                     Log::channel('machine_operations')->info('[HandleSlotAction] 发送 STOP_TWO', [
                         'machine_id' => $machine->id,
                     ]);
@@ -810,7 +815,7 @@ class PlayerMachineController
 
                 case 'stop_3':
                     // 停止转轴3（所有斯洛机）
-                    $services->sendCmd($services::STOP_THREE, 0, 'system', 0);
+                    $services->sendCmd($services::STOP_THREE, 0, $operatorType, $operatorId);
                     Log::channel('machine_operations')->info('[HandleSlotAction] 发送 STOP_THREE', [
                         'machine_id' => $machine->id,
                     ]);
@@ -874,51 +879,56 @@ class PlayerMachineController
 
             $services = new $serviceClass($machine, $lang);
 
+            // 确定操作者信息（用于日志追踪）
+            $operatorType = $player ? 'player' : 'system';
+            $operatorId = $player ? $player->id : 0;
+
             Log::channel('machine_operations')->info('[HandleJackpotAction] 开始处理', [
                 'machine_id' => $machine->id,
                 'action' => $action,
                 'control_type' => $controlType,
-                'player_id' => $player ? $player->id : null,
+                'operator_type' => $operatorType,
+                'operator_id' => $operatorId,
             ]);
 
             // 根据 action 发送相应指令
             switch ($action) {
                 case 'reward_switch':
-                    $services->sendCmd($services::REWARD_SWITCH, 0, 'system', 0);
+                    $services->sendCmd($services::REWARD_SWITCH, 0, $operatorType, $operatorId);
                     break;
 
                 case 'plc_start_or_stop':
                     // 根据当前状态决定开始或停止
                     $auto = $context['auto'] ?? 0;
                     if ($auto == 1) {
-                        $services->sendCmd($services::PUSH_STOP, 0, 'system', 0);
+                        $services->sendCmd($services::PUSH_STOP, 0, $operatorType, $operatorId);
                     } else {
-                        $services->sendCmd($services::PUSH . $services::PUSH_ONE, 0, 'system', 0);
+                        $services->sendCmd($services::PUSH . $services::PUSH_ONE, 0, $operatorType, $operatorId);
                     }
                     break;
 
                 case 'plc_push_5hz':
-                    $services->sendCmd($services::PUSH . $services::PUSH_THREE, 0, 'system', 0);
+                    $services->sendCmd($services::PUSH . $services::PUSH_THREE, 0, $operatorType, $operatorId);
                     break;
 
                 case 'plc_push_stop':
-                    $services->sendCmd($services::PUSH_STOP, 0, 'system', 0);
+                    $services->sendCmd($services::PUSH_STOP, 0, $operatorType, $operatorId);
                     break;
 
                 case 'plc_down_turn':
-                    $services->sendCmd($services::TURN_DOWN_ALL, 0, 'system', 0);
+                    $services->sendCmd($services::TURN_DOWN_ALL, 0, $operatorType, $operatorId);
                     break;
 
                 case 'all_down_turn':
-                    $services->sendCmd($services::TURN_DOWN_ALL, 0, 'system', 0);
+                    $services->sendCmd($services::TURN_DOWN_ALL, 0, $operatorType, $operatorId);
                     break;
 
                 case 'plc_up_turn_100':
-                    $services->sendCmd($services::TURN_UP_ALL, 0, 'system', 0);
+                    $services->sendCmd($services::TURN_UP_ALL, 0, $operatorType, $operatorId);
                     break;
 
                 case 'all_up_turn':
-                    $services->sendCmd($services::TURN_UP_ALL, 0, 'system', 0);
+                    $services->sendCmd($services::TURN_UP_ALL, 0, $operatorType, $operatorId);
                     break;
 
                 default:
