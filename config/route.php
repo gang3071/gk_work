@@ -45,6 +45,10 @@ Route::group('/api', function () {
             Route::post('/open-point', [\app\api\v1\MachineOperationController::class, 'openPoint']);
             Route::post('/wash-point', [\app\api\v1\MachineOperationController::class, 'washPoint']);
 
+            // 机台指令发送（底层接口）
+            Route::post('/send-cmd', [\app\api\v1\MachineOperationController::class, 'sendCmd']);
+            Route::post('/batch-send-cmd', [\app\api\v1\MachineOperationController::class, 'batchSendCmd']);
+
             // 机台在线状态检查
             Route::post('/check-online', [\app\api\v1\MachineOperationController::class, 'checkOnline']);
             Route::post('/batch-check-online', [\app\api\v1\MachineOperationController::class, 'batchCheckOnline']);

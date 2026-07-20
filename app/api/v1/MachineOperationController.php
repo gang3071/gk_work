@@ -804,4 +804,159 @@ class MachineOperationController extends BaseController
             return $this->handleException($e, '机台上分失败');
         }
     }
+
+    /**
+     * 发送机台指令
+     *
+     * POST /api/v1/machine/send-cmd
+     *
+     * 请求参数：
+     * - machine_id: int 机台ID（必填）
+     * - cmd: string 指令代码（必填）
+     * - data: int 指令数据（选填，默认0）
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function sendCmd(Request $request): Response
+    {
+        try {
+            $machineId = $request->post('machine_id');
+            $cmd = $request->post('cmd');
+            $data = $request->post('data', 0);
+            $lang = $request->post('lang', 'zh_TW');
+
+            // 从 header 获取玩家ID（可选）
+            $playerId = $request->header('X-Player-Id', 0);
+
+            locale($lang);
+
+            // 参数验证
+            if (empty($machineId) || empty($cmd)) {
+                return $this->fail('缺少必填参数', 400);
+            }
+
+            // 查询机台
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            // 创建机台服务
+            $services = \app\service\machine\MachineServices::createServices($machine, $lang);
+
+            // 发送指令
+            $services->sendCmd($cmd, $data, $playerId > 0 ? 'player' : 'system', $playerId);
+
+            Log::channel('machine_operations')->info('[SendCmd] 指令发送成功', [
+                'machine_id' => $machineId,
+                'cmd' => $cmd,
+                'data' => $data,
+                'player_id' => $playerId,
+            ]);
+
+            return $this->success([
+                'machine_id' => $machine->id,
+                'cmd' => $cmd,
+                'data' => $data,
+                'success' => true,
+            ]);
+
+        } catch (Exception $e) {
+            Log::channel('machine_operations')->error('[SendCmd] 指令发送失败', [
+                'error' => $e->getMessage(),
+            ]);
+            return $this->handleException($e, '发送机台指令失败');
+        }
+    }
+
+    /**
+     * 批量发送机台指令
+     *
+     * POST /api/v1/machine/batch-send-cmd
+     *
+     * 请求参数：
+     * - machine_id: int 机台ID（必填）
+     * - commands: array 指令列表（必填）
+     *   [
+     *     {'cmd': 'xxx', 'data': 0},
+     *     {'cmd': 'yyy', 'data': 1}
+     *   ]
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function batchSendCmd(Request $request): Response
+    {
+        try {
+            $machineId = $request->post('machine_id');
+            $commands = $request->post('commands', []);
+            $lang = $request->post('lang', 'zh_TW');
+
+            // 从 header 获取玩家ID（可选）
+            $playerId = $request->header('X-Player-Id', 0);
+
+            locale($lang);
+
+            // 参数验证
+            if (empty($machineId) || empty($commands) || !is_array($commands)) {
+                return $this->fail('缺少必填参数或参数格式错误', 400);
+            }
+
+            // 查询机台
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            // 创建机台服务
+            $services = \app\service\machine\MachineServices::createServices($machine, $lang);
+
+            // 批量发送指令
+            $results = [];
+            foreach ($commands as $command) {
+                if (!isset($command['cmd'])) {
+                    continue;
+                }
+
+                $cmd = $command['cmd'];
+                $data = $command['data'] ?? 0;
+
+                try {
+                    $services->sendCmd($cmd, $data, $playerId > 0 ? 'player' : 'system', $playerId);
+                    $results[] = [
+                        'cmd' => $cmd,
+                        'data' => $data,
+                        'success' => true,
+                    ];
+                } catch (Exception $e) {
+                    $results[] = [
+                        'cmd' => $cmd,
+                        'data' => $data,
+                        'success' => false,
+                        'error' => $e->getMessage(),
+                    ];
+                }
+            }
+
+            Log::channel('machine_operations')->info('[BatchSendCmd] 批量指令发送完成', [
+                'machine_id' => $machineId,
+                'total' => count($commands),
+                'success' => count(array_filter($results, fn($r) => $r['success'])),
+                'failed' => count(array_filter($results, fn($r) => !$r['success'])),
+            ]);
+
+            return $this->success([
+                'machine_id' => $machine->id,
+                'total' => count($commands),
+                'results' => $results,
+            ]);
+
+        } catch (Exception $e) {
+            Log::channel('machine_operations')->error('[BatchSendCmd] 批量指令发送失败', [
+                'error' => $e->getMessage(),
+            ]);
+            return $this->handleException($e, '批量发送机台指令失败');
+        }
+    }
 }
