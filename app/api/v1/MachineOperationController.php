@@ -565,4 +565,129 @@ class MachineOperationController extends BaseController
             'score' => max($gamingScore, 0),
         ];
     }
+
+    /**
+     * 检查机台在线状态
+     *
+     * POST /api/v1/machine/check-online
+     *
+     * 请求参数：
+     * - machine_id: int 机台ID（必填）
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function checkOnline(Request $request): Response
+    {
+        try {
+            $machineId = $request->post('machine_id');
+            if (empty($machineId)) {
+                return $this->fail('缺少机台ID', 400);
+            }
+
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            // 检查主连接是否在线
+            $mainUid = $machine->domain . ':' . $machine->port;
+            try {
+                $mainOnline = \GatewayWorker\Lib\Gateway::isUidOnline($mainUid);
+            } catch (Exception $e) {
+                Log::warning('[CheckOnline] Gateway 检查主连接失败', [
+                    'machine_id' => $machineId,
+                    'main_uid' => $mainUid,
+                    'error' => $e->getMessage(),
+                ]);
+                $mainOnline = false;
+            }
+
+            // 检查从连接是否在线（双连接机台）
+            $slaveOnline = false;
+            if (!empty($machine->slave_domain) && !empty($machine->slave_port)) {
+                $slaveUid = $machine->slave_domain . ':' . $machine->slave_port;
+                try {
+                    $slaveOnline = \GatewayWorker\Lib\Gateway::isUidOnline($slaveUid);
+                } catch (Exception $e) {
+                    Log::warning('[CheckOnline] Gateway 检查从连接失败', [
+                        'machine_id' => $machineId,
+                        'slave_uid' => $slaveUid,
+                        'error' => $e->getMessage(),
+                    ]);
+                    $slaveOnline = false;
+                }
+            }
+
+            return $this->success([
+                'machine_id' => $machine->id,
+                'main_online' => $mainOnline,
+                'slave_online' => $slaveOnline,
+                'is_online' => $mainOnline, // 主连接在线即认为机台在线
+            ]);
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '检查机台在线状态失败');
+        }
+    }
+
+    /**
+     * 批量检查机台在线状态
+     *
+     * POST /api/v1/machine/batch-check-online
+     *
+     * 请求参数：
+     * - machine_ids: array 机台ID数组（必填）
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function batchCheckOnline(Request $request): Response
+    {
+        try {
+            $machineIds = $request->post('machine_ids', []);
+            if (empty($machineIds) || !is_array($machineIds)) {
+                return $this->fail('缺少机台ID数组', 400);
+            }
+
+            $results = [];
+            $machines = Machine::whereIn('id', $machineIds)->get();
+
+            foreach ($machines as $machine) {
+                // 检查主连接
+                $mainUid = $machine->domain . ':' . $machine->port;
+                try {
+                    $mainOnline = \GatewayWorker\Lib\Gateway::isUidOnline($mainUid);
+                } catch (Exception $e) {
+                    $mainOnline = false;
+                }
+
+                // 检查从连接（如果有）
+                $slaveOnline = false;
+                if (!empty($machine->slave_domain) && !empty($machine->slave_port)) {
+                    $slaveUid = $machine->slave_domain . ':' . $machine->slave_port;
+                    try {
+                        $slaveOnline = \GatewayWorker\Lib\Gateway::isUidOnline($slaveUid);
+                    } catch (Exception $e) {
+                        $slaveOnline = false;
+                    }
+                }
+
+                $results[] = [
+                    'machine_id' => $machine->id,
+                    'main_online' => $mainOnline,
+                    'slave_online' => $slaveOnline,
+                    'is_online' => $mainOnline,
+                ];
+            }
+
+            return $this->success([
+                'total' => count($results),
+                'machines' => $results,
+            ]);
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '批量检查机台在线状态失败');
+        }
+    }
 }

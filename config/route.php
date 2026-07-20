@@ -43,6 +43,10 @@ Route::group('/api', function () {
 
             // 机台洗分接口（硬件层操作）
             Route::post('/wash-point', [\app\api\v1\MachineOperationController::class, 'washPoint']);
+
+            // 机台在线状态检查
+            Route::post('/check-online', [\app\api\v1\MachineOperationController::class, 'checkOnline']);
+            Route::post('/batch-check-online', [\app\api\v1\MachineOperationController::class, 'batchCheckOnline']);
         });
     });
 });
