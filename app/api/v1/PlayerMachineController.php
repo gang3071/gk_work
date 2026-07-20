@@ -775,6 +775,47 @@ class PlayerMachineController
                     ]);
                     break;
 
+                case 'out_1_pulse':
+                    // 出1脉冲（根据厂商选择不同指令）
+                    if ($controlType === Machine::CONTROL_TYPE_SONG) {
+                        // 小淞：REWARD_SWITCH
+                        $services->sendCmd($services::REWARD_SWITCH, 0, 'system', 0);
+                        Log::channel('machine_operations')->info('[HandleSlotAction] 发送 REWARD_SWITCH (小淞)', [
+                            'machine_id' => $machine->id,
+                        ]);
+                    } else {
+                        // 双美：OUTPUT + U1_PULSE
+                        $services->sendCmd($services::OUTPUT . $services::U1_PULSE, 0, 'system', 0);
+                        Log::channel('machine_operations')->info('[HandleSlotAction] 发送 OUTPUT+U1_PULSE (双美)', [
+                            'machine_id' => $machine->id,
+                        ]);
+                    }
+                    break;
+
+                case 'stop_1':
+                    // 停止转轴1（所有斯洛机）
+                    $services->sendCmd($services::STOP_ONE, 0, 'system', 0);
+                    Log::channel('machine_operations')->info('[HandleSlotAction] 发送 STOP_ONE', [
+                        'machine_id' => $machine->id,
+                    ]);
+                    break;
+
+                case 'stop_2':
+                    // 停止转轴2（所有斯洛机）
+                    $services->sendCmd($services::STOP_TWO, 0, 'system', 0);
+                    Log::channel('machine_operations')->info('[HandleSlotAction] 发送 STOP_TWO', [
+                        'machine_id' => $machine->id,
+                    ]);
+                    break;
+
+                case 'stop_3':
+                    // 停止转轴3（所有斯洛机）
+                    $services->sendCmd($services::STOP_THREE, 0, 'system', 0);
+                    Log::channel('machine_operations')->info('[HandleSlotAction] 发送 STOP_THREE', [
+                        'machine_id' => $machine->id,
+                    ]);
+                    break;
+
                 default:
                     return $this->error("不支持的操作: {$action}", [], 400);
             }
