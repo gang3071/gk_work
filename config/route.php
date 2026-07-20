@@ -46,6 +46,8 @@ Route::group('/api', function () {
             Route::post('/batch-check-online', [\app\api\v1\PlayerMachineController::class, 'batchCheckOnline']);
             // 获取机台操作描述
             Route::post('/get-description', [\app\api\v1\PlayerMachineController::class, 'getDescription']);
+            // 执行机台动作（统一处理硬件指令）
+            Route::post('/execute-action', [\app\api\v1\PlayerMachineController::class, 'executeAction']);
         });
     });
 });

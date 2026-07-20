@@ -629,4 +629,283 @@ class PlayerMachineController
             ]);
         }
     }
+
+    /**
+     * 执行机台动作（统一处理硬件指令）
+     *
+     * 职责分离：
+     * - gk_api: 业务校验、数据库事务、钱包操作
+     * - gk_work: 机台硬件操作（指令发送）
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function executeAction(Request $request): Response
+    {
+        try {
+            // 设置语言
+            $lang = $this->setLanguage($request);
+
+            // 获取玩家信息（可选）
+            $player = $this->getPlayer($request);
+
+            // 验证必需参数
+            $machineId = $request->input('machine_id');
+            $action = $request->input('action');
+            $context = $request->input('context', []);
+
+            if (!$machineId || !$action) {
+                return $this->error('缺少必需参数：machine_id 或 action', [], 400);
+            }
+
+            // 查询机台
+            $machine = Machine::query()->where('id', $machineId)->first();
+            if (!$machine) {
+                return $this->error(trans('machine_not_found', [], 'message'), [], 404);
+            }
+
+            // 根据机台类型路由
+            $machineType = $context['machine_type'] ?? GameType::TYPE_STEEL_BALL;
+
+            if ($machineType === GameType::TYPE_SLOT) {
+                // 斯洛机逻辑
+                return $this->handleSlotAction($machine, $action, $context, $lang, $player);
+            } else {
+                // 钢珠机逻辑（已有的 jackpot 处理）
+                return $this->handleJackpotAction($machine, $action, $context, $lang, $player);
+            }
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '【玩家操作】执行机台动作失败', [
+                'operator_type' => 'player',
+                'player_id' => isset($player) && $player ? $player->id : null,
+                'machine_id' => $request->input('machine_id'),
+                'action' => $request->input('action'),
+            ]);
+        }
+    }
+
+    /**
+     * 处理斯洛机动作
+     *
+     * 支持的操作：start, auto, stop_auto
+     *
+     * @param Machine $machine
+     * @param string $action
+     * @param array $context
+     * @param string $lang
+     * @param Player|null $player
+     * @return Response
+     */
+    private function handleSlotAction(
+        Machine $machine,
+        string $action,
+        array $context,
+        string $lang,
+        ?Player $player
+    ): Response {
+        try {
+            $controlType = $context['control_type'] ?? Machine::CONTROL_TYPE_MEI;
+            $movePoint = $context['move_point'] ?? 0;
+
+            // 根据控制类型选择服务类
+            $serviceClass = ($controlType === Machine::CONTROL_TYPE_MEI)
+                ? \app\service\machine\Slot::class
+                : \app\service\machine\SongSlot::class;
+
+            $services = new $serviceClass($machine, $lang);
+
+            Log::channel('machine_operations')->info('[HandleSlotAction] 开始处理', [
+                'machine_id' => $machine->id,
+                'action' => $action,
+                'control_type' => $controlType,
+                'move_point' => $movePoint,
+                'player_id' => $player ? $player->id : null,
+            ]);
+
+            switch ($action) {
+                case 'start':
+                    // 条件1: 移分开关（仅双美）
+                    if ($controlType === Machine::CONTROL_TYPE_MEI && $movePoint == 0) {
+                        $services->sendCmd($services::MOVE_POINT_ON, 0, 'system', 0);
+                        Log::channel('machine_operations')->info('[HandleSlotAction] 发送 MOVE_POINT_ON', [
+                            'machine_id' => $machine->id,
+                        ]);
+                    }
+
+                    // 条件2: 压分读取（仅双美）
+                    if ($controlType === Machine::CONTROL_TYPE_MEI) {
+                        $services->sendCmd($services::PRESSURE, 0, 'system', 0);
+                        Log::channel('machine_operations')->info('[HandleSlotAction] 发送 PRESSURE', [
+                            'machine_id' => $machine->id,
+                        ]);
+                    }
+
+                    // 条件3: 开始指令（所有斯洛机）
+                    $services->sendCmd($services::START, 0, 'system', 0);
+                    Log::channel('machine_operations')->info('[HandleSlotAction] 发送 START', [
+                        'machine_id' => $machine->id,
+                        'control_type' => $controlType,
+                    ]);
+                    break;
+
+                case 'auto':
+                    // 条件1: 移分开关（仅双美）
+                    if ($controlType === Machine::CONTROL_TYPE_MEI && $movePoint == 0) {
+                        $services->sendCmd($services::MOVE_POINT_ON, 0, 'system', 0);
+                        Log::channel('machine_operations')->info('[HandleSlotAction] 发送 MOVE_POINT_ON', [
+                            'machine_id' => $machine->id,
+                        ]);
+                    }
+
+                    // 条件2: 开启自动出分（所有斯洛机）
+                    $services->sendCmd($services::OUT_ON, 0, 'system', 0);
+                    Log::channel('machine_operations')->info('[HandleSlotAction] 发送 OUT_ON', [
+                        'machine_id' => $machine->id,
+                        'control_type' => $controlType,
+                    ]);
+                    break;
+
+                case 'stop_auto':
+                    // 关闭自动出分（所有斯洛机）
+                    $services->sendCmd($services::OUT_OFF, 0, 'system', 0);
+                    Log::channel('machine_operations')->info('[HandleSlotAction] 发送 OUT_OFF', [
+                        'machine_id' => $machine->id,
+                        'control_type' => $controlType,
+                    ]);
+                    break;
+
+                default:
+                    return $this->error("不支持的操作: {$action}", [], 400);
+            }
+
+            Log::channel('machine_operations')->info('[HandleSlotAction] 处理成功', [
+                'machine_id' => $machine->id,
+                'action' => $action,
+                'control_type' => $controlType,
+            ]);
+
+            return $this->success([
+                'machine_id' => $machine->id,
+                'action' => $action,
+                'control_type' => $controlType,
+            ]);
+
+        } catch (Exception $e) {
+            Log::channel('machine_operations')->error('[HandleSlotAction] 处理失败', [
+                'machine_id' => $machine->id,
+                'action' => $action,
+                'control_type' => $context['control_type'] ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            throw $e;
+        }
+    }
+
+    /**
+     * 处理钢珠机动作
+     *
+     * 支持的操作：reward_switch, plc_start_or_stop, plc_push_5hz 等
+     *
+     * @param Machine $machine
+     * @param string $action
+     * @param array $context
+     * @param string $lang
+     * @param Player|null $player
+     * @return Response
+     */
+    private function handleJackpotAction(
+        Machine $machine,
+        string $action,
+        array $context,
+        string $lang,
+        ?Player $player
+    ): Response {
+        try {
+            $controlType = $context['control_type'] ?? Machine::CONTROL_TYPE_MEI;
+
+            // 根据控制类型选择服务类
+            $serviceClass = ($controlType === Machine::CONTROL_TYPE_MEI)
+                ? \app\service\machine\Jackpot::class
+                : \app\service\machine\SongJackpot::class;
+
+            $services = new $serviceClass($machine, $lang);
+
+            Log::channel('machine_operations')->info('[HandleJackpotAction] 开始处理', [
+                'machine_id' => $machine->id,
+                'action' => $action,
+                'control_type' => $controlType,
+                'player_id' => $player ? $player->id : null,
+            ]);
+
+            // 根据 action 发送相应指令
+            switch ($action) {
+                case 'reward_switch':
+                    $services->sendCmd($services::REWARD_SWITCH, 0, 'system', 0);
+                    break;
+
+                case 'plc_start_or_stop':
+                    // 根据当前状态决定开始或停止
+                    $auto = $context['auto'] ?? 0;
+                    if ($auto == 1) {
+                        $services->sendCmd($services::PUSH_STOP, 0, 'system', 0);
+                    } else {
+                        $services->sendCmd($services::PUSH . $services::PUSH_ONE, 0, 'system', 0);
+                    }
+                    break;
+
+                case 'plc_push_5hz':
+                    $services->sendCmd($services::PUSH . $services::PUSH_THREE, 0, 'system', 0);
+                    break;
+
+                case 'plc_push_stop':
+                    $services->sendCmd($services::PUSH_STOP, 0, 'system', 0);
+                    break;
+
+                case 'plc_down_turn':
+                    $services->sendCmd($services::TURN_DOWN_ALL, 0, 'system', 0);
+                    break;
+
+                case 'all_down_turn':
+                    $services->sendCmd($services::TURN_DOWN_ALL, 0, 'system', 0);
+                    break;
+
+                case 'plc_up_turn_100':
+                    $services->sendCmd($services::TURN_UP_ALL, 0, 'system', 0);
+                    break;
+
+                case 'all_up_turn':
+                    $services->sendCmd($services::TURN_UP_ALL, 0, 'system', 0);
+                    break;
+
+                default:
+                    return $this->error("不支持的操作: {$action}", [], 400);
+            }
+
+            Log::channel('machine_operations')->info('[HandleJackpotAction] 处理成功', [
+                'machine_id' => $machine->id,
+                'action' => $action,
+                'control_type' => $controlType,
+            ]);
+
+            return $this->success([
+                'machine_id' => $machine->id,
+                'action' => $action,
+                'control_type' => $controlType,
+            ]);
+
+        } catch (Exception $e) {
+            Log::channel('machine_operations')->error('[HandleJackpotAction] 处理失败', [
+                'machine_id' => $machine->id,
+                'action' => $action,
+                'control_type' => $context['control_type'] ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            throw $e;
+        }
+    }
 }
