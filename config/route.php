@@ -57,40 +57,20 @@ Route::group('/api', function () {
         Route::post('/replay', [\app\api\v1\AdminGamePlatformController::class, 'replay']);
         // 管理后台 - 机台操作 API
         Route::group('/machine', function () {
-            // ✅ 新增：统一操作入口（推荐使用）
+            // ✅ 统一操作接口
             Route::post('/execute', [\app\api\v1\MachineOperationController::class, 'execute']);
             Route::post('/batch-execute', [\app\api\v1\MachineOperationController::class, 'batchExecute']);
             Route::get('/operations', [\app\api\v1\MachineOperationController::class, 'getOperations']);
 
-            // ⚠️ 以下为兼容旧接口（保留，但推荐使用 /execute）
-            // 发送机台指令
-            Route::post('/send-cmd', [\app\api\v1\AdminMachineController::class, 'sendCmd']);
-            // 批量发送机台指令
-            Route::post('/batch-send-cmd', [\app\api\v1\AdminMachineController::class, 'batchSendCmd']);
-            // 获取机台状态
-            Route::post('/status', [\app\api\v1\AdminMachineController::class, 'getMachineStatus']);
-            // 检查机台在线状态
-            Route::post('/check-online', [\app\api\v1\AdminMachineController::class, 'checkOnline']);
-            // 批量检查机台在线状态
-            Route::post('/batch-check-online', [\app\api\v1\AdminMachineController::class, 'batchCheckOnline']);
-            // 获取机台操作描述
-            Route::post('/get-description', [\app\api\v1\AdminMachineController::class, 'getDescription']);
-            // 获取Gateway信息（调试用）
+            // ✅ 特殊功能接口（调试、统计、状态管理）
             Route::get('/gateway-info', [\app\api\v1\AdminMachineController::class, 'getGatewayInfo']);
-            // 获取所有机台在线状态
             Route::post('/all-online-status', [\app\api\v1\AdminMachineController::class, 'getAllOnlineStatus']);
-            // 获取机台在线统计
             Route::get('/online-statistics', [\app\api\v1\AdminMachineController::class, 'getOnlineStatistics']);
-            // 批量获取机台状态
-            Route::post('/batch-status', [\app\api\v1\AdminMachineController::class, 'batchGetMachineStatus']);
-            // 更新机台状态
             Route::post('/update-state', [\app\api\v1\AdminMachineController::class, 'updateMachineState']);
-            // ✅ 高级操作（踢出玩家、开分等）
-            // 踢出玩家（洗分）
+
+            // ✅ 高级操作（待迁移到 MachineOperationService）
             Route::post('/kick-player', [\app\api\v1\AdminMachineController::class, 'kickPlayer']);
-            // 强制踢出玩家（不返还分数）
             Route::post('/force-kick-player', [\app\api\v1\AdminMachineController::class, 'forceKickPlayer']);
-            // 自定义开分
             Route::post('/custom-open-score', [\app\api\v1\AdminMachineController::class, 'customOpenScore']);
         });
 
