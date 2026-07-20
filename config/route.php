@@ -36,6 +36,11 @@ Route::group('/api', function () {
 
         // 玩家机台操作 API（来自 gk_api，使用 JWT Token 或 X-Player-Id）
         Route::group('/machine', function () {
+            // ✅ 新增：统一操作入口（推荐使用）
+            Route::post('/execute', [\app\api\v1\MachineOperationController::class, 'execute']);
+            Route::get('/operations', [\app\api\v1\MachineOperationController::class, 'getOperations']);
+
+            // ⚠️ 以下为兼容旧接口（保留，但推荐使用 /execute）
             // 发送机台指令
             Route::post('/send-cmd', [\app\api\v1\PlayerMachineController::class, 'sendCmd']);
             // 获取机台状态
@@ -65,6 +70,12 @@ Route::group('/api', function () {
         Route::post('/replay', [\app\api\v1\AdminGamePlatformController::class, 'replay']);
         // 管理后台 - 机台操作 API
         Route::group('/machine', function () {
+            // ✅ 新增：统一操作入口（推荐使用）
+            Route::post('/execute', [\app\api\v1\MachineOperationController::class, 'execute']);
+            Route::post('/batch-execute', [\app\api\v1\MachineOperationController::class, 'batchExecute']);
+            Route::get('/operations', [\app\api\v1\MachineOperationController::class, 'getOperations']);
+
+            // ⚠️ 以下为兼容旧接口（保留，但推荐使用 /execute）
             // 发送机台指令
             Route::post('/send-cmd', [\app\api\v1\AdminMachineController::class, 'sendCmd']);
             // 批量发送机台指令
