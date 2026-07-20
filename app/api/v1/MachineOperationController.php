@@ -690,4 +690,118 @@ class MachineOperationController extends BaseController
             return $this->handleException($e, '批量检查机台在线状态失败');
         }
     }
+
+    /**
+     * 机台上分（只执行硬件操作）
+     *
+     * POST /api/v1/machine/open-point
+     *
+     * 请求参数：
+     * - machine_id: int 机台ID（必填）
+     * - player_id: int 玩家ID（必填）
+     * - open_score: float 上分数量（必填）
+     * - machine_context: array 机台上下文信息（必填）
+     * - pre_clear_commands: array 预清空指令（选填）
+     *
+     * 职责：只负责硬件层操作
+     * 1. 执行预清空指令（如果有）
+     * 2. 发送上分指令
+     * 3. 返回成功状态
+     *
+     * 不负责：
+     * - 数据库事务（由 gk_api 处理）
+     * - 钱包操作（由 gk_api 处理）
+     * - 游戏记录（由 gk_api 处理）
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function openPoint(Request $request): Response
+    {
+        try {
+            // 1. 获取请求参数
+            $machineId = $request->post('machine_id');
+            $playerId = $request->post('player_id');
+            $openScore = $request->post('open_score');
+            $machineContext = $request->post('machine_context', []);
+            $preClearCommands = $request->post('pre_clear_commands', []);
+            $lang = $request->post('lang', 'zh_TW');
+
+            locale($lang);
+
+            // 2. 参数验证
+            if (empty($machineId) || empty($playerId) || $openScore === null) {
+                return $this->fail('缺少必填参数', 400);
+            }
+
+            if ($openScore <= 0) {
+                return $this->fail('上分数量必须大于0', 400);
+            }
+
+            Log::channel('machine_operations')->info('[OpenPoint] 收到上分请求', [
+                'machine_id' => $machineId,
+                'player_id' => $playerId,
+                'open_score' => $openScore,
+            ]);
+
+            // 3. 查询机台
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            // 4. 创建机台服务
+            $services = \app\service\machine\MachineServices::createServices($machine, $lang);
+
+            // 5. 执行预清空指令（如果有）
+            if (!empty($preClearCommands) && is_array($preClearCommands)) {
+                foreach ($preClearCommands as $cmd) {
+                    if (isset($cmd['command']) && isset($cmd['value'])) {
+                        Log::channel('machine_operations')->info('[OpenPoint] 执行预清空指令', [
+                            'machine_id' => $machineId,
+                            'command' => $cmd['command'],
+                            'value' => $cmd['value'],
+                        ]);
+                        $services->sendCmd($cmd['command'], $cmd['value'], 'player', $playerId);
+                    }
+                }
+            }
+
+            // 6. 首次上分特殊处理
+            if ($machine->gaming_user_id == 0) {
+                // 斯洛机 + 双美：关闭移点
+                if ($machine->type == \app\model\GameType::TYPE_SLOT
+                    && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
+                    Log::channel('machine_operations')->info('[OpenPoint] 首次上分 - 关闭移点', [
+                        'machine_id' => $machineId,
+                    ]);
+                    $services->sendCmd($services::MOVE_POINT_OFF, 0, 'player', $playerId);
+                }
+            }
+
+            // 7. 发送上分指令
+            $services->sendCmd($services::OPEN_ANY_POINT, $openScore, 'player', $playerId);
+
+            Log::channel('machine_operations')->info('[OpenPoint] 上分完成', [
+                'machine_id' => $machineId,
+                'player_id' => $playerId,
+                'open_score' => $openScore,
+            ]);
+
+            // 8. 返回成功
+            return $this->success([
+                'machine_id' => $machine->id,
+                'open_score' => $openScore,
+                'success' => true,
+            ]);
+
+        } catch (Exception $e) {
+            Log::channel('machine_operations')->error('[OpenPoint] 上分失败', [
+                'machine_id' => $machineId ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return $this->handleException($e, '机台上分失败');
+        }
+    }
 }

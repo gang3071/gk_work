@@ -41,7 +41,8 @@ Route::group('/api', function () {
             Route::post('/batch-execute', [\app\api\v1\MachineOperationController::class, 'batchExecute']);
             Route::get('/operations', [\app\api\v1\MachineOperationController::class, 'getOperations']);
 
-            // 机台洗分接口（硬件层操作）
+            // 机台上下分接口（硬件层操作）
+            Route::post('/open-point', [\app\api\v1\MachineOperationController::class, 'openPoint']);
             Route::post('/wash-point', [\app\api\v1\MachineOperationController::class, 'washPoint']);
 
             // 机台在线状态检查
