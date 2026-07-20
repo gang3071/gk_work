@@ -36,23 +36,16 @@ Route::group('/api', function () {
 
         // 玩家机台操作 API（来自 gk_api，使用 JWT Token 或 X-Player-Id）
         Route::group('/machine', function () {
-            // ✅ 新接口（推荐使用）
+            // ✅ 统一操作接口
             Route::post('/execute', [\app\api\v1\MachineOperationController::class, 'execute']);
             Route::get('/operations', [\app\api\v1\MachineOperationController::class, 'getOperations']);
 
-            // ⚠️ 以下为旧接口（已废弃，计划在 v2.0 移除）
-            // @deprecated 请使用 /execute 替代
+            // ⚠️ 保留的特殊接口
             Route::post('/send-cmd', [\app\api\v1\PlayerMachineController::class, 'sendCmd']);
-            // @deprecated 请使用 /execute (action: query_status) 替代
             Route::post('/status', [\app\api\v1\PlayerMachineController::class, 'getMachineStatus']);
-            // @deprecated 请使用 /execute (action: check_online) 替代
             Route::post('/check-online', [\app\api\v1\PlayerMachineController::class, 'checkOnline']);
-            // 保留（特殊业务需求）
             Route::post('/batch-check-online', [\app\api\v1\PlayerMachineController::class, 'batchCheckOnline']);
-            // @deprecated 请使用 /execute (action: get_description) 替代
             Route::post('/get-description', [\app\api\v1\PlayerMachineController::class, 'getDescription']);
-            // @deprecated 请使用 /execute 替代
-            Route::post('/execute-action', [\app\api\v1\PlayerMachineController::class, 'executeAction']);
         });
     });
 });
