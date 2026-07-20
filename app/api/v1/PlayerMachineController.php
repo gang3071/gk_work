@@ -640,8 +640,28 @@ class PlayerMachineController
      * @param Request $request
      * @return Response
      */
+    /**
+     * 执行机台动作（旧接口）
+     *
+     * @deprecated 已废弃，请使用 MachineOperationController::execute()
+     * @see \app\api\v1\MachineOperationController::execute()
+     *
+     * 新接口: POST /api/v1/machine/execute
+     * 优点: 参数更简洁，自动识别机台类型和厂商
+     *
+     * @param Request $request
+     * @return Response
+     */
     public function executeAction(Request $request): Response
     {
+        // 添加废弃警告日志
+        Log::channel('machine_operations')->warning('[Deprecated] executeAction 已废弃', [
+            'player_id' => $request->header('X-Player-Id'),
+            'machine_id' => $request->input('machine_id'),
+            'action' => $request->input('action'),
+            'new_api' => '/api/v1/machine/execute',
+        ]);
+
         try {
             // 设置语言
             $lang = $this->setLanguage($request);
