@@ -1132,7 +1132,15 @@ function machineWash(
     string  $adminUsername = ''
 ): PlayerLotteryRecord|bool|array
 {
+    // 分布式锁：防止上下分并发
+    $actionLockerKey = 'machine_operation_lock_' . $machine->id;
+    $lock = \support\Locker::lock($actionLockerKey, 30, true);
+
     try {
+        if (!$lock->acquire()) {
+            throw new Exception(trans('machine_is_using_msg1', [], 'message'));
+        }
+
         $lang = locale() ?? 'zh_CN';
         $services = MachineServices::createServices($machine, $lang);
         if ($services->last_point_at + 5 >= time()) {
@@ -1337,6 +1345,21 @@ function machineWash(
     LotteryServices::clearNoticeCache($player->id, $machine->id);
 
     return $playerLotteryRecord ?? true;
+
+    } finally {
+        // 释放锁
+        try {
+            if (isset($lock) && $lock->isAcquired()) {
+                $lock->release();
+            }
+        } catch (\Exception $lockError) {
+            \support\Log::critical('[machineWash] 锁释放失败', [
+                'machine_id' => $machine->id,
+                'lock_key' => $actionLockerKey ?? null,
+                'error' => $lockError->getMessage(),
+            ]);
+        }
+    }
 }
 
 /**
@@ -2462,13 +2485,22 @@ if (!function_exists('machineOpenAnyFree')) {
      */
     function machineOpenAnyFree(Player $player, Machine $machine, int $openScore, int $adminId = 0, string $adminUsername = ''): bool
     {
-        DB::beginTransaction();
+        // 分布式锁：防止上下分并发
+        $actionLockerKey = 'machine_operation_lock_' . $machine->id;
+        $lock = \support\Locker::lock($actionLockerKey, 30, true);
+
         try {
-            $lang = locale() ?? 'zh_CN';
-            $services = MachineServices::createServices($machine, $lang);
-            if ($services->last_point_at + 5 >= time()) {
-                throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
+            if (!$lock->acquire()) {
+                throw new Exception(trans('machine_is_using_msg1', [], 'message'));
             }
+
+            DB::beginTransaction();
+            try {
+                $lang = locale() ?? 'zh_CN';
+                $services = MachineServices::createServices($machine, $lang);
+                if ($services->last_point_at + 5 >= time()) {
+                    throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
+                }
             $openScore = checkMachineOpenAny($machine, $openScore, 0);
             //測試連線
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
@@ -2532,6 +2564,21 @@ if (!function_exists('machineOpenAnyFree')) {
         }
 
         return true;
+
+        } finally {
+            // 释放锁
+            try {
+                if (isset($lock) && $lock->isAcquired()) {
+                    $lock->release();
+                }
+            } catch (\Exception $lockError) {
+                \support\Log::critical('[machineOpenAnyFree] 锁释放失败', [
+                    'machine_id' => $machine->id,
+                    'lock_key' => $actionLockerKey ?? null,
+                    'error' => $lockError->getMessage(),
+                ]);
+            }
+        }
     }
 }
 

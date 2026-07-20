@@ -27,7 +27,7 @@ use Exception;
  * @author Claude Code
  * @date 2026-07-20
  */
-class MachineOperationController extends BaseController
+class MachineOperationController
 {
     /**
      * 执行机台操作（统一入口）
@@ -55,17 +55,28 @@ class MachineOperationController extends BaseController
             $params = $request->post('params', []);
 
             if (!$machineId || !$action) {
-                return $this->fail('缺少必要参数: machine_id 和 action');
+                return json(['code' => 0, 'msg' => '缺少必要参数: machine_id 和 action', 'data' => []]);
             }
 
             // 2. 获取机台
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在');
+                return json(['code' => 0, 'msg' => '机台不存在', 'data' => []]);
             }
 
             // 3. 确定操作者类型和 ID
-            list($operatorType, $operatorId) = $this->getOperatorInfo($request);
+            // 注意：对于业务操作（wash/open），operatorId 从 params['player_id'] 获取
+            $path = $request->path();
+            if (strpos($path, '/api/admin/') !== false) {
+                $operatorType = MachineOperationService::OPERATOR_ADMIN;
+                $operatorId = 0; // 后续可从 session/header 获取
+            } elseif (strpos($path, '/api/v1/') !== false && isset($params['player_id'])) {
+                $operatorType = MachineOperationService::OPERATOR_PLAYER;
+                $operatorId = (int) $params['player_id'];
+            } else {
+                $operatorType = MachineOperationService::OPERATOR_SYSTEM;
+                $operatorId = 0;
+            }
 
             // 4. 获取语言
             $lang = $this->setLanguage($request);
@@ -93,16 +104,20 @@ class MachineOperationController extends BaseController
 
             // 8. 返回结果
             if ($result['success']) {
-                return $this->success($result['data'], $result['message']);
+                return json(['code' => 1, 'msg' => $result['message'], 'data' => $result['data']]);
             } else {
-                return $this->fail($result['message']);
+                return json(['code' => 0, 'msg' => $result['message'], 'data' => []]);
             }
 
         } catch (Exception $e) {
-            return $this->handleException($e, '机台操作失败', [
+            Log::channel('machine_operations')->error('[MachineOperationController] 机台操作失败', [
                 'machine_id' => $machineId,
                 'action' => $action,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
+
+            return json(['code' => 0, 'msg' => '机台操作失败: ' . $e->getMessage(), 'data' => []]);
         }
     }
 
@@ -170,11 +185,11 @@ class MachineOperationController extends BaseController
             $params = $request->post('params', []);
 
             if (empty($machineIds) || !$action) {
-                return $this->fail('缺少必要参数: machine_ids 和 action');
+                return json(['code' => 0, 'msg' => '缺少必要参数: machine_ids 和 action', 'data' => []]);
             }
 
             if (!is_array($machineIds)) {
-                return $this->fail('machine_ids 必须是数组');
+                return json(['code' => 0, 'msg' => 'machine_ids 必须是数组', 'data' => []]);
             }
 
             // 2. 确定操作者信息
@@ -182,7 +197,7 @@ class MachineOperationController extends BaseController
 
             // 3. 只允许后台管理员批量操作
             if ($operatorType !== MachineOperationService::OPERATOR_ADMIN) {
-                return $this->fail('批量操作仅限后台管理员');
+                return json(['code' => 0, 'msg' => '批量操作仅限后台管理员', 'data' => []]);
             }
 
             // 4. 获取语言
@@ -239,17 +254,25 @@ class MachineOperationController extends BaseController
             }
 
             // 6. 返回汇总结果
-            return $this->success([
-                'total' => count($machineIds),
-                'success_count' => $successCount,
-                'fail_count' => $failCount,
-                'results' => $results,
-            ], "批量操作完成：成功 {$successCount} 个，失败 {$failCount} 个");
+            return json([
+                'code' => 1,
+                'msg' => "批量操作完成：成功 {$successCount} 个，失败 {$failCount} 个",
+                'data' => [
+                    'total' => count($machineIds),
+                    'success_count' => $successCount,
+                    'fail_count' => $failCount,
+                    'results' => $results,
+                ],
+            ]);
 
         } catch (Exception $e) {
-            return $this->handleException($e, '批量操作失败', [
+            Log::channel('machine_operations')->error('[MachineOperationController] 批量操作失败', [
                 'action' => $action ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
+
+            return json(['code' => 0, 'msg' => '批量操作失败: ' . $e->getMessage(), 'data' => []]);
         }
     }
 
@@ -268,12 +291,12 @@ class MachineOperationController extends BaseController
             $machineId = $request->get('machine_id');
 
             if (!$machineId) {
-                return $this->fail('缺少参数: machine_id');
+                return json(['code' => 0, 'msg' => '缺少参数: machine_id', 'data' => []]);
             }
 
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在');
+                return json(['code' => 0, 'msg' => '机台不存在', 'data' => []]);
             }
 
             // 根据机台类型返回支持的操作
@@ -326,637 +349,42 @@ class MachineOperationController extends BaseController
                 ];
             }
 
-            return $this->success([
-                'machine_id' => $machine->id,
-                'machine_type' => $machine->game_type == \addons\webman\model\constant\GameType::TYPE_SLOT ? 'slot' : 'jackpot',
-                'control_type' => $machine->control_type === Machine::CONTROL_TYPE_MEI ? 'mei' : 'song',
-                'operations' => $operations,
-            ]);
-
-        } catch (Exception $e) {
-            return $this->handleException($e, '获取操作列表失败');
-        }
-    }
-
-    /**
-     * 机台洗分（只执行硬件操作）
-     *
-     * POST /api/v1/machine/wash-point
-     *
-     * 请求参数：
-     * - machine_id: int 机台 ID（必填）
-     * - player_id: int 玩家 ID（必填）
-     * - action: string 操作类型 (leave/down)（必填）
-     * - machine_context: array 机台上下文信息（必填）
-     * - wash_id: string 洗分唯一ID（必填）
-     *
-     * 职责：只负责硬件层操作
-     * 1. 发送机台指令
-     * 2. 读取机台状态
-     * 3. 返回洗分数量
-     *
-     * 不负责：
-     * - 数据库事务（由 gk_api 处理）
-     * - 钱包操作（由 gk_api 处理）
-     * - 游戏记录（由 gk_api 处理）
-     *
-     * @param Request $request
-     * @return Response
-     */
-    public function washPoint(Request $request): Response
-    {
-        $washId = null;
-        try {
-            // 1. 获取请求参数
-            $machineId = $request->post('machine_id');
-            $playerId = $request->post('player_id');
-            $action = $request->post('action', 'leave');
-            $machineContext = $request->post('machine_context', []);
-            $washId = $request->post('wash_id');
-            $lang = $request->post('lang', 'zh_TW');
-
-            locale($lang);
-
-            // 2. 参数验证
-            if (empty($machineId) || empty($playerId) || empty($washId)) {
-                return $this->fail('缺少必填参数', 400);
-            }
-
-            Log::channel('machine_operations')->info('[WashPoint] 收到洗分请求', [
-                'wash_id' => $washId,
-                'machine_id' => $machineId,
-                'player_id' => $playerId,
-                'action' => $action,
-            ]);
-
-            // 3. 查询机台和玩家
-            $machine = Machine::find($machineId);
-            if (!$machine) {
-                return $this->fail('机台不存在', 404);
-            }
-
-            $player = Player::find($playerId);
-            if (!$player) {
-                return $this->fail('玩家不存在', 404);
-            }
-
-            // 4. 创建机台服务（用于发送指令）
-            $services = \app\service\machine\MachineServices::createServices($machine, $lang);
-
-            // 5. 根据机台类型执行不同的洗分指令
-            $washPoint = 0;
-            $gamingTurnPoint = 0;
-            $gamingPressure = 0;
-            $gamingScore = 0;
-
-            switch ($machine->type) {
-                case \app\model\GameType::TYPE_STEEL_BALL:
-                    // 钢珠机洗分
-                    $washPoint = $this->washSteelBall($machine, $services, $action, $playerId);
-                    $gamingTurnPoint = $services->player_win_number;
-                    break;
-
-                case \app\model\GameType::TYPE_SLOT:
-                    // 斯洛机洗分
-                    $result = $this->washSlot($machine, $services, $playerId);
-                    $washPoint = $result['wash_point'];
-                    $gamingPressure = $result['pressure'];
-                    $gamingScore = $result['score'];
-                    break;
-
-                default:
-                    return $this->fail('不支持的机台类型', 400);
-            }
-
-            Log::channel('machine_operations')->info('[WashPoint] 洗分完成', [
-                'wash_id' => $washId,
-                'machine_id' => $machineId,
-                'wash_point' => $washPoint,
-                'gaming_turn_point' => $gamingTurnPoint,
-                'gaming_pressure' => $gamingPressure,
-                'gaming_score' => $gamingScore,
-            ]);
-
-            // 6. 返回洗分结果
-            return $this->success([
-                'wash_point' => $washPoint,
-                'gaming_turn_point' => $gamingTurnPoint,
-                'gaming_pressure' => $gamingPressure,
-                'gaming_score' => $gamingScore,
-            ]);
-
-        } catch (Exception $e) {
-            Log::channel('machine_operations')->error('[WashPoint] 洗分失败', [
-                'wash_id' => $washId,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-            return $this->handleException($e, '机台洗分失败');
-        }
-    }
-
-    /**
-     * 钢珠机洗分（只执行硬件操作）
-     *
-     * @param Machine $machine
-     * @param \app\service\machine\MachineServices $services
-     * @param string $action
-     * @param int $playerId
-     * @return int
-     * @throws Exception
-     */
-    private function washSteelBall(
-        Machine $machine,
-        \app\service\machine\MachineServices $services,
-        string $action,
-        int $playerId
-    ): int {
-        // 弃台需要下转,下珠
-        if ($action == 'leave') {
-            if ($machine->control_type == Machine::CONTROL_TYPE_MEI) {
-                // 双美：停止推珠 + 自动上转 + 得分转分 + 全部下转
-                $services->sendCmd($services::PUSH . $services::PUSH_STOP, 0, 'player', $playerId);
-                if ($services->auto == 1) {
-                    $services->sendCmd($services::AUTO_UP_TURN, 0, 'player', $playerId);
-                }
-                if ($services->score > 0) {
-                    $services->sendCmd($services::SCORE_TO_POINT, 0, 'player', $playerId);
-                }
-                if ($services->turn > 0) {
-                    $services->sendCmd($services::TURN_DOWN_ALL, 0, 'player', $playerId);
-                }
-            }
-
-            if ($machine->control_type == Machine::CONTROL_TYPE_SONG) {
-                // 小淞：自动上转 + 读取转数 + 读取得分 + 得分转分 + 全部下转
-                if ($services->auto == 1) {
-                    $services->sendCmd($services::AUTO_UP_TURN, 0, 'player', $playerId);
-                }
-                $services->sendCmd($services::MACHINE_TURN, 0, 'player', $playerId);
-                $services->sendCmd($services::MACHINE_SCORE, 0, 'player', $playerId);
-                if ($services->score > 0) {
-                    $services->sendCmd($services::SCORE_TO_POINT, 0, 'player', $playerId);
-                }
-                if ($services->turn > 0) {
-                    $services->sendCmd($services::TURN_DOWN_ALL, 0, 'player', $playerId);
-                }
-            }
-        }
-
-        // 读取机台分数和中奖数
-        $services->sendCmd($services::MACHINE_POINT, 0, 'player', $playerId);
-        $services->sendCmd($services::WIN_NUMBER, 0, 'player', $playerId);
-
-        // 返回洗分数量（不扣除赠点，由 gk_api 处理）
-        return $services->point;
-    }
-
-    /**
-     * 斯洛机洗分（只执行硬件操作）
-     *
-     * @param Machine $machine
-     * @param \app\service\machine\MachineServices $services
-     * @param int $playerId
-     * @return array
-     * @throws Exception
-     */
-    private function washSlot(
-        Machine $machine,
-        \app\service\machine\MachineServices $services,
-        int $playerId
-    ): array {
-        // 关闭移点（双美）
-        if ($services->move_point == 1 && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
-            $services->sendCmd($services::MOVE_POINT_OFF, 0, 'player', $playerId);
-        }
-
-        // 关闭自动
-        if ($services->auto == 1) {
-            $services->sendCmd($services::OUT_OFF, 0, 'player', $playerId);
-        }
-
-        // 停止所有轴
-        $services->sendCmd($services::STOP_ONE, 0, 'player', $playerId);
-        $services->sendCmd($services::STOP_TWO, 0, 'player', $playerId);
-        $services->sendCmd($services::STOP_THREE, 0, 'player', $playerId);
-
-        // 读取得分
-        $services->sendCmd($services::READ_SCORE, 0, 'player', $playerId);
-
-        // 读取押分
-        $services->sendCmd($services::READ_BET, 0, 'player', $playerId);
-
-        // 计算压分和得分（不扣除 player_pressure 和 player_score，由 gk_api 处理）
-        $gamingPressure = bcsub($services->bet, $services->player_pressure ?? 0);
-        $gamingScore = bcsub($services->win, $services->player_score ?? 0);
-
-        Log::channel('slot_machine')->info('[WashSlot] 斯洛机洗分', [
-            'machine_code' => $machine->code,
-            'point' => $services->point,
-            'bet' => $services->bet,
-            'win' => $services->win,
-            'gaming_pressure' => $gamingPressure,
-            'gaming_score' => $gamingScore,
-        ]);
-
-        return [
-            'wash_point' => $services->point,
-            'pressure' => max($gamingPressure, 0),
-            'score' => max($gamingScore, 0),
-        ];
-    }
-
-    /**
-     * 检查机台在线状态
-     *
-     * POST /api/v1/machine/check-online
-     *
-     * 请求参数：
-     * - machine_id: int 机台ID（必填）
-     *
-     * @param Request $request
-     * @return Response
-     */
-    public function checkOnline(Request $request): Response
-    {
-        try {
-            $machineId = $request->post('machine_id');
-            if (empty($machineId)) {
-                return $this->fail('缺少机台ID', 400);
-            }
-
-            $machine = Machine::find($machineId);
-            if (!$machine) {
-                return $this->fail('机台不存在', 404);
-            }
-
-            // 检查主连接是否在线
-            $mainUid = $machine->domain . ':' . $machine->port;
-            try {
-                $mainOnline = \GatewayWorker\Lib\Gateway::isUidOnline($mainUid);
-            } catch (Exception $e) {
-                Log::warning('[CheckOnline] Gateway 检查主连接失败', [
-                    'machine_id' => $machineId,
-                    'main_uid' => $mainUid,
-                    'error' => $e->getMessage(),
-                ]);
-                $mainOnline = false;
-            }
-
-            // 检查从连接是否在线（双连接机台）
-            $slaveOnline = false;
-            if (!empty($machine->slave_domain) && !empty($machine->slave_port)) {
-                $slaveUid = $machine->slave_domain . ':' . $machine->slave_port;
-                try {
-                    $slaveOnline = \GatewayWorker\Lib\Gateway::isUidOnline($slaveUid);
-                } catch (Exception $e) {
-                    Log::warning('[CheckOnline] Gateway 检查从连接失败', [
-                        'machine_id' => $machineId,
-                        'slave_uid' => $slaveUid,
-                        'error' => $e->getMessage(),
-                    ]);
-                    $slaveOnline = false;
-                }
-            }
-
-            return $this->success([
-                'machine_id' => $machine->id,
-                'main_online' => $mainOnline,
-                'slave_online' => $slaveOnline,
-                'is_online' => $mainOnline, // 主连接在线即认为机台在线
-            ]);
-
-        } catch (Exception $e) {
-            return $this->handleException($e, '检查机台在线状态失败');
-        }
-    }
-
-    /**
-     * 批量检查机台在线状态
-     *
-     * POST /api/v1/machine/batch-check-online
-     *
-     * 请求参数：
-     * - machine_ids: array 机台ID数组（必填）
-     *
-     * @param Request $request
-     * @return Response
-     */
-    public function batchCheckOnline(Request $request): Response
-    {
-        try {
-            $machineIds = $request->post('machine_ids', []);
-            if (empty($machineIds) || !is_array($machineIds)) {
-                return $this->fail('缺少机台ID数组', 400);
-            }
-
-            $results = [];
-            $machines = Machine::whereIn('id', $machineIds)->get();
-
-            foreach ($machines as $machine) {
-                // 检查主连接
-                $mainUid = $machine->domain . ':' . $machine->port;
-                try {
-                    $mainOnline = \GatewayWorker\Lib\Gateway::isUidOnline($mainUid);
-                } catch (Exception $e) {
-                    $mainOnline = false;
-                }
-
-                // 检查从连接（如果有）
-                $slaveOnline = false;
-                if (!empty($machine->slave_domain) && !empty($machine->slave_port)) {
-                    $slaveUid = $machine->slave_domain . ':' . $machine->slave_port;
-                    try {
-                        $slaveOnline = \GatewayWorker\Lib\Gateway::isUidOnline($slaveUid);
-                    } catch (Exception $e) {
-                        $slaveOnline = false;
-                    }
-                }
-
-                $results[] = [
+            return json([
+                'code' => 1,
+                'msg' => 'success',
+                'data' => [
                     'machine_id' => $machine->id,
-                    'main_online' => $mainOnline,
-                    'slave_online' => $slaveOnline,
-                    'is_online' => $mainOnline,
-                ];
-            }
-
-            return $this->success([
-                'total' => count($results),
-                'machines' => $results,
+                    'machine_type' => $machine->game_type == \addons\webman\model\constant\GameType::TYPE_SLOT ? 'slot' : 'jackpot',
+                    'control_type' => $machine->control_type === Machine::CONTROL_TYPE_MEI ? 'mei' : 'song',
+                    'operations' => $operations,
+                ],
             ]);
 
         } catch (Exception $e) {
-            return $this->handleException($e, '批量检查机台在线状态失败');
-        }
-    }
-
-    /**
-     * 机台上分（只执行硬件操作）
-     *
-     * POST /api/v1/machine/open-point
-     *
-     * 请求参数：
-     * - machine_id: int 机台ID（必填）
-     * - player_id: int 玩家ID（必填）
-     * - open_score: float 上分数量（必填）
-     * - machine_context: array 机台上下文信息（必填）
-     * - pre_clear_commands: array 预清空指令（选填）
-     *
-     * 职责：只负责硬件层操作
-     * 1. 执行预清空指令（如果有）
-     * 2. 发送上分指令
-     * 3. 返回成功状态
-     *
-     * 不负责：
-     * - 数据库事务（由 gk_api 处理）
-     * - 钱包操作（由 gk_api 处理）
-     * - 游戏记录（由 gk_api 处理）
-     *
-     * @param Request $request
-     * @return Response
-     */
-    public function openPoint(Request $request): Response
-    {
-        try {
-            // 1. 获取请求参数
-            $machineId = $request->post('machine_id');
-            $playerId = $request->post('player_id');
-            $openScore = $request->post('open_score');
-            $machineContext = $request->post('machine_context', []);
-            $preClearCommands = $request->post('pre_clear_commands', []);
-            $lang = $request->post('lang', 'zh_TW');
-
-            locale($lang);
-
-            // 2. 参数验证
-            if (empty($machineId) || empty($playerId) || $openScore === null) {
-                return $this->fail('缺少必填参数', 400);
-            }
-
-            if ($openScore <= 0) {
-                return $this->fail('上分数量必须大于0', 400);
-            }
-
-            Log::channel('machine_operations')->info('[OpenPoint] 收到上分请求', [
-                'machine_id' => $machineId,
-                'player_id' => $playerId,
-                'open_score' => $openScore,
-            ]);
-
-            // 3. 查询机台
-            $machine = Machine::find($machineId);
-            if (!$machine) {
-                return $this->fail('机台不存在', 404);
-            }
-
-            // 4. 创建机台服务
-            $services = \app\service\machine\MachineServices::createServices($machine, $lang);
-
-            // 5. 执行预清空指令（如果有）
-            if (!empty($preClearCommands) && is_array($preClearCommands)) {
-                foreach ($preClearCommands as $cmd) {
-                    if (isset($cmd['command']) && isset($cmd['value'])) {
-                        Log::channel('machine_operations')->info('[OpenPoint] 执行预清空指令', [
-                            'machine_id' => $machineId,
-                            'command' => $cmd['command'],
-                            'value' => $cmd['value'],
-                        ]);
-                        $services->sendCmd($cmd['command'], $cmd['value'], 'player', $playerId);
-                    }
-                }
-            }
-
-            // 6. 首次上分特殊处理
-            if ($machine->gaming_user_id == 0) {
-                // 斯洛机 + 双美：关闭移点
-                if ($machine->type == \app\model\GameType::TYPE_SLOT
-                    && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
-                    Log::channel('machine_operations')->info('[OpenPoint] 首次上分 - 关闭移点', [
-                        'machine_id' => $machineId,
-                    ]);
-                    $services->sendCmd($services::MOVE_POINT_OFF, 0, 'player', $playerId);
-                }
-            }
-
-            // 7. 发送上分指令
-            $services->sendCmd($services::OPEN_ANY_POINT, $openScore, 'player', $playerId);
-
-            Log::channel('machine_operations')->info('[OpenPoint] 上分完成', [
-                'machine_id' => $machineId,
-                'player_id' => $playerId,
-                'open_score' => $openScore,
-            ]);
-
-            // 8. 返回成功
-            return $this->success([
-                'machine_id' => $machine->id,
-                'open_score' => $openScore,
-                'success' => true,
-            ]);
-
-        } catch (Exception $e) {
-            Log::channel('machine_operations')->error('[OpenPoint] 上分失败', [
-                'machine_id' => $machineId ?? null,
+            Log::channel('machine_operations')->error('[MachineOperationController] 获取操作列表失败', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
-            return $this->handleException($e, '机台上分失败');
+
+            return json(['code' => 0, 'msg' => '获取操作列表失败: ' . $e->getMessage(), 'data' => []]);
         }
     }
 
     /**
-     * 发送机台指令
-     *
-     * POST /api/v1/machine/send-cmd
-     *
-     * 请求参数：
-     * - machine_id: int 机台ID（必填）
-     * - cmd: string 指令代码（必填）
-     * - data: int 指令数据（选填，默认0）
-     *
-     * @param Request $request
-     * @return Response
+     * 设置语言
      */
-    public function sendCmd(Request $request): Response
+    private function setLanguage(Request $request): string
     {
-        try {
-            $machineId = $request->post('machine_id');
-            $cmd = $request->post('cmd');
-            $data = $request->post('data', 0);
-            $lang = $request->post('lang', 'zh_TW');
-
-            // 从 header 获取玩家ID（可选）
-            $playerId = $request->header('X-Player-Id', 0);
-
-            locale($lang);
-
-            // 参数验证
-            if (empty($machineId) || empty($cmd)) {
-                return $this->fail('缺少必填参数', 400);
-            }
-
-            // 查询机台
-            $machine = Machine::find($machineId);
-            if (!$machine) {
-                return $this->fail('机台不存在', 404);
-            }
-
-            // 创建机台服务
-            $services = \app\service\machine\MachineServices::createServices($machine, $lang);
-
-            // 发送指令
-            $services->sendCmd($cmd, $data, $playerId > 0 ? 'player' : 'system', $playerId);
-
-            Log::channel('machine_operations')->info('[SendCmd] 指令发送成功', [
-                'machine_id' => $machineId,
-                'cmd' => $cmd,
-                'data' => $data,
-                'player_id' => $playerId,
-            ]);
-
-            return $this->success([
-                'machine_id' => $machine->id,
-                'cmd' => $cmd,
-                'data' => $data,
-                'success' => true,
-            ]);
-
-        } catch (Exception $e) {
-            Log::channel('machine_operations')->error('[SendCmd] 指令发送失败', [
-                'error' => $e->getMessage(),
-            ]);
-            return $this->handleException($e, '发送机台指令失败');
-        }
+        return $request->header('accept-language', 'zh_CN');
     }
 
     /**
-     * 批量发送机台指令
-     *
-     * POST /api/v1/machine/batch-send-cmd
-     *
-     * 请求参数：
-     * - machine_id: int 机台ID（必填）
-     * - commands: array 指令列表（必填）
-     *   [
-     *     {'cmd': 'xxx', 'data': 0},
-     *     {'cmd': 'yyy', 'data': 1}
-     *   ]
-     *
-     * @param Request $request
-     * @return Response
+     * 获取玩家（从请求中）
      */
-    public function batchSendCmd(Request $request): Response
+    private function getPlayer(Request $request): ?Player
     {
-        try {
-            $machineId = $request->post('machine_id');
-            $commands = $request->post('commands', []);
-            $lang = $request->post('lang', 'zh_TW');
-
-            // 从 header 获取玩家ID（可选）
-            $playerId = $request->header('X-Player-Id', 0);
-
-            locale($lang);
-
-            // 参数验证
-            if (empty($machineId) || empty($commands) || !is_array($commands)) {
-                return $this->fail('缺少必填参数或参数格式错误', 400);
-            }
-
-            // 查询机台
-            $machine = Machine::find($machineId);
-            if (!$machine) {
-                return $this->fail('机台不存在', 404);
-            }
-
-            // 创建机台服务
-            $services = \app\service\machine\MachineServices::createServices($machine, $lang);
-
-            // 批量发送指令
-            $results = [];
-            foreach ($commands as $command) {
-                if (!isset($command['cmd'])) {
-                    continue;
-                }
-
-                $cmd = $command['cmd'];
-                $data = $command['data'] ?? 0;
-
-                try {
-                    $services->sendCmd($cmd, $data, $playerId > 0 ? 'player' : 'system', $playerId);
-                    $results[] = [
-                        'cmd' => $cmd,
-                        'data' => $data,
-                        'success' => true,
-                    ];
-                } catch (Exception $e) {
-                    $results[] = [
-                        'cmd' => $cmd,
-                        'data' => $data,
-                        'success' => false,
-                        'error' => $e->getMessage(),
-                    ];
-                }
-            }
-
-            Log::channel('machine_operations')->info('[BatchSendCmd] 批量指令发送完成', [
-                'machine_id' => $machineId,
-                'total' => count($commands),
-                'success' => count(array_filter($results, fn($r) => $r['success'])),
-                'failed' => count(array_filter($results, fn($r) => !$r['success'])),
-            ]);
-
-            return $this->success([
-                'machine_id' => $machine->id,
-                'total' => count($commands),
-                'results' => $results,
-            ]);
-
-        } catch (Exception $e) {
-            Log::channel('machine_operations')->error('[BatchSendCmd] 批量指令发送失败', [
-                'error' => $e->getMessage(),
-            ]);
-            return $this->handleException($e, '批量发送机台指令失败');
-        }
+        // 这里可以从 header 或 session 获取玩家信息
+        // 暂时返回 null
+        return null;
     }
 }

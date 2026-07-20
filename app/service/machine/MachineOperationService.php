@@ -140,6 +140,11 @@ class MachineOperationService
             return $this->executeBasicOperation($action, $params);
         }
 
+        // 业务操作（洗分/上分 - 包含完整业务逻辑）
+        if ($this->isBusinessOperation($action)) {
+            return $this->executeBusinessOperation($action, $params);
+        }
+
         // 控制指令
         if ($this->isControlOperation($action)) {
             return $this->executeControlOperation($action, $params);
@@ -168,6 +173,17 @@ class MachineOperationService
     }
 
     /**
+     * 判断是否为业务操作（洗分/上分）
+     */
+    private function isBusinessOperation(string $action): bool
+    {
+        return in_array($action, [
+            'wash',              // 洗分（完整业务逻辑）
+            'open',              // 上分（完整业务逻辑）
+        ]);
+    }
+
+    /**
      * 执行基础操作
      */
     private function executeBasicOperation(string $action, array $params): array
@@ -181,6 +197,21 @@ class MachineOperationService
                 return $this->getDescription();
             default:
                 throw new Exception("未知的基础操作: {$action}");
+        }
+    }
+
+    /**
+     * 执行业务操作（洗分/上分 - 完整业务逻辑）
+     */
+    private function executeBusinessOperation(string $action, array $params): array
+    {
+        switch ($action) {
+            case 'wash':
+                return $this->wash($params);
+            case 'open':
+                return $this->open($params);
+            default:
+                throw new Exception("未知的业务操作: {$action}");
         }
     }
 
@@ -625,5 +656,126 @@ class MachineOperationService
             default:
                 return "未知操作者";
         }
+    }
+
+    /**
+     * 洗分（完整业务逻辑）
+     *
+     * 调用完整的 machineWash 函数处理所有业务逻辑：
+     * - 硬件指令发送
+     * - 数据库事务
+     * - 钱包操作
+     * - 游戏记录
+     * - 彩金处理
+     * - 活动结算
+     */
+    private function wash(array $params): array
+    {
+        // 验证必需参数
+        if (!isset($params['player_id'])) {
+            throw new Exception('缺少参数: player_id');
+        }
+
+        if (!isset($params['action']) || !in_array($params['action'], ['leave', 'switch'])) {
+            throw new Exception('缺少或无效的参数: action (必须是 leave 或 switch)');
+        }
+
+        // 获取玩家
+        $player = \addons\webman\model\Player::find($params['player_id']);
+        if (!$player) {
+            throw new Exception('玩家不存在');
+        }
+
+        // 准备参数
+        $action = $params['action']; // 'leave' 或 'switch'
+        $isSystem = $params['is_system'] ?? 0;
+        $hasLottery = $params['has_lottery'] ?? false;
+        $adminId = $this->operatorType === self::OPERATOR_ADMIN ? $this->operatorId : 0;
+        $adminUsername = $params['admin_username'] ?? '';
+
+        // 调用完整的 machineWash 函数
+        $result = \machineWash(
+            $player,
+            $this->machine,
+            $action,
+            $isSystem,
+            $hasLottery,
+            $adminId,
+            $adminUsername
+        );
+
+        // 处理返回结果
+        if ($result === false) {
+            throw new Exception('洗分失败');
+        }
+
+        if (is_array($result)) {
+            return [
+                'success' => true,
+                'wash_point' => $result['wash_point'] ?? 0,
+                'gaming_turn_point' => $result['gaming_turn_point'] ?? 0,
+                'gaming_pressure' => $result['gaming_pressure'] ?? 0,
+                'gaming_score' => $result['gaming_score'] ?? 0,
+            ];
+        }
+
+        // PlayerLotteryRecord 对象（中奖）
+        return [
+            'success' => true,
+            'has_lottery' => true,
+            'lottery_record' => $result,
+        ];
+    }
+
+    /**
+     * 上分（完整业务逻辑）
+     *
+     * 调用完整的 machineOpenAnyFree 函数处理所有业务逻辑：
+     * - 硬件指令发送
+     * - 数据库事务
+     * - 钱包操作
+     * - 游戏记录
+     */
+    private function open(array $params): array
+    {
+        // 验证必需参数
+        if (!isset($params['player_id'])) {
+            throw new Exception('缺少参数: player_id');
+        }
+
+        if (!isset($params['open_score']) || $params['open_score'] <= 0) {
+            throw new Exception('缺少或无效的参数: open_score (必须大于0)');
+        }
+
+        // 获取玩家
+        $player = \addons\webman\model\Player::find($params['player_id']);
+        if (!$player) {
+            throw new Exception('玩家不存在');
+        }
+
+        // 准备参数
+        $openScore = (int) $params['open_score'];
+        $adminId = $this->operatorType === self::OPERATOR_ADMIN ? $this->operatorId : 0;
+        $adminUsername = $params['admin_username'] ?? '';
+
+        // 调用完整的 machineOpenAnyFree 函数
+        $result = \machineOpenAnyFree(
+            $player,
+            $this->machine,
+            $openScore,
+            $adminId,
+            $adminUsername
+        );
+
+        if ($result === false) {
+            throw new Exception('上分失败');
+        }
+
+        return [
+            'success' => true,
+            'open_score' => $openScore,
+            'machine_id' => $this->machine->id,
+            'player_id' => $player->id,
+        ];
     }
 }
