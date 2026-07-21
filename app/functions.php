@@ -2563,23 +2563,31 @@ if (!function_exists('machineOpenAnyFree')) {
             }
 
             //首次上分
-            if ($machine->gaming_user_id == 0) {
-                //斯洛 移分off
-                if ($machine->type == GameType::TYPE_SLOT && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
-                    $services->sendCmd($services::MOVE_POINT_OFF, 0, 'admin', $adminId);
-                }
-            }
+            $isFirstOpen = ($machine->gaming_user_id == 0);
+
+            $machine->gaming = 1;
+            $machine->gaming_user_id = $player->id;
+            $machine->save();
+
+            DB::commit();
+
+            // ✅ Redis 缓存更新移到事务提交后（避免 commit 失败导致不一致）
             //累計該玩家開分
             $services->gaming = 1;
             $services->gaming_user_id = $player->id;
             $services->player_open_point = bcadd($services->player_open_point, $openScore);
             $services->last_point_at = time();
 
-            $machine->gaming = 1;
-            $machine->gaming_user_id = $player->id;
-            $machine->save();
+            // 首次上分发送移分关闭指令
+            if ($isFirstOpen) {
+                //斯洛 移分off
+                if ($machine->type == GameType::TYPE_SLOT && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
+                    $services->sendCmd($services::MOVE_POINT_OFF, 0, 'admin', $adminId);
+                }
+            }
+
+            // 发送开分指令
             $services->sendCmd($services::OPEN_ANY_POINT, $openScore, 'admin', $adminId);
-            DB::commit();
         } catch (\Exception $e) {
             DB::rollback();
             throw new Exception($e->getMessage());

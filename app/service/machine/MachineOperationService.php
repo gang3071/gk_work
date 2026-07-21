@@ -681,7 +681,9 @@ class MachineOperationService
         }
 
         // 获取玩家
-        $player = \addons\webman\model\Player::find($params['player_id']);
+        // ✅ 预加载 recommend_promoter 和 national_promoter 关系，避免 N+1 查询
+        $player = \addons\webman\model\Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
+            ->find($params['player_id']);
         if (!$player) {
             throw new Exception('玩家不存在');
         }
@@ -748,7 +750,9 @@ class MachineOperationService
         }
 
         // 获取玩家
-        $player = \addons\webman\model\Player::find($params['player_id']);
+        // ✅ 预加载 recommend_promoter 和 national_promoter 关系，避免 N+1 查询
+        $player = \addons\webman\model\Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
+            ->find($params['player_id']);
         if (!$player) {
             throw new Exception('玩家不存在');
         }
