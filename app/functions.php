@@ -2483,7 +2483,7 @@ if (!function_exists('machineOpenAnyFree')) {
      * @return bool
      * @throws Exception
      */
-    function machineOpenAnyFree(Player $player, Machine $machine, int $openScore, int $adminId = 0, string $adminUsername = ''): bool
+    function machineOpenAnyFree(Player $player, Machine $machine, int $openScore, int $adminId = 0, string $adminUsername = '', ?int $giftScore = 0, ?int $giveRuleId = null): bool
     {
         // 分布式锁：防止上下分并发
         $actionLockerKey = 'machine_operation_lock_' . $machine->id;
@@ -2540,6 +2540,28 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerGameLog->user_name = $adminUsername;
             $playerGameLog->is_test = $player->is_test; //标记测试数据
             $playerGameLog->save();
+
+            // 记录赠点信息（如果有赠点规则）
+            if ($giveRuleId && $giftScore > 0) {
+                $machineCategoryGiveRule = \addons\webman\model\MachineCategoryGiveRule::find($giveRuleId);
+                if ($machineCategoryGiveRule) {
+                    $playersGiftRecord = new \addons\webman\model\PlayerGiftRecord();
+                    $playersGiftRecord->player_game_log_id = $playerGameLog->id;
+                    $playersGiftRecord->machine_category_give_rule_id = $machineCategoryGiveRule->id;
+                    $playersGiftRecord->machine_id = $machine->id;
+                    $playersGiftRecord->player_id = $player->id;
+                    $playersGiftRecord->player_name = $player->name;
+                    $playersGiftRecord->machine_name = $machine->name;
+                    $playersGiftRecord->machine_type = $machine->type;
+                    $playersGiftRecord->open_num = $machineCategoryGiveRule->open_num;
+                    $playersGiftRecord->give_num = $machineCategoryGiveRule->give_num;
+                    $playersGiftRecord->condition = $machineCategoryGiveRule->condition;
+                    $playersGiftRecord->created_at = date('Y-m-d H:i:s');
+                    $playersGiftRecord->updated_at = date('Y-m-d H:i:s');
+                    $playersGiftRecord->save();
+                }
+            }
+
             //首次上分
             if ($machine->gaming_user_id == 0) {
                 //斯洛 移分off

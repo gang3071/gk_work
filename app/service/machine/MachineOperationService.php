@@ -755,6 +755,8 @@ class MachineOperationService
 
         // 准备参数
         $openScore = (int) $params['open_score'];
+        $giftScore = (int) ($params['gift_score'] ?? 0);
+        $giveRuleId = isset($params['give_rule_id']) ? (int) $params['give_rule_id'] : null;
         $adminId = $this->operatorType === self::OPERATOR_ADMIN ? $this->operatorId : 0;
         $adminUsername = $params['admin_username'] ?? '';
 
@@ -764,7 +766,9 @@ class MachineOperationService
             $this->machine,
             $openScore,
             $adminId,
-            $adminUsername
+            $adminUsername,
+            $giftScore,
+            $giveRuleId
         );
 
         if ($result === false) {
