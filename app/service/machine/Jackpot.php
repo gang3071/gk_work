@@ -645,6 +645,43 @@ class Jackpot extends MachineServices implements BaseMachine
                 ]);
 
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
+
+                // ✅ 发送 Telegram 告警：硬件指令失败
+                try {
+                    $telegramConfig = config('telegram');
+                    if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
+                        $telegram = new \app\service\TelegramService(
+                            $telegramConfig['bot_token'],
+                            $telegramConfig['chat_id']
+                        );
+                        $cmdDesc = match($cmd) {
+                            self::OPEN_ANY_POINT => '开任意分',
+                            self::OPEN_ONE => '开分一次',
+                            self::OPEN_TEN => '开分10次',
+                            self::WASH_ZERO => '洗分清零',
+                            default => $cmd,
+                        };
+                        $telegram->sendAlert([
+                            'datetime' => new \DateTime(),
+                            'level_name' => 'ERROR',
+                            'message' => "钢珠机硬件指令失败（{$cmdDesc}）",
+                            'context' => [
+                                'machine_id' => $this->machine->id,
+                                'machine_code' => $this->machine->code,
+                                'machine_name' => $this->machine->name,
+                                'machine_type' => 'Jackpot',
+                                'cmd' => $cmd,
+                                'cmd_desc' => $cmdDesc,
+                                'error' => $e->getMessage(),
+                                'action' => '机台已自动锁定，请检查硬件状态',
+                            ],
+                        ]);
+                    }
+                } catch (\Exception $telegramError) {
+                    Log::error('[TelegramAlert] 发送告警失败', [
+                        'error' => $telegramError->getMessage(),
+                    ]);
+                }
             }
             throw new Exception($e->getMessage());
         }
