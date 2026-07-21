@@ -1100,7 +1100,13 @@ class GameRecordSyncWorker
             return false;
         }
 
-        // 3. 过滤BTG鱼机游戏
+        // 3. 过滤真人视讯和体育平台（只保留电子游戏平台参与彩金）
+        $platform = GamePlatform::query()->find($record->platform_id);
+        if ($platform && in_array($platform->code, $this->getExcludedPlatformCodes())) {
+            return false;
+        }
+
+        // 4. 过滤BTG鱼机游戏
         $originalData = json_decode($record->original_data, true);
         if (is_array($originalData)) {
             // 处理关联数组和索引数组两种情况
