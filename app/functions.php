@@ -1273,8 +1273,22 @@ function machineWash(
             }
         }
 
-        // ✅ 修复：在数据库事务提交前立即更新Redis缓存状态
-        // 避免API查询时读取到不一致的状态（DB已更新但Redis未更新）
+        // ✅ 硬件清零指令（在事务内执行，失败可回滚）
+        switch ($machine->type) {
+            case GameType::TYPE_STEEL_BALL:
+                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+                $services->sendCmd($services::CLEAR_LOG, 0, 'player', $player->id, $is_system);
+                break;
+            case GameType::TYPE_SLOT:
+                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+                $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
+                break;
+        }
+
+        // ✅ 硬件指令成功后才提交数据库
+        DB::commit();
+
+        // ✅ Redis 最终状态更新（在 commit 后，保证一致性）
         if ($path == 'leave') {
             $services->keeping_user_id = 0;
             $services->keeping = 0;
@@ -1282,22 +1296,18 @@ function machineWash(
             $services->keep_seconds = 0;
         }
 
-        DB::commit();
-        // 执行下分操作
+        // ✅ Redis 清零操作（硬件已清零，同步 Redis）
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
-                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
-                $services->sendCmd($services::CLEAR_LOG, 0, 'player', $player->id, $is_system);
                 $services->player_win_number = 0;
                 break;
             case GameType::TYPE_SLOT:
-                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
-                $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
                 $services->player_pressure = 0;
                 $services->player_score = 0;
                 $services->bet = 0;
                 break;
         }
+
     } catch (Exception $e) {
         DB::rollback();
         throw new Exception($e->getMessage());
@@ -2569,15 +2579,7 @@ if (!function_exists('machineOpenAnyFree')) {
             $machine->gaming_user_id = $player->id;
             $machine->save();
 
-            DB::commit();
-
-            // ✅ Redis 缓存更新移到事务提交后（避免 commit 失败导致不一致）
-            //累計該玩家開分
-            $services->gaming = 1;
-            $services->gaming_user_id = $player->id;
-            $services->player_open_point = bcadd($services->player_open_point, $openScore);
-            $services->last_point_at = time();
-
+            // ✅ 硬件开分指令（在事务内执行，失败可回滚）
             // 首次上分发送移分关闭指令
             if ($isFirstOpen) {
                 //斯洛 移分off
@@ -2588,6 +2590,17 @@ if (!function_exists('machineOpenAnyFree')) {
 
             // 发送开分指令
             $services->sendCmd($services::OPEN_ANY_POINT, $openScore, 'admin', $adminId);
+
+            // ✅ 硬件指令成功后才提交数据库
+            DB::commit();
+
+            // ✅ Redis 缓存更新移到事务提交后（保证一致性）
+            //累計該玩家開分
+            $services->gaming = 1;
+            $services->gaming_user_id = $player->id;
+            $services->player_open_point = bcadd($services->player_open_point, $openScore);
+            $services->last_point_at = time();
+
         } catch (\Exception $e) {
             DB::rollback();
             throw new Exception($e->getMessage());
