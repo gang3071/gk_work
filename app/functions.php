@@ -1132,7 +1132,15 @@ function machineWash(
     string  $adminUsername = ''
 ): PlayerLotteryRecord|bool|array
 {
+    // 分布式锁：防止上下分并发
+    $actionLockerKey = 'machine_operation_lock_' . $machine->id;
+    $lock = \support\Locker::lock($actionLockerKey, 30, true);
+
     try {
+        if (!$lock->acquire()) {
+            throw new Exception(trans('machine_is_using_msg1', [], 'message'));
+        }
+
         $lang = locale() ?? 'zh_CN';
         $services = MachineServices::createServices($machine, $lang);
         if ($services->last_point_at + 5 >= time()) {
@@ -1265,8 +1273,22 @@ function machineWash(
             }
         }
 
-        // ✅ 修复：在数据库事务提交前立即更新Redis缓存状态
-        // 避免API查询时读取到不一致的状态（DB已更新但Redis未更新）
+        // ✅ 硬件清零指令（在事务内执行，失败可回滚）
+        switch ($machine->type) {
+            case GameType::TYPE_STEEL_BALL:
+                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+                $services->sendCmd($services::CLEAR_LOG, 0, 'player', $player->id, $is_system);
+                break;
+            case GameType::TYPE_SLOT:
+                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+                $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
+                break;
+        }
+
+        // ✅ 硬件指令成功后才提交数据库
+        DB::commit();
+
+        // ✅ Redis 最终状态更新（在 commit 后，保证一致性）
         if ($path == 'leave') {
             $services->keeping_user_id = 0;
             $services->keeping = 0;
@@ -1274,22 +1296,18 @@ function machineWash(
             $services->keep_seconds = 0;
         }
 
-        DB::commit();
-        // 执行下分操作
+        // ✅ Redis 清零操作（硬件已清零，同步 Redis）
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
-                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
-                $services->sendCmd($services::CLEAR_LOG, 0, 'player', $player->id, $is_system);
                 $services->player_win_number = 0;
                 break;
             case GameType::TYPE_SLOT:
-                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
-                $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
                 $services->player_pressure = 0;
                 $services->player_score = 0;
                 $services->bet = 0;
                 break;
         }
+
     } catch (Exception $e) {
         DB::rollback();
         throw new Exception($e->getMessage());
@@ -1337,6 +1355,21 @@ function machineWash(
     LotteryServices::clearNoticeCache($player->id, $machine->id);
 
     return $playerLotteryRecord ?? true;
+
+    } finally {
+        // 释放锁
+        try {
+            if (isset($lock) && $lock->isAcquired()) {
+                $lock->release();
+            }
+        } catch (\Exception $lockError) {
+            \support\Log::critical('[machineWash] 锁释放失败', [
+                'machine_id' => $machine->id,
+                'lock_key' => $actionLockerKey ?? null,
+                'error' => $lockError->getMessage(),
+            ]);
+        }
+    }
 }
 
 /**
@@ -2460,15 +2493,24 @@ if (!function_exists('machineOpenAnyFree')) {
      * @return bool
      * @throws Exception
      */
-    function machineOpenAnyFree(Player $player, Machine $machine, int $openScore, int $adminId = 0, string $adminUsername = ''): bool
+    function machineOpenAnyFree(Player $player, Machine $machine, int $openScore, int $adminId = 0, string $adminUsername = '', ?int $giftScore = 0, ?int $giveRuleId = null): bool
     {
-        DB::beginTransaction();
+        // 分布式锁：防止上下分并发
+        $actionLockerKey = 'machine_operation_lock_' . $machine->id;
+        $lock = \support\Locker::lock($actionLockerKey, 30, true);
+
         try {
-            $lang = locale() ?? 'zh_CN';
-            $services = MachineServices::createServices($machine, $lang);
-            if ($services->last_point_at + 5 >= time()) {
-                throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
+            if (!$lock->acquire()) {
+                throw new Exception(trans('machine_is_using_msg1', [], 'message'));
             }
+
+            DB::beginTransaction();
+            try {
+                $lang = locale() ?? 'zh_CN';
+                $services = MachineServices::createServices($machine, $lang);
+                if ($services->last_point_at + 5 >= time()) {
+                    throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
+                }
             $openScore = checkMachineOpenAny($machine, $openScore, 0);
             //測試連線
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
@@ -2508,30 +2550,78 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerGameLog->user_name = $adminUsername;
             $playerGameLog->is_test = $player->is_test; //标记测试数据
             $playerGameLog->save();
+
+            // 记录赠点信息（如果有赠点规则）
+            if ($giveRuleId && $giftScore > 0) {
+                $machineCategoryGiveRule = \addons\webman\model\MachineCategoryGiveRule::find($giveRuleId);
+                if ($machineCategoryGiveRule) {
+                    $playersGiftRecord = new \addons\webman\model\PlayerGiftRecord();
+                    $playersGiftRecord->player_game_log_id = $playerGameLog->id;
+                    $playersGiftRecord->machine_category_give_rule_id = $machineCategoryGiveRule->id;
+                    $playersGiftRecord->machine_id = $machine->id;
+                    $playersGiftRecord->player_id = $player->id;
+                    $playersGiftRecord->player_name = $player->name;
+                    $playersGiftRecord->machine_name = $machine->name;
+                    $playersGiftRecord->machine_type = $machine->type;
+                    $playersGiftRecord->open_num = $machineCategoryGiveRule->open_num;
+                    $playersGiftRecord->give_num = $machineCategoryGiveRule->give_num;
+                    $playersGiftRecord->condition = $machineCategoryGiveRule->condition;
+                    $playersGiftRecord->created_at = date('Y-m-d H:i:s');
+                    $playersGiftRecord->updated_at = date('Y-m-d H:i:s');
+                    $playersGiftRecord->save();
+                }
+            }
+
             //首次上分
-            if ($machine->gaming_user_id == 0) {
+            $isFirstOpen = ($machine->gaming_user_id == 0);
+
+            $machine->gaming = 1;
+            $machine->gaming_user_id = $player->id;
+            $machine->save();
+
+            // ✅ 硬件开分指令（在事务内执行，失败可回滚）
+            // 首次上分发送移分关闭指令
+            if ($isFirstOpen) {
                 //斯洛 移分off
                 if ($machine->type == GameType::TYPE_SLOT && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
                     $services->sendCmd($services::MOVE_POINT_OFF, 0, 'admin', $adminId);
                 }
             }
+
+            // 发送开分指令
+            $services->sendCmd($services::OPEN_ANY_POINT, $openScore, 'admin', $adminId);
+
+            // ✅ 硬件指令成功后才提交数据库
+            DB::commit();
+
+            // ✅ Redis 缓存更新移到事务提交后（保证一致性）
             //累計該玩家開分
             $services->gaming = 1;
             $services->gaming_user_id = $player->id;
             $services->player_open_point = bcadd($services->player_open_point, $openScore);
             $services->last_point_at = time();
 
-            $machine->gaming = 1;
-            $machine->gaming_user_id = $player->id;
-            $machine->save();
-            $services->sendCmd($services::OPEN_ANY_POINT, $openScore, 'admin', $adminId);
-            DB::commit();
         } catch (\Exception $e) {
             DB::rollback();
             throw new Exception($e->getMessage());
         }
 
         return true;
+
+        } finally {
+            // 释放锁
+            try {
+                if (isset($lock) && $lock->isAcquired()) {
+                    $lock->release();
+                }
+            } catch (\Exception $lockError) {
+                \support\Log::critical('[machineOpenAnyFree] 锁释放失败', [
+                    'machine_id' => $machine->id,
+                    'lock_key' => $actionLockerKey ?? null,
+                    'error' => $lockError->getMessage(),
+                ]);
+            }
+        }
     }
 }
 

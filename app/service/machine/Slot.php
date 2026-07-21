@@ -666,6 +666,36 @@ class Slot extends MachineServices implements BaseMachine
                         'expiration_time_ms' => round($this->expirationTime / 1000, 2),
                     ]);
                     $this->log->error('指令超时异常', ['slot -> openPoint', [$this->machine->code, $cmd]]);
+
+                    // ✅ 发送 Telegram 告警：硬件开分指令超时
+                    try {
+                        $telegramConfig = config('telegram');
+                        if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
+                            $telegram = new \app\service\TelegramService(
+                                $telegramConfig['bot_token'],
+                                $telegramConfig['chat_id']
+                            );
+                            $telegram->sendAlert([
+                                'datetime' => new \DateTime(),
+                                'level_name' => 'ERROR',
+                                'message' => '硬件开分指令超时',
+                                'context' => [
+                                    'machine_id' => $this->machine->id,
+                                    'machine_code' => $this->machine->code,
+                                    'machine_type' => 'Slot',
+                                    'cmd' => $cmd,
+                                    'timeout_ms' => round($handleDuration / 1000, 2),
+                                    'current_point' => $this->point,
+                                    'action' => '请检查机台硬件连接状态',
+                                ],
+                            ]);
+                        }
+                    } catch (\Exception $telegramError) {
+                        Log::error('[TelegramAlert] 发送告警失败', [
+                            'error' => $telegramError->getMessage(),
+                        ]);
+                    }
+
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
                 usleep($sleep);
@@ -835,6 +865,37 @@ class Slot extends MachineServices implements BaseMachine
                     'error' => $e->getMessage(),
                 ]);
                 $this->log->error('指令超时异常', ['slot -> washPoint', [$this->machine->code]]);
+
+                // ✅ 发送 Telegram 告警：硬件清零指令失败
+                try {
+                    $telegramConfig = config('telegram');
+                    if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
+                        $telegram = new \app\service\TelegramService(
+                            $telegramConfig['bot_token'],
+                            $telegramConfig['chat_id']
+                        );
+                        $telegram->sendAlert([
+                            'datetime' => new \DateTime(),
+                            'level_name' => 'CRITICAL',
+                            'message' => '硬件清零指令失败（超过最大重试次数）',
+                            'context' => [
+                                'machine_id' => $this->machine->id,
+                                'machine_code' => $this->machine->code,
+                                'machine_type' => 'Slot',
+                                'attempts' => $attempts,
+                                'max_retries' => $maxRetries,
+                                'current_point' => $this->point,
+                                'error' => $e->getMessage(),
+                                'action' => '请手动检查机台硬件状态',
+                            ],
+                        ]);
+                    }
+                } catch (\Exception $telegramError) {
+                    Log::error('[TelegramAlert] 发送告警失败', [
+                        'error' => $telegramError->getMessage(),
+                    ]);
+                }
+
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
 
