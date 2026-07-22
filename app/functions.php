@@ -1292,6 +1292,9 @@ function machineWash(
             $machine->gaming_user_id = 0;
             $machine->save();
 
+            // ✅ 手动清除 Machine 缓存（Workerman 多进程下模型事件不可靠）
+            \app\service\machine\MachineOperationService::clearMachineCache($machine);
+
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
                 $activityServices = new ActivityServices($machine, $player);
                 $activityServices->playerFinishActivity(true);
@@ -2913,14 +2916,13 @@ if (!function_exists('machineOpenAnyFree')) {
 
             $machine->save();
 
-            // ✅ 诊断日志：验证缓存是否真的被删除
-            $cacheExists = Cache::has($cacheKey);
-            Log::info('[machineOpenAnyFree] Machine 模型已保存', [
+            // ✅ 手动清除 Machine 缓存（Workerman 多进程下模型事件不可靠）
+            $cacheResult = \app\service\machine\MachineOperationService::clearMachineCache($machine);
+
+            Log::info('[machineOpenAnyFree] Machine 模型已保存并清除缓存', [
                 'player_id' => $player->id,
                 'machine_id' => $machine->id,
-                'cache_key' => $cacheKey,
-                'cache_still_exists' => $cacheExists,
-                'cache_should_be_deleted' => !$cacheExists,
+                'cache_result' => $cacheResult,
             ]);
 
             // ✅ 硬件开分指令（在事务内执行，失败可回滚）

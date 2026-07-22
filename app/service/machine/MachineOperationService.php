@@ -881,4 +881,58 @@ class MachineOperationService
             'player_id' => $player->id,
         ];
     }
+
+    /**
+     * 清除 Machine 模型缓存
+     *
+     * 用途：在上分/下分/弃台等操作后，手动清除 Machine 缓存
+     * 原因：Workerman 多进程环境下，模型事件（booted/updated）不可靠
+     *       - 每个进程独立 boot 模型，boot 时机不确定
+     *       - 导致 Events.php 可能获取到缓存的旧 Machine 对象
+     *       - 旧对象的 gaming_user_id 可能为 0，导致心跳处理异常
+     *
+     * @param Machine $machine 机台对象
+     * @return array 返回删除结果
+     */
+    public static function clearMachineCache(Machine $machine): array
+    {
+        $result = [
+            'main_cache_key' => null,
+            'main_deleted' => false,
+            'auto_card_cache_key' => null,
+            'auto_card_deleted' => false,
+        ];
+
+        // 生成主缓存 key
+        $mainCacheKey = sprintf('machine:domain:%s:port:%s:type:%s',
+            $machine->domain, $machine->port, $machine->type
+        );
+        $result['main_cache_key'] = $mainCacheKey;
+        $result['main_deleted'] = \support\Cache::delete($mainCacheKey);
+
+        // 如果是 Slot 机台且配置了 auto_card，也需要删除 auto_card 缓存
+        if ($machine->type == GameType::TYPE_SLOT
+            && !empty($machine->auto_card_domain)
+            && !empty($machine->auto_card_port)
+        ) {
+            $autoCardCacheKey = sprintf('machine:domain:%s:port:%s:type:%s',
+                $machine->auto_card_domain, $machine->auto_card_port, $machine->type
+            );
+            $result['auto_card_cache_key'] = $autoCardCacheKey;
+            $result['auto_card_deleted'] = \support\Cache::delete($autoCardCacheKey);
+        }
+
+        // 记录日志
+        Log::info('[MachineOperationService] 清除 Machine 缓存', [
+            'machine_id' => $machine->id,
+            'machine_code' => $machine->code,
+            'machine_type' => $machine->type,
+            'main_cache_key' => $result['main_cache_key'],
+            'main_deleted' => $result['main_deleted'],
+            'auto_card_cache_key' => $result['auto_card_cache_key'],
+            'auto_card_deleted' => $result['auto_card_deleted'],
+        ]);
+
+        return $result;
+    }
 }
