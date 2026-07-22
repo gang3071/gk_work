@@ -134,20 +134,27 @@ class AdminMachineController
     {
         try {
             $this->setLanguage($request);
+            $machineIds = $request->post('machine_ids', []); // ✅ 支持指定机台ID列表
             $departmentId = $request->post('department_id', 0);
             $type = $request->post('type'); // slot, steel_ball, fish
 
             // 构建查询
             $query = Machine::query()->where('status', 1);
 
-            if ($type) {
-                $typeMap = [
-                    'slot' => GameType::TYPE_SLOT,
-                    'steel_ball' => GameType::TYPE_STEEL_BALL,
-                    'fish' => GameType::TYPE_FISH,
-                ];
-                if (isset($typeMap[$type])) {
-                    $query->where('type', $typeMap[$type]);
+            // ✅ 优先使用 machine_ids（批量查询优化）
+            if (!empty($machineIds) && is_array($machineIds)) {
+                $query->whereIn('id', $machineIds);
+            } else {
+                // 兼容旧的 type 筛选
+                if ($type) {
+                    $typeMap = [
+                        'slot' => GameType::TYPE_SLOT,
+                        'steel_ball' => GameType::TYPE_STEEL_BALL,
+                        'fish' => GameType::TYPE_FISH,
+                    ];
+                    if (isset($typeMap[$type])) {
+                        $query->where('type', $typeMap[$type]);
+                    }
                 }
             }
 
@@ -181,6 +188,59 @@ class AdminMachineController
         } catch (Exception $e) {
             return $this->handleException($e, '【管理员操作】获取所有在线状态失败', [
                 'operator_type' => 'admin'
+            ]);
+        }
+    }
+
+    /**
+     * 检查单个机台在线状态
+     * POST /api/admin/machine/check-online
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function checkOnline(Request $request): Response
+    {
+        try {
+            $this->setLanguage($request);
+            $machineId = $request->post('machine_id');
+
+            if (!$machineId) {
+                return $this->fail('machine_id 参数必填', 400);
+            }
+
+            // 查询机台
+            $machine = Machine::query()
+                ->where('id', $machineId)
+                ->first(['id', 'domain', 'port', 'auto_card_domain', 'auto_card_port', 'type', 'code', 'name']);
+
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            // ✅ 使用统一的服务类检查在线状态
+            $onlineStatus = MachineOperationService::batchCheckOnline([$machine]);
+            $status = $onlineStatus[$machine->id] ?? [
+                'online' => false,
+                'main_online' => false,
+                'auto_online' => false,
+            ];
+
+            return $this->success([
+                'id' => $machine->id,
+                'code' => $machine->code,
+                'name' => $machine->name,
+                'type' => $machine->type,
+                'main_online' => $status['main_online'],
+                'auto_online' => $status['auto_online'],
+                'online' => $status['online'],
+                'status' => $status['online'] ? 'online' : 'offline',
+            ]);
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '【管理员操作】检查机台在线状态失败', [
+                'operator_type' => 'admin',
+                'machine_id' => $machineId ?? null
             ]);
         }
     }
