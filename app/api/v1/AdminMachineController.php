@@ -400,6 +400,35 @@ class AdminMachineController
                 ]);
             }
 
+            // ✅ 特殊处理：小淞机器解锁时自动发送故障排除指令
+            if ($field === 'has_lock' && $value == 0 && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
+                try {
+                    // 根据机台类型获取故障排除指令
+                    $checkCmd = match($machine->type) {
+                        GameType::TYPE_SLOT => SongSlot::CHECK,        // 斯洛：afcfb4
+                        GameType::TYPE_STEEL_BALL => SongJackpot::CHECK, // 钢珠：46cfb4
+                        default => null,
+                    };
+
+                    if ($checkCmd) {
+                        // 发送故障排除指令
+                        $result = $services->sendCmd($checkCmd, 0, 'admin');
+                        Log::info('Song machine unlock: CHECK command sent', [
+                            'machine_id' => $machineIdInt,
+                            'type' => $machine->type,
+                            'cmd' => $checkCmd,
+                            'result' => $result,
+                        ]);
+                    }
+                } catch (Exception $e) {
+                    // 故障排除失败不阻断主流程
+                    Log::warning('Failed to send CHECK command for SONG machine unlock', [
+                        'machine_id' => $machineIdInt,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
             return $this->success([
                 'machine_id' => $machineIdInt,
                 'field' => $field,
