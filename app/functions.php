@@ -2569,6 +2569,14 @@ if (!function_exists('machineOpenAnyFree')) {
      */
     function machineOpenAnyFree(Player $player, Machine $machine, int $openScore, int $adminId = 0, string $adminUsername = '', ?int $giftScore = 0, ?int $giveRuleId = null): bool
     {
+        // ✅ 参数验证
+        if ($openScore <= 0) {
+            throw new \InvalidArgumentException('openScore must be greater than 0');
+        }
+        if ($giftScore < 0) {
+            throw new \InvalidArgumentException('giftScore cannot be negative');
+        }
+
         // 分布式锁：防止上下分并发
         $actionLockerKey = 'machine_operation_lock_' . $machine->id;
         $lock = Locker::lock($actionLockerKey, 30, true);
@@ -2593,6 +2601,7 @@ if (!function_exists('machineOpenAnyFree')) {
 
             DB::beginTransaction();
             $walletDeducted = false;  // 标记钱包是否已扣款
+            $money = 0;  // ✅ 初始化，避免异常处理时 Undefined variable
             try {
             // ⚠️ checkMachineOpenAny 只验证 openScore（购买的分），不包含赠分
             // giftScore 会在硬件上分时额外加上
@@ -2870,15 +2879,24 @@ if (!function_exists('machineOpenAnyFree')) {
             // ⚠️ 玩家扣款只扣 openScore 的金额，但硬件要给 totalOpenScore = openScore + giftScore
             $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
 
-            // ✅ 硬件指令成功后才提交数据库
+            // ✅ 硬件指令成功后才提交数据库（DB 是唯一真实来源）
             DB::commit();
 
-            // ✅ Redis 缓存更新移到事务提交后（保证一致性）
-            //累計該玩家開分（包含赠分）
-            $services->gaming = 1;
-            $services->gaming_user_id = $player->id;
-            $services->player_open_point = bcadd($services->player_open_point, $totalOpenScore);
-            $services->last_point_at = time();
+            // ✅ Redis 缓存更新（失败不影响业务，下次读取时从 DB 刷新）
+            try {
+                //累計該玩家開分（包含赠分）
+                $services->gaming = 1;
+                $services->gaming_user_id = $player->id;
+                $services->player_open_point = bcadd($services->player_open_point, $totalOpenScore);
+                $services->last_point_at = time();
+            } catch (\Exception $redisError) {
+                Log::warning('[machineOpenAnyFree] Redis 缓存更新失败', [
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                    'error' => $redisError->getMessage(),
+                ]);
+                // Redis 失败不影响业务，继续执行
+            }
 
         } catch (\Exception $e) {
             DB::rollback();
