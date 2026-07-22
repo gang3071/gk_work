@@ -2594,11 +2594,18 @@ if (!function_exists('machineOpenAnyFree')) {
             DB::beginTransaction();
             $walletDeducted = false;  // 标记钱包是否已扣款
             try {
+            // ⚠️ checkMachineOpenAny 只验证 openScore（购买的分），不包含赠分
+            // giftScore 会在硬件上分时额外加上
             $openScore = checkMachineOpenAny($machine, $openScore, 0);
+
+            // ✅ 计算总上分（购买分 + 赠送分）
+            $totalOpenScore = $openScore + $giftScore;
+
             //測試連線
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
             } else {
-                if ($services->point + $openScore > 4000) {
+                // ✅ 检查机台分数上限（包含赠分）
+                if ($services->point + $totalOpenScore > 4000) {
                     throw new Exception(trans('machine_wash_point_limit_exceeded', [], 'message'));
                 }
             }
@@ -2859,17 +2866,18 @@ if (!function_exists('machineOpenAnyFree')) {
                 }
             }
 
-            // 发送开分指令
-            $services->sendCmd($services::OPEN_ANY_POINT, $openScore, 'admin', $adminId);
+            // 发送开分指令（包含赠送分）
+            // ⚠️ 玩家扣款只扣 openScore 的金额，但硬件要给 totalOpenScore = openScore + giftScore
+            $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
 
             // ✅ 硬件指令成功后才提交数据库
             DB::commit();
 
             // ✅ Redis 缓存更新移到事务提交后（保证一致性）
-            //累計該玩家開分
+            //累計該玩家開分（包含赠分）
             $services->gaming = 1;
             $services->gaming_user_id = $player->id;
-            $services->player_open_point = bcadd($services->player_open_point, $openScore);
+            $services->player_open_point = bcadd($services->player_open_point, $totalOpenScore);
             $services->last_point_at = time();
 
         } catch (\Exception $e) {
