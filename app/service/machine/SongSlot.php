@@ -302,8 +302,6 @@ class SongSlot extends MachineServices implements BaseMachine
                     $orgBet = $this->bet;
                     $orgPoint = $this->point;
                     $orgNowTurn = $this->now_turn;
-                    $orgAuto = $this->auto;
-                    $orgWin = $this->win;
                     if (substr($msg, 18, 2) != 'da') {
                         $this->has_lock = 1;
 
@@ -346,7 +344,6 @@ class SongSlot extends MachineServices implements BaseMachine
                         'new_bet' => $nowBet,
                         'bet_changed' => $orgBet != $nowBet,
                         'current_turn' => $orgNowTurn,
-                        'reward_status' => $nowRewardStatus,
                         'gaming' => $this->gaming,
                         'change_point_card_status' => $this->change_point_card_status,
                     ]);
@@ -383,8 +380,29 @@ class SongSlot extends MachineServices implements BaseMachine
                     } elseif ($nowRewardStatus == 0) {
                         $newTurn = bcadd($orgNowTurn, bcsub($nowBet, $orgBet, 2), 2);
 
+                        // ✅ 诊断日志：检查转数增加条件
+                        $turnCondition1 = $newTurn > $orgNowTurn;
+                        $turnCondition2 = !empty($gamingUserId);
+                        $turnAllConditionsMet = $turnCondition1 && $turnCondition2;
+
+                        \support\Log::channel('machine_keeping')->debug('SongSlot 转数增加条件检查', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'condition_turn_increased' => $turnCondition1,
+                            'condition_has_player' => $turnCondition2,
+                            'all_conditions_met' => $turnAllConditionsMet,
+                            'old_turn' => $orgNowTurn,
+                            'new_turn' => $newTurn,
+                            'turn_diff' => bcsub($newTurn, $orgNowTurn, 2),
+                            'old_bet' => $orgBet,
+                            'new_bet' => $nowBet,
+                            'bet_diff' => bcsub($nowBet, $orgBet, 2),
+                            'gaming_user_id' => $gamingUserId,
+                            'reward_status' => $nowRewardStatus,
+                        ]);
+
                         // ✅ 修复：转数增加时也更新活动时间（即使押注金额不变）
-                        if ($newTurn > $orgNowTurn && !empty($gamingUserId)) {
+                        if ($turnAllConditionsMet) {
                             $oldPlayTime = $this->last_play_time;
                             $this->last_play_time = time();
 
@@ -404,7 +422,28 @@ class SongSlot extends MachineServices implements BaseMachine
 
                         $this->now_turn = $newTurn;
                     }
-                    if ($orgBet > 0 && $orgBet < $nowBet && !empty($gamingUserId) && $this->change_point_card_status == 0) {
+                    // ✅ 诊断日志：检查押注增加条件
+                    $betCondition1 = $orgBet > 0;
+                    $betCondition2 = $orgBet < $nowBet;
+                    $betCondition3 = !empty($gamingUserId);
+                    $betCondition4 = $this->change_point_card_status == 0;
+                    $betAllConditionsMet = $betCondition1 && $betCondition2 && $betCondition3 && $betCondition4;
+
+                    \support\Log::channel('machine_keeping')->debug('SongSlot 押注增加条件检查', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'condition_bet_gt_0' => $betCondition1,
+                        'condition_bet_increased' => $betCondition2,
+                        'condition_has_player' => $betCondition3,
+                        'condition_no_point_card' => $betCondition4,
+                        'all_conditions_met' => $betAllConditionsMet,
+                        'old_bet' => $orgBet,
+                        'new_bet' => $nowBet,
+                        'gaming_user_id' => $gamingUserId,
+                        'change_point_card_status' => $this->change_point_card_status,
+                    ]);
+
+                    if ($betAllConditionsMet) {
                         $oldPlayTime = $this->last_play_time;
                         $this->last_play_time = time();
 

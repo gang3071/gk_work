@@ -1250,7 +1250,28 @@ class Slot extends MachineServices implements BaseMachine
                         }
                         return true;
                     }
-                    if ($this->bet > 0 && $this->bet != $data && !empty($gamingUserId) && $this->change_point_card_status == 0) {
+                    // ✅ 诊断日志：检查押注改变条件
+                    $betCondition1 = $this->bet > 0;
+                    $betCondition2 = $this->bet != $data;
+                    $betCondition3 = !empty($gamingUserId);
+                    $betCondition4 = $this->change_point_card_status == 0;
+                    $allConditionsMet = $betCondition1 && $betCondition2 && $betCondition3 && $betCondition4;
+
+                    \support\Log::channel('machine_keeping')->debug('Slot 押注改变条件检查', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'condition_bet_gt_0' => $betCondition1,
+                        'condition_bet_changed' => $betCondition2,
+                        'condition_has_player' => $betCondition3,
+                        'condition_no_point_card' => $betCondition4,
+                        'all_conditions_met' => $allConditionsMet,
+                        'bet' => $this->bet,
+                        'data' => $data,
+                        'gaming_user_id' => $gamingUserId,
+                        'change_point_card_status' => $this->change_point_card_status,
+                    ]);
+
+                    if ($allConditionsMet) {
                         $oldPlayTime = $this->last_play_time;
                         $this->last_play_time = time();
 
@@ -1283,8 +1304,29 @@ class Slot extends MachineServices implements BaseMachine
                         $bet = $this->bet;
                         $newTurn = bcadd($nowTurn, bcsub($data, $bet, 2), 2);
 
+                        // ✅ 诊断日志：检查转数增加条件
+                        $turnCondition1 = $newTurn > $nowTurn;
+                        $turnCondition2 = !empty($gamingUserId);
+                        $turnAllConditionsMet = $turnCondition1 && $turnCondition2;
+
+                        \support\Log::channel('machine_keeping')->debug('Slot 转数增加条件检查', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'condition_turn_increased' => $turnCondition1,
+                            'condition_has_player' => $turnCondition2,
+                            'all_conditions_met' => $turnAllConditionsMet,
+                            'old_turn' => $nowTurn,
+                            'new_turn' => $newTurn,
+                            'turn_diff' => bcsub($newTurn, $nowTurn, 2),
+                            'old_bet' => $bet,
+                            'new_bet' => $data,
+                            'bet_diff' => bcsub($data, $bet, 2),
+                            'gaming_user_id' => $gamingUserId,
+                            'reward_status' => $this->reward_status,
+                        ]);
+
                         // ✅ 修复：转数增加时也更新活动时间（即使押注金额不变）
-                        if ($newTurn > $nowTurn && !empty($gamingUserId)) {
+                        if ($turnAllConditionsMet) {
                             $oldPlayTime = $this->last_play_time;
                             $this->last_play_time = time();
 
