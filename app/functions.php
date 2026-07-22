@@ -209,12 +209,13 @@ function machineKeepOutPlayer(): void
             }
             $keepSeconds = $services->keep_seconds;
 
-            // ✅ 诊断日志：检查 last_play_time 和活动状态
-            $currentTime = time();
-            $lastPlayTime = $services->last_play_time;
-            $timeSinceLastPlay = $currentTime - $lastPlayTime;
+            // ✅ 诊断日志：检查 last_play_time 和活动状态（仅 S326）
+            if ($machine->code == 'S326') {
+                $currentTime = time();
+                $lastPlayTime = $services->last_play_time;
+                $timeSinceLastPlay = $currentTime - $lastPlayTime;
 
-            $log->debug('PlayOutMachine: 检查保留状态', [
+                $log->debug('PlayOutMachine: 检查保留状态', [
                 'machine_id' => $machine->id,
                 'machine_code' => $machine->code,
                 'player_id' => $machine->gaming_user_id,
@@ -227,7 +228,8 @@ function machineKeepOutPlayer(): void
                 'now_turn' => $services->now_turn ?? 'N/A',
                 'bet' => $services->bet ?? 'N/A',
                 'reward_status' => $services->reward_status ?? 'N/A',
-            ]);
+                ]);
+            }
 
             if ($keepSeconds > 0) {
                 if ($services->reward_status == 1) {
