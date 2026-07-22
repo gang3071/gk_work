@@ -139,11 +139,6 @@ class AdminMachineController
             // 构建查询
             $query = Machine::query()->where('status', 1);
 
-            if ($departmentId) {
-                // 如果需要按部门过滤，这里添加逻辑
-                // $query->where('department_id', $departmentId);
-            }
-
             if ($type) {
                 $typeMap = [
                     'slot' => GameType::TYPE_SLOT,
@@ -172,19 +167,29 @@ class AdminMachineController
                 }
 
                 $autoOnline = false;
-                if (!empty($machine->auto_card_domain) && !empty($machine->auto_card_port)) {
-                    $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
-                    try {
-                        $autoOnline = Gateway::isUidOnline($autoUid);
-                    } catch (Exception $e) {
-                        Log::warning('Gateway isUidOnline failed for auto card in getAllOnlineStatus', [
-                            'machine_id' => $machine->id,
-                            'uid' => $autoUid,
-                            'error' => $e->getMessage()
-                        ]);
-                        $autoOnline = false; // 优雅降级
+                // 钢珠机需要检查自动打卡机
+                if ($machine->type == GameType::TYPE_STEEL_BALL) {
+                    if (!empty($machine->auto_card_domain) && !empty($machine->auto_card_port)) {
+                        $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
+                        try {
+                            $autoOnline = Gateway::isUidOnline($autoUid);
+                        } catch (Exception $e) {
+                            Log::warning('Gateway isUidOnline failed for auto card in getAllOnlineStatus', [
+                                'machine_id' => $machine->id,
+                                'uid' => $autoUid,
+                                'error' => $e->getMessage()
+                            ]);
+                            $autoOnline = false; // 优雅降级
+                        }
                     }
                 }
+
+                // ⭐ 根据机台类型判断在线状态
+                // 钢珠机：主机台 AND 自动打卡机都在线才算在线
+                // 斯洛机/捕鱼机：只需主机台在线
+                $isOnline = ($machine->type == GameType::TYPE_STEEL_BALL)
+                    ? ($mainOnline && $autoOnline)  // 钢珠机需要两个都在线
+                    : $mainOnline;                   // 其他机台只需主机台在线
 
                 $results[] = [
                     'id' => $machine->id,
@@ -193,8 +198,8 @@ class AdminMachineController
                     'type' => $machine->type,
                     'main_online' => $mainOnline,
                     'auto_online' => $autoOnline,
-                    'online' => $mainOnline,
-                    'status' => $mainOnline ? 'online' : 'offline',
+                    'online' => $isOnline,
+                    'status' => $isOnline ? 'online' : 'offline',
                 ];
             }
 
@@ -218,7 +223,9 @@ class AdminMachineController
     {
         try {
             $this->setLanguage($request);
-            $machines = Machine::query()->where('status', 1)->get(['id', 'domain', 'port', 'type']);
+            $machines = Machine::query()
+                ->where('status', 1)
+                ->get(['id', 'domain', 'port', 'type', 'auto_card_domain', 'auto_card_port']);
 
             $statistics = [
                 'total' => $machines->count(),
@@ -228,17 +235,42 @@ class AdminMachineController
             ];
 
             foreach ($machines as $machine) {
-                $uid = $machine->domain . ':' . $machine->port;
+                $mainUid = $machine->domain . ':' . $machine->port;
                 try {
-                    $isOnline = Gateway::isUidOnline($uid);
+                    $mainOnline = Gateway::isUidOnline($mainUid);
                 } catch (Exception $e) {
                     Log::warning('Gateway isUidOnline failed in getOnlineStatistics', [
                         'machine_id' => $machine->id,
-                        'uid' => $uid,
+                        'uid' => $mainUid,
                         'error' => $e->getMessage()
                     ]);
-                    $isOnline = false; // 优雅降级
+                    $mainOnline = false; // 优雅降级
                 }
+
+                // ⭐ 钢珠机需要检查自动打卡机
+                $autoOnline = false;
+                if ($machine->type == GameType::TYPE_STEEL_BALL) {
+                    if (!empty($machine->auto_card_domain) && !empty($machine->auto_card_port)) {
+                        $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
+                        try {
+                            $autoOnline = Gateway::isUidOnline($autoUid);
+                        } catch (Exception $e) {
+                            Log::warning('Gateway isUidOnline failed for auto card in getOnlineStatistics', [
+                                'machine_id' => $machine->id,
+                                'uid' => $autoUid,
+                                'error' => $e->getMessage()
+                            ]);
+                            $autoOnline = false;
+                        }
+                    }
+                }
+
+                // ⭐ 根据机台类型判断在线状态
+                // 钢珠机：主机台 AND 自动打卡机都在线才算在线
+                // 斯洛机/捕鱼机：只需主机台在线
+                $isOnline = ($machine->type == GameType::TYPE_STEEL_BALL)
+                    ? ($mainOnline && $autoOnline)
+                    : $mainOnline;
 
                 if ($isOnline) {
                     $statistics['online']++;
