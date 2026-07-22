@@ -39,6 +39,7 @@ use support\Log;
 use Webman\Push\Api;
 use Webman\Push\PushException;
 use Webman\RedisQueue\Client as queueClient;
+use yzh52521\WebmanLock\Locker;
 
 /**
  * 检查玩家游戏状态 5分钟没有使用机台玩家将被踢出(分数返还)
@@ -1134,7 +1135,7 @@ function machineWash(
 {
     // 分布式锁：防止上下分并发
     $actionLockerKey = 'machine_operation_lock_' . $machine->id;
-    $lock = \support\Locker::lock($actionLockerKey, 30, true);
+    $lock = Locker::lock($actionLockerKey, 30, true);
 
     try {
         if (!$lock->acquire()) {
@@ -2568,7 +2569,7 @@ if (!function_exists('machineOpenAnyFree')) {
     {
         // 分布式锁：防止上下分并发
         $actionLockerKey = 'machine_operation_lock_' . $machine->id;
-        $lock = \support\Locker::lock($actionLockerKey, 30, true);
+        $lock = Locker::lock($actionLockerKey, 30, true);
 
         try {
             if (!$lock->acquire()) {
