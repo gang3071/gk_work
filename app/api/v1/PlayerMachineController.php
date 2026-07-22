@@ -4,6 +4,7 @@ namespace app\api\v1;
 
 use app\model\GameType;
 use app\model\Machine;
+use app\service\machine\MachineOperationService;
 use Exception;
 use GatewayWorker\Lib\Gateway;
 use support\Log;
@@ -48,52 +49,19 @@ class PlayerMachineController
                 return $this->success([]);
             }
 
-            // 检查每台机台的在线状态
+            // ✅ 使用统一的服务类批量检查在线状态
+            $onlineStatus = MachineOperationService::batchCheckOnline($machines->all());
+
+            // 构建返回结果
             $results = [];
             foreach ($machines as $machine) {
-                $mainUid = $machine->domain . ':' . $machine->port;
-
-                try {
-                    $mainOnline = Gateway::isUidOnline($mainUid);
-                } catch (Exception $e) {
-                    Log::warning('[PlayerMachineController] Gateway isUidOnline 失败', [
-                        'machine_id' => $machine->id,
-                        'uid' => $mainUid,
-                        'error' => $e->getMessage(),
-                    ]);
-                    $mainOnline = false; // 优雅降级
-                }
-
-                // ⭐ 钢珠机需要检查自动打卡机
-                $autoOnline = false;
-                if ($machine->type == GameType::TYPE_STEEL_BALL) {
-                    if (!empty($machine->auto_card_domain) && !empty($machine->auto_card_port)) {
-                        $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
-                        try {
-                            $autoOnline = Gateway::isUidOnline($autoUid);
-                        } catch (Exception $e) {
-                            Log::warning('[PlayerMachineController] 自动打卡机 isUidOnline 失败', [
-                                'machine_id' => $machine->id,
-                                'uid' => $autoUid,
-                                'error' => $e->getMessage(),
-                            ]);
-                            $autoOnline = false;
-                        }
-                    }
-                }
-
-                // ⭐ 根据机台类型判断在线状态
-                // 钢珠机：主机台 AND 自动打卡机都在线才算在线
-                // 斯洛机/捕鱼机：只需主机台在线
-                $isOnline = ($machine->type == GameType::TYPE_STEEL_BALL)
-                    ? ($mainOnline && $autoOnline)
-                    : $mainOnline;
+                $status = $onlineStatus[$machine->id] ?? ['online' => false];
 
                 $results[] = [
                     'id' => $machine->id,
                     'code' => $machine->code,
-                    'online' => $isOnline,
-                    'status' => $isOnline ? 'online' : 'offline',
+                    'online' => $status['online'],
+                    'status' => $status['online'] ? 'online' : 'offline',
                 ];
             }
 

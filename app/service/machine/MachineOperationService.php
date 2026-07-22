@@ -2,9 +2,10 @@
 
 namespace app\service\machine;
 
-use addons\webman\model\Machine;
-use addons\webman\model\Player;
-use addons\webman\model\constant\GameType;
+use app\model\GameType;
+use app\model\Machine;
+use app\model\Player;
+use GatewayWorker\Lib\Gateway;
 use support\Log;
 use Exception;
 
@@ -78,7 +79,7 @@ class MachineOperationService
      */
     private function initServices(): void
     {
-        if ($this->machine->game_type == GameType::TYPE_SLOT) {
+        if ($this->machine->type == GameType::TYPE_SLOT) {
             // 斯洛机
             $serviceClass = ($this->machine->control_type === Machine::CONTROL_TYPE_MEI)
                 ? \app\service\machine\Slot::class
@@ -227,7 +228,7 @@ class MachineOperationService
 
         return [
             'machine_id' => $this->machine->id,
-            'machine_type' => $this->machine->game_type,
+            'machine_type' => $this->machine->type,
             'control_type' => $this->machine->control_type,
             'machine_info' => $machineInfo,
             'cache_data' => $this->services->cacheData ?? [],
@@ -235,28 +236,117 @@ class MachineOperationService
     }
 
     /**
-     * 检查机台在线
+     * 检查机台在线（统一方法）
+     *
+     * 区分机台类型：
+     * - 钢珠机：主机台 AND 自动打卡机都在线才算在线
+     * - 斯洛机/捕鱼机：只需主机台在线
+     *
+     * @return array ['online' => bool, 'main_online' => bool, 'auto_online' => bool]
      */
     private function checkOnline(): array
     {
         $mainUid = $this->machine->domain . ':' . $this->machine->port;
 
+        // 检查主机台在线状态
         try {
-            $isOnline = \GatewayClient\Gateway::isOnline($mainUid);
-
-            return [
-                'machine_id' => $this->machine->id,
-                'online' => $isOnline,
-                'uid' => $mainUid,
-            ];
+            $mainOnline = Gateway::isUidOnline($mainUid);
         } catch (Exception $e) {
-            return [
+            Log::warning('检查主机台在线状态失败', [
                 'machine_id' => $this->machine->id,
-                'online' => false,
                 'uid' => $mainUid,
                 'error' => $e->getMessage(),
+            ]);
+            $mainOnline = false;
+        }
+
+        // 检查自动打卡机（仅钢珠机）
+        $autoOnline = false;
+        if ($this->machine->type == GameType::TYPE_STEEL_BALL) {
+            if (!empty($this->machine->auto_card_domain) && !empty($this->machine->auto_card_port)) {
+                $autoUid = $this->machine->auto_card_domain . ':' . $this->machine->auto_card_port;
+                try {
+                    $autoOnline = Gateway::isUidOnline($autoUid);
+                } catch (Exception $e) {
+                    Log::warning('检查自动打卡机在线状态失败', [
+                        'machine_id' => $this->machine->id,
+                        'uid' => $autoUid,
+                        'error' => $e->getMessage(),
+                    ]);
+                    $autoOnline = false;
+                }
+            }
+        }
+
+        // 计算总在线状态
+        $isOnline = ($this->machine->type == GameType::TYPE_STEEL_BALL)
+            ? ($mainOnline && $autoOnline)  // 钢珠机需要都在线
+            : $mainOnline;                   // 其他机台只需主机台
+
+        return [
+            'machine_id' => $this->machine->id,
+            'online' => $isOnline,
+            'main_online' => $mainOnline,
+            'auto_online' => $autoOnline,
+        ];
+    }
+
+    /**
+     * 静态方法：批量检查机台在线状态
+     *
+     * @param array $machines Machine 对象数组
+     * @return array 机台ID => ['online' => bool, 'main_online' => bool, 'auto_online' => bool] 的映射
+     */
+    public static function batchCheckOnline(array $machines): array
+    {
+        $results = [];
+
+        foreach ($machines as $machine) {
+            $mainUid = $machine->domain . ':' . $machine->port;
+
+            // 检查主机台
+            try {
+                $mainOnline = Gateway::isUidOnline($mainUid);
+            } catch (Exception $e) {
+                Log::warning('批量检查：主机台在线状态失败', [
+                    'machine_id' => $machine->id,
+                    'uid' => $mainUid,
+                    'error' => $e->getMessage(),
+                ]);
+                $mainOnline = false;
+            }
+
+            // 检查自动打卡机（仅钢珠机）
+            $autoOnline = false;
+            if ($machine->type == GameType::TYPE_STEEL_BALL) {
+                if (!empty($machine->auto_card_domain) && !empty($machine->auto_card_port)) {
+                    $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
+                    try {
+                        $autoOnline = Gateway::isUidOnline($autoUid);
+                    } catch (Exception $e) {
+                        Log::warning('批量检查：自动打卡机在线状态失败', [
+                            'machine_id' => $machine->id,
+                            'uid' => $autoUid,
+                            'error' => $e->getMessage(),
+                        ]);
+                        $autoOnline = false;
+                    }
+                }
+            }
+
+            // 计算总在线状态
+            $isOnline = ($machine->type == GameType::TYPE_STEEL_BALL)
+                ? ($mainOnline && $autoOnline)
+                : $mainOnline;
+
+            $results[$machine->id] = [
+                'online' => $isOnline,
+                'main_online' => $mainOnline,
+                'auto_online' => $autoOnline,
             ];
         }
+
+        return $results;
     }
 
     /**
@@ -296,7 +386,7 @@ class MachineOperationService
      */
     private function executeControlOperation(string $action, array $params): array
     {
-        if ($this->machine->game_type == GameType::TYPE_SLOT) {
+        if ($this->machine->type == GameType::TYPE_SLOT) {
             return $this->executeSlotControl($action, $params);
         } else {
             return $this->executeJackpotControl($action, $params);
@@ -610,7 +700,7 @@ class MachineOperationService
         $context = [
             'stage' => $stage,
             'machine_id' => $this->machine->id,
-            'machine_type' => $this->machine->game_type == GameType::TYPE_SLOT ? 'slot' : 'jackpot',
+            'machine_type' => $this->machine->type == GameType::TYPE_SLOT ? 'slot' : 'jackpot',
             'control_type' => $this->machine->control_type === Machine::CONTROL_TYPE_MEI ? 'mei' : 'song',
             'action' => $action,
             'operator_type' => $this->operatorType,
@@ -635,7 +725,7 @@ class MachineOperationService
      */
     public function getMachineTypeDescription(): string
     {
-        $machineType = $this->machine->game_type == GameType::TYPE_SLOT ? '斯洛机' : '钢珠机';
+        $machineType = $this->machine->type == GameType::TYPE_SLOT ? '斯洛机' : '钢珠机';
         $controlType = $this->machine->control_type === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞';
 
         return "{$machineType} ({$controlType})";
@@ -682,7 +772,7 @@ class MachineOperationService
 
         // 获取玩家
         // ✅ 预加载 recommend_promoter 和 national_promoter 关系，避免 N+1 查询
-        $player = \addons\webman\model\Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
+        $player = Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
             ->find($params['player_id']);
         if (!$player) {
             throw new Exception('玩家不存在');
@@ -751,7 +841,7 @@ class MachineOperationService
 
         // 获取玩家
         // ✅ 预加载 recommend_promoter 和 national_promoter 关系，避免 N+1 查询
-        $player = \addons\webman\model\Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
+        $player = Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
             ->find($params['player_id']);
         if (!$player) {
             throw new Exception('玩家不存在');

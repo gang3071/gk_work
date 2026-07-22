@@ -2,10 +2,9 @@
 
 namespace app\api\v1;
 
+use app\model\Machine;
 use support\Request;
 use support\Response;
-use addons\webman\model\Machine;
-use addons\webman\model\Player;
 use app\service\machine\MachineOperationService;
 use support\Log;
 use Exception;
