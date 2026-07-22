@@ -158,17 +158,55 @@ class Machine extends Model
                 }
                 switch ($machine->type) {
                     case GameType::TYPE_SLOT:
-                        Cache::delete(sprintf('machine:domain:%s:port:%s:type:%s',
+                        $cacheKey1 = sprintf('machine:domain:%s:port:%s:type:%s',
                             $orData['domain'], $orData['port'], $orData['type']
-                        ));
-                        Cache::delete(sprintf('machine:domain:%s:port:%s:type:%s',
+                        );
+                        $cacheKey2 = sprintf('machine:domain:%s:port:%s:type:%s',
                             $orData['auto_card_domain'], $orData['auto_card_port'], $orData['type']
-                        ));
+                        );
+
+                        // ✅ 诊断日志：记录要删除的缓存 key
+                        \support\Log::info('[Machine::updated] 准备删除 Slot 缓存', [
+                            'machine_id' => $machine->id,
+                            'machine_code' => $machine->code,
+                            'cache_key_1' => $cacheKey1,
+                            'cache_key_2' => $cacheKey2,
+                            'changed_fields' => array_keys($changeData),
+                        ]);
+
+                        $deleted1 = Cache::delete($cacheKey1);
+                        $deleted2 = Cache::delete($cacheKey2);
+
+                        // ✅ 诊断日志：记录删除结果
+                        \support\Log::info('[Machine::updated] Slot 缓存删除结果', [
+                            'machine_id' => $machine->id,
+                            'cache_key_1' => $cacheKey1,
+                            'deleted_1' => $deleted1,
+                            'cache_key_2' => $cacheKey2,
+                            'deleted_2' => $deleted2,
+                        ]);
                         break;
                     case GameType::TYPE_STEEL_BALL:
-                        Cache::delete(sprintf('machine:domain:%s:port:%s:type:%s',
+                        $cacheKey = sprintf('machine:domain:%s:port:%s:type:%s',
                             $orData['domain'], $orData['port'], $orData['type']
-                        ));
+                        );
+
+                        // ✅ 诊断日志：记录要删除的缓存 key
+                        \support\Log::info('[Machine::updated] 准备删除 Jackpot 缓存', [
+                            'machine_id' => $machine->id,
+                            'machine_code' => $machine->code,
+                            'cache_key' => $cacheKey,
+                            'changed_fields' => array_keys($changeData),
+                        ]);
+
+                        $deleted = Cache::delete($cacheKey);
+
+                        // ✅ 诊断日志：记录删除结果
+                        \support\Log::info('[Machine::updated] Jackpot 缓存删除结果', [
+                            'machine_id' => $machine->id,
+                            'cache_key' => $cacheKey,
+                            'deleted' => $deleted,
+                        ]);
                         break;
                 }
             }
