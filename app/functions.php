@@ -2910,13 +2910,10 @@ if (!function_exists('machineOpenAnyFree')) {
             if ($walletDeducted) {
                 try {
                     // ✅ 锁定机台（防止其他玩家使用）
-                    // 🔴 重要：必须同时锁定 DB 和 Redis（业务层检查的是 Redis）
-                    $machine->has_lock = 1;
-                    $machine->save();  // 锁定 DB
-
+                    // 🔴 重要：has_lock 只存在于 Redis，不在数据库表中
                     $services->has_lock = 1;  // 锁定 Redis（业务层检查这个）
 
-                    Log::critical('[machineOpenAnyFree] 上分失败，机台已锁定（DB + Redis），需人工补偿', [
+                    Log::critical('[machineOpenAnyFree] 上分失败，机台已锁定（Redis），需人工补偿', [
                         'player_id' => $player->id,
                         'machine_id' => $machine->id,
                         'machine_code' => $machine->code,
