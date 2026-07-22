@@ -6,6 +6,7 @@
 use app\model\GameType;
 use app\model\LevelList;
 use app\model\Machine;
+use app\model\MachineCategoryGiveRule;
 use app\model\MachineKeepingLog;
 use app\model\MachineKickLog;
 use app\model\MachineMedia;
@@ -16,6 +17,7 @@ use app\model\Player;
 use app\model\PlayerDeliveryRecord;
 use app\model\PlayerGameLog;
 use app\model\PlayerGameRecord;
+use app\model\PlayerGiftRecord;
 use app\model\PlayerLotteryRecord;
 use app\model\PlayerPlatformCash;
 use app\model\PlayerPromoter;
@@ -2672,11 +2674,11 @@ if (!function_exists('machineOpenAnyFree')) {
             if (empty($gameRecord)) {
                 // 首次上分，创建新的游戏记录
                 $gameRecord = new PlayerGameRecord();
-                $gameRecord->game_id = $machine->machineCategory->game_id ?? 0;
+                $gameRecord->game_id = $machine->machineCategory?->game_id ?? 0;
                 $gameRecord->machine_id = $machine->id;
                 $gameRecord->player_id = $player->id;
                 $gameRecord->parent_player_id = $player->recommend_id ?? 0;
-                $gameRecord->agent_player_id = $player->recommend_promoter->recommend_id ?? 0;
+                $gameRecord->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
                 $gameRecord->type = $machine->type;
                 $gameRecord->code = $machine->code;
                 $gameRecord->odds = $machine->odds_x . ':' . $machine->odds_y;
@@ -2714,11 +2716,11 @@ if (!function_exists('machineOpenAnyFree')) {
 
                 // 创建新的游戏记录
                 $gameRecord = new PlayerGameRecord();
-                $gameRecord->game_id = $machine->machineCategory->game_id ?? 0;
+                $gameRecord->game_id = $machine->machineCategory?->game_id ?? 0;
                 $gameRecord->machine_id = $machine->id;
                 $gameRecord->player_id = $player->id;
                 $gameRecord->parent_player_id = $player->recommend_id ?? 0;
-                $gameRecord->agent_player_id = $player->recommend_promoter->recommend_id ?? 0;
+                $gameRecord->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
                 $gameRecord->type = $machine->type;
                 $gameRecord->code = $machine->code;
                 $gameRecord->odds = $machine->odds_x . ':' . $machine->odds_y;
@@ -2772,9 +2774,9 @@ if (!function_exists('machineOpenAnyFree')) {
 
             // 记录赠点信息（如果有赠点规则）
             if ($giveRuleId && $giftScore > 0) {
-                $machineCategoryGiveRule = \addons\webman\model\MachineCategoryGiveRule::find($giveRuleId);
+                $machineCategoryGiveRule = MachineCategoryGiveRule::find($giveRuleId);
                 if ($machineCategoryGiveRule) {
-                    $playersGiftRecord = new \addons\webman\model\PlayerGiftRecord();
+                    $playersGiftRecord = new PlayerGiftRecord();
                     $playersGiftRecord->player_game_log_id = $playerGameLog->id;
                     $playersGiftRecord->machine_category_give_rule_id = $machineCategoryGiveRule->id;
                     $playersGiftRecord->machine_id = $machine->id;
@@ -2792,7 +2794,7 @@ if (!function_exists('machineOpenAnyFree')) {
             }
 
             // ========== Phase 5: 写入金流明细 ==========
-            $playerDeliveryRecord = new \addons\webman\model\PlayerDeliveryRecord();
+            $playerDeliveryRecord = new PlayerDeliveryRecord();
             $playerDeliveryRecord->player_id = $player->id;
             $playerDeliveryRecord->department_id = $player->department_id;
             $playerDeliveryRecord->target = $playerGameLog->getTable();
@@ -2801,7 +2803,7 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerDeliveryRecord->machine_name = $machine->name;
             $playerDeliveryRecord->machine_type = $machine->type;
             $playerDeliveryRecord->code = $machine->code;
-            $playerDeliveryRecord->type = \addons\webman\model\PlayerDeliveryRecord::TYPE_MACHINE_OPEN;
+            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_MACHINE_OPEN;
             $playerDeliveryRecord->source = 'game_machine';
             $playerDeliveryRecord->amount = -$money;  // 负数表示扣款
             $playerDeliveryRecord->amount_before = $beforeGameAmount;
