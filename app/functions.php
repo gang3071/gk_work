@@ -2803,7 +2803,7 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerDeliveryRecord->machine_name = $machine->name;
             $playerDeliveryRecord->machine_type = $machine->type;
             $playerDeliveryRecord->code = $machine->code;
-            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_MACHINE_OPEN;
+            $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_MACHINE_UP;
             $playerDeliveryRecord->source = 'game_machine';
             $playerDeliveryRecord->amount = -$money;  // 负数表示扣款
             $playerDeliveryRecord->amount_before = $beforeGameAmount;
