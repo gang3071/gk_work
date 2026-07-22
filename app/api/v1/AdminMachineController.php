@@ -158,7 +158,7 @@ class AdminMachineController
                 }
             }
 
-            $machines = $query->get(['id', 'domain', 'port', 'auto_card_domain', 'auto_card_port', 'type', 'code', 'name']);
+            $machines = $query->get(['id', 'domain', 'port', 'auto_card_domain', 'auto_card_port', 'type', 'code']);
 
             // ✅ 使用统一的服务类批量检查在线状态
             $onlineStatus = MachineOperationService::batchCheckOnline($machines->all());
