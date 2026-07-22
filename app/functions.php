@@ -208,6 +208,27 @@ function machineKeepOutPlayer(): void
                 continue;
             }
             $keepSeconds = $services->keep_seconds;
+
+            // ✅ 诊断日志：检查 last_play_time 和活动状态
+            $currentTime = time();
+            $lastPlayTime = $services->last_play_time;
+            $timeSinceLastPlay = $currentTime - $lastPlayTime;
+
+            $log->debug('PlayOutMachine: 检查保留状态', [
+                'machine_id' => $machine->id,
+                'machine_code' => $machine->code,
+                'player_id' => $machine->gaming_user_id,
+                'keeping' => $services->keeping,
+                'keep_seconds' => $keepSeconds,
+                'last_play_time' => $lastPlayTime,
+                'last_play_time_formatted' => date('Y-m-d H:i:s', $lastPlayTime),
+                'current_time' => $currentTime,
+                'time_since_last_play' => $timeSinceLastPlay,
+                'now_turn' => $services->now_turn ?? 'N/A',
+                'bet' => $services->bet ?? 'N/A',
+                'reward_status' => $services->reward_status ?? 'N/A',
+            ]);
+
             if ($keepSeconds > 0) {
                 if ($services->reward_status == 1) {
                     if ($machine->type == GameType::TYPE_STEEL_BALL) {

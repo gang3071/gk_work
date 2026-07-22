@@ -366,10 +366,43 @@ class SongSlot extends MachineServices implements BaseMachine
                             'gaming_user_id' => $this->machine->gaming_user_id,
                         ]);
                     } elseif ($nowRewardStatus == 0) {
-                        $this->now_turn = bcadd($orgNowTurn, bcsub($nowBet, $orgBet, 2), 2);
+                        $newTurn = bcadd($orgNowTurn, bcsub($nowBet, $orgBet, 2), 2);
+
+                        // ✅ 修复：转数增加时也更新活动时间（即使押注金额不变）
+                        if ($newTurn > $orgNowTurn && !empty($gamingUserId)) {
+                            $oldPlayTime = $this->last_play_time;
+                            $this->last_play_time = time();
+
+                            \support\Log::channel('machine_keeping')->debug('SongSlot 转数增加更新 last_play_time', [
+                                'machine_id' => $this->machine->id,
+                                'machine_code' => $this->machine->code,
+                                'player_id' => $gamingUserId,
+                                'old_turn' => $orgNowTurn,
+                                'new_turn' => $newTurn,
+                                'old_bet' => $orgBet,
+                                'new_bet' => $nowBet,
+                                'old_last_play_time' => $oldPlayTime,
+                                'new_last_play_time' => $this->last_play_time,
+                                'time_diff' => $this->last_play_time - $oldPlayTime,
+                            ]);
+                        }
+
+                        $this->now_turn = $newTurn;
                     }
                     if ($orgBet > 0 && $orgBet < $nowBet && !empty($gamingUserId) && $this->change_point_card_status == 0) {
+                        $oldPlayTime = $this->last_play_time;
                         $this->last_play_time = time();
+
+                        \support\Log::channel('machine_keeping')->debug('SongSlot 押注增加更新 last_play_time', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'player_id' => $gamingUserId,
+                            'old_bet' => $orgBet,
+                            'new_bet' => $nowBet,
+                            'old_last_play_time' => $oldPlayTime,
+                            'new_last_play_time' => $this->last_play_time,
+                            'time_diff' => $this->last_play_time - $oldPlayTime,
+                        ]);
                         if ($this->reward_status == 0) {
                             Client::send('lottery-machine', [
                                 'num' => $nowBet,
