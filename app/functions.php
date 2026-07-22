@@ -246,6 +246,9 @@ function machineKeepOutPlayer(): void
                     'player_id' => $player->id,
                     'player_uuid' => $player->uuid,
                     'before_balance' => $beforeGameAmount,
+                    'kick_reason' => '保留时间耗尽（系统自动踢出）',  // ✅ 踢出原因
+                    'keep_seconds' => $services->keep_seconds,
+                    'keeping_duration' => time() - $services->last_keep_at,  // 保留了多久
                 ];
                 $log->info('PlayOutMachine: 准备踢出玩家', $machineStatus);
 
@@ -267,6 +270,7 @@ function machineKeepOutPlayer(): void
                         $log->info('PlayOutMachine: 踢出成功并退分', [
                             'machine_id' => $machine->id,
                             'player_id' => $player->id,
+                            'kick_reason' => '保留时间耗尽（系统自动踢出）',
                             'wash_point' => $wash_point,
                             'before_balance' => $beforeGameAmount,
                             'after_balance' => $afterGameAmount,
@@ -319,6 +323,7 @@ function machineKeepOutPlayer(): void
                 } catch (Exception $washException) {
                     // ❌ 退分失败，记录详细错误
                     $log->error('PlayOutMachine: 踢出玩家时退分失败', array_merge($machineStatus, [
+                        'kick_reason' => '保留时间耗尽（系统自动踢出）',
                         'error' => $washException->getMessage(),
                         'trace' => $washException->getTraceAsString(),
                     ]));
