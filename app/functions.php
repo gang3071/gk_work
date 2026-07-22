@@ -1365,6 +1365,18 @@ function machineWash(
                     'after' => $addResult['balance'],
                 ]);
 
+                // ✅ 推送余额变化到客户端
+                \app\service\BalancePushService::pushBalanceChange(
+                    $player->id,
+                    $washResult['before_balance'],
+                    $addResult['balance'],
+                    'settle',  // 下分加款视为结算
+                    [
+                        'platform' => $machine->name ?? $machine->code,
+                        'machine_id' => $machine->id,
+                    ]
+                );
+
             } catch (Exception $walletError) {
                 // ❌ CRITICAL：钱包加款失败，但 DB + Redis 已一致
                 Log::critical('[machineWash] 钱包加款失败，需要人工介入', [
@@ -2719,6 +2731,18 @@ if (!function_exists('machineOpenAnyFree')) {
                 'before_balance' => $beforeGameAmount,
                 'after_balance' => $afterGameAmount,
             ]);
+
+            // ✅ 推送余额变化到客户端
+            \app\service\BalancePushService::pushBalanceChange(
+                $player->id,
+                $beforeGameAmount,
+                $afterGameAmount,
+                'bet',  // 上分扣款视为下注
+                [
+                    'platform' => $machine->name ?? $machine->code,
+                    'machine_id' => $machine->id,
+                ]
+            );
 
             // ========== Phase 3: PlayerGameRecord 创建或更新 ==========
             /** @var PlayerGameRecord $gameRecord */
