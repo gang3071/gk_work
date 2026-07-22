@@ -351,11 +351,25 @@ class AdminMachineController
             // 创建机台服务
             $services = MachineServices::createServices($machine, $lang);
 
-            // ✅ 同时更新 DB 和 Redis（保证一致性）
-            // 先更新 DB
-            if (!$machine->isFillable($field)) {
+            // ✅ 定义允许通过 API 更新的字段白名单
+            $allowedFields = [
+                'has_lock',
+                'keeping',
+                'keeping_user_id',
+                'last_keep_at',
+                'last_play_time',
+                'push_auto',
+                'maintaining',
+                'status',
+                'is_use',
+            ];
+
+            if (!in_array($field, $allowedFields)) {
                 return $this->fail("字段 {$field} 不允许更新", 400);
             }
+
+            // 同时更新 DB 和 Redis（保证一致性）
+            // 先更新 DB
             $machine->$field = $value;
             $machine->save();
 
