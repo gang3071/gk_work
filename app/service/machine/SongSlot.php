@@ -294,7 +294,7 @@ class SongSlot extends MachineServices implements BaseMachine
                 throw new \Exception('指令s2校验失败');
             }
             $fun = substr($msg, 0, 4);
-            $gamingUserId = $this->machine->gaming_user_id;
+            $gamingUserId = $this->gaming_user_id; // ✅ 从 Redis 读取（实时数据），不从缓存的 Machine 对象读取
             switch ($fun) {
                 case self::TESTING:
                 case self::TESTING2:
@@ -363,7 +363,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     if ($orgRewardStatus == 0 && $nowRewardStatus == 1 && $this->now_turn > 0) {
                         $machineLotteryRecord = new MachineLotteryRecord();
                         $machineLotteryRecord->machine_id = $this->machine->id;
-                        $machineLotteryRecord->player_id = $this->machine->gaming_user_id ?? 0;
+                        $machineLotteryRecord->player_id = $gamingUserId; // ✅ 使用从 Redis 读取的 gaming_user_id
                         $machineLotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
                         $machineLotteryRecord->draw_bet = $this->bet;
                         $machineLotteryRecord->use_turn = $this->now_turn;

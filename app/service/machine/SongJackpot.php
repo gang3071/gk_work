@@ -287,8 +287,8 @@ class SongJackpot extends MachineServices implements BaseMachine
                     'odds_x' => $this->machine->odds_x,
                     'odds_y' => $this->machine->odds_y,
                     'type' => $this->machine->type,
-                    'gaming_user_id' => $this->machine->gaming_user_id,
-                    'gaming' => $this->machine->gaming,
+                    'gaming_user_id' => $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0, // ✅ 从 Redis 读取
+                    'gaming' => $machineCacheInfo[$this->cacheDataKey . '_gaming'] ?? 0, // ✅ 从 Redis 读取
                     'auto' => $machineCacheInfo[$this->cacheDataKey . '_auto'],
                     'move_point' => $machineCacheInfo[$this->cacheDataKey . '_move_point'],
                     'reward_status' => $machineCacheInfo[$this->cacheDataKey . '_reward_status'],
@@ -340,8 +340,10 @@ class SongJackpot extends MachineServices implements BaseMachine
                         }
                         break;
                 }
-                if (in_array($name, $this->machineInfo) && !empty($this->machine->gaming_user_id)) {
-                    $this->sendMachineNowInfoMessage($this->machine->gaming_user_id, $this->machine->id, $name, $info);
+                // ✅ 从 Redis 读取 gaming_user_id
+                $currentGamingUserId = $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0;
+                if (in_array($name, $this->machineInfo) && !empty($currentGamingUserId)) {
+                    $this->sendMachineNowInfoMessage($currentGamingUserId, $this->machine->id, $name, $info);
                 }
             }
         }
@@ -384,7 +386,7 @@ class SongJackpot extends MachineServices implements BaseMachine
             }
             $fun = substr($msg, 0, 6);
             $fun1 = substr($msg, 0, 4);
-            $gamingUserId = $this->machine->gaming_user_id;
+            $gamingUserId = $this->gaming_user_id; // ✅ 从 Redis 读取（实时数据），不从缓存的 Machine 对象读取
             $orgRewardStatus = $this->reward_status; // 开奖
             $orgTurn = $this->turn; // 原始转数
             $orgWinNumber = $this->win_number; // 中洞兑奖次数
@@ -432,7 +434,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                 if ($nowRewardStatus == 1 && $orgRewardStatus == 0) {
                     $machineLotteryRecord = new MachineLotteryRecord();
                     $machineLotteryRecord->machine_id = $this->machine->id;
-                    $machineLotteryRecord->player_id = $this->machine->gaming_user_id ?? 0;
+                    $machineLotteryRecord->player_id = $gamingUserId;
                     $machineLotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
                     $machineLotteryRecord->draw_bet = $this->win_number;
                     $machineLotteryRecord->use_turn = $this->now_turn;
@@ -444,10 +446,10 @@ class SongJackpot extends MachineServices implements BaseMachine
                         if (!empty($this->machine->gamingPlayer)) {
                             (new LotteryServices())->setMachine($this->machine)->setPlayer($this->machine->gamingPlayer)->fixedPotCheckLottery($nowScore);
                         }
-                        if ($nowScore > 0 && !empty($this->machine->gaming_user_id)) {
+                        if ($nowScore > 0 && !empty($gamingUserId)) {
                             Client::send('play-activity', [
                                 'machine_id' => $this->machine->id,
-                                'player_id' => $this->machine->gaming_user_id,
+                                'player_id' => $gamingUserId,
                                 'point' => $nowScore,
                             ]);
                         }
@@ -456,9 +458,9 @@ class SongJackpot extends MachineServices implements BaseMachine
                             'msg_type' => 'machine_reward_end',
                             'machine_id' => $this->machine->id,
                             'machine_code' => $this->machine->code,
-                            'gaming_user_id' => $this->machine->gaming_user_id,
+                            'gaming_user_id' => $gamingUserId,
                         ]);
-                        $this->sendCmd(self::SCORE_TO_POINT, 0, 'player', $this->machine->gaming_user_id);
+                        $this->sendCmd(self::SCORE_TO_POINT, 0, 'player', $gamingUserId);
                     }
                 }
                 if ($orgWinNumber > 0 && $orgWinNumber > $nowWinNumber && $this->change_point_card_status == 0 && $nowRewardStatus == 0 && $orgRewardStatus == 0) {
@@ -885,7 +887,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                     'exception_line' => $e->getLine(),
                     'operator_type' => $source,
                     'operator_id' => $source_id,
-                    'player_id' => $this->machine->gaming_user_id,
+                    'player_id' => $this->gaming_user_id, // ✅ 从 Redis 读取
                     'player_info' => $this->machine->gamingPlayer ? [
                         'uuid' => $this->machine->gamingPlayer->uuid,
                         'name' => $this->machine->gamingPlayer->name,
@@ -899,7 +901,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                     'timestamp' => date('Y-m-d H:i:s'),
                 ]);
 
-                sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
+                sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id); // ✅ 从 Redis 读取
             }
             throw new Exception($e->getMessage());
         }

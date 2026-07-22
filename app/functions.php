@@ -118,19 +118,23 @@ function machineKeepOutPlayer(): void
     /** @var Machine $machine */
     foreach ($gamingMachines as $machine) {
         try {
-            if (Cache::has('machine_open_point' . $machine->id . '_' . $machine->gaming_user_id)) {
+            $services = MachineServices::createServices($machine);
+
+            // ✅ 统一从 Redis 读取 gaming_user_id（实时数据）
+            $gamingUserId = $services->gaming_user_id ?? 0;
+
+            if (Cache::has('machine_open_point' . $machine->id . '_' . $gamingUserId)) {
                 continue;
             }
-            /** @var Player $player */
-            $player = $machine->gamingPlayer;
 
-            // ⚠️ 数据一致性检查：如果玩家不存在，说明数据库和Redis状态不一致
-            if (!$player) {
-                $log->warning('PlayOutMachine: 机台gaming状态异常 - 玩家不存在', [
+            // ⚠️ 数据一致性检查：如果 Redis gaming_user_id 为 0，说明状态异常
+            if ($gamingUserId == 0) {
+                $log->warning('PlayOutMachine: 机台gaming状态异常 - Redis gaming_user_id 为 0', [
                     'machine_id' => $machine->id,
                     'machine_code' => $machine->code,
                     'db_gaming' => $machine->gaming,
                     'db_gaming_user_id' => $machine->gaming_user_id,
+                    'redis_gaming_user_id' => $gamingUserId,
                 ]);
 
                 // 修复数据库状态（设为非游戏中）
@@ -140,21 +144,24 @@ function machineKeepOutPlayer(): void
                 continue;
             }
 
-            $services = MachineServices::createServices($machine);
+            /** @var Player $player */
+            $player = Player::query()->find($gamingUserId);
 
-            // ⚠️ Redis缓存一致性检查：gaming_user_id必须一致
-            $cachedGamingUserId = $services->gaming_user_id ?? 0;
-            if ($cachedGamingUserId != $machine->gaming_user_id) {
-                $log->warning('PlayOutMachine: Redis缓存与数据库gaming_user_id不一致', [
+            // ⚠️ 数据一致性检查：如果玩家不存在，说明数据异常
+            if (!$player) {
+                $log->warning('PlayOutMachine: 机台gaming状态异常 - 玩家不存在', [
                     'machine_id' => $machine->id,
                     'machine_code' => $machine->code,
-                    'db_gaming_user_id' => $machine->gaming_user_id,
-                    'cache_gaming_user_id' => $cachedGamingUserId,
-                    'player_id' => $player->id,
+                    'gaming_user_id' => $gamingUserId,
                 ]);
 
-                // 修复Redis缓存（以数据库为准）
-                $services->gaming_user_id = $machine->gaming_user_id;
+                // 修复数据库和Redis状态（设为非游戏中）
+                $machine->gaming = 0;
+                $machine->gaming_user_id = 0;
+                $machine->save();
+                $services->gaming = 0;
+                $services->gaming_user_id = 0;
+                continue;
             }
 
             if ($services->has_lock == 1) {
@@ -173,7 +180,7 @@ function machineKeepOutPlayer(): void
                     $services->sendCmd($services::OUT_OFF, 0, 'player', $player->id, 1);
                 }
                 $services->keeping = 1;
-                $services->keeping_user_id = $machine->gaming_user_id;
+                $services->keeping_user_id = $gamingUserId;
                 $services->last_keep_at = time();
                 // 记录保留日志
                 $machineKeepingLog = new MachineKeepingLog();
@@ -184,16 +191,16 @@ function machineKeepOutPlayer(): void
                 $machineKeepingLog->department_id = $player->department_id;
                 $machineKeepingLog->save();
                 // 发送进入保留状态消息
-                sendSocketMessage('player-' . $machine->gaming_user_id . '-' . $machine->id, [
+                sendSocketMessage('player-' . $gamingUserId . '-' . $machine->id, [
                     'msg_type' => 'player_machine_keeping',
-                    'player_id' => $machine->gaming_user_id,
+                    'player_id' => $gamingUserId,
                     'machine_id' => $machine->id,
                     'keep_seconds' => $services->keep_seconds,
                     'keeping' => $services->keeping
                 ]);
-                sendSocketMessage('player-' . $machine->gaming_user_id, [
+                sendSocketMessage('player-' . $gamingUserId, [
                     'msg_type' => 'player_machine_keeping',
-                    'player_id' => $machine->gaming_user_id,
+                    'player_id' => $gamingUserId,
                     'machine_id' => $machine->id,
                     'keep_seconds' => $services->keep_seconds,
                     'keeping' => $services->keeping
@@ -218,7 +225,7 @@ function machineKeepOutPlayer(): void
                 $log->debug('PlayOutMachine: 检查保留状态', [
                 'machine_id' => $machine->id,
                 'machine_code' => $machine->code,
-                'player_id' => $machine->gaming_user_id,
+                'player_id' => $gamingUserId,
                 'keeping' => $services->keeping,
                 'keep_seconds' => $keepSeconds,
                 'last_play_time' => $lastPlayTime,
@@ -242,16 +249,16 @@ function machineKeepOutPlayer(): void
                 $services->keep_seconds = max(bcsub($keepSeconds, 10), 0);
                 // ✅ 修复：发送扣减后的新值
                 $newKeepSeconds = $services->keep_seconds;
-                sendSocketMessage('player-' . $machine->gaming_user_id . '-' . $machine->id, [
+                sendSocketMessage('player-' . $gamingUserId . '-' . $machine->id, [
                     'msg_type' => 'player_machine_keeping',
-                    'player_id' => $machine->gaming_user_id,
+                    'player_id' => $gamingUserId,
                     'machine_id' => $machine->id,
                     'keep_seconds' => $newKeepSeconds,
                     'keeping' => $services->keeping
                 ]);
-                sendSocketMessage('player-' . $machine->gaming_user_id, [
+                sendSocketMessage('player-' . $gamingUserId, [
                     'msg_type' => 'player_machine_keeping',
-                    'player_id' => $machine->gaming_user_id,
+                    'player_id' => $gamingUserId,
                     'machine_id' => $machine->id,
                     'keep_seconds' => $newKeepSeconds,
                     'keeping' => $services->keeping
@@ -1292,9 +1299,6 @@ function machineWash(
             $machine->gaming_user_id = 0;
             $machine->save();
 
-            // ✅ 手动清除 Machine 缓存（Workerman 多进程下模型事件不可靠）
-            \app\service\machine\MachineOperationService::clearMachineCache($machine);
-
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
                 $activityServices = new ActivityServices($machine, $player);
                 $activityServices->playerFinishActivity(true);
@@ -1404,6 +1408,12 @@ function machineWash(
         } catch (Exception $e) {
             DB::rollback();
             throw new Exception($e->getMessage());
+        }
+
+        // ✅ CRITICAL：DB 事务提交后，清除 Machine 缓存
+        // 必须在 commit 后才能清除，否则其他进程会读到未提交的数据并缓存
+        if ($path == 'leave') {
+            \app\service\machine\MachineOperationService::clearMachineCache($machine);
         }
 
         // 游戏结束同步Redis彩金到数据库（新版：独立彩池模式）
@@ -2916,15 +2926,6 @@ if (!function_exists('machineOpenAnyFree')) {
 
             $machine->save();
 
-            // ✅ 手动清除 Machine 缓存（Workerman 多进程下模型事件不可靠）
-            $cacheResult = \app\service\machine\MachineOperationService::clearMachineCache($machine);
-
-            Log::info('[machineOpenAnyFree] Machine 模型已保存并清除缓存', [
-                'player_id' => $player->id,
-                'machine_id' => $machine->id,
-                'cache_result' => $cacheResult,
-            ]);
-
             // ✅ 硬件开分指令（在事务内执行，失败可回滚）
             // 首次上分发送移分关闭指令
             if ($isFirstOpen) {
@@ -2981,6 +2982,16 @@ if (!function_exists('machineOpenAnyFree')) {
                 ]);
                 // Redis 失败不影响业务，继续执行
             }
+
+            // ✅ CRITICAL：DB 事务提交并且 Redis 更新后，才能清除 Machine 缓存
+            // 原因：如果在 commit 前清除，其他进程读取时事务未提交，会把旧数据缓存起来
+            $cacheResult = \app\service\machine\MachineOperationService::clearMachineCache($machine);
+
+            Log::info('[machineOpenAnyFree] Machine 缓存已清除', [
+                'player_id' => $player->id,
+                'machine_id' => $machine->id,
+                'cache_result' => $cacheResult,
+            ]);
 
         } catch (\Exception $e) {
             DB::rollback();

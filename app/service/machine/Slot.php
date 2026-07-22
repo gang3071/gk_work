@@ -1188,7 +1188,7 @@ class Slot extends MachineServices implements BaseMachine
                 $this->now_turn = 0;
             }
             $this->move_point = substr($status1, 6, 1);
-            $gamingUserId = $this->machine->gaming_user_id;
+            $gamingUserId = $this->gaming_user_id; // ✅ 从 Redis 读取（实时数据），不从缓存的 Machine 对象读取
 
             switch ($fun) {
                 case Slot::MACHINE_BUSY:
