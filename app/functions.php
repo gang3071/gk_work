@@ -2675,6 +2675,11 @@ if (!function_exists('machineOpenAnyFree')) {
                 $gameRecord->game_id = $machine->machineCategory->game_id ?? 0;
                 $gameRecord->machine_id = $machine->id;
                 $gameRecord->player_id = $player->id;
+                $gameRecord->parent_player_id = $player->recommend_id ?? 0;
+                $gameRecord->agent_player_id = $player->recommend_promoter->recommend_id ?? 0;
+                $gameRecord->type = $machine->type;
+                $gameRecord->code = $machine->code;
+                $gameRecord->odds = $machine->odds_x . ':' . $machine->odds_y;
                 $gameRecord->status = PlayerGameRecord::STATUS_START;
                 $gameRecord->open_point = 0;
                 $gameRecord->open_amount = 0;
@@ -2710,8 +2715,13 @@ if (!function_exists('machineOpenAnyFree')) {
                 // 创建新的游戏记录
                 $gameRecord = new PlayerGameRecord();
                 $gameRecord->game_id = $machine->machineCategory->game_id ?? 0;
-                $gameRecord->player_id = $player->id;
                 $gameRecord->machine_id = $machine->id;
+                $gameRecord->player_id = $player->id;
+                $gameRecord->parent_player_id = $player->recommend_id ?? 0;
+                $gameRecord->agent_player_id = $player->recommend_promoter->recommend_id ?? 0;
+                $gameRecord->type = $machine->type;
+                $gameRecord->code = $machine->code;
+                $gameRecord->odds = $machine->odds_x . ':' . $machine->odds_y;
                 $gameRecord->status = PlayerGameRecord::STATUS_START;
                 $gameRecord->open_point = $openScore;
                 $gameRecord->open_amount = $money;
@@ -2719,6 +2729,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 $gameRecord->wash_point = 0;
                 $gameRecord->wash_amount = 0;
                 $gameRecord->profit = -$money;
+                $gameRecord->after_game_amount = $afterGameAmount;
                 $gameRecord->created_at = date('Y-m-d H:i:s');
                 $gameRecord->updated_at = date('Y-m-d H:i:s');
                 $gameRecord->save();
