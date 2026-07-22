@@ -354,7 +354,6 @@ class AdminMachineController
             // ✅ Redis-only 字段（仅存在于 Redis，不存在于数据库）
             $redisOnlyFields = [
                 'has_lock',         // 机台锁定状态
-                'gaming',           // 游戏中状态
                 'auto',             // 自动状态
                 'move_point',       // 移分
                 'reward_status',    // 奖励状态
@@ -362,6 +361,8 @@ class AdminMachineController
 
             // ✅ DB + Redis 字段（需要同时更新数据库和 Redis）
             $dbAndRedisFields = [
+                'gaming',           // 游戏中状态
+                'gaming_user_id',   // 游戏中玩家
                 'keeping',
                 'keeping_user_id',
                 'last_keep_at',
