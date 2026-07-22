@@ -78,6 +78,8 @@ Route::group('/api', function () {
             Route::post('/force-kick-player', [\app\api\v1\AdminMachineController::class, 'forceKickPlayer']);
             // 自定义开分
             Route::post('/custom-open-score', [\app\api\v1\AdminMachineController::class, 'customOpenScore']);
+            // 获取机台操作描述
+            Route::post('/get-description', [\app\api\v1\AdminMachineController::class, 'getDescription']);
         });
 
         // 管理后台 - 媒体服务器 API（业务接口）

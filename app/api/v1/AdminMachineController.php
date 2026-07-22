@@ -551,4 +551,68 @@ class AdminMachineController
             ]);
         }
     }
+
+    /**
+     * 获取机台操作描述
+     * POST /api/admin/machine/get-description
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function getDescription(Request $request): Response
+    {
+        try {
+            $lang = $this->setLanguage($request);
+            $adminId = $this->getAdminId($request);
+
+            // 验证参数
+            $machineId = (int)$request->post('machine_id');
+            $fun = (string)$request->post('fun', '');
+            $data = (int)$request->post('data', 0);
+
+            if ($machineId <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+
+            // 查询机台
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            // 创建机台服务
+            $services = MachineServices::createServices($machine, $lang);
+            if (!$services) {
+                return $this->fail('无法创建机台服务', 500);
+            }
+
+            // 获取描述信息
+            $description = '';
+            if (method_exists($services, 'getDescription')) {
+                $description = $services->getDescription($fun, $data);
+            } else {
+                return $this->fail('机台服务不支持 getDescription 方法', 500);
+            }
+
+            Log::info('【管理员操作】获取机台描述', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId,
+                'machine_id' => $machineId,
+                'fun' => $fun,
+                'data' => $data,
+            ]);
+
+            return $this->success([
+                'description' => $description,
+            ]);
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '【管理员操作】获取机台描述失败', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId ?? 0,
+                'machine_id' => $machineId ?? null,
+                'fun' => $fun ?? null,
+            ]);
+        }
+    }
 }
