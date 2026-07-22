@@ -212,7 +212,7 @@ class AdminMachineController
             // 查询机台
             $machine = Machine::query()
                 ->where('id', $machineId)
-                ->first(['id', 'domain', 'port', 'auto_card_domain', 'auto_card_port', 'type', 'code', 'name']);
+                ->first(['id', 'domain', 'port', 'auto_card_domain', 'auto_card_port', 'type', 'code']);
 
             if (!$machine) {
                 return $this->fail('机台不存在', 404);
