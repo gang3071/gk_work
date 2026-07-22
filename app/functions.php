@@ -2683,12 +2683,13 @@ if (!function_exists('machineOpenAnyFree')) {
                 $gameRecord->code = $machine->code;
                 $gameRecord->odds = $machine->odds_x . ':' . $machine->odds_y;
                 $gameRecord->status = PlayerGameRecord::STATUS_START;
-                $gameRecord->open_point = 0;
-                $gameRecord->open_amount = 0;
-                $gameRecord->give_amount = 0;
+                $gameRecord->open_point = $openScore;      // ✅ 修复：设置为实际上分金额
+                $gameRecord->open_amount = $money;         // ✅ 修复：设置为实际扣款金额
+                $gameRecord->give_amount = $giftScore;     // ✅ 修复：设置为实际赠送金额
                 $gameRecord->wash_point = 0;
                 $gameRecord->wash_amount = 0;
-                $gameRecord->after_game_amount = $beforeGameAmount;
+                $gameRecord->profit = -$money;             // ✅ 修复：添加 profit 字段
+                $gameRecord->after_game_amount = $afterGameAmount;  // ✅ 修复：应该是扣款后余额
                 $gameRecord->created_at = date('Y-m-d H:i:s');
                 $gameRecord->updated_at = date('Y-m-d H:i:s');
                 $gameRecord->save();
@@ -2697,11 +2698,12 @@ if (!function_exists('machineOpenAnyFree')) {
                     'player_id' => $player->id,
                     'machine_id' => $machine->id,
                     'game_record_id' => $gameRecord->id,
+                    'open_point' => $openScore,
+                    'open_amount' => $money,
                 ]);
             }
-
             // ✅ 检查游戏记录是否过期（超过48小时且被其他玩家占用）
-            if (time() - strtotime($gameRecord->updated_at) > 24 * 60 * 60 * 2
+            else if (time() - strtotime($gameRecord->updated_at) > 24 * 60 * 60 * 2
                 && $machine->gaming_user_id != $player->id) {
                 // 旧记录设置为结束状态
                 $gameRecord->status = PlayerGameRecord::STATUS_END;
@@ -2735,12 +2737,30 @@ if (!function_exists('machineOpenAnyFree')) {
                 $gameRecord->created_at = date('Y-m-d H:i:s');
                 $gameRecord->updated_at = date('Y-m-d H:i:s');
                 $gameRecord->save();
+
+                Log::info('[machineOpenAnyFree] 游戏记录过期，已创建新记录', [
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                    'new_game_record_id' => $gameRecord->id,
+                    'open_point' => $openScore,
+                    'open_amount' => $money,
+                ]);
             } else {
-                // 更新现有游戏记录
+                // 更新现有游戏记录（第2次及后续上分）
                 $gameRecord->open_point = bcadd($gameRecord->open_point, $openScore, 2);
                 $gameRecord->open_amount = bcadd($gameRecord->open_amount, $money, 2);
                 $gameRecord->give_amount = bcadd($gameRecord->give_amount, $giftScore, 2);
+                // ✅ 更新 profit（累计亏损）
+                $gameRecord->profit = bcsub($gameRecord->profit, $money, 2);
                 $gameRecord->save();
+
+                Log::info('[machineOpenAnyFree] 更新现有游戏记录', [
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                    'game_record_id' => $gameRecord->id,
+                    'total_open_point' => $gameRecord->open_point,
+                    'total_open_amount' => $gameRecord->open_amount,
+                ]);
             }
 
             // ========== Phase 4: 创建游戏日志 ==========
