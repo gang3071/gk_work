@@ -1228,6 +1228,20 @@ class Slot extends MachineServices implements BaseMachine
                     $this->setActionVersion($fun);
                     break;
                 case Slot::READ_BET:
+                    // ✅ 诊断日志：记录 READ_BET 接收到的状态
+                    \support\Log::channel('machine_keeping')->debug('Slot READ_BET 接收', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'player_id' => $gamingUserId,
+                        'current_bet' => $this->bet,
+                        'new_bet' => $data,
+                        'bet_changed' => $this->bet != $data,
+                        'current_turn' => $this->now_turn,
+                        'reward_status' => $this->reward_status,
+                        'gaming' => $this->gaming,
+                        'change_point_card_status' => $this->change_point_card_status,
+                    ]);
+
                     if ($this->bet > 0 && $this->bet > $data && $this->change_point_card_status == 0) {
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_BET);
                         $this->bet = $data;
@@ -1237,7 +1251,19 @@ class Slot extends MachineServices implements BaseMachine
                         return true;
                     }
                     if ($this->bet > 0 && $this->bet != $data && !empty($gamingUserId) && $this->change_point_card_status == 0) {
+                        $oldPlayTime = $this->last_play_time;
                         $this->last_play_time = time();
+
+                        \support\Log::channel('machine_keeping')->debug('Slot 押注改变更新 last_play_time', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'player_id' => $gamingUserId,
+                            'old_bet' => $this->bet,
+                            'new_bet' => $data,
+                            'old_last_play_time' => $oldPlayTime,
+                            'new_last_play_time' => $this->last_play_time,
+                            'time_diff' => $this->last_play_time - $oldPlayTime,
+                        ]);
                         if ($this->reward_status == 0) {
                             Client::send('lottery-machine', [
                                 'num' => $data,

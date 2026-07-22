@@ -336,6 +336,21 @@ class SongSlot extends MachineServices implements BaseMachine
                         throw new \Exception('机台故障');
                     }
                     [$nowPoint, $nowBet, $nowWin] = self::parseHeartbeat($msg);
+
+                    // ✅ 诊断日志：记录心跳接收到的状态
+                    \support\Log::channel('machine_keeping')->debug('SongSlot 心跳接收', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'player_id' => $gamingUserId,
+                        'current_bet' => $orgBet,
+                        'new_bet' => $nowBet,
+                        'bet_changed' => $orgBet != $nowBet,
+                        'current_turn' => $orgNowTurn,
+                        'reward_status' => $nowRewardStatus,
+                        'gaming' => $this->gaming,
+                        'change_point_card_status' => $this->change_point_card_status,
+                    ]);
+
                     if ($this->bet > 0 && $this->bet > $nowBet && $this->change_point_card_status == 0) {
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_BET);
                         $this->bet = $nowBet;
