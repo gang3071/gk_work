@@ -7,6 +7,8 @@ use app\model\GameType;
 use app\model\Machine;
 use app\service\machine\MachineOperationService;
 use app\service\machine\MachineServices;
+use app\service\machine\SongJackpot;
+use app\service\machine\SongSlot;
 use Exception;
 use GatewayWorker\Lib\Gateway;
 use support\Log;
