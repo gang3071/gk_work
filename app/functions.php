@@ -2704,7 +2704,6 @@ if (!function_exists('machineOpenAnyFree')) {
                 $gameRecord->give_amount = $giftScore;     // ✅ 修复：设置为实际赠送金额
                 $gameRecord->wash_point = 0;
                 $gameRecord->wash_amount = 0;
-                $gameRecord->profit = -$money;             // ✅ 修复：添加 profit 字段
                 $gameRecord->after_game_amount = $afterGameAmount;  // ✅ 修复：应该是扣款后余额
                 $gameRecord->created_at = date('Y-m-d H:i:s');
                 $gameRecord->updated_at = date('Y-m-d H:i:s');
@@ -2748,7 +2747,6 @@ if (!function_exists('machineOpenAnyFree')) {
                 $gameRecord->give_amount = $giftScore;
                 $gameRecord->wash_point = 0;
                 $gameRecord->wash_amount = 0;
-                $gameRecord->profit = -$money;
                 $gameRecord->after_game_amount = $afterGameAmount;
                 $gameRecord->created_at = date('Y-m-d H:i:s');
                 $gameRecord->updated_at = date('Y-m-d H:i:s');
@@ -2766,8 +2764,6 @@ if (!function_exists('machineOpenAnyFree')) {
                 $gameRecord->open_point = bcadd($gameRecord->open_point, $openScore, 2);
                 $gameRecord->open_amount = bcadd($gameRecord->open_amount, $money, 2);
                 $gameRecord->give_amount = bcadd($gameRecord->give_amount, $giftScore, 2);
-                // ✅ 更新 profit（累计亏损）
-                $gameRecord->profit = bcsub($gameRecord->profit, $money, 2);
                 $gameRecord->save();
 
                 Log::info('[machineOpenAnyFree] 更新现有游戏记录', [
