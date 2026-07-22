@@ -496,7 +496,7 @@ function encodeData($data): string
 {
     $dataStr = sprintf("%06X", $data);
     if (strlen($dataStr) > 6) {
-        throw new Exception('数据异常');
+        throw new Exception(trans('data_error', [], 'message'));
     }
     $dataStr = strrev($dataStr);
     $paddedStr = "";
@@ -516,7 +516,7 @@ function jackpotEncodeData($data): string
 {
     $dataStr = sprintf("%06X", $data);
     if (strlen($dataStr) > 6) {
-        throw new Exception('数据异常');
+        throw new Exception(trans('data_error', [], 'message'));
     }
     return substr($dataStr, 4, 2) . substr($dataStr, 2, 2) . substr($dataStr, 0, 2);
 }
@@ -531,7 +531,7 @@ function encodeDataXor55($data): string
 {
     $cmd = sprintf("%06X", $data);
     if (strlen($cmd) > 6) {
-        throw new Exception('数据异常');
+        throw new Exception(trans('data_error', [], 'message'));
     }
     $result = intval(hexdec(substr($cmd, 4, 2))) ^ intval(hexdec(substr($cmd, 2, 2))) ^ intval(hexdec(substr($cmd,
             0,
@@ -554,7 +554,7 @@ function jackpotEncodeDataXor55($data): string
 {
     $cmd = sprintf("%06X", $data);
     if (strlen($cmd) > 6) {
-        throw new Exception('数据异常');
+        throw new Exception(trans('data_error', [], 'message'));
     }
     $result = intval(hexdec(substr($cmd, 0, 2))) ^ intval(hexdec(substr($cmd, 2, 2))) ^ intval(hexdec(substr($cmd,
             4,
@@ -573,7 +573,7 @@ function checkCRC8(string $data): bool
     $str = substr($data, 0, 28);
     $crc8 = substr($data, 28, 4);
     if ($crc8 !== crc8(hex2bin($str), 0x31, 0x00, 0x00)) {
-        throw new Exception('crc8检查不通过' . $crc8 . crc8(hex2bin($str), 0x31, 0x00, 0x00));
+        throw new Exception(trans('crc8_check_failed', [], 'message') . ': ' . $crc8 . ' vs ' . crc8(hex2bin($str), 0x31, 0x00, 0x00));
     }
 
     return true;
@@ -594,7 +594,7 @@ function checkSlotXor55(string $msg, string $data): bool
     }
     $xor55 = substr($msg, 20, 4);
     if ($xor55 !== encodeDataXor55($data)) {
-        throw new Exception('xor55检查不通过');
+        throw new Exception(trans('xor55_check_failed', [], 'message'));
     }
 
     return true;
@@ -615,7 +615,7 @@ function checkJackpotXor55(string $msg, string $data): bool
     }
     $xor55 = substr($msg, 14, 2);
     if ($xor55 !== jackpotEncodeDataXor55($data)) {
-        throw new Exception('xor55检查不通过');
+        throw new Exception(trans('xor55_check_failed', [], 'message'));
     }
 
     return true;
@@ -632,7 +632,7 @@ function jackPotCheckCRC8(string $data): bool
     $str = substr($data, 0, 28);
     $crc8 = substr($data, 28, 2);
     if ($crc8 !== crc8(hex2bin($str), 0x31, 0x00, 0x00, true, true, false)) {
-        throw new Exception('crc8检查不通过');
+        throw new Exception(trans('crc8_check_failed', [], 'message'));
     }
 
     return true;
@@ -687,7 +687,7 @@ function slotCheckCRC8(string $data): bool
     $str = substr($data, 0, 12);
     $crc8 = substr($data, 12, 2);
     if ($crc8 !== crc8(hex2bin($str), 0x31, 0x00, 0x00, true, true, false)) {
-        throw new Exception('crc8检查不通过');
+        throw new Exception(trans('crc8_check_failed', [], 'message'));
     }
     return true;
 }
@@ -1143,6 +1143,13 @@ function machineWash(
 
         $lang = locale() ?? 'zh_CN';
         $services = MachineServices::createServices($machine, $lang);
+
+        // ========== 业务层检查：机台是否已锁定（检查 Redis）==========
+        // 硬件层锁定修改的是 Redis，所以必须检查 Redis 而不是 DB
+        if ($services->has_lock == 1) {
+            throw new Exception(trans('machine_has_lock', [], 'message'));
+        }
+
         if ($services->last_point_at + 5 >= time()) {
             throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
         }
@@ -1224,28 +1231,27 @@ function machineWash(
                 }
                 break;
         }
-    } catch (Exception $e) {
-        throw new Exception($e->getMessage());
-    }
 
-    /** 彩金预留检查 */
-    if ($hasLottery && $machine->type == GameType::TYPE_SLOT && $path == 'down' && $money > 0) {
-        try {
-            $playerLotteryRecord = (new LotteryServices())->setMachine($machine)->setPlayer($player)->fixedPotCheckLottery($money,
-                true);
-            if ($playerLotteryRecord) {
-                return $playerLotteryRecord;
+        /** 彩金预留检查 */
+        if ($hasLottery && $machine->type == GameType::TYPE_SLOT && $path == 'down' && $money > 0) {
+            try {
+                $playerLotteryRecord = (new LotteryServices())->setMachine($machine)->setPlayer($player)->fixedPotCheckLottery($money,
+                    true);
+                if ($playerLotteryRecord) {
+                    return $playerLotteryRecord;
+                }
+            } catch (Exception $e) {
+                throw new Exception($e->getMessage());
             }
-        } catch (Exception $e) {
-            throw new Exception($e->getMessage());
         }
-    }
-    DB::beginTransaction();
-    try {
-        if ($money >= 0) {
-            $machine = machineWashZero($player, $machine, $money, $is_system, max($gamingPressure, 0),
-                max($gamingScore, 0), max($gamingTurnPoint, 0), $path, $adminId, $adminUsername);
-        }
+        DB::beginTransaction();
+        try {
+            $washResult = null;
+            if ($money >= 0) {
+                $washResult = machineWashZero($player, $machine, $money, $is_system, max($gamingPressure, 0),
+                    max($gamingScore, 0), max($gamingTurnPoint, 0), $path, $adminId, $adminUsername);
+                $machine = $washResult['machine'];
+            }
         if ($path == 'leave') {
             if ($services->keeping == 1) {
                 // 更新保留日志
@@ -1288,7 +1294,8 @@ function machineWash(
         // ✅ 硬件指令成功后才提交数据库
         DB::commit();
 
-        // ✅ Redis 最终状态更新（在 commit 后，保证一致性）
+        // ✅ 立即更新 Redis 状态（保证 DB/Redis 一致性）
+        // 优化：在钱包操作之前更新 Redis，缩小不一致时间窗口
         if ($path == 'leave') {
             $services->keeping_user_id = 0;
             $services->keeping = 0;
@@ -1308,53 +1315,99 @@ function machineWash(
                 break;
         }
 
-    } catch (Exception $e) {
-        DB::rollback();
-        throw new Exception($e->getMessage());
-    }
-    // 游戏结束同步Redis彩金到数据库（新版：独立彩池模式）
-    // 强制同步所有彩金的Redis数据到数据库
-    try {
-        LotteryServices::forceSyncRedisToDatabase();
-    } catch (Exception $e) {
-        Log::error('游戏结束同步彩金失败: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
-    }
-    queueClient::send('media-recording', [
-        'machine_id' => $machine->id,
-        'action' => 'stop',
-    ], 10);
-    //下分成功 下分&下轉限制歸零 開獎中結束 關閉 push auto
-    $services->last_play_time = time();
-    if ($path == 'leave') {
-        $services->gaming_user_id = 0;
-        $services->gaming = 0;
-        // ✅ keeping相关字段已在DB事务提交前更新，此处无需重复
-        if ($machine->type == GameType::TYPE_SLOT) {
-            $services->player_pressure = 0;
-            $services->player_score = 0;
-        }
-        if ($machine->type == GameType::TYPE_STEEL_BALL) {
-            $services->player_win_number = 0;
-        }
-        $services->player_open_point = 0;
-        $services->player_wash_point = 0;
-    }
-    switch ($machine->type) {
-        case GameType::TYPE_STEEL_BALL:
-            if ($path == 'leave') {
-                $services->gift_bet = 0;
-                Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+        // ✅ 最后执行钱包加款（DB + Redis 已一致，钱包失败不影响状态一致性）
+        if ($washResult && $washResult['game_amount'] > 0) {
+            try {
+                $addResult = \app\service\WalletService::add($player->id, $washResult['game_amount']);
+
+                Log::info('[machineWash] 钱包加款成功', [
+                    'player_id' => $player->id,
+                    'amount' => $washResult['game_amount'],
+                    'before' => $washResult['before_balance'],
+                    'after' => $addResult['balance'],
+                ]);
+
+            } catch (Exception $walletError) {
+                // ❌ CRITICAL：钱包加款失败，但 DB + Redis 已一致
+                Log::critical('[machineWash] 钱包加款失败，需要人工介入', [
+                    'player_id' => $player->id,
+                    'amount' => $washResult['game_amount'],
+                    'before_balance' => $washResult['before_balance'],
+                    'error' => $walletError->getMessage(),
+                    'action' => '已洗分成功（DB+硬件+Redis），但钱包未加款，请立即手动给玩家加款',
+                    'timestamp' => date('Y-m-d H:i:s'),
+                ]);
+
+                // 发送 Telegram CRITICAL 告警
+                try {
+                    $telegramConfig = config('telegram');
+                    if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
+                        $telegram = new \app\service\TelegramService($telegramConfig['bot_token'], $telegramConfig['chat_id']);
+                        $telegram->sendAlert([
+                            'datetime' => new \DateTime(),
+                            'level_name' => 'CRITICAL',
+                            'message' => '洗分成功但钱包加款失败',
+                            'context' => [
+                                'player_id' => $player->id,
+                                'machine_id' => $machine->id,
+                                'amount' => $washResult['game_amount'],
+                                'action' => '请立即手动给玩家加款',
+                            ],
+                        ]);
+                    }
+                } catch (Exception $telegramError) {
+                    Log::error('[machineWash] Telegram 告警发送失败', [
+                        'error' => $telegramError->getMessage(),
+                    ]);
+                }
+
+                // ⚠️ 不抛出异常，返回成功（因为 DB + Redis 已一致，硬件已清零）
+                // 玩家会收到成功提示，但钱包暂时未到账
+                // 运维会收到 CRITICAL 告警，立即手动加款
             }
-            break;
-        case GameType::TYPE_SLOT:
-            Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
-            break;
-    }
+        }
 
-    // 清理消息缓存
-    LotteryServices::clearNoticeCache($player->id, $machine->id);
+        } catch (Exception $e) {
+            DB::rollback();
+            throw new Exception($e->getMessage());
+        }
 
-    return $playerLotteryRecord ?? true;
+        // 游戏结束同步Redis彩金到数据库（新版：独立彩池模式）
+        // 强制同步所有彩金的Redis数据到数据库
+        try {
+            LotteryServices::forceSyncRedisToDatabase();
+        } catch (Exception $e) {
+            Log::error('游戏结束同步彩金失败: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+        }
+        queueClient::send('media-recording', [
+            'machine_id' => $machine->id,
+            'action' => 'stop',
+        ], 10);
+        //下分成功 下分&下轉限制歸零 開獎中結束 關閉 push auto
+        $services->last_play_time = time();
+        if ($path == 'leave') {
+            $services->gaming_user_id = 0;
+            $services->gaming = 0;
+            // ✅ keeping、player_pressure、player_score、player_win_number 已在事务提交后立即更新，此处无需重复
+            $services->player_open_point = 0;
+            $services->player_wash_point = 0;
+        }
+        switch ($machine->type) {
+            case GameType::TYPE_STEEL_BALL:
+                if ($path == 'leave') {
+                    $services->gift_bet = 0;
+                    Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+                }
+                break;
+            case GameType::TYPE_SLOT:
+                Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+                break;
+        }
+
+        // 清理消息缓存
+        LotteryServices::clearNoticeCache($player->id, $machine->id);
+
+        return $playerLotteryRecord ?? true;
 
     } finally {
         // 释放锁
@@ -1396,7 +1449,7 @@ function machineWashZero(
     string  $action = 'leave',
     int     $adminId = 0,
     string  $adminUsername = ''
-): Machine
+): array
 {
     try {
         $services = MachineServices::createServices($machine);
@@ -1418,9 +1471,9 @@ function machineWashZero(
             //依照比值轉成錢包幣值 無條件捨去
             $game_amount = floor($money * ($machine->odds_x ?? 1) / ($machine->odds_y ?? 1));
 
-            // ✅ 使用 Lua 原子操作加款（Redis 作为唯一实时标准）
-            $addResult = \app\service\WalletService::add($player->id, $game_amount);
-            $afterGameAmount = $addResult['balance'];  // 提取余额
+            // ✅ CRITICAL 修复：不在这里加款，延后到 commit 后
+            // 计算预期余额（用于记录）
+            $afterGameAmount = $beforeGameAmount + $game_amount;
             if (!empty($gameRecord)) {
                 $gameRecord->wash_point = bcadd($gameRecord->wash_point, $wash_point, 2);
                 $gameRecord->wash_amount = bcadd($gameRecord->wash_amount, $game_amount, 2);
@@ -1517,7 +1570,13 @@ function machineWashZero(
         throw new Exception($e->getMessage());
     }
 
-    return $machine;
+    // ✅ 返回机台和钱包信息（钱包操作延后到外层 commit 后）
+    return [
+        'machine' => $machine,
+        'game_amount' => $money > 0 ? $game_amount : 0,
+        'before_balance' => $beforeGameAmount,
+        'after_balance' => $money > 0 ? $afterGameAmount : $beforeGameAmount,
+    ];
 }
 
 /**
@@ -2470,11 +2529,11 @@ if (!function_exists('checkMachineOpenAny')) {
             throw new InvalidArgumentException('Invalid odds_y value');
         }
         if ($machine->odds_x == 0) {
-            throw new Exception('机台赔率配置错误');
+            throw new Exception(trans('machine_odds_config_error', [], 'message'));
         }
         $yx = $machine->odds_y / $machine->odds_x;
         if ($machine->odds_y > $machine->odds_x && floor($yx) != $yx) {
-            throw new Exception('机台赔率配置错误');
+            throw new Exception(trans('machine_odds_config_error', [], 'message'));
         }
         $open_score = $money * $machine->odds_y / $machine->odds_x;
 
@@ -2484,13 +2543,25 @@ if (!function_exists('checkMachineOpenAny')) {
 
 if (!function_exists('machineOpenAnyFree')) {
     /**
-     * 任意開分免扣點
-     * @param Player $player
-     * @param Machine $machine
-     * @param int $openScore
-     * @param int $adminId
-     * @param string $adminUsername
-     * @return bool
+     * 任意开分（扣款）
+     *
+     * ⚠️ 注意：虽然函数名叫 "Free"，但实际上会扣除玩家钱包余额
+     *
+     * 用途：
+     * - 玩家正常上分（扣款）
+     * - 管理员代操作上分（扣款）
+     * - 管理员自定义开分（扣款）
+     *
+     * 如需真正的免费赠送（不扣款），请使用其他方法或新增专用函数
+     *
+     * @param Player $player 玩家对象
+     * @param Machine $machine 机台对象
+     * @param int $openScore 开分数值
+     * @param int $adminId 管理员ID（0表示玩家操作）
+     * @param string $adminUsername 管理员用户名
+     * @param int|null $giftScore 赠送分数
+     * @param int|null $giveRuleId 赠送规则ID
+     * @return bool 成功返回 true
      * @throws Exception
      */
     function machineOpenAnyFree(Player $player, Machine $machine, int $openScore, int $adminId = 0, string $adminUsername = '', ?int $giftScore = 0, ?int $giveRuleId = null): bool
@@ -2504,31 +2575,164 @@ if (!function_exists('machineOpenAnyFree')) {
                 throw new Exception(trans('machine_is_using_msg1', [], 'message'));
             }
 
+            $lang = locale() ?? 'zh_CN';
+            $services = MachineServices::createServices($machine, $lang);
+
+            // ========== 业务层检查：机台是否已锁定（检查 Redis）==========
+            // 硬件层锁定修改的是 Redis，所以必须检查 Redis 而不是 DB
+            if ($services->has_lock == 1) {
+                throw new Exception(trans('machine_has_lock', [], 'message'));
+            }
+
+            if ($services->last_point_at + 5 >= time()) {
+                throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
+            }
+
             DB::beginTransaction();
+            $walletDeducted = false;  // 标记钱包是否已扣款
             try {
-                $lang = locale() ?? 'zh_CN';
-                $services = MachineServices::createServices($machine, $lang);
-                if ($services->last_point_at + 5 >= time()) {
-                    throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
-                }
             $openScore = checkMachineOpenAny($machine, $openScore, 0);
             //測試連線
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
             } else {
                 if ($services->point + $openScore > 4000) {
-                    throw new Exception('机台洗分限制，累计分数不能超过4000');
+                    throw new Exception(trans('machine_wash_point_limit_exceeded', [], 'message'));
                 }
             }
+
+            // ========== Phase 1: 计算扣款金额 ==========
+            // ✅ 防御性检查：验证机台赔率配置
+            if (!$machine->odds_y || $machine->odds_y <= 0) {
+                throw new Exception(trans('machine_odds_config_error', [], 'message') . ': odds_y 无效');
+            }
+            if (!$machine->odds_x || $machine->odds_x <= 0) {
+                throw new Exception(trans('machine_odds_config_error', [], 'message') . ': odds_x 无效');
+            }
+
+            // 计算实际扣款金额（游戏分 → 金额）
+            $money = floor($openScore / $machine->odds_y * $machine->odds_x);
+
+            // ✅ 验证计算结果的合理性
+            if ($money <= 0) {
+                throw new Exception(trans('amount_calculation_zero_or_negative', [], 'message'));
+            }
+            if ($money > 1000000) {  // 限制单次上分100万元
+                Log::error('[machineOpenAnyFree] 计算金额超过限制', [
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                    'open_score' => $openScore,
+                    'odds_x' => $machine->odds_x,
+                    'odds_y' => $machine->odds_y,
+                    'calculated_money' => $money,
+                ]);
+                throw new Exception(trans('amount_calculation_too_large', [], 'message'));
+            }
+
+            // ========== Phase 2: 扣除玩家钱包 ==========
+            // ⚠️ 注意：这里会扣除玩家余额（虽然函数名叫 "Free"，但实际扣款）
+            // 如需真正的免费赠送，请新增专用函数或添加 $free 参数
+            $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
+
+            // ✅ CRITICAL FIX: 检查扣款结果（防止余额不足时继续上分）
+            $deductResult = \app\service\WalletService::deduct($player->id, $money);
+
+            if (!isset($deductResult['success']) || !$deductResult['success']) {
+                $error = $deductResult['error'] ?? trans('insufficient_balance', [], 'message');
+                Log::warning('[machineOpenAnyFree] 余额不足，拒绝上分', [
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                    'required_amount' => $money,
+                    'current_balance' => $beforeGameAmount,
+                    'error' => $error,
+                ]);
+                throw new Exception($error);
+            }
+
+            // ✅ 扣款成功，获取新余额
+            $afterGameAmount = $deductResult['balance'];
+            $walletDeducted = true;  // ← 只有成功才标记已扣款
+
+            Log::info('[machineOpenAnyFree] 扣款成功', [
+                'player_id' => $player->id,
+                'machine_id' => $machine->id,
+                'amount' => $money,
+                'before_balance' => $beforeGameAmount,
+                'after_balance' => $afterGameAmount,
+            ]);
+
+            // ========== Phase 3: PlayerGameRecord 创建或更新 ==========
+            /** @var PlayerGameRecord $gameRecord */
+            $gameRecord = PlayerGameRecord::query()->where('machine_id', $machine->id)
+                ->where('player_id', $player->id)
+                ->where('status', PlayerGameRecord::STATUS_START)
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            if (empty($gameRecord)) {
+                // 首次上分，创建新的游戏记录
+                $gameRecord = new PlayerGameRecord();
+                $gameRecord->machine_id = $machine->id;
+                $gameRecord->player_id = $player->id;
+                $gameRecord->status = PlayerGameRecord::STATUS_START;
+                $gameRecord->open_point = 0;
+                $gameRecord->open_amount = 0;
+                $gameRecord->give_amount = 0;
+                $gameRecord->wash_point = 0;
+                $gameRecord->wash_amount = 0;
+                $gameRecord->after_game_amount = $beforeGameAmount;
+                $gameRecord->created_at = date('Y-m-d H:i:s');
+                $gameRecord->updated_at = date('Y-m-d H:i:s');
+                $gameRecord->save();
+
+                Log::info('[machineOpenAnyFree] 创建新的游戏记录', [
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                    'game_record_id' => $gameRecord->id,
+                ]);
+            }
+
+            // ✅ 检查游戏记录是否过期（超过48小时且被其他玩家占用）
+            if (time() - strtotime($gameRecord->updated_at) > 24 * 60 * 60 * 2
+                && $machine->gaming_user_id != $player->id) {
+                // 旧记录设置为结束状态
+                $gameRecord->status = PlayerGameRecord::STATUS_END;
+                $gameRecord->save();
+
+                Log::info('[machineOpenAnyFree] 游戏记录过期，创建新记录', [
+                    'old_game_record_id' => $gameRecord->id,
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                    'expired_hours' => round((time() - strtotime($gameRecord->updated_at)) / 3600, 1),
+                ]);
+
+                // 创建新的游戏记录
+                $gameRecord = new PlayerGameRecord();
+                $gameRecord->player_id = $player->id;
+                $gameRecord->machine_id = $machine->id;
+                $gameRecord->status = PlayerGameRecord::STATUS_START;
+                $gameRecord->open_point = $openScore;
+                $gameRecord->open_amount = $money;
+                $gameRecord->give_amount = $giftScore;
+                $gameRecord->wash_point = 0;
+                $gameRecord->wash_amount = 0;
+                $gameRecord->profit = -$money;
+                $gameRecord->created_at = date('Y-m-d H:i:s');
+                $gameRecord->updated_at = date('Y-m-d H:i:s');
+                $gameRecord->save();
+            } else {
+                // 更新现有游戏记录
+                $gameRecord->open_point = bcadd($gameRecord->open_point, $openScore, 2);
+                $gameRecord->open_amount = bcadd($gameRecord->open_amount, $money, 2);
+                $gameRecord->give_amount = bcadd($gameRecord->give_amount, $giftScore, 2);
+                $gameRecord->save();
+            }
+
+            // ========== Phase 4: 创建游戏日志 ==========
             //上任意分
             $odds = $machine->odds_x . ':' . $machine->odds_y;
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
                 $odds = $machine->machineCategory?->name ?? '未知机种';
             }
-            /** @var PlayerPlatformCash $player_platform_wallet */
-            $player_platform_wallet = PlayerPlatformCash::query()->where([
-                'player_id' => $player->id,
-                'platform_id' => PlayerPlatformCash::PLATFORM_SELF
-            ])->first();
             $playerGameLog = new PlayerGameLog;
             $playerGameLog->player_id = $player->id;
             $playerGameLog->department_id = $player->department_id;
@@ -2542,9 +2746,10 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerGameLog->open_point = $openScore;
             $playerGameLog->wash_point = 0;
             $playerGameLog->gift_point = 0;
-            $playerGameLog->game_amount = 0;
-            $playerGameLog->before_game_amount = $player_platform_wallet->money ?? 0;
-            $playerGameLog->after_game_amount = $player_platform_wallet->money ?? 0;
+            $playerGameLog->game_amount = $money;  // ✅ 修复：实际扣款金额
+            $playerGameLog->before_game_amount = $beforeGameAmount;
+            $playerGameLog->after_game_amount = $afterGameAmount;  // ✅ 修复：扣款后余额
+            $playerGameLog->game_record_id = $gameRecord->id;
             $playerGameLog->user_id = $adminId;
             $playerGameLog->action = PlayerGameLog::ACTION_OPEN;
             $playerGameLog->user_name = $adminUsername;
@@ -2572,11 +2777,41 @@ if (!function_exists('machineOpenAnyFree')) {
                 }
             }
 
-            //首次上分
-            $isFirstOpen = ($machine->gaming_user_id == 0);
+            // ========== Phase 5: 写入金流明细 ==========
+            $playerDeliveryRecord = new \addons\webman\model\PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = $player->id;
+            $playerDeliveryRecord->department_id = $player->department_id;
+            $playerDeliveryRecord->target = $playerGameLog->getTable();
+            $playerDeliveryRecord->target_id = $playerGameLog->id;
+            $playerDeliveryRecord->machine_id = $machine->id;
+            $playerDeliveryRecord->machine_name = $machine->name;
+            $playerDeliveryRecord->machine_type = $machine->type;
+            $playerDeliveryRecord->code = $machine->code;
+            $playerDeliveryRecord->type = \addons\webman\model\PlayerDeliveryRecord::TYPE_MACHINE_OPEN;
+            $playerDeliveryRecord->source = 'game_machine';
+            $playerDeliveryRecord->amount = -$money;  // 负数表示扣款
+            $playerDeliveryRecord->amount_before = $beforeGameAmount;
+            $playerDeliveryRecord->amount_after = $afterGameAmount;
+            $playerDeliveryRecord->tradeno = '';
+            $playerDeliveryRecord->remark = '';
+            $playerDeliveryRecord->user_id = $adminId;
+            $playerDeliveryRecord->user_name = $adminUsername;
+            $playerDeliveryRecord->save();
 
+            // ========== Phase 6: 活动记录 ==========
+            if ($player->channel && $player->channel->activity_status == 1) {
+                $ActivityServices = new \app\service\ActivityServices($machine, $player);
+                $ActivityServices->addPlayerActivityRecord();
+            }
+
+            // ========== Phase 7: 更新机台状态 ==========
+            $isFirstOpen = ($machine->gaming_user_id == 0);
+            if ($machine->gaming == 0) {
+                $machine->last_game_at = date('Y-m-d H:i:s');
+            }
             $machine->gaming = 1;
             $machine->gaming_user_id = $player->id;
+            $machine->last_point_at = date('Y-m-d H:i:s');
             $machine->save();
 
             // ✅ 硬件开分指令（在事务内执行，失败可回滚）
@@ -2603,6 +2838,69 @@ if (!function_exists('machineOpenAnyFree')) {
 
         } catch (\Exception $e) {
             DB::rollback();
+
+            Log::error('[machineOpenAnyFree] 上分失败', [
+                'player_id' => $player->id,
+                'machine_id' => $machine->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'wallet_deducted' => $walletDeducted,
+            ]);
+
+            // ========== 上分失败处理：锁机台 + 人工补偿 ==========
+            // 策略：不自动回滚钱包，而是锁定机台由客服人工补偿
+            if ($walletDeducted) {
+                try {
+                    // ✅ 锁定机台（防止其他玩家使用）
+                    // 🔴 重要：必须同时锁定 DB 和 Redis（业务层检查的是 Redis）
+                    $machine->has_lock = 1;
+                    $machine->save();  // 锁定 DB
+
+                    $services->has_lock = 1;  // 锁定 Redis（业务层检查这个）
+
+                    Log::critical('[machineOpenAnyFree] 上分失败，机台已锁定（DB + Redis），需人工补偿', [
+                        'player_id' => $player->id,
+                        'machine_id' => $machine->id,
+                        'machine_code' => $machine->code,
+                        'deducted_amount' => $money,
+                        'action' => '请客服人工补偿玩家并解锁机台',
+                    ]);
+
+                    // 发送 Telegram CRITICAL 告警
+                    try {
+                        $telegramConfig = config('telegram');
+                        if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
+                            $telegram = new \app\service\TelegramService($telegramConfig['bot_token'], $telegramConfig['chat_id']);
+                            $telegram->sendAlert([
+                                'datetime' => new \DateTime(),
+                                'level_name' => 'CRITICAL',
+                                'message' => '上分失败，机台已锁定',
+                                'context' => [
+                                    'player_id' => $player->id,
+                                    'machine_id' => $machine->id,
+                                    'machine_code' => $machine->code,
+                                    'deducted_amount' => $money,
+                                    'action' => '请客服人工补偿玩家并解锁机台',
+                                ],
+                            ]);
+                        }
+                    } catch (\Exception $telegramError) {
+                        Log::error('[machineOpenAnyFree] Telegram 告警发送失败', [
+                            'error' => $telegramError->getMessage(),
+                        ]);
+                    }
+
+                } catch (\Exception $lockError) {
+                    Log::critical('[machineOpenAnyFree] 锁机台失败，双重故障', [
+                        'player_id' => $player->id,
+                        'machine_id' => $machine->id,
+                        'deducted_amount' => $money,
+                        'lock_error' => $lockError->getMessage(),
+                        'action' => '紧急：手动锁机台并补偿玩家',
+                    ]);
+                }
+            }
+
             throw new Exception($e->getMessage());
         }
 
@@ -2669,6 +2967,31 @@ if (!function_exists('resetMachineTrans')) {
                     $isOnLine = false;
                 }
             }
+            // ✅ 记录清零前的机台分数（用于审计）
+            $confiscatedPoint = $services->point;  // 即将被没收的分数
+            $confiscatedAmount = 0;
+            if ($confiscatedPoint > 0 && $machine->odds_y > 0 && $machine->odds_x > 0) {
+                $confiscatedAmount = floor($confiscatedPoint / $machine->odds_y * $machine->odds_x);
+            }
+
+            // ✅ 记录详细的强制踢出日志（包含被没收的金额）
+            Log::warning('[resetMachineTrans] 管理员强制踢出玩家，即将没收机台分数', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId,
+                'admin_username' => $adminUsername,
+                'player_id' => $player->id,
+                'player_username' => $player->username,
+                'machine_id' => $machine->id,
+                'machine_code' => $machine->code,
+                'machine_type' => $machine->type == GameType::TYPE_STEEL_BALL ? '钢珠机' : '斯洛机',
+                'confiscated_point' => $confiscatedPoint,  // 被没收的分数
+                'confiscated_amount' => $confiscatedAmount,  // 被没收的金额（人民币）
+                'odds' => $machine->odds_x . ':' . $machine->odds_y,
+                'is_online' => $isOnLine,
+                'reason' => '强制踢出（不返还分数）',
+                'timestamp' => date('Y-m-d H:i:s'),
+            ]);
+
             if ($isOnLine) {
                 switch ($machine->type) {
                     case GameType::TYPE_STEEL_BALL:
@@ -2684,6 +3007,11 @@ if (!function_exists('resetMachineTrans')) {
                         if ($services->turn > 0) {
                             $services->sendCmd($services::TURN_DOWN_ALL, 0, 'player', $player->id);
                         }
+
+                        // ✅ 强制踢出：清零机台珠数（没收分数）
+                        if ($services->point > 0) {
+                            $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id);
+                        }
                         break;
                     case GameType::TYPE_SLOT:
                         if ($services->move_point == 1 && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
@@ -2695,6 +3023,11 @@ if (!function_exists('resetMachineTrans')) {
                             $services->sendCmd($services::STOP_ONE, 0, 'player', $player->id);
                             $services->sendCmd($services::STOP_TWO, 0, 'player', $player->id);
                             $services->sendCmd($services::STOP_THREE, 0, 'player', $player->id);
+                        }
+
+                        // ✅ 强制踢出：清零机台分数（没收分数）
+                        if ($services->point > 0) {
+                            $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id);
                         }
                         break;
                 }
@@ -2733,19 +3066,20 @@ if (!function_exists('resetMachineTrans')) {
             $playerGameLog->odds = $odds;
             $playerGameLog->control_open_point = $machine->control_open_point;
             $playerGameLog->open_point = 0;
-            $playerGameLog->wash_point = 0;
+            $playerGameLog->wash_point = $confiscatedPoint;  // ✅ 记录被没收的分数
             $playerGameLog->gift_point = 0;
-            $playerGameLog->game_amount = 0;
+            $playerGameLog->game_amount = -$confiscatedAmount;  // ✅ 记录被没收的金额（负数表示没收）
             $playerGameLog->pressure = max($gamingPressure, 0);
             $playerGameLog->score = max($gamingScore, 0);
             $playerGameLog->turn_point = max($gamingTurn, 0);
             $playerGameLog->before_game_amount = $player_platform_wallet->money ?? 0;
-            $playerGameLog->after_game_amount = $player_platform_wallet->money ?? 0;
+            $playerGameLog->after_game_amount = $player_platform_wallet->money ?? 0;  // 钱包余额不变
             $playerGameLog->is_system = 1;
             $playerGameLog->action = PlayerGameLog::ACTION_LEAVE;
             $playerGameLog->user_id = $adminId;
             $playerGameLog->user_name = $adminUsername;
             $playerGameLog->is_test = $player->is_test; //标记测试数据
+            $playerGameLog->remark = "管理员{$adminUsername}强制踢出，没收{$confiscatedPoint}分（{$confiscatedAmount}元）";  // ✅ 添加备注
             $playerGameLog->save();
 
             $machine->gaming_user_id = 0;

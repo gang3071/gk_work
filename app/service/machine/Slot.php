@@ -257,11 +257,53 @@ class Slot extends MachineServices implements BaseMachine
                 }
             }
 
-            // 关键字段保存失败时记录额外日志
+            // ✅ 关键字段保存失败时必须抛出异常（防止 DB/Redis 数据不一致）
             if (!$saveResult) {
-                $criticalFields = ['gaming', 'gaming_user_id', 'last_play_time', 'point', 'bet', 'keeping'];
+                // 最关键的三个字段：has_lock, gaming, gaming_user_id
+                // 这些字段的不一致会导致严重的业务逻辑错误
+                $mustSuccessFields = ['has_lock', 'gaming', 'gaming_user_id'];
+                if (in_array($name, $mustSuccessFields)) {
+                    \support\Log::critical('关键字段Redis保存失败，抛出异常', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'field' => $name,
+                        'value' => $value
+                    ]);
+
+                    // ✅ 发送 Telegram CRITICAL 告警
+                    try {
+                        $token = env('TELEGRAM_BOT_TOKEN');
+                        $chatId = env('TELEGRAM_CHAT_ID');
+
+                        if (!empty($token) && !empty($chatId)) {
+                            $telegram = new \app\service\TelegramService($token, $chatId, \Monolog\Logger::ERROR);
+                            $telegram->sendAlert([
+                                'datetime' => new \DateTime(),
+                                'level_name' => 'CRITICAL',
+                                'message' => '[MachineServices:Slot] Redis 关键字段保存失败',
+                                'context' => [
+                                    'machine_id' => $this->machine->id ?? null,
+                                    'machine_code' => $this->machine->code ?? '',
+                                    'field' => $name,
+                                    'value' => $value,
+                                    'error' => 'Redis关键字段保存失败，可能导致DB/Redis数据不一致',
+                                ],
+                            ]);
+                        }
+                    } catch (\Throwable $telegramEx) {
+                        // Telegram 发送失败不影响主流程
+                        \support\Log::warning('[MachineServices:Slot] Telegram 告警发送失败', [
+                            'error' => $telegramEx->getMessage(),
+                        ]);
+                    }
+
+                    throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
+                }
+
+                // 其他重要字段只记录日志
+                $criticalFields = ['last_play_time', 'point', 'bet', 'keeping'];
                 if (in_array($name, $criticalFields)) {
-                    \support\Log::error('关键字段Redis保存失败', [
+                    \support\Log::error('重要字段Redis保存失败', [
                         'machine_id' => $this->machine->id,
                         'machine_code' => $this->machine->code,
                         'field' => $name,
