@@ -351,9 +351,17 @@ class AdminMachineController
             // 创建机台服务
             $services = MachineServices::createServices($machine, $lang);
 
-            // ✅ 定义允许通过 API 更新的字段白名单
-            $allowedFields = [
-                'has_lock',
+            // ✅ Redis-only 字段（仅存在于 Redis，不存在于数据库）
+            $redisOnlyFields = [
+                'has_lock',         // 机台锁定状态
+                'gaming',           // 游戏中状态
+                'auto',             // 自动状态
+                'move_point',       // 移分
+                'reward_status',    // 奖励状态
+            ];
+
+            // ✅ DB + Redis 字段（需要同时更新数据库和 Redis）
+            $dbAndRedisFields = [
                 'keeping',
                 'keeping_user_id',
                 'last_keep_at',
@@ -364,24 +372,33 @@ class AdminMachineController
                 'is_use',
             ];
 
-            if (!in_array($field, $allowedFields)) {
+            // 检查字段是否允许更新
+            if (!in_array($field, $redisOnlyFields) && !in_array($field, $dbAndRedisFields)) {
                 return $this->fail("字段 {$field} 不允许更新", 400);
             }
 
-            // 同时更新 DB 和 Redis（保证一致性）
-            // 先更新 DB
-            $machine->$field = $value;
-            $machine->save();
-
-            // 再更新 Redis
-            $services->$field = $value;
-
-            Log::info('Admin update machine state', [
-                'machine_id' => $machineIdInt,
-                'field' => $field,
-                'value' => $value,
-                'updated' => 'DB + Redis',
-            ]);
+            // 根据字段类型决定更新策略
+            if (in_array($field, $redisOnlyFields)) {
+                // ✅ Redis-only 字段：只更新 Redis
+                $services->$field = $value;
+                Log::info('Admin update machine state (Redis only)', [
+                    'machine_id' => $machineIdInt,
+                    'field' => $field,
+                    'value' => $value,
+                    'updated' => 'Redis only',
+                ]);
+            } else {
+                // ✅ DB + Redis 字段：同时更新数据库和 Redis
+                $machine->$field = $value;
+                $machine->save();
+                $services->$field = $value;
+                Log::info('Admin update machine state', [
+                    'machine_id' => $machineIdInt,
+                    'field' => $field,
+                    'value' => $value,
+                    'updated' => 'DB + Redis',
+                ]);
+            }
 
             return $this->success([
                 'machine_id' => $machineIdInt,
