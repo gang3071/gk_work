@@ -64,6 +64,11 @@ class MachineOperationService
         $this->operatorId = $operatorId;
         $this->lang = $lang;
 
+        // ✅ 确保 machineCategory 关系已加载（用于 PlayerGameRecord.game_id）
+        if (!$machine->relationLoaded('machineCategory')) {
+            $machine->load('machineCategory');
+        }
+
         // 初始化硬件服务类
         $this->initServices();
     }

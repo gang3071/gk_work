@@ -2672,6 +2672,7 @@ if (!function_exists('machineOpenAnyFree')) {
             if (empty($gameRecord)) {
                 // 首次上分，创建新的游戏记录
                 $gameRecord = new PlayerGameRecord();
+                $gameRecord->game_id = $machine->machineCategory->game_id ?? 0;
                 $gameRecord->machine_id = $machine->id;
                 $gameRecord->player_id = $player->id;
                 $gameRecord->status = PlayerGameRecord::STATUS_START;
@@ -2708,6 +2709,7 @@ if (!function_exists('machineOpenAnyFree')) {
 
                 // 创建新的游戏记录
                 $gameRecord = new PlayerGameRecord();
+                $gameRecord->game_id = $machine->machineCategory->game_id ?? 0;
                 $gameRecord->player_id = $player->id;
                 $gameRecord->machine_id = $machine->id;
                 $gameRecord->status = PlayerGameRecord::STATUS_START;
