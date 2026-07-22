@@ -553,6 +553,95 @@ class AdminMachineController
     }
 
     /**
+     * 发送机台指令
+     * POST /api/admin/machine/send-cmd
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function sendCmd(Request $request): Response
+    {
+        try {
+            $lang = $this->setLanguage($request);
+            $adminId = $this->getAdminId($request);
+
+            // 验证参数
+            $machineId = (int)$request->post('machine_id');
+            $cmd = (string)$request->post('cmd', '');
+            $data = (int)$request->post('data', 0);
+
+            if ($machineId <= 0) {
+                return $this->fail('无效的机台ID', 400);
+            }
+            if (empty($cmd)) {
+                return $this->fail('指令代码不能为空', 400);
+            }
+
+            // 查询机台
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail('机台不存在', 404);
+            }
+
+            // 创建机台服务
+            $services = MachineServices::createServices($machine, $lang);
+            if (!$services) {
+                return $this->fail('无法创建机台服务', 500);
+            }
+
+            // 获取管理员用户名（用于日志）
+            $adminUsername = $this->getAdminUsername($adminId);
+
+            // 发送指令
+            $result = $services->sendCmd($cmd, $data, 'admin', $adminId, $adminUsername);
+
+            Log::info('【管理员操作】发送机台指令', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId,
+                'admin_username' => $adminUsername,
+                'machine_id' => $machineId,
+                'cmd' => $cmd,
+                'data' => $data,
+                'result' => $result,
+            ]);
+
+            return $this->success($result);
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '【管理员操作】发送机台指令失败', [
+                'operator_type' => 'admin',
+                'admin_id' => $adminId ?? 0,
+                'machine_id' => $machineId ?? null,
+                'cmd' => $cmd ?? null,
+                'data' => $data ?? null,
+            ]);
+        }
+    }
+
+    /**
+     * 获取管理员用户名
+     * @param int $adminId
+     * @return string
+     */
+    private function getAdminUsername(int $adminId): string
+    {
+        if ($adminId <= 0) {
+            return '';
+        }
+
+        try {
+            $admin = \app\model\AdminUser::find($adminId);
+            return $admin ? $admin->username : '';
+        } catch (Exception $e) {
+            Log::warning('获取管理员用户名失败', [
+                'admin_id' => $adminId,
+                'error' => $e->getMessage()
+            ]);
+            return '';
+        }
+    }
+
+    /**
      * 获取机台操作描述
      * POST /api/admin/machine/get-description
      *
