@@ -21,6 +21,7 @@ use Webman\Event\Event;
  * @property float wash_point 游戏下点
  * @property float open_amount 机台上分
  * @property float wash_amount 机台下分
+ * @property float profit 盈亏金额（负数表示亏损/玩家上分，正数表示盈利/玩家下分）
  * @property float after_game_amount 余点数
  * @property float give_amount 开分赠点：赠送点数
  * @property string code 機台編號

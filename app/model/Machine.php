@@ -62,6 +62,7 @@ use support\Cache;
  * @property int gaming 遊戲中，0=否, 1=是
  * @property int keeping 保留 0=否 1=是
  * @property int maintaining 維護 0=否 1=是
+ * @property int has_lock 机台锁定状态 0=未锁定 1=已锁定，需人工处理
  * @property int gaming_user_id 遊戲中玩家
  * @property int keeping_user_id 保留中玩家
  * @property int strategy_id 攻略id
