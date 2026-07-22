@@ -41,7 +41,7 @@ class PlayerMachineController
             $machines = Machine::query()
                 ->whereIn('id', $machineIds)
                 ->where('status', 1)
-                ->get(['id', 'domain', 'port', 'code', 'name']);
+                ->get(['id', 'domain', 'port', 'code']);
 
             if ($machines->isEmpty()) {
                 return $this->success([]);
@@ -66,7 +66,6 @@ class PlayerMachineController
                 $results[] = [
                     'id' => $machine->id,
                     'code' => $machine->code,
-                    'name' => $machine->name,
                     'online' => $isOnline,
                     'status' => $isOnline ? 'online' : 'offline',
                 ];
