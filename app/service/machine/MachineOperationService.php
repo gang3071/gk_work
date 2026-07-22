@@ -265,9 +265,9 @@ class MachineOperationService
             $mainOnline = false;
         }
 
-        // 检查自动打卡机（仅钢珠机）
+        // 检查自动打卡机（仅 Slot 机器）
         $autoOnline = false;
-        if ($this->machine->type == GameType::TYPE_STEEL_BALL) {
+        if ($this->machine->type == GameType::TYPE_SLOT) {
             if (!empty($this->machine->auto_card_domain) && !empty($this->machine->auto_card_port)) {
                 $autoUid = $this->machine->auto_card_domain . ':' . $this->machine->auto_card_port;
                 try {
@@ -284,9 +284,13 @@ class MachineOperationService
         }
 
         // 计算总在线状态
-        $isOnline = ($this->machine->type == GameType::TYPE_STEEL_BALL)
-            ? ($mainOnline && $autoOnline)  // 钢珠机需要都在线
-            : $mainOnline;                   // 其他机台只需主机台
+        if ($this->machine->type == GameType::TYPE_SLOT) {
+            // Slot 机器：必须主机台和自动打卡机都在线
+            $isOnline = $mainOnline && $autoOnline;
+        } else {
+            // 钢珠机/捕鱼机：只需主机台在线
+            $isOnline = $mainOnline;
+        }
 
         return [
             'machine_id' => $this->machine->id,
@@ -321,9 +325,9 @@ class MachineOperationService
                 $mainOnline = false;
             }
 
-            // 检查自动打卡机（仅钢珠机）
+            // 检查自动打卡机（仅 Slot 机器）
             $autoOnline = false;
-            if ($machine->type == GameType::TYPE_STEEL_BALL) {
+            if ($machine->type == GameType::TYPE_SLOT) {
                 if (!empty($machine->auto_card_domain) && !empty($machine->auto_card_port)) {
                     $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
                     try {
@@ -340,9 +344,13 @@ class MachineOperationService
             }
 
             // 计算总在线状态
-            $isOnline = ($machine->type == GameType::TYPE_STEEL_BALL)
-                ? ($mainOnline && $autoOnline)
-                : $mainOnline;
+            if ($machine->type == GameType::TYPE_SLOT) {
+                // Slot 机器：必须主机台和自动打卡机都在线
+                $isOnline = $mainOnline && $autoOnline;
+            } else {
+                // 钢珠机/捕鱼机：只需主机台在线
+                $isOnline = $mainOnline;
+            }
 
             $results[$machine->id] = [
                 'online' => $isOnline,
