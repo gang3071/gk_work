@@ -291,13 +291,22 @@ class AdminMachineController
             // 创建机台服务
             $services = MachineServices::createServices($machine, $lang);
 
-            // 更新字段值
+            // ✅ 同时更新 DB 和 Redis（保证一致性）
+            // 先更新 DB
+            if (!$machine->isFillable($field)) {
+                return $this->fail("字段 {$field} 不允许更新", 400);
+            }
+            $machine->$field = $value;
+            $machine->save();
+
+            // 再更新 Redis
             $services->$field = $value;
 
             Log::info('Admin update machine state', [
                 'machine_id' => $machineIdInt,
                 'field' => $field,
-                'value' => $value
+                'value' => $value,
+                'updated' => 'DB + Redis',
             ]);
 
             return $this->success([
