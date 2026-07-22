@@ -71,10 +71,10 @@ Route::group('/api', function () {
             // 更新机台状态（用于后台解锁等操作）
             Route::post('/update-state', [\app\api\v1\AdminMachineController::class, 'updateMachineState']);
 
-            // ✅ 核心操作
-            // 发送机台指令（通用指令接口）
+            // ✅ 底层硬件指令接口（直接操作硬件，用于调试或特殊场景）
+            // 发送原始硬件指令（低层 API，参数：cmd/data）
             Route::post('/send-cmd', [\app\api\v1\AdminMachineController::class, 'sendCmd']);
-            // 获取机台操作描述
+            // 获取硬件指令的中文描述
             Route::post('/get-description', [\app\api\v1\AdminMachineController::class, 'getDescription']);
 
             // ✅ 高级操作（踢出玩家、开分等）
