@@ -593,7 +593,8 @@ class AdminMachineController
             $adminUsername = $this->getAdminUsername($adminId);
 
             // 发送指令
-            $result = $services->sendCmd($cmd, $data, 'admin', $adminId, $adminUsername);
+            // 参数顺序: $cmd, $data, $source, $source_id, $isSystem
+            $result = $services->sendCmd($cmd, $data, 'admin', $adminId, 0);
 
             Log::info('【管理员操作】发送机台指令', [
                 'operator_type' => 'admin',
