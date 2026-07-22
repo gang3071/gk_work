@@ -2885,10 +2885,43 @@ if (!function_exists('machineOpenAnyFree')) {
             if ($machine->gaming == 0) {
                 $machine->last_game_at = date('Y-m-d H:i:s');
             }
+
+            // ✅ 诊断日志：记录 Machine 更新前的状态
+            $oldGamingUserId = $machine->gaming_user_id;
+            $oldGaming = $machine->gaming;
+
             $machine->gaming = 1;
             $machine->gaming_user_id = $player->id;
             $machine->last_point_at = date('Y-m-d H:i:s');
+
+            // ✅ 诊断日志：生成缓存 key（用于验证缓存是否会被清除）
+            $cacheKey = sprintf('machine:domain:%s:port:%s:type:%s',
+                $machine->domain, $machine->port, $machine->type
+            );
+
+            Log::info('[machineOpenAnyFree] 准备更新 Machine 模型', [
+                'player_id' => $player->id,
+                'machine_id' => $machine->id,
+                'machine_code' => $machine->code,
+                'old_gaming_user_id' => $oldGamingUserId,
+                'new_gaming_user_id' => $player->id,
+                'old_gaming' => $oldGaming,
+                'new_gaming' => 1,
+                'cache_key' => $cacheKey,
+                'will_trigger_cache_delete' => ($oldGamingUserId != $player->id || $oldGaming != 1),
+            ]);
+
             $machine->save();
+
+            // ✅ 诊断日志：验证缓存是否真的被删除
+            $cacheExists = Cache::has($cacheKey);
+            Log::info('[machineOpenAnyFree] Machine 模型已保存', [
+                'player_id' => $player->id,
+                'machine_id' => $machine->id,
+                'cache_key' => $cacheKey,
+                'cache_still_exists' => $cacheExists,
+                'cache_should_be_deleted' => !$cacheExists,
+            ]);
 
             // ✅ 硬件开分指令（在事务内执行，失败可回滚）
             // 首次上分发送移分关闭指令
@@ -2908,16 +2941,41 @@ if (!function_exists('machineOpenAnyFree')) {
 
             // ✅ Redis 缓存更新（失败不影响业务，下次读取时从 DB 刷新）
             try {
+                // ✅ 诊断日志：记录 Redis 更新前的值
+                $oldRedisGamingUserId = $services->gaming_user_id ?? null;
+                $oldRedisGaming = $services->gaming ?? null;
+
+                Log::info('[machineOpenAnyFree] 准备更新 Redis', [
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                    'old_redis_gaming_user_id' => $oldRedisGamingUserId,
+                    'new_redis_gaming_user_id' => $player->id,
+                    'old_redis_gaming' => $oldRedisGaming,
+                    'new_redis_gaming' => 1,
+                ]);
+
                 //累計該玩家開分（包含赠分）
                 $services->gaming = 1;
                 $services->gaming_user_id = $player->id;
                 $services->player_open_point = bcadd($services->player_open_point, $totalOpenScore);
                 $services->last_point_at = time();
+
+                // ✅ 诊断日志：验证 Redis 更新成功
+                $newRedisGamingUserId = $services->gaming_user_id ?? null;
+                Log::info('[machineOpenAnyFree] Redis 更新成功', [
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                    'redis_gaming_user_id' => $newRedisGamingUserId,
+                    'redis_gaming' => $services->gaming,
+                    'update_success' => ($newRedisGamingUserId == $player->id),
+                ]);
+
             } catch (\Exception $redisError) {
-                Log::warning('[machineOpenAnyFree] Redis 缓存更新失败', [
+                Log::critical('[machineOpenAnyFree] Redis 缓存更新失败', [
                     'player_id' => $player->id,
                     'machine_id' => $machine->id,
                     'error' => $redisError->getMessage(),
+                    'trace' => $redisError->getTraceAsString(),
                 ]);
                 // Redis 失败不影响业务，继续执行
             }
