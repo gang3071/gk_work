@@ -78,15 +78,15 @@ class PlayKeepMachine implements Consumer
                 }
             }
 
-            // ✅ 使用 machine_category_id 作为缓存 key（同分类机台共享缓存）
-            $machineCategoryId = $machine->machine_category_id;
-            $keepMinutesCacheKey = "machine_category:{$machineCategoryId}:keep_minutes";
+            // ✅ 使用 cate_id 作为缓存 key（同分类机台共享缓存）
+            $cateId = $machine->cate_id;
+            $keepMinutesCacheKey = "machine_category:{$cateId}:keep_minutes";
             $keepMinutes = Cache::get($keepMinutesCacheKey);
 
             if ($keepMinutes === null) {
                 // 查询 machineCategory 表
                 $keepMinutes = \app\model\MachineCategory::query()
-                    ->where('id', $machineCategoryId)
+                    ->where('id', $cateId)
                     ->value('keep_minutes') ?? 0;
 
                 // 缓存 keep_minutes（1小时）
