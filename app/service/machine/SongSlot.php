@@ -767,9 +767,39 @@ class SongSlot extends MachineServices implements BaseMachine
                     break;
                 case self::WASH_ZERO:
                     $code = sprintf('%02x', rand(0, 0x63));
-                    $point = $this->point;
-                    $this->pre_wash_point = empty($data) ? $point : $data;
+                    $pointBeforeWash = $this->point;
+                    $this->pre_wash_point = empty($data) ? $pointBeforeWash : $data;
+
+                    // 执行洗分
                     $this->washPoint($uid, $cmd . $code, $this->pre_wash_point, $source, $source_id);
+
+                    // ✅ 二次确认：读取机台实际分数，验证是否真的扣掉了
+                    usleep(200000); // 等待 200ms 让机台完成操作
+                    $this->sendCmd(self::READ_SCORE, 0, $source, $source_id);
+                    usleep(100000); // 等待 100ms 让读分返回
+
+                    $pointAfterWash = $this->point;
+                    $expectedPoint = $pointBeforeWash - $this->pre_wash_point;
+
+                    // 允许 ±2 的误差（考虑心跳可能有微小变化）
+                    if (abs($pointAfterWash - $expectedPoint) > 2) {
+                        Log::error('[SongSlot-WashVerify] 洗分后分数校验失败', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'point_before' => $pointBeforeWash,
+                            'point_after' => $pointAfterWash,
+                            'expected' => $expectedPoint,
+                            'wash_amount' => $this->pre_wash_point,
+                        ]);
+                        throw new Exception('洗分失败：机台分数未正确扣除');
+                    }
+
+                    Log::info('[SongSlot-WashVerify] 洗分成功并验证', [
+                        'machine_id' => $this->machine->id,
+                        'point_before' => $pointBeforeWash,
+                        'point_after' => $pointAfterWash,
+                        'wash_amount' => $this->pre_wash_point,
+                    ]);
                     break;
                 case self::READ_BET:
                 case self::READ_SCORE:
