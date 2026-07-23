@@ -153,9 +153,9 @@ class PlayKeepMachine implements Consumer
         $machine = Cache::get($cacheKey);
 
         if (!$machine) {
-            // 数据库查询（只查必要字段）
+            // 数据库查询（预加载 machineCategory 避免 N+1）
             $machine = Machine::query()
-                ->select(['id', 'code', 'cate_id', 'type', 'domain', 'port'])
+                ->with('machineCategory:id,keep_minutes')
                 ->find($machineId);
 
             if ($machine) {
