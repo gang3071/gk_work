@@ -428,9 +428,9 @@ class SongSlot extends MachineServices implements BaseMachine
 
                         $this->now_turn = $newTurn;
                     }
-                    // ✅ 诊断日志：检查押注增加条件（仅 S326）
+                    // ✅ bet 是累加值，必须增加才说明有新押注
                     $betCondition1 = $orgBet > 0;
-                    $betCondition2 = $orgBet < $nowBet;
+                    $betCondition2 = $orgBet < $nowBet;  // bet 增加说明有新押注
                     $betCondition3 = !empty($gamingUserId);
                     $betCondition4 = $this->change_point_card_status == 0;
                     $betAllConditionsMet = $betCondition1 && $betCondition2 && $betCondition3 && $betCondition4;

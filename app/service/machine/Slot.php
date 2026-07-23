@@ -1252,9 +1252,9 @@ class Slot extends MachineServices implements BaseMachine
                         }
                         return true;
                     }
-                    // ✅ 诊断日志：检查押注改变条件（仅 S326）
+                    // ✅ bet 是累加值，必须改变才说明有新押注
                     $betCondition1 = $this->bet > 0;
-                    $betCondition2 = $this->bet != $data;
+                    $betCondition2 = $this->bet != $data;  // bet 变化说明有新押注
                     $betCondition3 = !empty($gamingUserId);
                     $betCondition4 = $this->change_point_card_status == 0;
                     $allConditionsMet = $betCondition1 && $betCondition2 && $betCondition3 && $betCondition4;
