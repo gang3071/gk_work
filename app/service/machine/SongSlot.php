@@ -505,6 +505,12 @@ class SongSlot extends MachineServices implements BaseMachine
                     $this->point = $nowPoint;
                     $this->bet = $nowBet;
                     $this->win = $nowWin;
+
+                    // ✅ auto 状态变化时推送到玩家端（异步开/关自动的核心推送逻辑）
+                    if ($this->auto != $nowAuto && !empty($gamingUserId)) {
+                        $this->pushAutoStatus($gamingUserId, $this->machine->id, $nowAuto);
+                    }
+
                     $this->auto = $nowAuto;
                     $this->reward_status = $nowRewardStatus;
                     $this->sendMachineNowStatusMessage($this->machine->id);
@@ -583,6 +589,12 @@ class SongSlot extends MachineServices implements BaseMachine
                     }
                     $nowAuto = substr($msg, 4, 2) == 'c0' ? 0 : 1;
                     $nowRewardStatus = substr($msg, 6, 2) == 'd0' ? 0 : 1;
+
+                    // ✅ auto 状态变化时推送到玩家端
+                    if ($this->auto != $nowAuto && !empty($gamingUserId)) {
+                        $this->pushAutoStatus($gamingUserId, $this->machine->id, $nowAuto);
+                    }
+
                     $this->auto = $nowAuto;
                     $this->reward_status = $nowRewardStatus;
                     $this->setActionVersion(self::READ_STATUS);
@@ -861,6 +873,20 @@ class SongSlot extends MachineServices implements BaseMachine
      * @throws Exception
      * @throws PushException
      */
+    /**
+     * 开启自动（异步模式 - 不等待机台返回）
+     *
+     * 发送指令后立即返回，机台状态变化后通过 Socket 推送通知前端
+     * Socket 推送在 handleMsg() Line 508-510 处理
+     *
+     * @param string $uid Gateway UID
+     * @param string $cmd 硬件指令
+     * @param int $data 指令数据
+     * @param string $source 来源（player/admin）
+     * @param int $source_id 来源ID（玩家ID或管理员ID）
+     * @return void
+     * @throws Exception
+     */
     private function autoOn(
         string $uid,
         string $cmd,
@@ -869,32 +895,27 @@ class SongSlot extends MachineServices implements BaseMachine
         int    $source_id = 0,
     ): void
     {
-        $expirationTime = 12000000;
         try {
+            // ✅ 异步发送指令，不等待机台返回
             Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
-            $handleDuration = 0;
-            $sleep = 1000000; // 5毫秒取一次值
-            while (true) {
-                $auto = $this->auto;
-                if ($auto == 1) {
-                    if ($source == 'admin') {
-                        sendSocketMessage('private-admin-1-' . $source_id, [
-                            'msg_type' => 'machine_action_result',
-                            'id' => $this->machine->id,
-                            'description' => $this->getDescription(self::OPEN_ANY_POINT, $data),
-                        ]);
-                    }
-                    return;
-                }
-                if ($handleDuration >= $expirationTime) {
-                    throw new Exception(trans('machine_action_fail', [], 'message'));
-                }
-                usleep($sleep);
-                $handleDuration += $sleep;
-                $this->sendCmd(self::READ_STATUS);
+
+            // ✅ 后台管理员操作：立即推送操作结果（告知"已发送指令"）
+            if ($source == 'admin') {
+                sendSocketMessage('private-admin-1-' . $source_id, [
+                    'msg_type' => 'machine_action_result',
+                    'id' => $this->machine->id,
+                    'description' => $this->getDescription(self::OPEN_ANY_POINT, $data) . ' (指令已发送)',
+                ]);
             }
-        } catch (Exception) {
-            $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code]]);
+
+            // ✅ 机台状态变化后，handleMsg() Line 508-510 会自动推送 auto 状态到前端
+            // 推送格式见 pushAutoStatus() 方法
+
+        } catch (Exception $e) {
+            $this->log->error('开启自动指令发送失败', [
+                'machine_code' => $this->machine->code,
+                'error' => $e->getMessage()
+            ]);
             throw new Exception(trans('machine_action_fail', [], 'message'));
         }
     }
@@ -999,6 +1020,20 @@ class SongSlot extends MachineServices implements BaseMachine
      * @throws Exception
      * @throws PushException
      */
+    /**
+     * 关闭自动（异步模式 - 不等待机台返回）
+     *
+     * 发送指令后立即返回，机台状态变化后通过 Socket 推送通知前端
+     * Socket 推送在 handleMsg() Line 508-510 处理
+     *
+     * @param string $uid Gateway UID
+     * @param string $cmd 硬件指令
+     * @param int $data 指令数据
+     * @param string $source 来源（player/admin）
+     * @param int $source_id 来源ID（玩家ID或管理员ID）
+     * @return void
+     * @throws Exception
+     */
     private function autoOff(
         string $uid,
         string $cmd,
@@ -1007,32 +1042,27 @@ class SongSlot extends MachineServices implements BaseMachine
         int    $source_id = 0,
     ): void
     {
-        $expirationTime = 12000000;
         try {
+            // ✅ 异步发送指令，不等待机台返回
             Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
-            $handleDuration = 0;
-            $sleep = 1000000; // 5毫秒取一次值
-            while (true) {
-                $auto = $this->auto;
-                if ($auto == 0) {
-                    if ($source == 'admin') {
-                        sendSocketMessage('private-admin-1-' . $source_id, [
-                            'msg_type' => 'machine_action_result',
-                            'id' => $this->machine->id,
-                            'description' => $this->getDescription(self::OPEN_ANY_POINT, $data),
-                        ]);
-                    }
-                    return;
-                }
-                if ($handleDuration >= $expirationTime) {
-                    throw new Exception(trans('machine_action_fail', [], 'message'));
-                }
-                usleep($sleep);
-                $handleDuration += $sleep;
-                $this->sendCmd(self::READ_STATUS);
+
+            // ✅ 后台管理员操作：立即推送操作结果（告知"已发送指令"）
+            if ($source == 'admin') {
+                sendSocketMessage('private-admin-1-' . $source_id, [
+                    'msg_type' => 'machine_action_result',
+                    'id' => $this->machine->id,
+                    'description' => $this->getDescription(self::OPEN_ANY_POINT, $data) . ' (指令已发送)',
+                ]);
             }
-        } catch (Exception) {
-            $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code]]);
+
+            // ✅ 机台状态变化后，handleMsg() Line 508-510 会自动推送 auto 状态到前端
+            // 推送格式见 pushAutoStatus() 方法
+
+        } catch (Exception $e) {
+            $this->log->error('关闭自动指令发送失败', [
+                'machine_code' => $this->machine->code,
+                'error' => $e->getMessage()
+            ]);
             throw new Exception(trans('machine_action_fail', [], 'message'));
         }
     }
@@ -1215,5 +1245,30 @@ class SongSlot extends MachineServices implements BaseMachine
     public function getAllData(): iterable
     {
         return Cache::getMultiple($this->cacheDataKeyArr, 0);
+    }
+
+    /**
+     * 推送机台自动状态到玩家端
+     *
+     * 当机台的 auto 状态发生变化时（开启/关闭自动），推送通知到玩家前端
+     * 使用单频道推送（与 machine_now_info 保持一致）
+     *
+     * @param int $playerId 玩家ID
+     * @param int $machineId 机台ID
+     * @param int $auto 自动状态（0=关闭，1=开启）
+     * @return void
+     */
+    private function pushAutoStatus(int $playerId, int $machineId, int $auto): void
+    {
+        $message = [
+            'msg_type' => 'player_machine_auto_status',
+            'player_id' => $playerId,
+            'machine_id' => $machineId,
+            'auto' => $auto,
+            'timestamp' => time(),
+        ];
+
+        // ✅ 单频道推送（与 machine_now_info 保持一致）
+        sendSocketMessage('player-' . $playerId . '-' . $machineId, $message);
     }
 }

@@ -402,6 +402,12 @@ class Slot extends MachineServices implements BaseMachine
             if ($fun == Slot::AUTO && $this->machine->is_special == 0) {
                 $status = decodeStatus(substr($msg, 10, 2));
                 $auto = substr($status, 7, 1);
+
+                // ✅ auto 状态变化时推送到玩家端
+                if ($this->auto != $auto && !empty($this->machine->gaming_user_id)) {
+                    $this->pushAutoStatus($this->machine->gaming_user_id, $this->machine->id, $auto);
+                }
+
                 $this->auto = $auto;
             }
             switch ($msg) {
@@ -1406,5 +1412,30 @@ class Slot extends MachineServices implements BaseMachine
         }
 
         return true;
+    }
+
+    /**
+     * 推送机台自动状态到玩家端
+     *
+     * 当机台的 auto 状态发生变化时（开启/关闭自动），推送通知到玩家前端
+     * 使用单频道推送（与 machine_now_info 保持一致）
+     *
+     * @param int $playerId 玩家ID
+     * @param int $machineId 机台ID
+     * @param int $auto 自动状态（0=关闭，1=开启）
+     * @return void
+     */
+    private function pushAutoStatus(int $playerId, int $machineId, int $auto): void
+    {
+        $message = [
+            'msg_type' => 'player_machine_auto_status',
+            'player_id' => $playerId,
+            'machine_id' => $machineId,
+            'auto' => $auto,
+            'timestamp' => time(),
+        ];
+
+        // ✅ 单频道推送（与 machine_now_info 保持一致）
+        sendSocketMessage('player-' . $playerId . '-' . $machineId, $message);
     }
 }
