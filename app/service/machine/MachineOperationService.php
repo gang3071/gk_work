@@ -882,8 +882,11 @@ class MachineOperationService
         }
 
         // 准备参数
-        // ✅ 兼容 gk_api: 'down' 映射为 'leave'
-        $action = $params['action'] === 'down' ? 'leave' : $params['action'];
+        // 注意：down（下分）、leave（弃台）、switch（换台）是不同的业务逻辑
+        // - down: 仅下分，不做清理操作
+        // - leave: 弃台，包含下转、停push等清理操作
+        // - switch: 换台，从一台机器切换到另一台
+        $action = $params['action'];
         $isSystem = $params['is_system'] ?? 0;
         $hasLottery = $params['has_lottery'] ?? false;
         $adminId = $this->operatorType === self::OPERATOR_ADMIN ? $this->operatorId : 0;
