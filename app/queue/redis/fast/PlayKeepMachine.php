@@ -68,28 +68,28 @@ class PlayKeepMachine implements Consumer
                 return; // 数据不完整，静默跳过
             }
 
-            // ✅ 从 Events::getMachine 的缓存中读取 keep_minutes
-            // 使用独立的 keep_minutes 缓存 key，避免触发 machineCategory 懒加载
-            $keepMinutesCacheKey = "{$machineCacheKey}:keep_minutes";
+            // ✅ 从 Events::getMachine 的缓存中读取 Machine 对象
+            $machine = Cache::get($machineCacheKey);
+            if (!$machine) {
+                // 缓存未命中，查询数据库
+                $machine = Machine::query()->find($machineId);
+                if (!$machine) {
+                    return; // 机台不存在
+                }
+            }
+
+            // ✅ 使用 machine_category_id 作为缓存 key（同分类机台共享缓存）
+            $machineCategoryId = $machine->machine_category_id;
+            $keepMinutesCacheKey = "machine_category:{$machineCategoryId}:keep_minutes";
             $keepMinutes = Cache::get($keepMinutesCacheKey);
 
             if ($keepMinutes === null) {
-                // 尝试从完整 Machine 缓存读取
-                $machine = Cache::get($machineCacheKey);
+                // 查询 machineCategory 表
+                $keepMinutes = \app\model\MachineCategory::query()
+                    ->where('id', $machineCategoryId)
+                    ->value('keep_minutes') ?? 0;
 
-                if ($machine && isset($machine->machineCategory)) {
-                    // Machine 缓存包含关联数据
-                    $keepMinutes = $machine->machineCategory->keep_minutes ?? 0;
-                } else {
-                    // 查询数据库
-                    $machine = Machine::query()->with('machineCategory:id,keep_minutes')->find($machineId);
-                    if (!$machine) {
-                        return; // 机台不存在
-                    }
-                    $keepMinutes = $machine->machineCategory->keep_minutes ?? 0;
-                }
-
-                // 缓存 keep_minutes（1小时，与 Events 一致）
+                // 缓存 keep_minutes（1小时）
                 Cache::set($keepMinutesCacheKey, $keepMinutes, 3600);
             }
 
