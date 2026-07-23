@@ -42,9 +42,9 @@ class PlayKeepMachine implements Consumer
     private static $maxKeepSeconds = null;
 
     /**
-     * 缓存过期时间（秒）
+     * 缓存过期时间（秒）- 与 Events.php 保持一致
      */
-    private const CACHE_TTL = 300; // 5 分钟
+    private const CACHE_TTL = 3600; // 1 小时
 
     /**
      * 消费消息
@@ -164,12 +164,19 @@ class PlayKeepMachine implements Consumer
     /**
      * 获取机台信息（带缓存）
      *
+     * 优化策略：
+     * 1. 进程内缓存（最快，1 小时 TTL）
+     * 2. Redis 缓存（与 Events.php 共享缓存 key，1 小时 TTL）
+     * 3. 数据库查询（最后手段）
+     *
+     * 缓存 key 格式：machine:id:{machine_id}
+     *
      * @param int $machineId
      * @return Machine|null
      */
     private function getMachine(int $machineId): ?Machine
     {
-        // 进程内缓存检查
+        // 1️⃣ 进程内缓存检查
         if (isset(self::$machineCache[$machineId])) {
             $cached = self::$machineCache[$machineId];
             if ($cached['expire'] > time()) {
@@ -178,23 +185,23 @@ class PlayKeepMachine implements Consumer
             unset(self::$machineCache[$machineId]);
         }
 
-        // Redis 缓存查询（MachineServices 内部也有缓存）
-        $cacheKey = "play_keep_machine:info:{$machineId}";
+        // 2️⃣ Redis 缓存检查（与 Events.php 保持一致的 TTL）
+        $cacheKey = "machine:id:{$machineId}";
         $machine = Cache::get($cacheKey);
 
         if (!$machine) {
-            // 数据库查询（预加载 machineCategory 避免 N+1）
+            // 3️⃣ 数据库查询（预加载 machineCategory 避免 N+1）
             $machine = Machine::query()
                 ->with('machineCategory:id,keep_minutes')
                 ->find($machineId);
 
             if ($machine) {
-                // 缓存到 Redis（5 分钟）
+                // 缓存到 Redis（1 小时，与 Events.php 一致）
                 Cache::set($cacheKey, $machine, self::CACHE_TTL);
             }
         }
 
-        // 缓存到进程内存
+        // 4️⃣ 缓存到进程内存
         if ($machine) {
             self::$machineCache[$machineId] = [
                 'machine' => $machine,
@@ -216,8 +223,8 @@ class PlayKeepMachine implements Consumer
         // 清除进程内缓存
         unset(self::$machineCache[$machineId]);
 
-        // 清除 Redis 缓存
-        $cacheKey = "play_keep_machine:info:{$machineId}";
+        // 清除 Redis 缓存（machine:id 格式）
+        $cacheKey = "machine:id:{$machineId}";
         Cache::delete($cacheKey);
 
         // 清除 keep_minutes 缓存
