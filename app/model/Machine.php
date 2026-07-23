@@ -105,12 +105,6 @@ class Machine extends Model
      */
     protected static function booted()
     {
-        // ✅ 诊断日志：验证 booted 是否被调用
-        \support\Log::info('[Machine::booted] 模型事件注册', [
-            'class' => static::class,
-            'timestamp' => date('Y-m-d H:i:s'),
-        ]);
-
         static::updated(function (Machine $machine) {
             // ✅ 诊断日志：验证 updated 事件是否触发
             \support\Log::info('[Machine::updated] 事件触发', [

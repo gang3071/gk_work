@@ -70,8 +70,38 @@ class PlayKeepMachine implements Consumer
                 return; // 机台不存在，静默跳过
             }
 
+            // ✅ 数据验证：检查 control_type 是否有效
+            if (empty($machine->control_type) || !in_array($machine->control_type, [1, 2])) {
+                Log::warning('[PlayKeepMachine] 机台 control_type 无效，跳过', [
+                    'machine_id' => $machineId,
+                    'machine_code' => $machine->code ?? 'unknown',
+                    'type' => $machine->type ?? 'null',
+                    'control_type' => $machine->control_type ?? 'null',
+                ]);
+
+                // 清除缓存，下次重新读取
+                $this->clearMachineCache($machineId);
+                return;
+            }
+
             // ✅ 优化2：直接创建 MachineServices（内部会缓存）
-            $services = MachineServices::createServices($machine);
+            try {
+                $services = MachineServices::createServices($machine);
+            } catch (\Throwable $createError) {
+                // ❌ 创建 MachineServices 失败，记录详细信息
+                Log::error('[PlayKeepMachine] 创建 MachineServices 失败', [
+                    'machine_id' => $machineId,
+                    'machine_type' => $machine->type ?? 'null',
+                    'control_type' => $machine->control_type ?? 'null',
+                    'has_machine' => true,
+                    'machine_attributes' => array_keys($machine->getAttributes()),
+                    'error' => $createError->getMessage(),
+                ]);
+
+                // 清除缓存，强制下次从数据库重新读取
+                $this->clearMachineCache($machineId);
+                throw $createError;
+            }
 
             // ✅ 从 Redis 读取 gaming_user_id（实时数据）
             $gamingUserId = $services->gaming_user_id ?? 0;
@@ -173,6 +203,26 @@ class PlayKeepMachine implements Consumer
         }
 
         return $machine;
+    }
+
+    /**
+     * 清除机台缓存
+     *
+     * @param int $machineId
+     * @return void
+     */
+    private function clearMachineCache(int $machineId): void
+    {
+        // 清除进程内缓存
+        unset(self::$machineCache[$machineId]);
+
+        // 清除 Redis 缓存
+        $cacheKey = "play_keep_machine:info:{$machineId}";
+        Cache::delete($cacheKey);
+
+        // 清除 keep_minutes 缓存
+        $keepMinutesCacheKey = "play_keep_machine:keep_minutes:{$machineId}";
+        Cache::delete($keepMinutesCacheKey);
     }
 
     /**
