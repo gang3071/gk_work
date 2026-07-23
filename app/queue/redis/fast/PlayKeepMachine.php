@@ -58,84 +58,40 @@ class PlayKeepMachine implements Consumer
             $machineId = $data['machine_id'] ?? 0;
             $playerId = $data['player_id'] ?? 0;
             $changeAmount = $data['change_amount'] ?? 0;
+            $keepMinutes = $data['keep_minutes'] ?? 0;
+            $oldKeepSeconds = $data['keep_seconds'] ?? 0;
+            $oldKeeping = $data['keeping'] ?? 0;
+            $gamingUserId = $data['gaming_user_id'] ?? $playerId;
 
             // ✅ 快速校验：数据完整性
-            if (!$machineId || !$playerId) {
-                return; // 数据不完整，静默跳过，减少日志
+            if (!$machineId || !$gamingUserId) {
+                return; // 数据不完整，静默跳过
             }
-
-            // ✅ 优化1：使用进程内缓存 + Redis 缓存机台信息
-            $machine = $this->getMachine($machineId);
-            if (!$machine) {
-                return; // 机台不存在，静默跳过
-            }
-
-            // ✅ 数据验证：检查 control_type 是否有效
-            if (empty($machine->control_type) || !in_array($machine->control_type, [1, 2])) {
-                Log::warning('[PlayKeepMachine] 机台 control_type 无效，跳过', [
-                    'machine_id' => $machineId,
-                    'machine_code' => $machine->code ?? 'unknown',
-                    'type' => $machine->type ?? 'null',
-                    'control_type' => $machine->control_type ?? 'null',
-                ]);
-
-                // 清除缓存，下次重新读取
-                $this->clearMachineCache($machineId);
-                return;
-            }
-
-            // ✅ 优化2：直接创建 MachineServices（内部会缓存）
-            try {
-                $services = MachineServices::createServices($machine);
-            } catch (\Throwable $createError) {
-                // ❌ 创建 MachineServices 失败，记录详细信息
-                Log::error('[PlayKeepMachine] 创建 MachineServices 失败', [
-                    'machine_id' => $machineId,
-                    'machine_type' => $machine->type ?? 'null',
-                    'control_type' => $machine->control_type ?? 'null',
-                    'has_machine' => true,
-                    'machine_attributes' => array_keys($machine->getAttributes()),
-                    'error' => $createError->getMessage(),
-                ]);
-
-                // 清除缓存，强制下次从数据库重新读取
-                $this->clearMachineCache($machineId);
-                throw $createError;
-            }
-
-            // ✅ 从 Redis 读取 gaming_user_id（实时数据）
-            $gamingUserId = $services->gaming_user_id ?? 0;
-            if (empty($gamingUserId)) {
-                return; // 无玩家，静默跳过
-            }
-
-            // ✅ 优化3：缓存 keep_minutes，避免每次访问关联
-            $keepMinutes = $this->getKeepMinutes($machineId, $machine);
 
             $keepSecondsChanged = false;
             $keepingChanged = false;
+            $newKeepSeconds = $oldKeepSeconds;
+            $newKeeping = $oldKeeping;
 
             // 增加保留时间
             if ($keepMinutes > 0 && $changeAmount > 0) {
-                $oldKeepSeconds = $services->keep_seconds;
                 $addSeconds = bcmul($keepMinutes, $changeAmount);
                 $newKeepSeconds = bcadd($oldKeepSeconds, $addSeconds);
 
-                // ✅ 优化4：缓存最大保留时间配置
+                // 检查最大保留时间限制
                 $maxKeepSeconds = $this->getMaxKeepSeconds();
                 if ($maxKeepSeconds > 0 && $newKeepSeconds > $maxKeepSeconds) {
                     $newKeepSeconds = $maxKeepSeconds;
                 }
 
                 if ($newKeepSeconds != $oldKeepSeconds) {
-                    $services->keep_seconds = $newKeepSeconds;
                     $keepSecondsChanged = true;
                 }
             }
 
             // 解除保留状态
-            if ($services->keeping == 1) {
-                $services->keeping = 0;
+            if ($oldKeeping == 1) {
+                $newKeeping = 0;
                 $keepingChanged = true;
 
                 // 更新保留日志（异步，不阻塞）
@@ -146,9 +102,26 @@ class PlayKeepMachine implements Consumer
                 }
             }
 
-            // ✅ 优化5：只在状态真正改变时才推送
+            // ✅ 更新 Redis（只在有变化时）
             if ($keepSecondsChanged || $keepingChanged) {
-                $this->pushKeepingStatus($gamingUserId, $machine->id, $services->keep_seconds, $services->keeping);
+                // 创建 MachineServices 更新 Redis
+                $machine = $this->getMachine($machineId);
+                if ($machine) {
+                    try {
+                        $services = MachineServices::createServices($machine);
+                        if ($keepSecondsChanged) {
+                            $services->keep_seconds = $newKeepSeconds;
+                        }
+                        if ($keepingChanged) {
+                            $services->keeping = $newKeeping;
+                        }
+                    } catch (\Throwable $e) {
+                        // 更新失败不影响推送
+                    }
+                }
+
+                // 推送到客户端
+                $this->pushKeepingStatus($gamingUserId, $machineId, $newKeepSeconds, $newKeeping);
             }
 
         } catch (\Throwable $e) {

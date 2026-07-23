@@ -524,6 +524,10 @@ class SongJackpot extends MachineServices implements BaseMachine
                             'change_amount' => abs($nowWinNumber - $orgWinNumber),
                             'machine_id' => $this->machine->id,
                             'player_id' => $gamingUserId,
+                            'gaming_user_id' => $gamingUserId,
+                            'keep_minutes' => $this->machine->machineCategory->keep_minutes ?? 0,
+                            'keep_seconds' => $this->keep_seconds,
+                            'keeping' => $this->keeping,
                         ]);
                         Client::send('lottery-machine', [
                             'num' => $nowWinNumber,

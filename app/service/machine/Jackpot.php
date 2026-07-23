@@ -494,6 +494,10 @@ class Jackpot extends MachineServices implements BaseMachine
                                 'change_amount' => abs($data - $this->win_number),
                                 'machine_id' => $this->machine->id,
                                 'player_id' => $gamingUserId,
+                                'gaming_user_id' => $gamingUserId,
+                                'keep_minutes' => $this->machine->machineCategory->keep_minutes ?? 0,
+                                'keep_seconds' => $this->keep_seconds,
+                                'keeping' => $this->keeping,
                             ]);
                             Client::send('lottery-machine', [
                                 'num' => $data,
