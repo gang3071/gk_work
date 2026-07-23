@@ -381,6 +381,7 @@ class MachineOperationService
     private function isControlOperation(string $action): bool
     {
         $slotActions = [
+            'move_point_off', 'bet',  // ✅ 新增：移分OFF、押分
             'start', 'auto', 'stop_auto',
             'out_1_pulse', 'stop_1', 'stop_2', 'stop_3',
         ];
@@ -420,6 +421,32 @@ class MachineOperationService
         $movePoint = $params['move_point'] ?? 0;
 
         switch ($action) {
+            case 'move_point_off':
+                // 移分OFF（仅双美斯洛）
+                if ($controlType === Machine::CONTROL_TYPE_MEI) {
+                    $this->sendCmd($this->services::MOVE_POINT_OFF);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 MOVE_POINT_OFF (双美)', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
+                break;
+
+            case 'bet':
+                // 押分（仅双美斯洛）
+                // 先关闭移分，再发送压分指令
+                if ($controlType === Machine::CONTROL_TYPE_MEI) {
+                    $this->sendCmd($this->services::MOVE_POINT_OFF);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 MOVE_POINT_OFF (双美)', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+
+                    $this->sendCmd($this->services::PRESSURE);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 PRESSURE (双美)', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
+                break;
+
             case 'start':
                 // 条件1: 移分开关（仅双美斯洛）
                 if ($controlType === Machine::CONTROL_TYPE_MEI && $movePoint == 0) {
