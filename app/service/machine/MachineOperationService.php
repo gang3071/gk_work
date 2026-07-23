@@ -201,6 +201,8 @@ class MachineOperationService
                 return $this->checkOnline();
             case 'get_description':
                 return $this->getDescription();
+            case 'send_raw_cmd':
+                return $this->sendRawCmd($params);
             default:
                 throw new Exception("未知的基础操作: {$action}");
         }
@@ -370,6 +372,41 @@ class MachineOperationService
         return [
             'machine_id' => $this->machine->id,
             'description' => $this->services->getDescription(),
+        ];
+    }
+
+    /**
+     * 发送原始硬件指令（底层接口）
+     *
+     * 用于直接发送 TCP 指令码，不经过业务逻辑封装
+     *
+     * @param array $params ['cmd' => string, 'data' => int, 'is_system' => int]
+     * @return array
+     * @throws Exception
+     */
+    private function sendRawCmd(array $params): array
+    {
+        $cmd = $params['cmd'] ?? '';
+        $data = (int) ($params['data'] ?? 0);
+        $isSystem = (int) ($params['is_system'] ?? 0);
+
+        if (empty($cmd)) {
+            throw new Exception('缺少必要参数: cmd');
+        }
+
+        // 直接调用底层服务发送 TCP 指令
+        $result = $this->services->sendCmd(
+            $cmd,
+            $data,
+            $isSystem,
+            $this->operatorId
+        );
+
+        return [
+            'success' => $result,
+            'cmd' => $cmd,
+            'data' => $data,
+            'machine_id' => $this->machine->id,
         ];
     }
 
