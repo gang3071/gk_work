@@ -541,31 +541,40 @@ class MachineOperationService
                 break;
 
             case 'plc_start_or_stop':
-                // 根据当前状态决定开始或停止
-                if ($auto == 1) {
-                    $this->sendCmd($this->services::PUSH_STOP);
-                    Log::channel('machine_operations')->info('[JackpotControl] 发送 PUSH_STOP', [
-                        'machine_id' => $this->machine->id,
-                    ]);
-                } else {
-                    $this->sendCmd($this->services::PUSH . $this->services::PUSH_ONE);
-                    Log::channel('machine_operations')->info('[JackpotControl] 发送 PUSH+PUSH_ONE', [
-                        'machine_id' => $this->machine->id,
-                    ]);
-                }
-                break;
-
-            case 'plc_push_5hz':
-                $this->sendCmd($this->services::PUSH . $this->services::PUSH_THREE);
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 PUSH+PUSH_THREE', [
+                // 自动上转（开始游戏）
+                $this->sendCmd($this->services::AUTO_UP_TURN);
+                Log::channel('machine_operations')->info('[JackpotControl] 发送 AUTO_UP_TURN', [
                     'machine_id' => $this->machine->id,
                 ]);
                 break;
 
-            case 'plc_push_stop':
-                $this->sendCmd($this->services::PUSH_STOP);
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 PUSH_STOP', [
+            case 'plc_push_5hz':
+                // 连发 PUSH（5Hz）
+                if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
+                    // 双美：PUSH + PUSH_THREE
+                    $this->sendCmd($this->services::PUSH . $this->services::PUSH_THREE);
+                } else {
+                    // 小淞：直接发送 PUSH_THREE
+                    $this->sendCmd($this->services::PUSH_THREE);
+                }
+                Log::channel('machine_operations')->info('[JackpotControl] 发送 PUSH_THREE（连发）', [
                     'machine_id' => $this->machine->id,
+                    'control_type' => $this->machine->control_type,
+                ]);
+                break;
+
+            case 'plc_push_stop':
+                // 停止 PUSH
+                if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
+                    // 双美：PUSH + PUSH_STOP
+                    $this->sendCmd($this->services::PUSH . $this->services::PUSH_STOP);
+                } else {
+                    // 小淞：PUSH_ONE（单发 PUSH）
+                    $this->sendCmd($this->services::PUSH_ONE);
+                }
+                Log::channel('machine_operations')->info('[JackpotControl] 发送 PUSH_STOP 指令', [
+                    'machine_id' => $this->machine->id,
+                    'control_type' => $this->machine->control_type,
                 ]);
                 break;
 
