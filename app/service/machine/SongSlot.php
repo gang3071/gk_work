@@ -773,10 +773,17 @@ class SongSlot extends MachineServices implements BaseMachine
                     // 执行洗分
                     $this->washPoint($uid, $cmd . $code, $this->pre_wash_point, $source, $source_id);
 
-                    // ✅ 二次确认：读取机台实际分数，验证是否真的扣掉了
-                    usleep(200000); // 等待 200ms 让机台完成操作
-                    $this->sendCmd(self::READ_SCORE, 0, $source, $source_id);
-                    usleep(100000); // 等待 100ms 让读分返回
+                    // ✅ 二次确认：主动读取机台分数，验证是否真的扣掉了
+                    // sendCmd 内部会阻塞等待直到收到响应或超时，无需额外 sleep
+                    try {
+                        $this->sendCmd(self::READ_SCORE, 0, $source, $source_id);
+                    } catch (Exception $e) {
+                        // 读分失败不影响主流程，但记录日志
+                        Log::warning('[SongSlot-WashVerify] 洗分后读分失败', [
+                            'machine_id' => $this->machine->id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
 
                     $pointAfterWash = $this->point;
                     $expectedPoint = $pointBeforeWash - $this->pre_wash_point;
