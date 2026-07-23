@@ -869,8 +869,8 @@ class MachineOperationService
             throw new Exception('缺少参数: player_id');
         }
 
-        if (!isset($params['action']) || !in_array($params['action'], ['leave', 'switch'])) {
-            throw new Exception('缺少或无效的参数: action (必须是 leave 或 switch)');
+        if (!isset($params['action']) || !in_array($params['action'], ['leave', 'down', 'switch'])) {
+            throw new Exception('缺少或无效的参数: action (必须是 leave/down/switch)');
         }
 
         // 获取玩家
@@ -882,7 +882,8 @@ class MachineOperationService
         }
 
         // 准备参数
-        $action = $params['action']; // 'leave' 或 'switch'
+        // ✅ 兼容 gk_api: 'down' 映射为 'leave'
+        $action = $params['action'] === 'down' ? 'leave' : $params['action'];
         $isSystem = $params['is_system'] ?? 0;
         $hasLottery = $params['has_lottery'] ?? false;
         $adminId = $this->operatorType === self::OPERATOR_ADMIN ? $this->operatorId : 0;
