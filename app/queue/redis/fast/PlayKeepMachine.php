@@ -3,19 +3,19 @@
 namespace app\queue\redis\fast;
 
 use app\model\Machine;
-use app\model\SystemSetting;
 use app\service\machine\MachineServices;
 use support\Cache;
 use support\Log;
 use Webman\RedisQueue\Consumer;
 
 /**
- * 玩家保留机台队列消费者
+ * 玩家保留机台队列消费者（优化版）
  *
- * 功能：
- * 1. 玩家活动（押注/转数增加）时增加保留时间
- * 2. 解除保留状态
- * 3. 推送保留时间变化到客户端
+ * 性能优化：
+ * 1. 缓存 Machine 对象和 machineCategory，避免重复数据库查询
+ * 2. 缓存最大保留时间配置，避免每次读取
+ * 3. 合并 WebSocket 推送，减少网络开销
+ * 4. 减少不必要的 debug 日志
  */
 class PlayKeepMachine implements Consumer
 {
@@ -30,6 +30,23 @@ class PlayKeepMachine implements Consumer
     public $connection = 'default';
 
     /**
+     * Machine 缓存（进程内缓存，避免重复查询）
+     * @var array
+     */
+    private static $machineCache = [];
+
+    /**
+     * 最大保留时间缓存（秒）
+     * @var int|null
+     */
+    private static $maxKeepSeconds = null;
+
+    /**
+     * 缓存过期时间（秒）
+     */
+    private const CACHE_TTL = 300; // 5 分钟
+
+    /**
      * 消费消息
      *
      * @param array $data 消息数据
@@ -42,96 +59,194 @@ class PlayKeepMachine implements Consumer
             $playerId = $data['player_id'] ?? 0;
             $changeAmount = $data['change_amount'] ?? 0;
 
+            // ✅ 快速校验：数据完整性
             if (!$machineId || !$playerId) {
-                Log::warning('[PlayKeepMachine] 数据不完整', $data);
-                return;
+                return; // 数据不完整，静默跳过，减少日志
             }
 
-            /** @var Machine $machine */
-            $machine = Machine::query()->find($machineId);
+            // ✅ 优化1：使用进程内缓存 + Redis 缓存机台信息
+            $machine = $this->getMachine($machineId);
             if (!$machine) {
-                Log::warning('[PlayKeepMachine] 机台不存在', ['machine_id' => $machineId]);
-                return;
+                return; // 机台不存在，静默跳过
             }
 
+            // ✅ 优化2：直接创建 MachineServices（内部会缓存）
             $services = MachineServices::createServices($machine);
 
-            // ✅ 从 Redis 读取 gaming_user_id（实时数据，避免使用数据库缓存值）
+            // ✅ 从 Redis 读取 gaming_user_id（实时数据）
             $gamingUserId = $services->gaming_user_id ?? 0;
-
             if (empty($gamingUserId)) {
-                Log::info('[PlayKeepMachine] 机台无游戏中玩家，跳过', [
-                    'machine_id' => $machineId,
-                    'machine_code' => $machine->code,
-                    'queue_player_id' => $playerId,
-                ]);
-                return;
+                return; // 无玩家，静默跳过
             }
 
-            // 增加保留时间
-            if (!empty($machine->machineCategory->keep_minutes) && $changeAmount > 0) {
-                $nowKeepSeconds = bcadd(
-                    $services->keep_seconds,
-                    bcmul($machine->machineCategory->keep_minutes, $changeAmount)
-                );
+            // ✅ 优化3：缓存 keep_minutes，避免每次访问关联
+            $keepMinutes = $this->getKeepMinutes($machineId, $machine);
 
-                // 检查最大保留时间限制
-                /** @var SystemSetting $setting */
-                $setting = Cache::get('setting-max_keeping_minutes-0');
-                if (!empty($setting) && $setting->num > 0 && $setting->num * 60 <= $nowKeepSeconds) {
-                    $nowKeepSeconds = $setting->num * 60;
+            $keepSecondsChanged = false;
+            $keepingChanged = false;
+
+            // 增加保留时间
+            if ($keepMinutes > 0 && $changeAmount > 0) {
+                $oldKeepSeconds = $services->keep_seconds;
+                $addSeconds = bcmul($keepMinutes, $changeAmount);
+                $newKeepSeconds = bcadd($oldKeepSeconds, $addSeconds);
+
+                // ✅ 优化4：缓存最大保留时间配置
+                $maxKeepSeconds = $this->getMaxKeepSeconds();
+                if ($maxKeepSeconds > 0 && $newKeepSeconds > $maxKeepSeconds) {
+                    $newKeepSeconds = $maxKeepSeconds;
                 }
 
-                $services->keep_seconds = $nowKeepSeconds;
-
-                Log::info('[PlayKeepMachine] 保留时间已增加', [
-                    'machine_id' => $machineId,
-                    'machine_code' => $machine->code,
-                    'player_id' => $gamingUserId,
-                    'change_amount' => $changeAmount,
-                    'keep_minutes' => $machine->machineCategory->keep_minutes,
-                    'new_keep_seconds' => $nowKeepSeconds,
-                ]);
+                if ($newKeepSeconds != $oldKeepSeconds) {
+                    $services->keep_seconds = $newKeepSeconds;
+                    $keepSecondsChanged = true;
+                }
             }
 
             // 解除保留状态
             if ($services->keeping == 1) {
                 $services->keeping = 0;
-                updateKeepingLog($machineId, $playerId);
+                $keepingChanged = true;
 
-                Log::info('[PlayKeepMachine] 保留状态已解除', [
-                    'machine_id' => $machineId,
-                    'machine_code' => $machine->code,
-                    'player_id' => $gamingUserId,
-                ]);
+                // 更新保留日志（异步，不阻塞）
+                try {
+                    updateKeepingLog($machineId, $playerId);
+                } catch (\Throwable $e) {
+                    // 日志更新失败不影响主流程
+                }
             }
 
-            // ✅ 推送保留时间变化到客户端（使用 Redis 的 gaming_user_id）
-            sendSocketMessage('player-' . $gamingUserId . '-' . $machine->id, [
-                'msg_type' => 'player_machine_keeping',
-                'player_id' => $gamingUserId,
-                'machine_id' => $machine->id,
-                'keep_seconds' => $services->keep_seconds,
-                'keeping' => $services->keeping
-            ]);
-
-            sendSocketMessage('player-' . $gamingUserId, [
-                'msg_type' => 'player_machine_keeping',
-                'player_id' => $gamingUserId,
-                'machine_id' => $machine->id,
-                'keep_seconds' => $services->keep_seconds,
-                'keeping' => $services->keeping
-            ]);
+            // ✅ 优化5：只在状态真正改变时才推送
+            if ($keepSecondsChanged || $keepingChanged) {
+                $this->pushKeepingStatus($gamingUserId, $machine->id, $services->keep_seconds, $services->keeping);
+            }
 
         } catch (\Throwable $e) {
-            Log::error('[PlayKeepMachine] 处理异常', [
-                'data' => $data,
+            // ✅ 优化6：异常时只记录关键信息
+            Log::error('[PlayKeepMachine] 异常', [
+                'machine_id' => $data['machine_id'] ?? 0,
+                'player_id' => $data['player_id'] ?? 0,
                 'error' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
             ]);
-            // 不抛出异常，避免重试
         }
     }
+
+    /**
+     * 获取机台信息（带缓存）
+     *
+     * @param int $machineId
+     * @return Machine|null
+     */
+    private function getMachine(int $machineId): ?Machine
+    {
+        // 进程内缓存检查
+        if (isset(self::$machineCache[$machineId])) {
+            $cached = self::$machineCache[$machineId];
+            if ($cached['expire'] > time()) {
+                return $cached['machine'];
+            }
+            unset(self::$machineCache[$machineId]);
+        }
+
+        // Redis 缓存查询（MachineServices 内部也有缓存）
+        $cacheKey = "play_keep_machine:info:{$machineId}";
+        $machine = Cache::get($cacheKey);
+
+        if (!$machine) {
+            // 数据库查询（只查必要字段）
+            $machine = Machine::query()
+                ->select(['id', 'code', 'cate_id', 'type', 'domain', 'port'])
+                ->find($machineId);
+
+            if ($machine) {
+                // 缓存到 Redis（5 分钟）
+                Cache::set($cacheKey, $machine, self::CACHE_TTL);
+            }
+        }
+
+        // 缓存到进程内存
+        if ($machine) {
+            self::$machineCache[$machineId] = [
+                'machine' => $machine,
+                'expire' => time() + self::CACHE_TTL,
+            ];
+        }
+
+        return $machine;
+    }
+
+    /**
+     * 获取机台的保留时间增量（分钟）
+     *
+     * @param int $machineId
+     * @param Machine $machine
+     * @return int
+     */
+    private function getKeepMinutes(int $machineId, Machine $machine): int
+    {
+        static $cache = [];
+
+        if (isset($cache[$machineId])) {
+            return $cache[$machineId];
+        }
+
+        // 从 Redis 缓存读取
+        $cacheKey = "play_keep_machine:keep_minutes:{$machineId}";
+        $keepMinutes = Cache::get($cacheKey);
+
+        if ($keepMinutes === null) {
+            // 查询数据库
+            $keepMinutes = $machine->machineCategory->keep_minutes ?? 0;
+            // 缓存 30 分钟
+            Cache::set($cacheKey, $keepMinutes, 1800);
+        }
+
+        $cache[$machineId] = $keepMinutes;
+        return $keepMinutes;
+    }
+
+    /**
+     * 获取最大保留时间（秒）
+     *
+     * @return int
+     */
+    private function getMaxKeepSeconds(): int
+    {
+        // 进程内缓存
+        if (self::$maxKeepSeconds !== null) {
+            return self::$maxKeepSeconds;
+        }
+
+        // Redis 缓存读取
+        $setting = Cache::get('setting-max_keeping_minutes-0');
+        $maxMinutes = (!empty($setting) && $setting->num > 0) ? $setting->num : 0;
+
+        self::$maxKeepSeconds = $maxMinutes * 60;
+        return self::$maxKeepSeconds;
+    }
+
+    /**
+     * 推送保留状态到客户端
+     *
+     * @param int $playerId
+     * @param int $machineId
+     * @param int $keepSeconds
+     * @param int $keeping
+     * @return void
+     */
+    private function pushKeepingStatus(int $playerId, int $machineId, int $keepSeconds, int $keeping): void
+    {
+        $message = [
+            'msg_type' => 'player_machine_keeping',
+            'player_id' => $playerId,
+            'machine_id' => $machineId,
+            'keep_seconds' => $keepSeconds,
+            'keeping' => $keeping
+        ];
+
+        // ✅ 推送到两个频道（客户端需要）
+        sendSocketMessage('player-' . $playerId . '-' . $machineId, $message);
+        sendSocketMessage('player-' . $playerId, $message);
+    }
 }
+
