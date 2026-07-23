@@ -570,17 +570,33 @@ class MachineOperationService
                 break;
 
             case 'plc_down_turn':
+                // 下转一次（转数转分数）
+                $this->sendCmd($this->services::TURN_TO_POINT);
+                Log::channel('machine_operations')->info('[JackpotControl] 发送 TURN_TO_POINT（下转一次）', [
+                    'machine_id' => $this->machine->id,
+                ]);
+                break;
+
             case 'all_down_turn':
+                // 全部下转
                 $this->sendCmd($this->services::TURN_DOWN_ALL);
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 TURN_DOWN_ALL', [
+                Log::channel('machine_operations')->info('[JackpotControl] 发送 TURN_DOWN_ALL（全部下转）', [
                     'machine_id' => $this->machine->id,
                 ]);
                 break;
 
             case 'plc_up_turn_100':
+                // 上转一次（分数转转数）
+                $this->sendCmd($this->services::POINT_TO_TURN);
+                Log::channel('machine_operations')->info('[JackpotControl] 发送 POINT_TO_TURN（上转一次）', [
+                    'machine_id' => $this->machine->id,
+                ]);
+                break;
+
             case 'all_up_turn':
+                // 全部上转
                 $this->sendCmd($this->services::TURN_UP_ALL);
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 TURN_UP_ALL', [
+                Log::channel('machine_operations')->info('[JackpotControl] 发送 TURN_UP_ALL（全部上转）', [
                     'machine_id' => $this->machine->id,
                 ]);
                 break;
