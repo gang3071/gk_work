@@ -1304,7 +1304,11 @@ class Slot extends MachineServices implements BaseMachine
                             'machine_id' => $this->machine->id,
                             'player_id' => $gamingUserId,
                             'gaming_user_id' => $gamingUserId,
-                            'keep_minutes' => $this->machine->machineCategory->keep_minutes ?? 0,
+                            'keep_minutes' => \support\Cache::remember(
+                                "machine:keep_minutes:{$this->machine->id}",
+                                1800,
+                                fn() => $this->machine->machineCategory->keep_minutes ?? 0
+                            ),
                             'keep_seconds' => $this->keep_seconds,
                             'keeping' => $this->keeping,
                         ]);
