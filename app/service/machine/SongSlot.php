@@ -863,17 +863,6 @@ class SongSlot extends MachineServices implements BaseMachine
     }
 
     /**
-     * 读取当前分数
-     * @param string $uid
-     * @param string $cmd
-     * @param int $data
-     * @param string $source
-     * @param int $source_id
-     * @return void
-     * @throws Exception
-     * @throws PushException
-     */
-    /**
      * 开启自动（异步模式 - 不等待机台返回）
      *
      * 发送指令后立即返回，机台状态变化后通过 Socket 推送通知前端
