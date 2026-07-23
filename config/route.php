@@ -39,10 +39,6 @@ Route::group('/api', function () {
             // ✅ 统一操作入口
             Route::post('/execute', [\app\api\v1\MachineOperationController::class, 'execute']);
             Route::get('/operations', [\app\api\v1\MachineOperationController::class, 'getOperations']);
-
-            // ✅ 底层硬件接口（gk_api AbstractMachineService 调用）
-            Route::post('/send-cmd', [\app\api\v1\PlayerMachineController::class, 'sendCmd']);
-
             // ✅ 获取所有在线状态（玩家端）
             Route::post('/all-online-status', [\app\api\v1\PlayerMachineController::class, 'getAllOnlineStatus']);
         });

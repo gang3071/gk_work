@@ -2,7 +2,9 @@
 
 namespace app\api\v1;
 
+use app\model\GameType;
 use app\model\Machine;
+use app\model\Player;
 use support\Request;
 use support\Response;
 use app\service\machine\MachineOperationService;
@@ -299,7 +301,7 @@ class MachineOperationController
             }
 
             // 根据机台类型返回支持的操作
-            if ($machine->game_type == \addons\webman\model\constant\GameType::TYPE_SLOT) {
+            if ($machine->game_type == GameType::TYPE_SLOT) {
                 // 斯洛机操作
                 $operations = [
                     'basic' => [
@@ -353,7 +355,7 @@ class MachineOperationController
                 'msg' => 'success',
                 'data' => [
                     'machine_id' => $machine->id,
-                    'machine_type' => $machine->game_type == \addons\webman\model\constant\GameType::TYPE_SLOT ? 'slot' : 'jackpot',
+                    'machine_type' => $machine->game_type == GameType::TYPE_SLOT ? 'slot' : 'jackpot',
                     'control_type' => $machine->control_type === Machine::CONTROL_TYPE_MEI ? 'mei' : 'song',
                     'operations' => $operations,
                 ],
