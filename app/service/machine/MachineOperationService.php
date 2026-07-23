@@ -175,6 +175,7 @@ class MachineOperationService
             'query_status',      // 查询机台状态
             'check_online',      // 检查在线状态
             'get_description',   // 获取操作描述
+            'send_raw_cmd',      // 发送原始硬件指令
         ]);
     }
 
