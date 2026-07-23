@@ -475,21 +475,14 @@ class SongSlot extends MachineServices implements BaseMachine
                                 'player_id' => $gamingUserId,
                             ]);
                         }
-                        // ✅ 使用与 Events::getMachine 相同的缓存 key 格式
-                        $keepMinutesCacheKey = sprintf('machine:domain:%s:port:%s:type:%s:keep_minutes',
-                            $this->machine->domain, $this->machine->port, $this->machine->type
-                        );
-
                         Client::send('play-keep-machine', [
                             'change_amount' => abs($nowBet - $orgBet),
                             'machine_id' => $this->machine->id,
+                            'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                                $this->machine->domain, $this->machine->port, $this->machine->type
+                            ),
                             'player_id' => $gamingUserId,
                             'gaming_user_id' => $gamingUserId,
-                            'keep_minutes' => \support\Cache::remember(
-                                $keepMinutesCacheKey,
-                                3600,  // 与 Events::getMachine 一致
-                                fn() => $this->machine->machineCategory->keep_minutes ?? 0
-                            ),
                             'keep_seconds' => $this->keep_seconds,
                             'keeping' => $this->keeping,
                         ]);

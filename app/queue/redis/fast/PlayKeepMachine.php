@@ -58,15 +58,28 @@ class PlayKeepMachine implements Consumer
             $machineId = $data['machine_id'] ?? 0;
             $playerId = $data['player_id'] ?? 0;
             $changeAmount = $data['change_amount'] ?? 0;
-            $keepMinutes = $data['keep_minutes'] ?? 0;
+            $machineCacheKey = $data['machine_cache_key'] ?? '';
             $oldKeepSeconds = $data['keep_seconds'] ?? 0;
             $oldKeeping = $data['keeping'] ?? 0;
             $gamingUserId = $data['gaming_user_id'] ?? $playerId;
 
             // ✅ 快速校验：数据完整性
-            if (!$machineId || !$gamingUserId) {
+            if (!$machineId || !$gamingUserId || !$machineCacheKey) {
                 return; // 数据不完整，静默跳过
             }
+
+            // ✅ 从 Events::getMachine 的缓存中读取 Machine 对象
+            $machine = Cache::get($machineCacheKey);
+            if (!$machine) {
+                // 缓存未命中，查询数据库
+                $machine = Machine::query()->with('machineCategory:id,keep_minutes')->find($machineId);
+                if (!$machine) {
+                    return; // 机台不存在
+                }
+            }
+
+            // 获取 keep_minutes
+            $keepMinutes = $machine->machineCategory->keep_minutes ?? 0;
 
             $keepSecondsChanged = false;
             $keepingChanged = false;
