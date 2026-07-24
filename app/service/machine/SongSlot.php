@@ -506,14 +506,27 @@ class SongSlot extends MachineServices implements BaseMachine
                     $this->bet = $nowBet;
                     $this->win = $nowWin;
 
-                    // ✅ auto 状态变化时推送到玩家端（异步开/关自动的核心推送逻辑）
-                    if ($this->auto != $nowAuto && !empty($gamingUserId)) {
-                        $this->pushAutoStatus($gamingUserId, $this->machine->id, $nowAuto);
-                    }
+                    // ✅ 检测状态变化并推送（只推送变化的字段）
+                    $oldAuto = $this->auto;
+                    $oldRewardStatus = $this->reward_status;
 
                     $this->auto = $nowAuto;
                     $this->reward_status = $nowRewardStatus;
+
+                    // 推送到后台管理端
                     $this->sendMachineNowStatusMessage($this->machine->id);
+
+                    // ✅ 只在有玩家且状态变化时推送到玩家端
+                    if (!empty($gamingUserId)) {
+                        // auto 状态变化
+                        if ($oldAuto != $nowAuto) {
+                            $this->sendMachineNowInfoMessage($gamingUserId, $this->machine->id, 'auto', ['auto' => $nowAuto]);
+                        }
+                        // reward_status 状态变化
+                        if ($oldRewardStatus != $nowRewardStatus) {
+                            $this->sendMachineNowInfoMessage($gamingUserId, $this->machine->id, 'reward_status', ['reward_status' => $nowRewardStatus]);
+                        }
+                    }
                     break;
                 case self::WASH_ZERO:
                     Redis::publish($domain . ':' . $port, '设备返回的消息');
@@ -590,13 +603,25 @@ class SongSlot extends MachineServices implements BaseMachine
                     $nowAuto = substr($msg, 4, 2) == 'c0' ? 0 : 1;
                     $nowRewardStatus = substr($msg, 6, 2) == 'd0' ? 0 : 1;
 
-                    // ✅ auto 状态变化时推送到玩家端
-                    if ($this->auto != $nowAuto && !empty($gamingUserId)) {
-                        $this->pushAutoStatus($gamingUserId, $this->machine->id, $nowAuto);
-                    }
+                    // ✅ 检测状态变化并推送（只推送变化的字段）
+                    $oldAuto = $this->auto;
+                    $oldRewardStatus = $this->reward_status;
 
                     $this->auto = $nowAuto;
                     $this->reward_status = $nowRewardStatus;
+
+                    // ✅ 只在有玩家且状态变化时推送到玩家端
+                    if (!empty($gamingUserId)) {
+                        // auto 状态变化
+                        if ($oldAuto != $nowAuto) {
+                            $this->sendMachineNowInfoMessage($gamingUserId, $this->machine->id, 'auto', ['auto' => $nowAuto]);
+                        }
+                        // reward_status 状态变化
+                        if ($oldRewardStatus != $nowRewardStatus) {
+                            $this->sendMachineNowInfoMessage($gamingUserId, $this->machine->id, 'reward_status', ['reward_status' => $nowRewardStatus]);
+                        }
+                    }
+
                     $this->setActionVersion(self::READ_STATUS);
                     break;
                 default:
@@ -1260,30 +1285,5 @@ class SongSlot extends MachineServices implements BaseMachine
     public function getAllData(): iterable
     {
         return Cache::getMultiple($this->cacheDataKeyArr, 0);
-    }
-
-    /**
-     * 推送机台自动状态到玩家端
-     *
-     * 当机台的 auto 状态发生变化时（开启/关闭自动），推送通知到玩家前端
-     * 使用单频道推送（与 machine_now_info 保持一致）
-     *
-     * @param int $playerId 玩家ID
-     * @param int $machineId 机台ID
-     * @param int $auto 自动状态（0=关闭，1=开启）
-     * @return void
-     */
-    private function pushAutoStatus(int $playerId, int $machineId, int $auto): void
-    {
-        $message = [
-            'msg_type' => 'player_machine_auto_status',
-            'player_id' => $playerId,
-            'machine_id' => $machineId,
-            'auto' => $auto,
-            'timestamp' => time(),
-        ];
-
-        // ✅ 单频道推送（与 machine_now_info 保持一致）
-        sendSocketMessage('player-' . $playerId . '-' . $machineId, $message);
     }
 }
