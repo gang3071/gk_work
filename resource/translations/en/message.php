@@ -418,5 +418,24 @@ return [
     'machine_lock' => '{code}The machine is locked. Please unlock the machine after troubleshooting',
     'point_not_enough' => 'The machine score must be greater than 6 to enable automatic operation',
     'machine_point_insufficient' => '{code} Machine, score less than 100, unable to move up',
-    'one_payment_recharge_close' => 'onePay Recharge Pass Load has been closed'
+    'one_payment_recharge_close' => 'onePay Recharge Pass Load has been closed',
+
+    // ==================== Machine Operations Translation (Added 2026-07-24) ====================
+    'operation_success' => 'Operation successful',
+    'unsupported_operation' => 'Unsupported operation: {action}',
+    'unknown_basic_operation' => 'Unknown basic operation: {action}',
+    'unknown_business_operation' => 'Unknown business operation: {action}',
+    'missing_required_parameter' => 'Missing required parameter: {param}',
+    'unknown_slot_control_cmd' => 'Unknown slot machine control command: {action}',
+    'unknown_jackpot_control_cmd' => 'Unknown jackpot machine control command: {action}',
+    'advanced_operation_admin_only' => 'Advanced operations are only allowed for admin',
+    'unknown_advanced_operation' => 'Unknown advanced operation: {action}',
+    'kick_player_not_migrated' => 'kickPlayer feature not migrated yet, please use original interface',
+    'force_kick_player_not_migrated' => 'forceKickPlayer feature not migrated yet, please use original interface',
+    'custom_open_score_not_migrated' => 'customOpenScore feature not migrated yet, please use original interface',
+    'missing_parameter' => 'Missing parameter: {param}',
+    'invalid_wash_action' => 'Missing or invalid parameter: action (must be leave/down/switch)',
+    'wash_failed' => 'Wash failed',
+    'invalid_open_score' => 'Missing or invalid parameter: open_score (must be greater than 0)',
+    'open_machine_failed' => 'Open machine failed',
 ];

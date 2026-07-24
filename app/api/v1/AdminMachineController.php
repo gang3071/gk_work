@@ -107,7 +107,7 @@ class AdminMachineController
             ]);
         } else {
             // 生产环境：返回通用错误消息
-            return $this->fail('操作失败，请稍后重试', 500);
+            return $this->fail(trans('operation_failed_retry', [], 'admin_machine'), 500);
         }
     }
 
@@ -208,7 +208,7 @@ class AdminMachineController
             $machineId = $request->post('machine_id');
 
             if (!$machineId) {
-                return $this->fail('machine_id 参数必填', 400);
+                return $this->fail(trans('machine_id_required', [], 'admin_machine'), 400);
             }
 
             // 查询机台
@@ -217,7 +217,7 @@ class AdminMachineController
                 ->first(['id', 'domain', 'port', 'auto_card_domain', 'auto_card_port', 'type', 'code']);
 
             if (!$machine) {
-                return $this->fail('机台不存在', 404);
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'), 404);
             }
 
             // ✅ 使用统一的服务类检查在线状态
@@ -335,7 +335,7 @@ class AdminMachineController
 
             $machineIdInt = (int)$machineId;
             if ($machineIdInt <= 0) {
-                return $this->fail('无效的机台ID', 400);
+                return $this->fail(trans('invalid_machine_id', [], 'admin_machine'), 400);
             }
 
             $field = $request->post('field');
@@ -377,7 +377,7 @@ class AdminMachineController
 
             // 检查字段是否允许更新
             if (!in_array($field, $redisOnlyFields) && !in_array($field, $dbAndRedisFields)) {
-                return $this->fail("字段 {$field} 不允许更新", 400);
+                return $this->fail(trans('field_update_not_allowed', ['{field}' => $field], 'admin_machine'), 400);
             }
 
             // 根据字段类型决定更新策略
@@ -466,31 +466,31 @@ class AdminMachineController
             $path = $request->post('path', 'leave'); // leave 或 down
 
             if ($machineId <= 0) {
-                return $this->fail('无效的机台ID', 400);
+                return $this->fail(trans('invalid_machine_id', [], 'admin_machine'), 400);
             }
             if ($playerId <= 0) {
-                return $this->fail('无效的玩家ID', 400);
+                return $this->fail(trans('invalid_player_id', [], 'admin_machine'), 400);
             }
             if (!in_array($path, ['leave', 'down'])) {
-                return $this->fail('无效的操作类型，必须是 leave 或 down', 400);
+                return $this->fail(trans('invalid_operation_type_leave_down', [], 'admin_machine'), 400);
             }
 
             // 查询机台和玩家
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在', 404);
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'), 404);
             }
 
             $player = \app\model\Player::find($playerId);
             if (!$player) {
-                return $this->fail('玩家不存在', 404);
+                return $this->fail(trans('player_not_found', [], 'admin_machine'), 404);
             }
 
             // 调用洗分函数
             // 注意：这里需要确保 gk_work 中也有 machineWash 函数
             // 如果没有，需要从 gk_admin 迁移过来
             if (!function_exists('machineWash')) {
-                return $this->fail('machineWash 函数未定义，请联系技术支持', 500);
+                return $this->fail(trans('machine_wash_undefined', [], 'admin_machine'), 500);
             }
 
             // 获取管理员用户名（如果有的话）
@@ -507,7 +507,7 @@ class AdminMachineController
                 'path' => $path
             ]);
 
-            return $this->success([], '踢出玩家成功');
+            return $this->success([], trans('kick_player_success', [], 'admin_machine'));
 
         } catch (Exception $e) {
             return $this->handleException($e, '【管理员操作】踢出玩家失败', [
@@ -537,26 +537,26 @@ class AdminMachineController
             $playerId = (int)$request->post('player_id');
 
             if ($machineId <= 0) {
-                return $this->fail('无效的机台ID', 400);
+                return $this->fail(trans('invalid_machine_id', [], 'admin_machine'), 400);
             }
             if ($playerId <= 0) {
-                return $this->fail('无效的玩家ID', 400);
+                return $this->fail(trans('invalid_player_id', [], 'admin_machine'), 400);
             }
 
             // 查询机台和玩家
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在', 404);
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'), 404);
             }
 
             $player = \app\model\Player::find($playerId);
             if (!$player) {
-                return $this->fail('玩家不存在', 404);
+                return $this->fail(trans('player_not_found', [], 'admin_machine'), 404);
             }
 
             // 调用强制重置函数
             if (!function_exists('resetMachineTrans')) {
-                return $this->fail('resetMachineTrans 函数未定义，请联系技术支持', 500);
+                return $this->fail(trans('reset_machine_trans_undefined', [], 'admin_machine'), 500);
             }
 
             // 获取管理员用户名（如果有的话）
@@ -572,7 +572,7 @@ class AdminMachineController
                 'player_id' => $playerId
             ]);
 
-            return $this->success([], '强制踢出玩家成功');
+            return $this->success([], trans('force_kick_player_success', [], 'admin_machine'));
 
         } catch (Exception $e) {
             return $this->handleException($e, '【管理员操作】强制踢出玩家失败', [
@@ -603,32 +603,32 @@ class AdminMachineController
             $openScore = (int)$request->post('open_score');
 
             if ($machineId <= 0) {
-                return $this->fail('无效的机台ID', 400);
+                return $this->fail(trans('invalid_machine_id', [], 'admin_machine'), 400);
             }
             if ($playerId <= 0) {
-                return $this->fail('无效的玩家ID', 400);
+                return $this->fail(trans('invalid_player_id', [], 'admin_machine'), 400);
             }
             if ($openScore <= 0) {
-                return $this->fail('开分数值必须大于0', 400);
+                return $this->fail(trans('open_score_must_positive', [], 'admin_machine'), 400);
             }
             if ($openScore > 100000) {
-                return $this->fail('开分数值过大，单次最多10万分', 400);
+                return $this->fail(trans('open_score_too_large', [], 'admin_machine'), 400);
             }
 
             // 查询机台和玩家
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在', 404);
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'), 404);
             }
 
             $player = \app\model\Player::find($playerId);
             if (!$player) {
-                return $this->fail('玩家不存在', 404);
+                return $this->fail(trans('player_not_found', [], 'admin_machine'), 404);
             }
 
             // 调用自定义开分函数
             if (!function_exists('machineOpenAnyFree')) {
-                return $this->fail('machineOpenAnyFree 函数未定义，请联系技术支持', 500);
+                return $this->fail(trans('machine_open_any_free_undefined', [], 'admin_machine'), 500);
             }
 
             // 获取管理员用户名（如果有的话）
@@ -645,7 +645,7 @@ class AdminMachineController
                 'open_score' => $openScore
             ]);
 
-            return $this->success([], '自定义开分成功');
+            return $this->success([], trans('custom_open_score_success', [], 'admin_machine'));
 
         } catch (Exception $e) {
             return $this->handleException($e, '【管理员操作】自定义开分失败', [
@@ -677,22 +677,22 @@ class AdminMachineController
             $data = (int)$request->post('data', 0);
 
             if ($machineId <= 0) {
-                return $this->fail('无效的机台ID', 400);
+                return $this->fail(trans('invalid_machine_id', [], 'admin_machine'), 400);
             }
             if (empty($cmd)) {
-                return $this->fail('指令代码不能为空', 400);
+                return $this->fail(trans('cmd_cannot_empty', [], 'admin_machine'), 400);
             }
 
             // 查询机台
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在', 404);
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'), 404);
             }
 
             // 创建机台服务
             $services = MachineServices::createServices($machine, $lang);
             if (!$services) {
-                return $this->fail('无法创建机台服务', 500);
+                return $this->fail(trans('cannot_create_machine_service', [], 'admin_machine'), 500);
             }
 
             // 获取管理员用户名（用于日志）
@@ -767,19 +767,19 @@ class AdminMachineController
             $data = (int)$request->post('data', 0);
 
             if ($machineId <= 0) {
-                return $this->fail('无效的机台ID', 400);
+                return $this->fail(trans('invalid_machine_id', [], 'admin_machine'), 400);
             }
 
             // 查询机台
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return $this->fail('机台不存在', 404);
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'), 404);
             }
 
             // 创建机台服务
             $services = MachineServices::createServices($machine, $lang);
             if (!$services) {
-                return $this->fail('无法创建机台服务', 500);
+                return $this->fail(trans('cannot_create_machine_service', [], 'admin_machine'), 500);
             }
 
             // 获取描述信息
@@ -787,7 +787,7 @@ class AdminMachineController
             if (method_exists($services, 'getDescription')) {
                 $description = $services->getDescription($fun, $data);
             } else {
-                return $this->fail('机台服务不支持 getDescription 方法', 500);
+                return $this->fail(trans('get_description_not_supported', [], 'admin_machine'), 500);
             }
 
             Log::info('【管理员操作】获取机台描述', [

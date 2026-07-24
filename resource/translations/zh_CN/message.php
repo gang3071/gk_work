@@ -429,5 +429,24 @@ return [
     'machine_lock' => '{code}机台已锁,请排障后解锁机台',
     'point_not_enough' => '机台分数必须大于6才能开启自动',
     'machine_point_insufficient' => '{code} 机台, 分数不足100无法上转',
-    'one_payment_recharge_close' => 'onePay充值通道已关闭'
+    'one_payment_recharge_close' => 'onePay充值通道已关闭',
+
+    // ==================== 机台操作翻译（2026-07-24 新增） ====================
+    'operation_success' => '操作成功',
+    'unsupported_operation' => '不支持的操作: {action}',
+    'unknown_basic_operation' => '未知的基础操作: {action}',
+    'unknown_business_operation' => '未知的业务操作: {action}',
+    'missing_required_parameter' => '缺少必要参数: {param}',
+    'unknown_slot_control_cmd' => '未知的斯洛机控制指令: {action}',
+    'unknown_jackpot_control_cmd' => '未知的钢珠机控制指令: {action}',
+    'advanced_operation_admin_only' => '高级操作仅限后台管理员',
+    'unknown_advanced_operation' => '未知的高级操作: {action}',
+    'kick_player_not_migrated' => 'kickPlayer 功能尚未迁移，请使用原接口',
+    'force_kick_player_not_migrated' => 'forceKickPlayer 功能尚未迁移，请使用原接口',
+    'custom_open_score_not_migrated' => 'customOpenScore 功能尚未迁移，请使用原接口',
+    'missing_parameter' => '缺少参数: {param}',
+    'invalid_wash_action' => '缺少或无效的参数: action (必须是 leave/down/switch)',
+    'wash_failed' => '洗分失败',
+    'invalid_open_score' => '缺少或无效的参数: open_score (必须大于0)',
+    'open_machine_failed' => '上分失败',
 ];

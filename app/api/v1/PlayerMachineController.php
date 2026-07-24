@@ -36,7 +36,7 @@ class PlayerMachineController
 
             // 参数验证
             if (!is_array($machineIds) || empty($machineIds)) {
-                return $this->fail('machine_ids 参数必须是非空数组', 400);
+                return $this->fail(trans('machine_ids_must_non_empty_array', [], 'player_machine', $lang), 400);
             }
 
             // 查询指定的机台
@@ -79,7 +79,8 @@ class PlayerMachineController
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            return $this->fail('批量检查机台在线状态失败: ' . $e->getMessage(), 500);
+            $lang = $request->header('Accept-Language', 'zh_TW');
+            return $this->fail(trans('batch_check_online_failed', [], 'player_machine', $lang) . ': ' . $e->getMessage(), 500);
         }
     }
 

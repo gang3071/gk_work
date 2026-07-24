@@ -1,21 +1,27 @@
 <?php
 
 return [
-    // Common messages
     'success' => 'Success',
     'fail' => 'Failed',
-
-    // Error messages
-    'machine_id_required' => 'Machine ID is required',
-    'cmd_required' => 'Command is required',
+    'operation_failed_retry' => 'Operation failed, please try again later',
+    'machine_id_required' => 'machine_id parameter is required',
+    'field_required' => 'field parameter is required',
+    'invalid_machine_id' => 'Invalid machine ID',
     'machine_not_found' => 'Machine not found',
-    'field_required' => 'Field name is required',
-    'machine_ids_required' => 'Machine ID list is required',
-    'commands_required' => 'Commands list is required',
-    'data_must_be_numeric' => 'Data parameter must be numeric',
-
-    // Success messages
-    'cmd_sent_success' => 'Command sent successfully',
     'state_updated_success' => 'State updated successfully',
-    'batch_cmd_completed' => 'Batch commands completed',
+    'field_update_not_allowed' => 'Field {field} update not allowed',
+    'invalid_player_id' => 'Invalid player ID',
+    'invalid_operation_type_leave_down' => 'Invalid operation type, must be leave or down',
+    'player_not_found' => 'Player not found',
+    'machine_wash_undefined' => 'machineWash function undefined, please contact technical support',
+    'kick_player_success' => 'Player kicked successfully',
+    'reset_machine_trans_undefined' => 'resetMachineTrans function undefined, please contact technical support',
+    'force_kick_player_success' => 'Player force kicked successfully',
+    'open_score_must_positive' => 'Open score must be greater than 0',
+    'open_score_too_large' => 'Open score too large, max 100,000 per time',
+    'machine_open_any_free_undefined' => 'machineOpenAnyFree function undefined, please contact technical support',
+    'custom_open_score_success' => 'Custom open score successful',
+    'cmd_cannot_empty' => 'Command code cannot be empty',
+    'cannot_create_machine_service' => 'Cannot create machine service',
+    'get_description_not_supported' => 'Machine service does not support getDescription method',
 ];

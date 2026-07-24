@@ -120,7 +120,7 @@ class MachineOperationService
 
             return [
                 'success' => true,
-                'message' => '操作成功',
+                'message' => trans('operation_success', [], 'message', $this->lang),
                 'data' => $result,
             ];
 
@@ -161,7 +161,7 @@ class MachineOperationService
             return $this->executeAdvancedOperation($action, $params);
         }
 
-        throw new Exception("不支持的操作: {$action}");
+        throw new Exception(trans('unsupported_operation', ['{action}' => $action], 'message', $this->lang));
     }
 
     // ==================== 基础操作 ====================
@@ -205,7 +205,7 @@ class MachineOperationService
             case 'send_raw_cmd':
                 return $this->sendRawCmd($params);
             default:
-                throw new Exception("未知的基础操作: {$action}");
+                throw new Exception(trans('unknown_basic_operation', ['{action}' => $action], 'message', $this->lang));
         }
     }
 
@@ -220,7 +220,7 @@ class MachineOperationService
             case 'open':
                 return $this->open($params);
             default:
-                throw new Exception("未知的业务操作: {$action}");
+                throw new Exception(trans('unknown_business_operation', ['{action}' => $action], 'message', $this->lang));
         }
     }
 
@@ -392,7 +392,7 @@ class MachineOperationService
         $isSystem = (int) ($params['is_system'] ?? 0);
 
         if (empty($cmd)) {
-            throw new Exception('缺少必要参数: cmd');
+            throw new Exception(trans('missing_required_parameter', ['{param}' => 'cmd'], 'message', $this->lang));
         }
 
         // 直接调用底层服务发送 TCP 指令
@@ -577,7 +577,7 @@ class MachineOperationService
                 break;
 
             default:
-                throw new Exception("未知的斯洛机控制指令: {$action}");
+                throw new Exception(trans('unknown_slot_control_cmd', ['{action}' => $action], 'message', $this->lang));
         }
 
         return [
@@ -676,7 +676,7 @@ class MachineOperationService
                 break;
 
             default:
-                throw new Exception("未知的钢珠机控制指令: {$action}");
+                throw new Exception(trans('unknown_jackpot_control_cmd', ['{action}' => $action], 'message', $this->lang));
         }
 
         return [
@@ -710,7 +710,7 @@ class MachineOperationService
     {
         // 权限检查：高级操作只允许后台管理员
         if ($this->operatorType !== self::OPERATOR_ADMIN) {
-            throw new Exception('高级操作仅限后台管理员');
+            throw new Exception(trans('advanced_operation_admin_only', [], 'message', $this->lang));
         }
 
         switch ($action) {
@@ -721,7 +721,7 @@ class MachineOperationService
             case 'custom_open_score':
                 return $this->customOpenScore($params);
             default:
-                throw new Exception("未知的高级操作: {$action}");
+                throw new Exception(trans('unknown_advanced_operation', ['{action}' => $action], 'message', $this->lang));
         }
     }
 
@@ -738,7 +738,7 @@ class MachineOperationService
             'params' => $params,
         ]);
 
-        throw new Exception('kickPlayer 功能尚未迁移，请使用原接口');
+        throw new Exception(trans('kick_player_not_migrated', [], 'message', $this->lang));
     }
 
     /**
@@ -754,7 +754,7 @@ class MachineOperationService
             'params' => $params,
         ]);
 
-        throw new Exception('forceKickPlayer 功能尚未迁移，请使用原接口');
+        throw new Exception(trans('force_kick_player_not_migrated', [], 'message', $this->lang));
     }
 
     /**
@@ -770,7 +770,7 @@ class MachineOperationService
             'params' => $params,
         ]);
 
-        throw new Exception('customOpenScore 功能尚未迁移，请使用原接口');
+        throw new Exception(trans('custom_open_score_not_migrated', [], 'message', $this->lang));
     }
 
     // ==================== 辅助方法 ====================
@@ -866,11 +866,11 @@ class MachineOperationService
     {
         // 验证必需参数
         if (!isset($params['player_id'])) {
-            throw new Exception('缺少参数: player_id');
+            throw new Exception(trans('missing_parameter', ['{param}' => 'player_id'], 'message', $this->lang));
         }
 
         if (!isset($params['action']) || !in_array($params['action'], ['leave', 'down', 'switch'])) {
-            throw new Exception('缺少或无效的参数: action (必须是 leave/down/switch)');
+            throw new Exception(trans('invalid_wash_action', [], 'message', $this->lang));
         }
 
         // 获取玩家
@@ -878,7 +878,7 @@ class MachineOperationService
         $player = Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
             ->find($params['player_id']);
         if (!$player) {
-            throw new Exception('玩家不存在');
+            throw new Exception(trans('player_not_found', [], 'message', $this->lang));
         }
 
         // 准备参数
@@ -905,7 +905,7 @@ class MachineOperationService
 
         // 处理返回结果
         if ($result === false) {
-            throw new Exception('洗分失败');
+            throw new Exception(trans('wash_failed', [], 'message', $this->lang));
         }
 
         if (is_array($result)) {
@@ -939,11 +939,11 @@ class MachineOperationService
     {
         // 验证必需参数
         if (!isset($params['player_id'])) {
-            throw new Exception('缺少参数: player_id');
+            throw new Exception(trans('missing_parameter', ['{param}' => 'player_id'], 'message', $this->lang));
         }
 
         if (!isset($params['open_score']) || $params['open_score'] <= 0) {
-            throw new Exception('缺少或无效的参数: open_score (必须大于0)');
+            throw new Exception(trans('invalid_open_score', [], 'message', $this->lang));
         }
 
         // 获取玩家
@@ -951,7 +951,7 @@ class MachineOperationService
         $player = Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
             ->find($params['player_id']);
         if (!$player) {
-            throw new Exception('玩家不存在');
+            throw new Exception(trans('player_not_found', [], 'message', $this->lang));
         }
 
         // 准备参数
@@ -973,7 +973,7 @@ class MachineOperationService
         );
 
         if ($result === false) {
-            throw new Exception('上分失败');
+            throw new Exception(trans('open_machine_failed', [], 'message', $this->lang));
         }
 
         return [

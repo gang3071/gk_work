@@ -1,21 +1,27 @@
 <?php
 
 return [
-    // Common messages
     'success' => '成功',
     'fail' => '失敗',
-
-    // Error messages
-    'machine_id_required' => 'マシンIDは必須です',
-    'cmd_required' => 'コマンドは必須です',
-    'machine_not_found' => 'マシンが見つかりません',
-    'field_required' => 'フィールド名は必須です',
-    'machine_ids_required' => 'マシンIDリストは必須です',
-    'commands_required' => 'コマンドリストは必須です',
-    'data_must_be_numeric' => 'データパラメータは数値である必要があります',
-
-    // Success messages
-    'cmd_sent_success' => 'コマンド送信成功',
-    'state_updated_success' => 'ステータス更新成功',
-    'batch_cmd_completed' => 'バッチコマンド実行完了',
+    'operation_failed_retry' => '操作失敗，請稍後重試',
+    'machine_id_required' => '機台ID不能為空',
+    'field_required' => '字段名不能為空',
+    'invalid_machine_id' => '無效的機台ID',
+    'machine_not_found' => '機台不存在',
+    'state_updated_success' => '狀態更新成功',
+    'field_update_not_allowed' => '字段 {field} 不允許更新',
+    'invalid_player_id' => '無效的玩家ID',
+    'invalid_operation_type_leave_down' => '無效的操作類型，必須是 leave 或 down',
+    'player_not_found' => '玩家不存在',
+    'machine_wash_undefined' => 'machineWash 函數未定義，請聯繫技術支持',
+    'kick_player_success' => '踢出玩家成功',
+    'reset_machine_trans_undefined' => 'resetMachineTrans 函數未定義，請聯繫技術支持',
+    'force_kick_player_success' => '強制踢出玩家成功',
+    'open_score_must_positive' => '開分數值必須大於0',
+    'open_score_too_large' => '開分數值過大，單次最多10萬分',
+    'machine_open_any_free_undefined' => 'machineOpenAnyFree 函數未定義，請聯繫技術支持',
+    'custom_open_score_success' => '自定義開分成功',
+    'cmd_cannot_empty' => '指令代碼不能為空',
+    'cannot_create_machine_service' => '無法創建機台服務',
+    'get_description_not_supported' => '機台服務不支持 getDescription 方法',
 ];
