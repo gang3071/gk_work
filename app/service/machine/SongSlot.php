@@ -1109,7 +1109,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     return;
                 }
                 if ($handleDuration >= $expirationTime) {
-                    throw new Exception(trans('machine_action_fail', [], 'message'));
+                    throw new Exception(trans('machine_connect_timeout', [], 'message'));
                 }
                 usleep($sleep);
                 $handleDuration += $sleep;
@@ -1171,16 +1171,16 @@ class SongSlot extends MachineServices implements BaseMachine
                     return;
                 }
                 if ($handleDuration >= $expirationTime) {
-                    throw new Exception(trans('machine_action_fail', [], 'message'));
+                    throw new Exception(trans('machine_connect_timeout', [], 'message'));
                 }
                 usleep($sleep);
                 $handleDuration += $sleep;
             }
-        } catch (Exception) {
+        } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code]]);
-                throw new Exception(trans('machine_action_fail', [], 'message'));
+                $this->log->error('指令超时异常', ['slot -> washPoint', [$this->machine->code], 'error' => $e->getMessage()]);
+                throw new Exception(trans('machine_connect_timeout', [], 'message'));
             }
             usleep(50000);
             $this->washPoint($uid, $cmd, $data, $source, $source_id, $attempts);
@@ -1226,16 +1226,16 @@ class SongSlot extends MachineServices implements BaseMachine
                     return;
                 }
                 if ($handleDuration >= $expirationTime) {
-                    throw new Exception(trans('machine_action_fail', [], 'message'));
+                    throw new Exception(trans('machine_connect_timeout', [], 'message'));
                 }
                 usleep($sleep);
                 $handleDuration += $sleep;
             }
-        } catch (Exception) {
+        } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code]]);
-                throw new Exception(trans('machine_action_fail', [], 'message'));
+                $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code], 'error' => $e->getMessage()]);
+                throw new Exception(trans('machine_connect_timeout', [], 'message'));
             }
             usleep(50000);
             $this->machineAction($uid, $cmd, $source, $source_id, $attempts);
