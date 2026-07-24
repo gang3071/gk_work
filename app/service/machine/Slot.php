@@ -1144,20 +1144,21 @@ class Slot extends MachineServices implements BaseMachine
             $this->bb_status = substr($status2, 5, 1);
             $this->action_time = getMillisecond();
             $nowTurn = $this->now_turn;
-            $this->log->info('接收指令', [
-                'slot',
-                [
-                    '2' => decodeStatus(substr($msg, 6, 2)),
-                    'msg' => $msg,
-                    'auto' => $this->auto,
-                    'now_turn' => $nowTurn > 0 ? intval(ceil($nowTurn / 3)) : 0,
-                    'reward_status' => $this->reward_status,
-                    'bb_status' => $this->bb_status,
-                    'rb_status' => $this->rb_status,
-                    'bet' => $this->bet,
-                    'code' => $this->machine->code,
-                ]
-            ]);
+            if ($this->machine->code == 'S339') {
+                $this->log->info('接收指令', [
+                    'slot',
+                    [
+                        'msg' => $msg,
+                        'auto' => $this->auto,
+                        'now_turn' => $nowTurn > 0 ? intval(ceil($nowTurn / 3)) : 0,
+                        'reward_status' => $this->reward_status,
+                        'bb_status' => $this->bb_status,
+                        'rb_status' => $this->rb_status,
+                        'bet' => $this->bet,
+                        'code' => $this->machine->code,
+                    ]
+                ]);
+            }
             // 开奖状态和rush确变状态只要一个为1进入开奖状态
             if ($this->bb_status == 1 || $this->rb_status == 1) {
                 $this->reward_status = 1;
