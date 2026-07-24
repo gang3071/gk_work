@@ -176,6 +176,23 @@ function machineKeepOutPlayer(): void
                 $minutes = $settingMinutes + (15 * 60);
             }
             if ($services->keeping == 0 && time() - $services->last_play_time > $minutes) {
+                // ⚠️ C376 进入保留状态日志
+                if ($machine->code === 'C376') {
+                    $log->info('[C376-EnterKeeping] 玩家无操作，进入保留状态', [
+                        'machine_id' => $machine->id,
+                        'machine_code' => $machine->code,
+                        'player_id' => $player->id,
+                        'last_play_time' => $services->last_play_time,
+                        'last_play_time_formatted' => date('Y-m-d H:i:s', $services->last_play_time),
+                        'idle_seconds' => time() - $services->last_play_time,
+                        'idle_threshold_seconds' => $minutes,
+                        'now_turn' => $services->now_turn ?? 'N/A',
+                        'win_number' => $services->win_number ?? 'N/A',
+                        'bet' => $services->bet ?? 'N/A',
+                        'reward_status' => $services->reward_status ?? 'N/A',
+                    ]);
+                }
+
                 if ($machine->type == GameType::TYPE_SLOT && $machine->is_special == 0 && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
                     $services->sendCmd($services::OUT_OFF, 0, 'player', $player->id, 1);
                 }
@@ -280,7 +297,26 @@ function machineKeepOutPlayer(): void
                     'keep_seconds' => $services->keep_seconds,
                     'keeping_duration' => time() - $services->last_keep_at,  // 保留了多久
                 ];
-                $log->info('PlayOutMachine: 准备踢出玩家', $machineStatus);
+
+                // ⚠️ C376 详细踢出日志
+                if ($machine->code === 'C376') {
+                    $log->info('[C376-KickOut] 准备踢出玩家 - 详细状态', array_merge($machineStatus, [
+                        'last_play_time' => $services->last_play_time,
+                        'last_play_time_formatted' => date('Y-m-d H:i:s', $services->last_play_time),
+                        'last_keep_at_formatted' => date('Y-m-d H:i:s', $services->last_keep_at),
+                        'now_turn' => $services->now_turn ?? 'N/A',
+                        'win_number' => $services->win_number ?? 'N/A',
+                        'bet' => $services->bet ?? 'N/A',
+                        'point' => $services->point ?? 'N/A',
+                        'reward_status' => $services->reward_status ?? 'N/A',
+                        'bb_status' => $services->bb_status ?? 'N/A',
+                        'rush_status' => $services->rush_status ?? 'N/A',
+                        'auto' => $services->auto ?? 'N/A',
+                        'time_since_last_play' => time() - $services->last_play_time,
+                    ]));
+                } else {
+                    $log->info('PlayOutMachine: 准备踢出玩家', $machineStatus);
+                }
 
                 try {
                     $washResult = machineWash($player, $machine, 'leave', 1);
@@ -291,20 +327,40 @@ function machineKeepOutPlayer(): void
 
                     // ⚠️ 异常检测：退分为0时记录警告
                     if ($wash_point == 0) {
-                        $log->warning('PlayOutMachine: 踢出玩家但退分为0，请检查硬件通信', array_merge($machineStatus, [
-                            'after_balance' => $afterGameAmount,
-                            'wash_point' => $wash_point,
-                            'wash_result' => $washResult,
-                        ]));
+                        if ($machine->code === 'C376') {
+                            $log->warning('[C376-KickOut] 踢出玩家但退分为0，请检查硬件通信', array_merge($machineStatus, [
+                                'after_balance' => $afterGameAmount,
+                                'wash_point' => $wash_point,
+                                'wash_result' => $washResult,
+                            ]));
+                        } else {
+                            $log->warning('PlayOutMachine: 踢出玩家但退分为0，请检查硬件通信', array_merge($machineStatus, [
+                                'after_balance' => $afterGameAmount,
+                                'wash_point' => $wash_point,
+                                'wash_result' => $washResult,
+                            ]));
+                        }
                     } else {
-                        $log->info('PlayOutMachine: 踢出成功并退分', [
-                            'machine_id' => $machine->id,
-                            'player_id' => $player->id,
-                            'kick_reason' => '保留时间耗尽（系统自动踢出）',
-                            'wash_point' => $wash_point,
-                            'before_balance' => $beforeGameAmount,
-                            'after_balance' => $afterGameAmount,
-                        ]);
+                        if ($machine->code === 'C376') {
+                            $log->info('[C376-KickOut] 踢出成功并退分', [
+                                'machine_id' => $machine->id,
+                                'machine_code' => $machine->code,
+                                'player_id' => $player->id,
+                                'kick_reason' => '保留时间耗尽（系统自动踢出）',
+                                'wash_point' => $wash_point,
+                                'before_balance' => $beforeGameAmount,
+                                'after_balance' => $afterGameAmount,
+                            ]);
+                        } else {
+                            $log->info('PlayOutMachine: 踢出成功并退分', [
+                                'machine_id' => $machine->id,
+                                'player_id' => $player->id,
+                                'kick_reason' => '保留时间耗尽（系统自动踢出）',
+                                'wash_point' => $wash_point,
+                                'before_balance' => $beforeGameAmount,
+                                'after_balance' => $afterGameAmount,
+                            ]);
+                        }
                     }
 
                     $machineKickLog = new MachineKickLog;
@@ -1170,6 +1226,21 @@ function machineWash(
     string  $adminUsername = ''
 ): PlayerLotteryRecord|bool|array
 {
+    // ⚠️ C376 洗分日志（开始）
+    if ($machine->code === 'C376') {
+        Log::channel('machine_operations')->info('[C376-MachineWash] 开始洗分流程', [
+            'machine_id' => $machine->id,
+            'machine_code' => $machine->code,
+            'player_id' => $player->id,
+            'player_uuid' => $player->uuid,
+            'path' => $path,
+            'is_system' => $is_system,
+            'has_lottery' => $hasLottery,
+            'admin_id' => $adminId,
+            'admin_username' => $adminUsername,
+        ]);
+    }
+
     // 分布式锁：防止上下分并发
     $actionLockerKey = 'machine_operation_lock_' . $machine->id;
     $lock = Locker::lock($actionLockerKey, 30, true);
@@ -1419,6 +1490,19 @@ function machineWash(
 
         } catch (Exception $e) {
             DB::rollback();
+
+            // ⚠️ C376 洗分日志（失败）
+            if ($machine->code === 'C376') {
+                Log::channel('machine_operations')->error('[C376-MachineWash] 洗分失败', [
+                    'machine_id' => $machine->id,
+                    'machine_code' => $machine->code,
+                    'player_id' => $player->id,
+                    'path' => $path,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+            }
+
             throw new Exception($e->getMessage());
         }
 
@@ -1462,6 +1546,21 @@ function machineWash(
 
         // 清理消息缓存
         LotteryServices::clearNoticeCache($player->id, $machine->id);
+
+        // ⚠️ C376 洗分日志（成功）
+        if ($machine->code === 'C376') {
+            Log::channel('machine_operations')->info('[C376-MachineWash] 洗分成功完成', [
+                'machine_id' => $machine->id,
+                'machine_code' => $machine->code,
+                'player_id' => $player->id,
+                'path' => $path,
+                'wash_point' => $washResult['wash_point'] ?? 0,
+                'gaming_turn_point' => $washResult['gaming_turn_point'] ?? 0,
+                'gaming_pressure' => $washResult['gaming_pressure'] ?? 0,
+                'gaming_score' => $washResult['gaming_score'] ?? 0,
+                'has_lottery' => isset($playerLotteryRecord),
+            ]);
+        }
 
         return $playerLotteryRecord ?? true;
 

@@ -477,18 +477,62 @@ class Jackpot extends MachineServices implements BaseMachine
                     $this->setActionVersion($fun);
                     break;
                 case Jackpot::WIN_NUMBER:
+                    // ⚠️ CRITICAL：重新读取 gaming_user_id，防止使用已被踢出的玩家ID
+                    // 场景：玩家在处理消息期间被踢出，$gamingUserId 变量还保留旧值
+                    $currentGamingUserId = $this->gaming_user_id;
+
+                    // 总日志：只记录 C376 机器
+                    if ($this->machine->code === 'C376') {
+                        Log::channel('machine_operations')->debug('[Jackpot-WinNumber] 收到出珠数消息', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'before_win_number' => $this->win_number,
+                            'new_win_number' => $data,
+                            'gaming_user_id_cached' => $gamingUserId,
+                            'gaming_user_id_current' => $currentGamingUserId,
+                            'is_kicked_during_msg' => $gamingUserId != $currentGamingUserId,
+                            'change_point_card_status' => $this->change_point_card_status,
+                            'reward_status' => $this->reward_status,
+                            'condition_check' => [
+                                'win_number_gt_0' => $this->win_number > 0,
+                                'win_number_changed' => $this->win_number != $data,
+                                'has_gaming_user' => !empty($currentGamingUserId),
+                                'card_status_ok' => $this->change_point_card_status == 0,
+                            ],
+                        ]);
+                    }
+
                     if ($this->win_number > 0 && $this->win_number > $data && $this->change_point_card_status == 0) {
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_WIN_NUMBER);
-                        if (!empty($gamingUserId)) {
+                        if (!empty($currentGamingUserId)) {
                             if ($this->auto == 1) {
-                                $this->sendCmd(self::AUTO_UP_TURN, 0, 'player', $gamingUserId, 1);
+                                $this->sendCmd(self::AUTO_UP_TURN, 0, 'player', $currentGamingUserId, 1);
                             }
                         }
                         $this->win_number = $data;
                         return true;
                     }
-                    if ($this->win_number > 0 && $this->win_number != $data && !empty($gamingUserId) && $this->change_point_card_status == 0) {
+                    if ($this->win_number > 0 && $this->win_number != $data && !empty($currentGamingUserId) && $this->change_point_card_status == 0) {
+                        $beforePlayTime = $this->last_play_time;
                         $this->last_play_time = time();
+
+                        // 只记录 C376 机器
+                        if ($this->machine->code === 'C376') {
+                            Log::channel('machine_operations')->info('[Jackpot-WinNumber] 出珠数变化，更新最后游戏时间', [
+                                'machine_id' => $this->machine->id,
+                                'machine_code' => $this->machine->code,
+                                'gaming_user_id' => $currentGamingUserId,
+                                'before_win_number' => $this->win_number,
+                                'after_win_number' => $data,
+                                'change_amount' => abs($data - $this->win_number),
+                                'before_last_play_time' => $beforePlayTime,
+                                'after_last_play_time' => $this->last_play_time,
+                                'time_updated' => $this->last_play_time > $beforePlayTime ? 'YES' : 'NO',
+                                'reward_status' => $this->reward_status,
+                                'change_point_card_status' => $this->change_point_card_status,
+                            ]);
+                        }
+
                         if ($this->reward_status == 0) {
                             Client::send('play-keep-machine', [
                                 'change_amount' => abs($data - $this->win_number),
@@ -496,8 +540,8 @@ class Jackpot extends MachineServices implements BaseMachine
                                 'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
                                     $this->machine->domain, $this->machine->port, $this->machine->type
                                 ),
-                                'player_id' => $gamingUserId,
-                                'gaming_user_id' => $gamingUserId,
+                                'player_id' => $currentGamingUserId,
+                                'gaming_user_id' => $currentGamingUserId,
                                 'keep_seconds' => $this->keep_seconds,
                                 'keeping' => $this->keeping,
                             ]);
@@ -505,7 +549,26 @@ class Jackpot extends MachineServices implements BaseMachine
                                 'num' => $data,
                                 'last_num' => $this->win_number,
                                 'machine_id' => $this->machine->id,
-                                'player_id' => $gamingUserId,
+                                'player_id' => $currentGamingUserId,
+                            ]);
+                        }
+                    } else {
+                        // 条件不满足，只记录 C376 机器
+                        if ($this->machine->code === 'C376') {
+                            Log::channel('machine_operations')->debug('[Jackpot-WinNumber] 条件不满足，未更新last_play_time', [
+                                'machine_id' => $this->machine->id,
+                                'machine_code' => $this->machine->code,
+                                'win_number' => $this->win_number,
+                                'new_data' => $data,
+                                'gaming_user_id_cached' => $gamingUserId,
+                                'gaming_user_id_current' => $currentGamingUserId,
+                                'change_point_card_status' => $this->change_point_card_status,
+                                'failed_conditions' => [
+                                    'win_number_is_zero' => $this->win_number == 0,
+                                    'win_number_not_changed' => $this->win_number == $data,
+                                    'no_gaming_user' => empty($currentGamingUserId),
+                                    'card_status_error' => $this->change_point_card_status != 0,
+                                ],
                             ]);
                         }
                     }
@@ -513,7 +576,7 @@ class Jackpot extends MachineServices implements BaseMachine
                         $nowTurn = $this->now_turn;
                         $bet = $this->win_number;
                         $this->now_turn = bcadd($nowTurn, bcsub($data, $bet, 2), 2);
-                        if (!empty($gamingUserId)) {
+                        if (!empty($currentGamingUserId)) {
                             $playerNumber = $this->player_win_number;
                             $this->player_win_number = bcadd($playerNumber, bcsub($data, $bet, 2), 2);
                         }

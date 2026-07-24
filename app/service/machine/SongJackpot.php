@@ -517,7 +517,12 @@ class SongJackpot extends MachineServices implements BaseMachine
                 if ($nowTurn <= 0 && !empty($gamingUserId)) {
                     Cache::delete('gift_cache_' . $this->machine->id . '_' . $gamingUserId);
                 }
-                if ($orgWinNumber > 0 && $orgWinNumber < $nowWinNumber && !empty($gamingUserId) && $this->change_point_card_status == 0) {
+
+                // ⚠️ CRITICAL：重新读取 gaming_user_id，防止使用已被踢出的玩家ID
+                // 场景：玩家在处理消息期间被踢出，$gamingUserId 变量还保留旧值
+                $currentGamingUserId = $this->gaming_user_id;
+
+                if ($orgWinNumber > 0 && $orgWinNumber < $nowWinNumber && !empty($currentGamingUserId) && $this->change_point_card_status == 0) {
                     $this->last_play_time = time();
                     if ($nowRewardStatus == 0) {
                         Client::send('play-keep-machine', [
@@ -526,8 +531,8 @@ class SongJackpot extends MachineServices implements BaseMachine
                             'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
                                 $this->machine->domain, $this->machine->port, $this->machine->type
                             ),
-                            'player_id' => $gamingUserId,
-                            'gaming_user_id' => $gamingUserId,
+                            'player_id' => $currentGamingUserId,
+                            'gaming_user_id' => $currentGamingUserId,
                             'keep_seconds' => $this->keep_seconds,
                             'keeping' => $this->keeping,
                         ]);
@@ -535,7 +540,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                             'num' => $nowWinNumber,
                             'last_num' => $orgWinNumber,
                             'machine_id' => $this->machine->id,
-                            'player_id' => $gamingUserId,
+                            'player_id' => $currentGamingUserId,
                         ]);
                     }
                 }

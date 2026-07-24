@@ -121,18 +121,76 @@ class PlayKeepMachine implements Consumer
                 // 创建 MachineServices 更新 Redis（复用前面已获取的 $machine）
                 try {
                     $services = MachineServices::createServices($machine);
+
+                    // ⚠️ CRITICAL：重新读取实时 gaming_user_id 和 keeping 状态
+                    // 原因：队列消息是异步的，处理时玩家可能已被踢出（keeping=1）
+                    $currentGamingUserId = $services->gaming_user_id;
+                    $currentKeeping = $services->keeping;
+
+                    // C376 调试日志
+                    if ($machine->code === 'C376') {
+                        Log::channel('machine_operations')->info('[C376-PlayKeepMachine] 队列处理', [
+                            'machine_id' => $machineId,
+                            'machine_code' => $machine->code,
+                            'gaming_user_id_from_queue' => $gamingUserId,
+                            'gaming_user_id_current' => $currentGamingUserId,
+                            'keeping_from_queue' => $oldKeeping,
+                            'keeping_current' => $currentKeeping,
+                            'is_kicked_during_queue' => $gamingUserId != $currentGamingUserId || $oldKeeping != $currentKeeping,
+                            'change_amount' => $changeAmount,
+                            'old_keep_seconds' => $oldKeepSeconds,
+                            'new_keep_seconds' => $newKeepSeconds,
+                        ]);
+                    }
+
+                    // 只在玩家还在游戏中时才处理
+                    if (empty($currentGamingUserId)) {
+                        // 玩家已离开，丢弃此消息
+                        if ($machine->code === 'C376') {
+                            Log::channel('machine_operations')->info('[C376-PlayKeepMachine] 玩家已离开，丢弃消息', [
+                                'machine_id' => $machineId,
+                                'gaming_user_id_from_queue' => $gamingUserId,
+                            ]);
+                        }
+                        return;
+                    }
+
+                    // 如果当前已经在保留状态（被踢出/闲置），则解除保留
+                    if ($currentKeeping == 1) {
+                        $services->keeping = 0;
+                        $keepingChanged = true;
+                        $newKeeping = 0;
+
+                        // C376 解除保留日志
+                        if ($machine->code === 'C376') {
+                            Log::channel('machine_operations')->info('[C376-PlayKeepMachine] 玩家有活动，解除保留状态', [
+                                'machine_id' => $machineId,
+                                'machine_code' => $machine->code,
+                                'player_id' => $currentGamingUserId,
+                                'change_amount' => $changeAmount,
+                                'keep_seconds' => $newKeepSeconds,
+                            ]);
+                        }
+
+                        // 更新保留日志
+                        try {
+                            updateKeepingLog($machineId, $currentGamingUserId);
+                        } catch (\Throwable $e) {
+                            // 日志更新失败不影响主流程
+                        }
+                    }
+
                     if ($keepSecondsChanged) {
                         $services->keep_seconds = $newKeepSeconds;
-                    }
-                    if ($keepingChanged) {
-                        $services->keeping = $newKeeping;
                     }
                 } catch (\Throwable $e) {
                     // 更新失败不影响推送
                 }
 
-                // 推送到客户端
-                $this->pushKeepingStatus($gamingUserId, $machineId, $newKeepSeconds, $newKeeping);
+                // 推送到客户端（使用实时 gaming_user_id）
+                if (!empty($currentGamingUserId)) {
+                    $this->pushKeepingStatus($currentGamingUserId, $machineId, $newKeepSeconds, $newKeeping);
+                }
             }
 
         } catch (\Throwable $e) {

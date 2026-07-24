@@ -407,22 +407,28 @@ class SongSlot extends MachineServices implements BaseMachine
 
                         // ✅ 修复：转数增加时也更新活动时间（即使押注金额不变）
                         if ($turnAllConditionsMet) {
-                            $oldPlayTime = $this->last_play_time;
-                            $this->last_play_time = time();
+                            // ⚠️ CRITICAL：重新读取 gaming_user_id，防止使用已被踢出的玩家ID
+                            $currentGamingUserId = $this->gaming_user_id;
+                            if (!empty($currentGamingUserId)) {
+                                $oldPlayTime = $this->last_play_time;
+                                $this->last_play_time = time();
 
-                            if ($this->machine->code == 'S326') {
-                                \support\Log::channel('machine_keeping')->debug('SongSlot 转数增加更新 last_play_time', [
-                                'machine_id' => $this->machine->id,
-                                'machine_code' => $this->machine->code,
-                                'player_id' => $gamingUserId,
-                                'old_turn' => $orgNowTurn,
-                                'new_turn' => $newTurn,
-                                'old_bet' => $orgBet,
-                                'new_bet' => $nowBet,
-                                'old_last_play_time' => $oldPlayTime,
-                                'new_last_play_time' => $this->last_play_time,
-                                'time_diff' => $this->last_play_time - $oldPlayTime,
-                                ]);
+                                if ($this->machine->code == 'S326') {
+                                    \support\Log::channel('machine_keeping')->debug('SongSlot 转数增加更新 last_play_time', [
+                                    'machine_id' => $this->machine->id,
+                                    'machine_code' => $this->machine->code,
+                                    'player_id' => $currentGamingUserId,
+                                    'gaming_user_id_cached' => $gamingUserId,
+                                    'gaming_user_id_current' => $currentGamingUserId,
+                                    'old_turn' => $orgNowTurn,
+                                    'new_turn' => $newTurn,
+                                    'old_bet' => $orgBet,
+                                    'new_bet' => $nowBet,
+                                    'old_last_play_time' => $oldPlayTime,
+                                    'new_last_play_time' => $this->last_play_time,
+                                    'time_diff' => $this->last_play_time - $oldPlayTime,
+                                    ]);
+                                }
                             }
                         }
 
@@ -452,45 +458,51 @@ class SongSlot extends MachineServices implements BaseMachine
                     }
 
                     if ($betAllConditionsMet) {
-                        $oldPlayTime = $this->last_play_time;
-                        $this->last_play_time = time();
+                        // ⚠️ CRITICAL：重新读取 gaming_user_id，防止使用已被踢出的玩家ID
+                        $currentGamingUserId = $this->gaming_user_id;
+                        if (!empty($currentGamingUserId)) {
+                            $oldPlayTime = $this->last_play_time;
+                            $this->last_play_time = time();
 
-                        if ($this->machine->code == 'S326') {
-                            \support\Log::channel('machine_keeping')->debug('SongSlot 押注增加更新 last_play_time', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'player_id' => $gamingUserId,
-                            'old_bet' => $orgBet,
-                            'new_bet' => $nowBet,
-                            'old_last_play_time' => $oldPlayTime,
-                            'new_last_play_time' => $this->last_play_time,
-                            'time_diff' => $this->last_play_time - $oldPlayTime,
-                            ]);
+                            if ($this->machine->code == 'S326') {
+                                \support\Log::channel('machine_keeping')->debug('SongSlot 押注增加更新 last_play_time', [
+                                'machine_id' => $this->machine->id,
+                                'machine_code' => $this->machine->code,
+                                'player_id' => $currentGamingUserId,
+                                'gaming_user_id_cached' => $gamingUserId,
+                                'gaming_user_id_current' => $currentGamingUserId,
+                                'old_bet' => $orgBet,
+                                'new_bet' => $nowBet,
+                                'old_last_play_time' => $oldPlayTime,
+                                'new_last_play_time' => $this->last_play_time,
+                                'time_diff' => $this->last_play_time - $oldPlayTime,
+                                ]);
+                            }
                         }
-                        if ($this->reward_status == 0) {
+                        if ($this->reward_status == 0 && !empty($currentGamingUserId)) {
                             Client::send('lottery-machine', [
                                 'num' => $nowBet,
                                 'last_num' => $orgBet,
                                 'machine_id' => $this->machine->id,
-                                'player_id' => $gamingUserId,
+                                'player_id' => $currentGamingUserId,
                             ]);
-                        }
-                        Client::send('play-keep-machine', [
-                            'change_amount' => abs($nowBet - $orgBet),
-                            'machine_id' => $this->machine->id,
+                            Client::send('play-keep-machine', [
+                                'change_amount' => abs($nowBet - $orgBet),
+                                'machine_id' => $this->machine->id,
                             'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
                                 $this->machine->domain, $this->machine->port, $this->machine->type
                             ),
-                            'player_id' => $gamingUserId,
-                            'gaming_user_id' => $gamingUserId,
+                            'player_id' => $currentGamingUserId,
+                            'gaming_user_id' => $currentGamingUserId,
                             'keep_seconds' => $this->keep_seconds,
                             'keeping' => $this->keeping,
-                        ]);
+                            ]);
+                        }
                     }
-                    if ($nowPoint > 0 && $orgPoint != $nowPoint && !empty($gamingUserId)) {
+                    if ($nowPoint > 0 && $orgPoint != $nowPoint && !empty($currentGamingUserId)) {
                         Client::send('play-activity', [
                             'machine_id' => $this->machine->id,
-                            'player_id' => $gamingUserId,
+                            'player_id' => $currentGamingUserId,
                             'point' => $nowPoint,
                         ]);
                     }
