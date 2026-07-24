@@ -505,28 +505,9 @@ class SongSlot extends MachineServices implements BaseMachine
                     $this->point = $nowPoint;
                     $this->bet = $nowBet;
                     $this->win = $nowWin;
-
-                    // ✅ 检测状态变化并推送（只推送变化的字段）
-                    $oldAuto = $this->auto;
-                    $oldRewardStatus = $this->reward_status;
-
-                    $this->auto = $nowAuto;
-                    $this->reward_status = $nowRewardStatus;
-
-                    // 推送到后台管理端
+                    $this->auto = $nowAuto;  // ← __set() 会自动推送（如果在 machineInfo 中）
+                    $this->reward_status = $nowRewardStatus;  // ← __set() 会自动推送（如果在 machineInfo 中）
                     $this->sendMachineNowStatusMessage($this->machine->id);
-
-                    // ✅ 只在有玩家且状态变化时推送到玩家端
-                    if (!empty($gamingUserId)) {
-                        // auto 状态变化
-                        if ($oldAuto != $nowAuto) {
-                            $this->sendMachineNowInfoMessage($gamingUserId, $this->machine->id, 'auto', ['auto' => $nowAuto]);
-                        }
-                        // reward_status 状态变化
-                        if ($oldRewardStatus != $nowRewardStatus) {
-                            $this->sendMachineNowInfoMessage($gamingUserId, $this->machine->id, 'reward_status', ['reward_status' => $nowRewardStatus]);
-                        }
-                    }
                     break;
                 case self::WASH_ZERO:
                     Redis::publish($domain . ':' . $port, '设备返回的消息');
@@ -603,25 +584,8 @@ class SongSlot extends MachineServices implements BaseMachine
                     $nowAuto = substr($msg, 4, 2) == 'c0' ? 0 : 1;
                     $nowRewardStatus = substr($msg, 6, 2) == 'd0' ? 0 : 1;
 
-                    // ✅ 检测状态变化并推送（只推送变化的字段）
-                    $oldAuto = $this->auto;
-                    $oldRewardStatus = $this->reward_status;
-
-                    $this->auto = $nowAuto;
-                    $this->reward_status = $nowRewardStatus;
-
-                    // ✅ 只在有玩家且状态变化时推送到玩家端
-                    if (!empty($gamingUserId)) {
-                        // auto 状态变化
-                        if ($oldAuto != $nowAuto) {
-                            $this->sendMachineNowInfoMessage($gamingUserId, $this->machine->id, 'auto', ['auto' => $nowAuto]);
-                        }
-                        // reward_status 状态变化
-                        if ($oldRewardStatus != $nowRewardStatus) {
-                            $this->sendMachineNowInfoMessage($gamingUserId, $this->machine->id, 'reward_status', ['reward_status' => $nowRewardStatus]);
-                        }
-                    }
-
+                    $this->auto = $nowAuto;  // ← __set() 会自动推送（如果在 machineInfo 中）
+                    $this->reward_status = $nowRewardStatus;  // ← __set() 会自动推送（如果在 machineInfo 中）
                     $this->setActionVersion(self::READ_STATUS);
                     break;
                 default:

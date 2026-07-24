@@ -403,16 +403,7 @@ class Slot extends MachineServices implements BaseMachine
                 $status = decodeStatus(substr($msg, 10, 2));
                 $auto = substr($status, 7, 1);
 
-                // ✅ auto 状态变化时推送到玩家端（统一使用 machine_now_info 格式）
-                if ($this->auto != $auto && !empty($this->machine->gaming_user_id)) {
-                    $this->sendMachineNowInfoMessage(
-                        $this->machine->gaming_user_id,
-                        $this->machine->id,
-                        'auto',
-                        ['auto' => $auto]
-                    );
-                }
-
+                // ✅ __set() 会自动推送（auto 在 machineInfo 中）
                 $this->auto = $auto;
             }
             switch ($msg) {
