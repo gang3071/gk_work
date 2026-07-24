@@ -1208,6 +1208,7 @@ class Slot extends MachineServices implements BaseMachine
                     break;
                 case Slot::READ_SCORE:
                     if ($data > 0 && $this->point != $data && !empty($gamingUserId)) {
+                        $this->last_play_time = time();
                         Client::send('play-activity', [
                             'machine_id' => $this->machine->id,
                             'player_id' => $gamingUserId,
@@ -1230,22 +1231,6 @@ class Slot extends MachineServices implements BaseMachine
                     $this->setActionVersion($fun);
                     break;
                 case Slot::READ_BET:
-                    // ✅ 诊断日志：记录 READ_BET 接收到的状态（仅 S326）
-                    if ($this->machine->code == 'S326') {
-                        \support\Log::channel('machine_keeping')->debug('Slot READ_BET 接收', [
-                        'machine_id' => $this->machine->id,
-                        'machine_code' => $this->machine->code,
-                        'player_id' => $gamingUserId,
-                        'current_bet' => $this->bet,
-                        'new_bet' => $data,
-                        'bet_changed' => $this->bet != $data,
-                        'current_turn' => $this->now_turn,
-                        'reward_status' => $this->reward_status,
-                        'gaming' => $this->gaming,
-                        'change_point_card_status' => $this->change_point_card_status,
-                        ]);
-                    }
-
                     if ($this->bet > 0 && $this->bet > $data && $this->change_point_card_status == 0) {
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_BET);
                         $this->bet = $data;
@@ -1254,45 +1239,8 @@ class Slot extends MachineServices implements BaseMachine
                         }
                         return true;
                     }
-                    // ✅ bet 是累加值，必须改变才说明有新押注
-                    $betCondition1 = $this->bet > 0;
-                    $betCondition2 = $this->bet != $data;  // bet 变化说明有新押注
-                    $betCondition3 = !empty($gamingUserId);
-                    $betCondition4 = $this->change_point_card_status == 0;
-                    $allConditionsMet = $betCondition1 && $betCondition2 && $betCondition3 && $betCondition4;
-
-                    if ($this->machine->code == 'S326') {
-                        \support\Log::channel('machine_keeping')->debug('Slot 押注改变条件检查', [
-                        'machine_id' => $this->machine->id,
-                        'machine_code' => $this->machine->code,
-                        'condition_bet_gt_0' => $betCondition1,
-                        'condition_bet_changed' => $betCondition2,
-                        'condition_has_player' => $betCondition3,
-                        'condition_no_point_card' => $betCondition4,
-                        'all_conditions_met' => $allConditionsMet,
-                        'bet' => $this->bet,
-                        'data' => $data,
-                        'gaming_user_id' => $gamingUserId,
-                        'change_point_card_status' => $this->change_point_card_status,
-                        ]);
-                    }
-
-                    if ($allConditionsMet) {
-                        $oldPlayTime = $this->last_play_time;
+                    if ($this->bet > 0 && $this->bet != $data && !empty($gamingUserId) && $this->change_point_card_status == 0) {
                         $this->last_play_time = time();
-
-                        if ($this->machine->code == 'S326') {
-                            \support\Log::channel('machine_keeping')->debug('Slot 押注改变更新 last_play_time', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'player_id' => $gamingUserId,
-                            'old_bet' => $this->bet,
-                            'new_bet' => $data,
-                            'old_last_play_time' => $oldPlayTime,
-                            'new_last_play_time' => $this->last_play_time,
-                            'time_diff' => $this->last_play_time - $oldPlayTime,
-                            ]);
-                        }
                         if ($this->reward_status == 0) {
                             Client::send('lottery-machine', [
                                 'num' => $data,
@@ -1304,65 +1252,13 @@ class Slot extends MachineServices implements BaseMachine
                         Client::send('play-keep-machine', [
                             'change_amount' => abs($data - $this->bet),
                             'machine_id' => $this->machine->id,
-                            'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
-                                $this->machine->domain, $this->machine->port, $this->machine->type
-                            ),
                             'player_id' => $gamingUserId,
-                            'gaming_user_id' => $gamingUserId,
-                            'keep_seconds' => $this->keep_seconds,
-                            'keeping' => $this->keeping,
                         ]);
                     }
                     if ($this->reward_status == 0) {
                         $nowTurn = $this->now_turn;
                         $bet = $this->bet;
-                        $newTurn = bcadd($nowTurn, bcsub($data, $bet, 2), 2);
-
-                        // ✅ 诊断日志：检查转数增加条件（仅 S326）
-                        $turnCondition1 = $newTurn > $nowTurn;
-                        $turnCondition2 = !empty($gamingUserId);
-                        $turnAllConditionsMet = $turnCondition1 && $turnCondition2;
-
-                        if ($this->machine->code == 'S326') {
-                            \support\Log::channel('machine_keeping')->debug('Slot 转数增加条件检查', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'condition_turn_increased' => $turnCondition1,
-                            'condition_has_player' => $turnCondition2,
-                            'all_conditions_met' => $turnAllConditionsMet,
-                            'old_turn' => $nowTurn,
-                            'new_turn' => $newTurn,
-                            'turn_diff' => bcsub($newTurn, $nowTurn, 2),
-                            'old_bet' => $bet,
-                            'new_bet' => $data,
-                            'bet_diff' => bcsub($data, $bet, 2),
-                            'gaming_user_id' => $gamingUserId,
-                            'reward_status' => $this->reward_status,
-                            ]);
-                        }
-
-                        // ✅ 修复：转数增加时也更新活动时间（即使押注金额不变）
-                        if ($turnAllConditionsMet) {
-                            $oldPlayTime = $this->last_play_time;
-                            $this->last_play_time = time();
-
-                            if ($this->machine->code == 'S326') {
-                                \support\Log::channel('machine_keeping')->debug('Slot 转数增加更新 last_play_time', [
-                                'machine_id' => $this->machine->id,
-                                'machine_code' => $this->machine->code,
-                                'player_id' => $gamingUserId,
-                                'old_turn' => $nowTurn,
-                                'new_turn' => $newTurn,
-                                'bet' => $bet,
-                                'new_bet' => $data,
-                                'old_last_play_time' => $oldPlayTime,
-                                'new_last_play_time' => $this->last_play_time,
-                                'time_diff' => $this->last_play_time - $oldPlayTime,
-                                ]);
-                            }
-                        }
-
-                        $this->now_turn = $newTurn;
+                        $this->now_turn = bcadd($nowTurn, bcsub($data, $bet, 2), 2);
                     }
                     $this->bet = $data;
                     $this->change_point_card_status = 0;
