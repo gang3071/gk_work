@@ -183,6 +183,12 @@ class SongSlot extends MachineServices implements BaseMachine
     {
         $key = $this->cacheDataKey . '_' . $name;
         if (in_array($key, $this->cacheDataKeyArr)) {
+            // ⚠️ CRITICAL：上分成功时（gaming_user_id 从0变为非0），立即更新 last_play_time
+            // 原因：玩家刚上分就开始游戏，必须记录活动时间，否则可能被立即踢出
+            if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
+                Cache::set($this->cacheDataKey . '_last_play_time', time());
+            }
+
             try {
                 // 保存到缓存，失败时立即重试1次
                 $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
@@ -743,6 +749,16 @@ class SongSlot extends MachineServices implements BaseMachine
             if ($this->has_lock == 1 && $cmd != self::CHECK) {
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
             }
+
+            // ⚠️ CRITICAL：玩家操作时立即更新 last_play_time，不等硬件响应
+            // 原因：硬件响应是异步的，可能在系统踢人检查之后才到达
+            if ($source == 'player') {
+                $currentGamingUserId = $this->gaming_user_id;
+                if (!empty($currentGamingUserId)) {
+                    $this->last_play_time = time();
+                }
+            }
+
             switch ($cmd) {
                 case self::OUT_ON:
                     $nowPoint = $this->point;

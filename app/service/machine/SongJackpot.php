@@ -197,6 +197,12 @@ class SongJackpot extends MachineServices implements BaseMachine
     {
         $key = $this->cacheDataKey . '_' . $name;
         if (in_array($key, $this->cacheDataKeyArr)) {
+            // ⚠️ CRITICAL：上分成功时（gaming_user_id 从0变为非0），立即更新 last_play_time
+            // 原因：玩家刚上分就开始游戏，必须记录活动时间，否则可能被立即踢出
+            if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
+                Cache::set($this->cacheDataKey . '_last_play_time', time());
+            }
+
             try {
                 // 保存到缓存，失败时立即重试1次
                 $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
@@ -473,17 +479,6 @@ class SongJackpot extends MachineServices implements BaseMachine
                         // turn 是"剩余转数"，玩家游玩时会减少
                         $turnDelta = bcsub($nowTurn, $orgTurn, 2);
 
-                        // C393 turn 变化诊断日志
-                        if ($this->machine->code === 'C393') {
-                            Log::channel('machine_operations')->debug('[C393-TurnDelta] 心跳检测转数变化', [
-                                'machine_id' => $this->machine->id,
-                                'org_turn' => $orgTurn,
-                                'now_turn' => $nowTurn,
-                                'turn_delta' => $turnDelta,
-                                'gaming_user_id' => $gamingUserId,
-                            ]);
-                        }
-
                         // 检查是否刚执行过上转下转操作（检查缓存标记）
                         $isTurnAction = Cache::get('turn_action_flag_' . $this->machine->id);
                         // 如果检测到上转下转标记，跳过本次累加
@@ -502,23 +497,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                             $this->player_win_number = bcadd($playerNumber, $consumed, 2);
 
                             // ⚠️ CRITICAL：玩家消耗转数说明在游戏，更新 last_play_time
-                            $beforePlayTime = $this->last_play_time;
                             $this->last_play_time = time();
-
-                            // C393 调试日志
-                            if ($this->machine->code === 'C393') {
-                                Log::channel('machine_operations')->info('[C393-TurnConsumed] 玩家消耗转数，更新 last_play_time', [
-                                    'machine_id' => $this->machine->id,
-                                    'machine_code' => $this->machine->code,
-                                    'gaming_user_id' => $gamingUserId,
-                                    'turn_delta' => $turnDelta,
-                                    'consumed' => $consumed,
-                                    'before_last_play_time' => $beforePlayTime,
-                                    'after_last_play_time' => $this->last_play_time,
-                                    'before_formatted' => date('Y-m-d H:i:s', $beforePlayTime),
-                                    'after_formatted' => date('Y-m-d H:i:s', $this->last_play_time),
-                                ]);
-                            }
                         } else if (bccomp($turnDelta, '-10', 2) < 0) {
                             $this->log->info('turn大幅减少，可能是下转操作，不累加', [
                                 'machine_code' => $this->machine->code,
@@ -552,48 +531,8 @@ class SongJackpot extends MachineServices implements BaseMachine
                 // 场景：玩家在处理消息期间被踢出，$gamingUserId 变量还保留旧值
                 $currentGamingUserId = $this->gaming_user_id;
 
-                // C393 调试日志
-                if ($this->machine->code === 'C393') {
-                    Log::channel('machine_operations')->debug('[C393-WinNumber] 收到出珠数消息', [
-                        'machine_id' => $this->machine->id,
-                        'machine_code' => $this->machine->code,
-                        'org_win_number' => $orgWinNumber,
-                        'now_win_number' => $nowWinNumber,
-                        'gaming_user_id_cached' => $gamingUserId,
-                        'gaming_user_id_current' => $currentGamingUserId,
-                        'is_kicked_during_msg' => $gamingUserId != $currentGamingUserId,
-                        'change_point_card_status' => $this->change_point_card_status,
-                        'reward_status' => $nowRewardStatus,
-                        'condition_check' => [
-                            'win_number_gt_0' => $orgWinNumber > 0,
-                            'win_number_increased' => $orgWinNumber < $nowWinNumber,
-                            'has_gaming_user' => !empty($currentGamingUserId),
-                            'card_status_ok' => $this->change_point_card_status == 0,
-                        ],
-                    ]);
-                }
-
                 if ($orgWinNumber > 0 && $orgWinNumber < $nowWinNumber && !empty($currentGamingUserId) && $this->change_point_card_status == 0) {
-                    $beforePlayTime = $this->last_play_time;
                     $this->last_play_time = time();
-
-                    // C393 更新 last_play_time 日志
-                    if ($this->machine->code === 'C393') {
-                        Log::channel('machine_operations')->info('[C393-WinNumber] 出珠数增加，更新 last_play_time', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'gaming_user_id' => $currentGamingUserId,
-                            'org_win_number' => $orgWinNumber,
-                            'now_win_number' => $nowWinNumber,
-                            'change_amount' => abs($nowWinNumber - $orgWinNumber),
-                            'before_last_play_time' => $beforePlayTime,
-                            'after_last_play_time' => $this->last_play_time,
-                            'before_last_play_time_formatted' => date('Y-m-d H:i:s', $beforePlayTime),
-                            'after_last_play_time_formatted' => date('Y-m-d H:i:s', $this->last_play_time),
-                            'time_updated' => $this->last_play_time > $beforePlayTime ? 'YES' : 'NO',
-                            'reward_status' => $nowRewardStatus,
-                        ]);
-                    }
                     if ($nowRewardStatus == 0) {
                         Client::send('play-keep-machine', [
                             'change_amount' => abs($nowWinNumber - $orgWinNumber),
@@ -611,25 +550,6 @@ class SongJackpot extends MachineServices implements BaseMachine
                             'last_num' => $orgWinNumber,
                             'machine_id' => $this->machine->id,
                             'player_id' => $currentGamingUserId,
-                        ]);
-                    }
-                } else {
-                    // C393 条件不满足日志
-                    if ($this->machine->code === 'C393') {
-                        Log::channel('machine_operations')->debug('[C393-WinNumber] 条件不满足，未更新 last_play_time', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'org_win_number' => $orgWinNumber,
-                            'now_win_number' => $nowWinNumber,
-                            'gaming_user_id_cached' => $gamingUserId,
-                            'gaming_user_id_current' => $currentGamingUserId,
-                            'change_point_card_status' => $this->change_point_card_status,
-                            'failed_conditions' => [
-                                'win_number_is_zero' => $orgWinNumber == 0,
-                                'win_number_not_increased' => $orgWinNumber >= $nowWinNumber,
-                                'no_gaming_user' => empty($currentGamingUserId),
-                                'card_status_error' => $this->change_point_card_status != 0,
-                            ],
                         ]);
                     }
                 }
@@ -900,6 +820,16 @@ class SongJackpot extends MachineServices implements BaseMachine
             if ($this->has_lock == 1 && $cmd != self::CHECK) {
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
             }
+
+            // ⚠️ CRITICAL：玩家操作时立即更新 last_play_time，不等硬件响应
+            // 原因：硬件响应是异步的，可能在系统踢人检查之后才到达
+            if ($source == 'player') {
+                $currentGamingUserId = $this->gaming_user_id;
+                if (!empty($currentGamingUserId)) {
+                    $this->last_play_time = time();
+                }
+            }
+
             switch ($cmd) {
                 case self::SCORE_TO_POINT:
                     if ($this->reward_status == 1) {

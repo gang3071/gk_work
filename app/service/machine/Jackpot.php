@@ -202,6 +202,12 @@ class Jackpot extends MachineServices implements BaseMachine
     {
         $key = $this->cacheDataKey . '_' . $name;
         if (in_array($key, $this->cacheDataKeyArr)) {
+            // ⚠️ CRITICAL：上分成功时（gaming_user_id 从0变为非0），立即更新 last_play_time
+            // 原因：玩家刚上分就开始游戏，必须记录活动时间，否则可能被立即踢出
+            if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
+                Cache::set($this->cacheDataKey . '_last_play_time', time());
+            }
+
             try {
                 // 保存到缓存，失败时立即重试1次
                 $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
@@ -481,27 +487,6 @@ class Jackpot extends MachineServices implements BaseMachine
                     // 场景：玩家在处理消息期间被踢出，$gamingUserId 变量还保留旧值
                     $currentGamingUserId = $this->gaming_user_id;
 
-                    // 总日志：只记录 C376 机器
-                    if ($this->machine->code === 'C376') {
-                        Log::channel('machine_operations')->debug('[Jackpot-WinNumber] 收到出珠数消息', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'before_win_number' => $this->win_number,
-                            'new_win_number' => $data,
-                            'gaming_user_id_cached' => $gamingUserId,
-                            'gaming_user_id_current' => $currentGamingUserId,
-                            'is_kicked_during_msg' => $gamingUserId != $currentGamingUserId,
-                            'change_point_card_status' => $this->change_point_card_status,
-                            'reward_status' => $this->reward_status,
-                            'condition_check' => [
-                                'win_number_gt_0' => $this->win_number > 0,
-                                'win_number_changed' => $this->win_number != $data,
-                                'has_gaming_user' => !empty($currentGamingUserId),
-                                'card_status_ok' => $this->change_point_card_status == 0,
-                            ],
-                        ]);
-                    }
-
                     if ($this->win_number > 0 && $this->win_number > $data && $this->change_point_card_status == 0) {
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_WIN_NUMBER);
                         if (!empty($currentGamingUserId)) {
@@ -513,25 +498,7 @@ class Jackpot extends MachineServices implements BaseMachine
                         return true;
                     }
                     if ($this->win_number > 0 && $this->win_number != $data && !empty($currentGamingUserId) && $this->change_point_card_status == 0) {
-                        $beforePlayTime = $this->last_play_time;
                         $this->last_play_time = time();
-
-                        // 只记录 C376 机器
-                        if ($this->machine->code === 'C376') {
-                            Log::channel('machine_operations')->info('[Jackpot-WinNumber] 出珠数变化，更新最后游戏时间', [
-                                'machine_id' => $this->machine->id,
-                                'machine_code' => $this->machine->code,
-                                'gaming_user_id' => $currentGamingUserId,
-                                'before_win_number' => $this->win_number,
-                                'after_win_number' => $data,
-                                'change_amount' => abs($data - $this->win_number),
-                                'before_last_play_time' => $beforePlayTime,
-                                'after_last_play_time' => $this->last_play_time,
-                                'time_updated' => $this->last_play_time > $beforePlayTime ? 'YES' : 'NO',
-                                'reward_status' => $this->reward_status,
-                                'change_point_card_status' => $this->change_point_card_status,
-                            ]);
-                        }
 
                         if ($this->reward_status == 0) {
                             Client::send('play-keep-machine', [
@@ -550,25 +517,6 @@ class Jackpot extends MachineServices implements BaseMachine
                                 'last_num' => $this->win_number,
                                 'machine_id' => $this->machine->id,
                                 'player_id' => $currentGamingUserId,
-                            ]);
-                        }
-                    } else {
-                        // 条件不满足，只记录 C376 机器
-                        if ($this->machine->code === 'C376') {
-                            Log::channel('machine_operations')->debug('[Jackpot-WinNumber] 条件不满足，未更新last_play_time', [
-                                'machine_id' => $this->machine->id,
-                                'machine_code' => $this->machine->code,
-                                'win_number' => $this->win_number,
-                                'new_data' => $data,
-                                'gaming_user_id_cached' => $gamingUserId,
-                                'gaming_user_id_current' => $currentGamingUserId,
-                                'change_point_card_status' => $this->change_point_card_status,
-                                'failed_conditions' => [
-                                    'win_number_is_zero' => $this->win_number == 0,
-                                    'win_number_not_changed' => $this->win_number == $data,
-                                    'no_gaming_user' => empty($currentGamingUserId),
-                                    'card_status_error' => $this->change_point_card_status != 0,
-                                ],
                             ]);
                         }
                     }
@@ -648,6 +596,16 @@ class Jackpot extends MachineServices implements BaseMachine
             if (!Gateway::isUidOnline($uid)) {
                 throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
             }
+
+            // ⚠️ CRITICAL：玩家操作时立即更新 last_play_time，不等硬件响应
+            // 原因：硬件响应是异步的，可能在系统踢人检查之后才到达
+            if ($source == 'player') {
+                $currentGamingUserId = $this->gaming_user_id;
+                if (!empty($currentGamingUserId)) {
+                    $this->last_play_time = time();
+                }
+            }
+
             switch ($cmd) {
                 case self::TESTING:
                 default:
