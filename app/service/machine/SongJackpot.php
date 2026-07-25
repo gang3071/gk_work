@@ -522,8 +522,48 @@ class SongJackpot extends MachineServices implements BaseMachine
                 // 场景：玩家在处理消息期间被踢出，$gamingUserId 变量还保留旧值
                 $currentGamingUserId = $this->gaming_user_id;
 
+                // C393 调试日志
+                if ($this->machine->code === 'C393') {
+                    Log::channel('machine_operations')->debug('[C393-WinNumber] 收到出珠数消息', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'org_win_number' => $orgWinNumber,
+                        'now_win_number' => $nowWinNumber,
+                        'gaming_user_id_cached' => $gamingUserId,
+                        'gaming_user_id_current' => $currentGamingUserId,
+                        'is_kicked_during_msg' => $gamingUserId != $currentGamingUserId,
+                        'change_point_card_status' => $this->change_point_card_status,
+                        'reward_status' => $nowRewardStatus,
+                        'condition_check' => [
+                            'win_number_gt_0' => $orgWinNumber > 0,
+                            'win_number_increased' => $orgWinNumber < $nowWinNumber,
+                            'has_gaming_user' => !empty($currentGamingUserId),
+                            'card_status_ok' => $this->change_point_card_status == 0,
+                        ],
+                    ]);
+                }
+
                 if ($orgWinNumber > 0 && $orgWinNumber < $nowWinNumber && !empty($currentGamingUserId) && $this->change_point_card_status == 0) {
+                    $beforePlayTime = $this->last_play_time;
                     $this->last_play_time = time();
+
+                    // C393 更新 last_play_time 日志
+                    if ($this->machine->code === 'C393') {
+                        Log::channel('machine_operations')->info('[C393-WinNumber] 出珠数增加，更新 last_play_time', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'gaming_user_id' => $currentGamingUserId,
+                            'org_win_number' => $orgWinNumber,
+                            'now_win_number' => $nowWinNumber,
+                            'change_amount' => abs($nowWinNumber - $orgWinNumber),
+                            'before_last_play_time' => $beforePlayTime,
+                            'after_last_play_time' => $this->last_play_time,
+                            'before_last_play_time_formatted' => date('Y-m-d H:i:s', $beforePlayTime),
+                            'after_last_play_time_formatted' => date('Y-m-d H:i:s', $this->last_play_time),
+                            'time_updated' => $this->last_play_time > $beforePlayTime ? 'YES' : 'NO',
+                            'reward_status' => $nowRewardStatus,
+                        ]);
+                    }
                     if ($nowRewardStatus == 0) {
                         Client::send('play-keep-machine', [
                             'change_amount' => abs($nowWinNumber - $orgWinNumber),
@@ -541,6 +581,25 @@ class SongJackpot extends MachineServices implements BaseMachine
                             'last_num' => $orgWinNumber,
                             'machine_id' => $this->machine->id,
                             'player_id' => $currentGamingUserId,
+                        ]);
+                    }
+                } else {
+                    // C393 条件不满足日志
+                    if ($this->machine->code === 'C393') {
+                        Log::channel('machine_operations')->debug('[C393-WinNumber] 条件不满足，未更新 last_play_time', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'org_win_number' => $orgWinNumber,
+                            'now_win_number' => $nowWinNumber,
+                            'gaming_user_id_cached' => $gamingUserId,
+                            'gaming_user_id_current' => $currentGamingUserId,
+                            'change_point_card_status' => $this->change_point_card_status,
+                            'failed_conditions' => [
+                                'win_number_is_zero' => $orgWinNumber == 0,
+                                'win_number_not_increased' => $orgWinNumber >= $nowWinNumber,
+                                'no_gaming_user' => empty($currentGamingUserId),
+                                'card_status_error' => $this->change_point_card_status != 0,
+                            ],
                         ]);
                     }
                 }

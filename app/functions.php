@@ -176,7 +176,7 @@ function machineKeepOutPlayer(): void
                 $minutes = $settingMinutes + (15 * 60);
             }
             if ($services->keeping == 0 && time() - $services->last_play_time > $minutes) {
-                // ⚠️ C376 进入保留状态日志
+                // ⚠️ C376/C393 进入保留状态日志
                 if ($machine->code === 'C376') {
                     $log->info('[C376-EnterKeeping] 玩家无操作，进入保留状态', [
                         'machine_id' => $machine->id,
@@ -190,6 +190,30 @@ function machineKeepOutPlayer(): void
                         'win_number' => $services->win_number ?? 'N/A',
                         'bet' => $services->bet ?? 'N/A',
                         'reward_status' => $services->reward_status ?? 'N/A',
+                    ]);
+                } elseif ($machine->code === 'C393') {
+                    $log->info('[C393-EnterKeeping] 玩家无操作，进入保留状态', [
+                        'machine_id' => $machine->id,
+                        'machine_code' => $machine->code,
+                        'player_id' => $player->id,
+                        'player_uuid' => $player->uuid ?? 'N/A',
+                        'player_name' => $player->name ?? 'N/A',
+                        'last_play_time' => $services->last_play_time,
+                        'last_play_time_formatted' => date('Y-m-d H:i:s', $services->last_play_time),
+                        'current_time' => time(),
+                        'current_time_formatted' => date('Y-m-d H:i:s'),
+                        'idle_seconds' => time() - $services->last_play_time,
+                        'idle_threshold_seconds' => $minutes,
+                        'machine_state' => [
+                            'gaming' => $services->gaming ?? 'N/A',
+                            'gaming_user_id' => $services->gaming_user_id ?? 'N/A',
+                            'point' => $services->point ?? 'N/A',
+                            'win_number' => $services->win_number ?? 'N/A',
+                            'turn' => $services->turn ?? 'N/A',
+                            'score' => $services->score ?? 'N/A',
+                            'auto' => $services->auto ?? 'N/A',
+                            'reward_status' => $services->reward_status ?? 'N/A',
+                        ],
                     ]);
                 }
 
@@ -298,7 +322,7 @@ function machineKeepOutPlayer(): void
                     'keeping_duration' => time() - $services->last_keep_at,  // 保留了多久
                 ];
 
-                // ⚠️ C376 详细踢出日志
+                // ⚠️ C376/C393 详细踢出日志
                 if ($machine->code === 'C376') {
                     $log->info('[C376-KickOut] 准备踢出玩家 - 详细状态', array_merge($machineStatus, [
                         'last_play_time' => $services->last_play_time,
@@ -313,6 +337,43 @@ function machineKeepOutPlayer(): void
                         'rush_status' => $services->rush_status ?? 'N/A',
                         'auto' => $services->auto ?? 'N/A',
                         'time_since_last_play' => time() - $services->last_play_time,
+                    ]));
+                } elseif ($machine->code === 'C393') {
+                    $log->info('[C393-KickOut] 准备踢出玩家 - 详细状态', array_merge($machineStatus, [
+                        'kick_reason' => '保留时间耗尽（系统自动踢出）',
+                        'player_info' => [
+                            'id' => $player->id,
+                            'uuid' => $player->uuid ?? 'N/A',
+                            'name' => $player->name ?? 'N/A',
+                            'phone' => $player->phone ?? 'N/A',
+                        ],
+                        'time_info' => [
+                            'last_play_time' => $services->last_play_time,
+                            'last_play_time_formatted' => date('Y-m-d H:i:s', $services->last_play_time),
+                            'last_keep_at' => $services->last_keep_at,
+                            'last_keep_at_formatted' => date('Y-m-d H:i:s', $services->last_keep_at),
+                            'current_time' => time(),
+                            'current_time_formatted' => date('Y-m-d H:i:s'),
+                            'time_since_last_play' => time() - $services->last_play_time,
+                            'keeping_duration' => time() - $services->last_keep_at,
+                        ],
+                        'machine_state' => [
+                            'gaming' => $services->gaming ?? 'N/A',
+                            'gaming_user_id' => $services->gaming_user_id ?? 'N/A',
+                            'point' => $services->point ?? 'N/A',
+                            'win_number' => $services->win_number ?? 'N/A',
+                            'turn' => $services->turn ?? 'N/A',
+                            'score' => $services->score ?? 'N/A',
+                            'auto' => $services->auto ?? 'N/A',
+                            'reward_status' => $services->reward_status ?? 'N/A',
+                            'bb_status' => $services->bb_status ?? 'N/A',
+                            'rush_status' => $services->rush_status ?? 'N/A',
+                        ],
+                        'keep_info' => [
+                            'keep_seconds' => $services->keep_seconds,
+                            'keeping' => $services->keeping,
+                            'keeping_user_id' => $services->keeping_user_id ?? 'N/A',
+                        ],
                     ]));
                 } else {
                     $log->info('PlayOutMachine: 准备踢出玩家', $machineStatus);
@@ -333,6 +394,12 @@ function machineKeepOutPlayer(): void
                                 'wash_point' => $wash_point,
                                 'wash_result' => $washResult,
                             ]));
+                        } elseif ($machine->code === 'C393') {
+                            $log->warning('[C393-KickOut] 踢出玩家但退分为0，请检查硬件通信', array_merge($machineStatus, [
+                                'after_balance' => $afterGameAmount,
+                                'wash_point' => $wash_point,
+                                'wash_result' => $washResult,
+                            ]));
                         } else {
                             $log->warning('PlayOutMachine: 踢出玩家但退分为0，请检查硬件通信', array_merge($machineStatus, [
                                 'after_balance' => $afterGameAmount,
@@ -346,6 +413,17 @@ function machineKeepOutPlayer(): void
                                 'machine_id' => $machine->id,
                                 'machine_code' => $machine->code,
                                 'player_id' => $player->id,
+                                'kick_reason' => '保留时间耗尽（系统自动踢出）',
+                                'wash_point' => $wash_point,
+                                'before_balance' => $beforeGameAmount,
+                                'after_balance' => $afterGameAmount,
+                            ]);
+                        } elseif ($machine->code === 'C393') {
+                            $log->info('[C393-KickOut] 踢出成功并退分', [
+                                'machine_id' => $machine->id,
+                                'machine_code' => $machine->code,
+                                'player_id' => $player->id,
+                                'player_uuid' => $player->uuid ?? 'N/A',
                                 'kick_reason' => '保留时间耗尽（系统自动踢出）',
                                 'wash_point' => $wash_point,
                                 'before_balance' => $beforeGameAmount,

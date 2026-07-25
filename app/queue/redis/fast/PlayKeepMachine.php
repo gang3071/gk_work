@@ -127,9 +127,9 @@ class PlayKeepMachine implements Consumer
                     $currentGamingUserId = $services->gaming_user_id;
                     $currentKeeping = $services->keeping;
 
-                    // C376 调试日志
-                    if ($machine->code === 'C376') {
-                        Log::channel('machine_operations')->info('[C376-PlayKeepMachine] 队列处理', [
+                    // C376/C393 调试日志
+                    if ($machine->code === 'C376' || $machine->code === 'C393') {
+                        Log::channel('machine_operations')->info('[' . $machine->code . '-PlayKeepMachine] 队列处理', [
                             'machine_id' => $machineId,
                             'machine_code' => $machine->code,
                             'gaming_user_id_from_queue' => $gamingUserId,
@@ -146,8 +146,8 @@ class PlayKeepMachine implements Consumer
                     // 只在玩家还在游戏中时才处理
                     if (empty($currentGamingUserId)) {
                         // 玩家已离开，丢弃此消息
-                        if ($machine->code === 'C376') {
-                            Log::channel('machine_operations')->info('[C376-PlayKeepMachine] 玩家已离开，丢弃消息', [
+                        if ($machine->code === 'C376' || $machine->code === 'C393') {
+                            Log::channel('machine_operations')->info('[' . $machine->code . '-PlayKeepMachine] 玩家已离开，丢弃消息', [
                                 'machine_id' => $machineId,
                                 'gaming_user_id_from_queue' => $gamingUserId,
                             ]);
@@ -161,9 +161,9 @@ class PlayKeepMachine implements Consumer
                         $keepingChanged = true;
                         $newKeeping = 0;
 
-                        // C376 解除保留日志
-                        if ($machine->code === 'C376') {
-                            Log::channel('machine_operations')->info('[C376-PlayKeepMachine] 玩家有活动，解除保留状态', [
+                        // C376/C393 解除保留日志
+                        if ($machine->code === 'C376' || $machine->code === 'C393') {
+                            Log::channel('machine_operations')->info('[' . $machine->code . '-PlayKeepMachine] 玩家有活动，解除保留状态', [
                                 'machine_id' => $machineId,
                                 'machine_code' => $machine->code,
                                 'player_id' => $currentGamingUserId,
