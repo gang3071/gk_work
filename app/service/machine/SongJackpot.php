@@ -473,6 +473,17 @@ class SongJackpot extends MachineServices implements BaseMachine
                         // turn 是"剩余转数"，玩家游玩时会减少
                         $turnDelta = bcsub($nowTurn, $orgTurn, 2);
 
+                        // C393 turn 变化诊断日志
+                        if ($this->machine->code === 'C393') {
+                            Log::channel('machine_operations')->debug('[C393-TurnDelta] 心跳检测转数变化', [
+                                'machine_id' => $this->machine->id,
+                                'org_turn' => $orgTurn,
+                                'now_turn' => $nowTurn,
+                                'turn_delta' => $turnDelta,
+                                'gaming_user_id' => $gamingUserId,
+                            ]);
+                        }
+
                         // 检查是否刚执行过上转下转操作（检查缓存标记）
                         $isTurnAction = Cache::get('turn_action_flag_' . $this->machine->id);
                         // 如果检测到上转下转标记，跳过本次累加
