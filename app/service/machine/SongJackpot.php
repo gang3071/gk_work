@@ -489,6 +489,25 @@ class SongJackpot extends MachineServices implements BaseMachine
                             $playerNumber = $this->player_win_number;
                             $consumed = abs($turnDelta);  // 消耗的转数（绝对值）
                             $this->player_win_number = bcadd($playerNumber, $consumed, 2);
+
+                            // ⚠️ CRITICAL：玩家消耗转数说明在游戏，更新 last_play_time
+                            $beforePlayTime = $this->last_play_time;
+                            $this->last_play_time = time();
+
+                            // C393 调试日志
+                            if ($this->machine->code === 'C393') {
+                                Log::channel('machine_operations')->info('[C393-TurnConsumed] 玩家消耗转数，更新 last_play_time', [
+                                    'machine_id' => $this->machine->id,
+                                    'machine_code' => $this->machine->code,
+                                    'gaming_user_id' => $gamingUserId,
+                                    'turn_delta' => $turnDelta,
+                                    'consumed' => $consumed,
+                                    'before_last_play_time' => $beforePlayTime,
+                                    'after_last_play_time' => $this->last_play_time,
+                                    'before_formatted' => date('Y-m-d H:i:s', $beforePlayTime),
+                                    'after_formatted' => date('Y-m-d H:i:s', $this->last_play_time),
+                                ]);
+                            }
                         } else if (bccomp($turnDelta, '-10', 2) < 0) {
                             $this->log->info('turn大幅减少，可能是下转操作，不累加', [
                                 'machine_code' => $this->machine->code,
