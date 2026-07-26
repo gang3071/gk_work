@@ -784,46 +784,11 @@ class SongSlot extends MachineServices implements BaseMachine
                     break;
                 case self::WASH_ZERO:
                     $code = sprintf('%02x', rand(0, 0x63));
-                    $pointBeforeWash = $this->point;
-                    $this->pre_wash_point = empty($data) ? $pointBeforeWash : $data;
-
-                    // 执行洗分
+                    $this->log->info('下分编号为', [$code]);
+                    $point = $this->point;
+                    $this->pre_wash_point = empty($data) ? $point : $data;
+                    $this->log->info('发送下分操作: 预下分为', [$this->pre_wash_point]);
                     $this->washPoint($uid, $cmd . $code, $this->pre_wash_point, $source, $source_id);
-
-                    // ✅ 二次确认：主动读取机台分数，验证是否真的扣掉了
-                    // sendCmd 内部会阻塞等待直到收到响应或超时，无需额外 sleep
-                    try {
-                        $this->sendCmd(self::READ_SCORE, 0, $source, $source_id);
-                    } catch (Exception $e) {
-                        // 读分失败不影响主流程，但记录日志
-                        Log::warning('[SongSlot-WashVerify] 洗分后读分失败', [
-                            'machine_id' => $this->machine->id,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
-
-                    $pointAfterWash = $this->point;
-                    $expectedPoint = $pointBeforeWash - $this->pre_wash_point;
-
-                    // 允许 ±2 的误差（考虑心跳可能有微小变化）
-                    if (abs($pointAfterWash - $expectedPoint) > 2) {
-                        Log::error('[SongSlot-WashVerify] 洗分后分数校验失败', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'point_before' => $pointBeforeWash,
-                            'point_after' => $pointAfterWash,
-                            'expected' => $expectedPoint,
-                            'wash_amount' => $this->pre_wash_point,
-                        ]);
-                        throw new Exception('洗分失败：机台分数未正确扣除');
-                    }
-
-                    Log::info('[SongSlot-WashVerify] 洗分成功并验证', [
-                        'machine_id' => $this->machine->id,
-                        'point_before' => $pointBeforeWash,
-                        'point_after' => $pointAfterWash,
-                        'wash_amount' => $this->pre_wash_point,
-                    ]);
                     break;
                 case self::READ_BET:
                 case self::READ_SCORE:

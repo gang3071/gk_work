@@ -444,7 +444,6 @@ class Jackpot extends MachineServices implements BaseMachine
                 $this->now_turn = 0;
             }
 
-            $gamingUserId = $this->gaming_user_id; // ✅ 从 Redis 读取（实时数据），不从缓存的 Machine 对象读取
             switch ($fun) {
                 case Jackpot::TURN_UP_ALL:
                 case Jackpot::TURN_TO_POINT:

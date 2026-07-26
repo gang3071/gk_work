@@ -1396,21 +1396,24 @@ function machineWash(
                 $services->sendCmd($services::STOP_ONE, 0, 'player', $player->id, $is_system);
                 $services->sendCmd($services::STOP_TWO, 0, 'player', $player->id, $is_system);
                 $services->sendCmd($services::STOP_THREE, 0, 'player', $player->id, $is_system);
+
+                // ⚠️ CRITICAL：立即读取 point，避免被心跳更新
                 $services->sendCmd($services::READ_SCORE, 0, 'player', $player->id, $is_system);
-                Log::channel('song_slot_machine')->info('slot -> wash', [
+                $money = $services->point;  // 紧接着读取，减少时间窗口
+
+                $services->sendCmd($services::READ_BET, 0, 'player', $player->id, $is_system);
+                $gamingPressure = bcsub($services->bet, $services->player_pressure);
+                $gamingScore = bcsub($services->win, $services->player_score);
+
+                Log::channel('slot_machine')->info('slot -> wash', [
                     'point' => $money,
                     'code' => $machine->code,
                     'bet' => $services->bet,
                     'player_pressure' => $services->player_pressure,
+                    'gaming_pressure' => $gamingPressure,
+                    'gaming_score' => $gamingScore,
                 ]);
-                $services->sendCmd($services::READ_BET, 0, 'player', $player->id, $is_system);
-                $gamingPressure = bcsub($services->bet, $services->player_pressure);
-                $gamingScore = bcsub($services->win, $services->player_score);
-                $money = $services->point;
-                Log::channel('slot_machine')->info('slot -> wash', [
-                    'point' => $money,
-                    'code' => $machine->code,
-                ]);
+
                 if (!empty($giftPoint)) {
                     if ($money < $giftPoint['open_point'] * $giftPoint['condition']) {
                         $money = max($money - $giftPoint['gift_point'], 0);
