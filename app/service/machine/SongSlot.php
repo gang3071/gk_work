@@ -784,7 +784,15 @@ class SongSlot extends MachineServices implements BaseMachine
                     break;
                 case self::WASH_ZERO:
                     $code = sprintf('%02x', rand(0, 0x63));
-                    $this->log->info('下分编号为', [$code]);
+                    $this->log->info('[SongSlot-sendCmd] 准备调用 washPoint', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'code' => $code,
+                        'uid' => $uid,
+                        'source' => $source,
+                        'source_id' => $source_id,
+                        'current_point' => $this->point,
+                    ]);
                     $point = $this->point;
                     $this->pre_wash_point = empty($data) ? $point : $data;
                     $this->log->info('发送下分操作: 预下分为', [$this->pre_wash_point]);
@@ -1192,7 +1200,19 @@ class SongSlot extends MachineServices implements BaseMachine
 
         try {
             $beforeActionTime = $this->setActionVersion($cmd);
-            Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd . 'c1', 0)));
+            $cmdHex = $this->createCmd($cmd . 'c1', 0);
+
+            $this->log->info('[SongSlot-washPoint] 发送 WASH_ZERO 指令', [
+                'machine_code' => $this->machine->code,
+                'uid' => $uid,
+                'cmd' => $cmd,
+                'cmd_hex' => $cmdHex,
+                'data' => $data,
+                'before_point' => $this->point,
+                'attempts' => $attempts,
+            ]);
+
+            Gateway::sendToUid($uid, hex2bin($cmdHex));
             $handleDuration = 0;
             $sleep = 50000; // 5毫秒取一次值
             while (true) {

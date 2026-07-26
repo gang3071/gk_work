@@ -525,6 +525,14 @@ class Slot extends MachineServices implements BaseMachine
                     $this->openPoint($uid, $cmd, $data, $source, $source_id);
                     break;
                 case self::WASH_ZERO:
+                    Log::channel('slot_machine')->info('[Slot-sendCmd] 准备调用 washPoint', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'uid' => $uid,
+                        'source' => $source,
+                        'source_id' => $source_id,
+                        'current_point' => $this->point,
+                    ]);
                     $this->washPoint($uid, $source, $source_id);
                     break;
                 case self::WASH_POINT:
@@ -809,8 +817,16 @@ class Slot extends MachineServices implements BaseMachine
             // 如果此时 point = 0，可能是心跳在发送指令前更新了 Redis
             // 应该继续发送指令让硬件确认清零，而不是静默返回
 
-            Gateway::sendToUid($uid,
-                hex2bin($this->createCmd(self::PREFIX . self::WASH_ZERO, 0, self::TYPE_OPEN_CARD)));
+            $cmdHex = $this->createCmd(self::PREFIX . self::WASH_ZERO, 0, self::TYPE_OPEN_CARD);
+            Log::channel('slot_machine')->info('[Slot-washPoint] 发送 WASH_ZERO 指令', [
+                'machine_code' => $this->machine->code,
+                'uid' => $uid,
+                'cmd_hex' => $cmdHex,
+                'before_point' => $beforePoint,
+                'attempts' => $attempts,
+            ]);
+
+            Gateway::sendToUid($uid, hex2bin($cmdHex));
             $beforeActionTime = $this->action_time;
             $handleDuration = 0;
             $sleep = 50000; // 5毫秒取一次值
