@@ -1449,11 +1449,24 @@ function machineWash(
                 $machine = $washResult['machine'];
             } elseif ($money == 0 && $path == 'leave') {
                 // 0 分弃台，只清理状态，不创建记录
-                Log::info('[machineWash] 0分弃台，不创建洗分记录', [
+                Log::channel('slot_machine')->info('[machineWash] 0分弃台，不创建洗分记录', [
                     'machine_id' => $machine->id,
                     'machine_code' => $machine->code,
                     'player_id' => $player->id,
                 ]);
+            } elseif ($money == 0 && $path == 'down') {
+                // 🚨 0 分下分，说明发生了竞态条件！
+                // READ_SCORE 时读到 100 分，但心跳更新成了 0
+                // 这种情况不能静默成功，必须报错让玩家重试
+                Log::channel('slot_machine')->error('[machineWash] 竞态条件：下分时读到0分', [
+                    'machine_id' => $machine->id,
+                    'machine_code' => $machine->code,
+                    'player_id' => $player->id,
+                    'path' => $path,
+                    'reason' => 'READ_SCORE 后心跳更新了 Redis',
+                    'action' => '抛出异常，要求玩家重试',
+                ]);
+                throw new Exception("下分失败：机台分数正在更新中，请稍后重试");
             }
         if ($path == 'leave') {
             if ($services->keeping == 1) {
