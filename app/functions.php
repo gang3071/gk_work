@@ -1436,13 +1436,35 @@ function machineWash(
 
         /** 彩金预留检查 */
         if ($hasLottery && $machine->type == GameType::TYPE_SLOT && $path == 'down' && $money > 0) {
+            Log::channel('slot_machine')->info('[machineWash] 开始彩金预留检查', [
+                'machine_code' => $machine->code,
+                'money' => $money,
+                'hasLottery' => $hasLottery,
+            ]);
+
             try {
                 $playerLotteryRecord = (new LotteryServices())->setMachine($machine)->setPlayer($player)->fixedPotCheckLottery($money,
                     true);
                 if ($playerLotteryRecord) {
+                    Log::channel('slot_machine')->info('[machineWash] 中了彩金，暂停下分', [
+                        'machine_code' => $machine->code,
+                        'money' => $money,
+                        'lottery_record_id' => $playerLotteryRecord->id ?? null,
+                    ]);
                     return $playerLotteryRecord;
                 }
+
+                Log::channel('slot_machine')->info('[machineWash] 彩金检查通过，继续下分', [
+                    'machine_code' => $machine->code,
+                    'money' => $money,
+                ]);
             } catch (Exception $e) {
+                Log::channel('slot_machine')->error('[machineWash] 彩金检查异常', [
+                    'machine_code' => $machine->code,
+                    'money' => $money,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
                 throw new Exception($e->getMessage());
             }
         }
