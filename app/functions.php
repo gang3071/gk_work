@@ -1534,9 +1534,15 @@ function machineWash(
                         'realPoint' => $realPoint,
                     ]);
                     $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+
+                    // 延迟一下再读取，确保硬件完全清零
+                    usleep(200000);  // 200ms
+
+                    $pointAfterWash = $services->point;
                     Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO 执行完成', [
                         'machine_code' => $machine->code,
-                        'after_point' => $services->point,
+                        'after_point_immediate' => 0,  // washPoint 返回时是 0
+                        'after_point_200ms_later' => $pointAfterWash,  // 200ms 后再读
                     ]);
                 } else {
                     Log::channel('slot_machine')->warning('[machineWash-硬件清零] 跳过 WASH_ZERO（硬件已是0分）', [
@@ -1546,7 +1552,13 @@ function machineWash(
                     ]);
                 }
 
+                Log::channel('slot_machine')->info('[machineWash-硬件清零] 开始执行 ALL_DOWN', [
+                    'machine_code' => $machine->code,
+                ]);
                 $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
+                Log::channel('slot_machine')->info('[machineWash-硬件清零] ALL_DOWN 执行完成', [
+                    'machine_code' => $machine->code,
+                ]);
                 break;
         }
 
