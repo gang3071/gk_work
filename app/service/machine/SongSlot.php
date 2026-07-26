@@ -815,13 +815,17 @@ class SongSlot extends MachineServices implements BaseMachine
             ])) {
                 $this->has_lock = 1;
 
+                // 确定指令类型
+                $cmdType = $cmd == self::OPEN_ANY_POINT ? '上分' : '下分';
+
                 // 详细记录机台锁的原因
-                Log::channel('machine_operations')->error('[SongSlot-MachineLock] 机台被锁', [
+                Log::channel('machine_operations')->error("[SongSlot-MachineLock] {$cmdType}失败，机台被锁", [
                     'machine_id' => $this->machine->id,
                     'machine_code' => $this->machine->code,
                     'machine_name' => $this->machine->name,
                     'cmd' => $cmd,
-                    'cmd_desc' => $this->getDescription($cmd),
+                    'cmd_type' => $cmdType,
+                    'cmd_data' => $data ?? 0,
                     'lock_reason' => '指令执行异常',
                     'exception_message' => $e->getMessage(),
                     'exception_file' => $e->getFile(),
@@ -850,7 +854,9 @@ class SongSlot extends MachineServices implements BaseMachine
                 'operator_type' => $source,
                 'operator_id' => $source_id,
                 'cmd' => $cmd,
-                'machine_code' => $this->machine->code
+                'cmd_data' => $data ?? 0,
+                'machine_code' => $this->machine->code,
+                'error' => $e->getMessage(),
             ]);
             throw new Exception($e->getMessage());
         }
@@ -1084,6 +1090,17 @@ class SongSlot extends MachineServices implements BaseMachine
     ): void
     {
         $expirationTime = 1000000;
+
+        $this->log->info('[SongSlot-上分开始]', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'cmd' => $cmd,
+            'data' => $data,
+            'source' => $source,
+            'source_id' => $source_id,
+            'before_point' => $this->point,
+        ]);
+
         try {
             $beforeActionTime = $this->setActionVersion($cmd);
             Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
@@ -1092,6 +1109,14 @@ class SongSlot extends MachineServices implements BaseMachine
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 if ($actionTime > $beforeActionTime) {
+                    $this->log->info('[SongSlot-上分成功]', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'data' => $data,
+                        'after_point' => $this->point,
+                        'duration_ms' => round($handleDuration / 1000, 2),
+                    ]);
+
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -1107,8 +1132,14 @@ class SongSlot extends MachineServices implements BaseMachine
                 usleep($sleep);
                 $handleDuration += $sleep;
             }
-        } catch (Exception) {
-            $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code]]);
+        } catch (Exception $e) {
+            $this->log->error('[SongSlot-上分失败]', [
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'data' => $data,
+                'error' => $e->getMessage(),
+                'before_point' => $this->point,
+            ]);
             throw new Exception(trans('machine_action_fail', [], 'message'));
         }
     }
@@ -1146,6 +1177,19 @@ class SongSlot extends MachineServices implements BaseMachine
     {
         $maxRetries = 8;
         $expirationTime = 1000000;
+
+        if ($attempts == 0) {
+            $this->log->info('[SongSlot-下分开始]', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'data' => $data,
+                'source' => $source,
+                'source_id' => $source_id,
+                'before_point' => $this->point,
+            ]);
+        }
+
         try {
             $beforeActionTime = $this->setActionVersion($cmd);
             Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd . 'c1', 0)));
@@ -1154,6 +1198,15 @@ class SongSlot extends MachineServices implements BaseMachine
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 if ($actionTime > $beforeActionTime) {
+                    $this->log->info('[SongSlot-下分成功]', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'data' => $data,
+                        'after_point' => $this->point,
+                        'attempts' => $attempts + 1,
+                        'duration_ms' => round($handleDuration / 1000, 2),
+                    ]);
+
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -1172,9 +1225,22 @@ class SongSlot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('指令超时异常', ['slot -> washPoint', [$this->machine->code], 'error' => $e->getMessage()]);
+                $this->log->error('[SongSlot-下分失败]', [
+                    'machine_code' => $this->machine->code,
+                    'cmd' => $cmd,
+                    'data' => $data,
+                    'error' => $e->getMessage(),
+                    'attempts' => $attempts,
+                    'before_point' => $this->point,
+                ]);
                 throw new Exception(trans('machine_connect_timeout', [], 'message'));
             }
+            $this->log->warning('[SongSlot-下分重试]', [
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'attempts' => $attempts,
+                'max_retries' => $maxRetries,
+            ]);
             usleep(50000);
             $this->washPoint($uid, $cmd, $data, $source, $source_id, $attempts);
         }
