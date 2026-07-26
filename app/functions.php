@@ -1401,11 +1401,19 @@ function machineWash(
                     $services->sendCmd($services::STOP_THREE, 0, 'player', $player->id, $is_system);
                 }
 
-                // ⚠️ CRITICAL：立即读取 point，避免被心跳更新
+                // ⚠️ CRITICAL：读取分数后等待硬件响应稳定
                 $services->sendCmd($services::READ_SCORE, 0, 'player', $player->id, $is_system);
-                $money = $services->point;  // 紧接着读取，减少时间窗口
+
+                // 短暂延迟，确保硬件响应完全写入 Redis（避免读到中间状态）
+                usleep(100000);  // 100ms
+
+                $money = $services->point;  // 读取稳定后的值
 
                 $services->sendCmd($services::READ_BET, 0, 'player', $player->id, $is_system);
+
+                // 短暂延迟，确保 READ_BET 响应也稳定
+                usleep(100000);  // 100ms
+
                 $gamingPressure = bcsub($services->bet, $services->player_pressure);
                 $gamingScore = bcsub($services->win, $services->player_score);
 
