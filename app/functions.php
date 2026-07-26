@@ -1437,10 +1437,19 @@ function machineWash(
         DB::beginTransaction();
         try {
             $washResult = null;
-            if ($money >= 0) {
+            // ⚠️ CRITICAL：只有 money > 0 时才创建洗分记录
+            // 防止竞态条件导致创建 0 分记录但硬件有分的情况
+            if ($money > 0) {
                 $washResult = machineWashZero($player, $machine, $money, $is_system, max($gamingPressure, 0),
                     max($gamingScore, 0), max($gamingTurnPoint, 0), $path, $adminId, $adminUsername);
                 $machine = $washResult['machine'];
+            } elseif ($money == 0 && $path == 'leave') {
+                // 0 分弃台，只清理状态，不创建记录
+                Log::info('[machineWash] 0分弃台，不创建洗分记录', [
+                    'machine_id' => $machine->id,
+                    'machine_code' => $machine->code,
+                    'player_id' => $player->id,
+                ]);
             }
         if ($path == 'leave') {
             if ($services->keeping == 1) {
@@ -1476,7 +1485,21 @@ function machineWash(
                 $services->sendCmd($services::CLEAR_LOG, 0, 'player', $player->id, $is_system);
                 break;
             case GameType::TYPE_SLOT:
-                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+                // ⚠️ CRITICAL：洗分前二次确认机台分数，防止竞态条件
+                // 如果此时 point = 0 但 money > 0，说明被心跳更新了，需要报错
+                $services->sendCmd($services::READ_SCORE, 0, 'player', $player->id, $is_system);
+                $realPoint = $services->point;
+
+                if ($money > 0 && $realPoint == 0) {
+                    // 数据库记录了下分，但硬件已经是 0，数据不一致！
+                    throw new Exception("洗分失败：数据不一致（记录{$money}分，硬件0分）");
+                }
+
+                if ($realPoint > 0) {
+                    // 只有硬件有分数时才执行洗分指令
+                    $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+                }
+
                 $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
                 break;
         }
