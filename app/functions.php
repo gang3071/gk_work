@@ -1393,9 +1393,13 @@ function machineWash(
                 if ($services->auto == 1) {
                     $services->sendCmd($services::OUT_OFF, 0, 'player', $player->id, $is_system);
                 }
-                $services->sendCmd($services::STOP_ONE, 0, 'player', $player->id, $is_system);
-                $services->sendCmd($services::STOP_TWO, 0, 'player', $player->id, $is_system);
-                $services->sendCmd($services::STOP_THREE, 0, 'player', $player->id, $is_system);
+
+                // STOP 指令：双美总是执行，小淞只在弃台时执行
+                if ($machine->control_type == Machine::CONTROL_TYPE_MEI || $path == 'leave') {
+                    $services->sendCmd($services::STOP_ONE, 0, 'player', $player->id, $is_system);
+                    $services->sendCmd($services::STOP_TWO, 0, 'player', $player->id, $is_system);
+                    $services->sendCmd($services::STOP_THREE, 0, 'player', $player->id, $is_system);
+                }
 
                 // ⚠️ CRITICAL：立即读取 point，避免被心跳更新
                 $services->sendCmd($services::READ_SCORE, 0, 'player', $player->id, $is_system);
