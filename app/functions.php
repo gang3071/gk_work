@@ -1494,6 +1494,13 @@ function machineWash(
                 $services->sendCmd($services::READ_SCORE, 0, 'player', $player->id, $is_system);
                 $realPoint = $services->point;
 
+                Log::channel('slot_machine')->info('[machineWash-硬件清零] 二次确认分数', [
+                    'machine_code' => $machine->code,
+                    'money' => $money,
+                    'realPoint' => $realPoint,
+                    'will_wash' => $realPoint > 0,
+                ]);
+
                 if ($money > 0 && $realPoint == 0) {
                     // 数据库记录了下分，但硬件已经是 0，数据不一致！
                     throw new Exception("洗分失败：数据不一致（记录{$money}分，硬件0分）");
@@ -1501,7 +1508,21 @@ function machineWash(
 
                 if ($realPoint > 0) {
                     // 只有硬件有分数时才执行洗分指令
+                    Log::channel('slot_machine')->info('[machineWash-硬件清零] 开始执行 WASH_ZERO', [
+                        'machine_code' => $machine->code,
+                        'realPoint' => $realPoint,
+                    ]);
                     $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+                    Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO 执行完成', [
+                        'machine_code' => $machine->code,
+                        'after_point' => $services->point,
+                    ]);
+                } else {
+                    Log::channel('slot_machine')->warning('[machineWash-硬件清零] 跳过 WASH_ZERO（硬件已是0分）', [
+                        'machine_code' => $machine->code,
+                        'money' => $money,
+                        'realPoint' => $realPoint,
+                    ]);
                 }
 
                 $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
