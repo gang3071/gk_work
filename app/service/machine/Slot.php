@@ -790,11 +790,25 @@ class Slot extends MachineServices implements BaseMachine
     {
         $maxRetries = 8;
         $expirationTime = 1000000;
+
+        if ($attempts == 0) {
+            Log::channel('slot_machine')->info('[Slot-下分开始]', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'source' => $source,
+                'source_id' => $source_id,
+                'before_point' => $this->point,
+            ]);
+        }
+
         try {
             $beforePoint = $this->point;
-            if ($beforePoint == 0) {
-                return;
-            }
+
+            // ⚠️ 移除静默返回逻辑！
+            // 原因：machineWash 已经做了二次确认，如果还能调用到这里说明应该执行清零
+            // 如果此时 point = 0，可能是心跳在发送指令前更新了 Redis
+            // 应该继续发送指令让硬件确认清零，而不是静默返回
+
             Gateway::sendToUid($uid,
                 hex2bin($this->createCmd(self::PREFIX . self::WASH_ZERO, 0, self::TYPE_OPEN_CARD)));
             $beforeActionTime = $this->action_time;
@@ -804,6 +818,14 @@ class Slot extends MachineServices implements BaseMachine
                 $point = $this->point;
                 $actionTime = $this->action_time;
                 if ($actionTime > $beforeActionTime && $point == 0) {
+                    Log::channel('slot_machine')->info('[Slot-下分成功]', [
+                        'machine_code' => $this->machine->code,
+                        'before_point' => $beforePoint,
+                        'after_point' => $point,
+                        'attempts' => $attempts + 1,
+                        'duration_ms' => round($handleDuration / 1000, 2),
+                    ]);
+
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -852,8 +874,23 @@ class Slot extends MachineServices implements BaseMachine
                     ]);
                 }
 
+                Log::channel('slot_machine')->error('[Slot-下分失败]', [
+                    'machine_code' => $this->machine->code,
+                    'error' => $e->getMessage(),
+                    'attempts' => $attempts,
+                    'before_point' => $beforePoint ?? $this->point,
+                    'current_point' => $this->point,
+                ]);
+
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
+
+            Log::channel('slot_machine')->warning('[Slot-下分重试]', [
+                'machine_code' => $this->machine->code,
+                'attempts' => $attempts,
+                'max_retries' => $maxRetries,
+                'current_point' => $this->point,
+            ]);
 
             usleep(50000);
             $this->washPoint($uid, $source, $source_id, $attempts);
