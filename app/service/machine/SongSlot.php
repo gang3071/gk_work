@@ -523,8 +523,20 @@ class SongSlot extends MachineServices implements BaseMachine
                     $this->point = $nowPoint;
                     $this->bet = $nowBet;
                     $this->win = $nowWin;
-                    $this->auto = $nowAuto;  // ← __set() 会自动推送（如果在 machineInfo 中）
-                    $this->reward_status = $nowRewardStatus;  // ← __set() 会自动推送（如果在 machineInfo 中）
+
+                    // ✅ 检测 auto 状态变化，推送给玩家
+                    $orgAuto = $this->auto;
+                    $this->auto = $nowAuto;
+                    if ($orgAuto != $nowAuto && !empty($gamingUserId)) {
+                        sendSocketMessage('player-' . $gamingUserId . '-' . $this->machine->id, [
+                            'msg_type' => 'machine_auto_status_change',
+                            'machine_id' => $this->machine->id,
+                            'auto' => $nowAuto,
+                            'auto_status' => $nowAuto == 1 ? 'on' : 'off',
+                        ]);
+                    }
+
+                    $this->reward_status = $nowRewardStatus;
                     $this->sendMachineNowStatusMessage($this->machine->id);
                     break;
                 case self::WASH_ZERO:
@@ -602,8 +614,19 @@ class SongSlot extends MachineServices implements BaseMachine
                     $nowAuto = substr($msg, 4, 2) == 'c0' ? 0 : 1;
                     $nowRewardStatus = substr($msg, 6, 2) == 'd0' ? 0 : 1;
 
-                    $this->auto = $nowAuto;  // ← __set() 会自动推送（如果在 machineInfo 中）
-                    $this->reward_status = $nowRewardStatus;  // ← __set() 会自动推送（如果在 machineInfo 中）
+                    // ✅ 检测 auto 状态变化，推送给玩家
+                    $orgAuto = $this->auto;
+                    $this->auto = $nowAuto;
+                    if ($orgAuto != $nowAuto && !empty($gamingUserId)) {
+                        sendSocketMessage('player-' . $gamingUserId . '-' . $this->machine->id, [
+                            'msg_type' => 'machine_auto_status_change',
+                            'machine_id' => $this->machine->id,
+                            'auto' => $nowAuto,
+                            'auto_status' => $nowAuto == 1 ? 'on' : 'off',
+                        ]);
+                    }
+
+                    $this->reward_status = $nowRewardStatus;
                     $this->setActionVersion(self::READ_STATUS);
                     break;
                 default:
