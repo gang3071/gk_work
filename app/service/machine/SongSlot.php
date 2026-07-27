@@ -270,6 +270,46 @@ class SongSlot extends MachineServices implements BaseMachine
                     ]);
                 }
             }
+
+            // ✅ 自动推送机制（和 SongJackpot 一致）
+            // 当 machineInfo 中的字段变化时，自动推送给玩家
+            $machineCacheInfo = $this->getAllData() ?? [];
+            if (!empty($machineCacheInfo)) {
+                $info = [
+                    'id' => $this->machine->id,
+                    'last_game_at' => $this->machine->last_game_at,
+                    'type' => $this->machine->type,
+                    'gaming_user_id' => $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0,
+                    'gaming' => $machineCacheInfo[$this->cacheDataKey . '_gaming'] ?? 0,
+                    'auto' => $machineCacheInfo[$this->cacheDataKey . '_auto'],
+                    'reward_status' => $machineCacheInfo[$this->cacheDataKey . '_reward_status'],
+                    'play_start_time' => $machineCacheInfo[$this->cacheDataKey . '_play_start_time'],
+                    'point' => $machineCacheInfo[$this->cacheDataKey . '_point'],
+                    'bet' => $machineCacheInfo[$this->cacheDataKey . '_bet'],
+                    'win' => $machineCacheInfo[$this->cacheDataKey . '_win'],
+                    'last_play_time' => $machineCacheInfo[$this->cacheDataKey . '_last_play_time'],
+                    'keep_seconds' => $machineCacheInfo[$this->cacheDataKey . '_keep_seconds'],
+                    'keeping' => $machineCacheInfo[$this->cacheDataKey . '_keeping'],
+                    'keeping_user_id' => $machineCacheInfo[$this->cacheDataKey . '_keeping_user_id'],
+                    'last_keep_at' => $machineCacheInfo[$this->cacheDataKey . '_last_keep_at'],
+                    'player_pressure' => $machineCacheInfo[$this->cacheDataKey . '_player_pressure'],
+                    'player_score' => $machineCacheInfo[$this->cacheDataKey . '_player_score'],
+                    'player_open_point' => $machineCacheInfo[$this->cacheDataKey . '_player_open_point'],
+                    'player_wash_point' => $machineCacheInfo[$this->cacheDataKey . '_player_wash_point'],
+                    'last_point_at' => $machineCacheInfo[$this->cacheDataKey . '_last_point_at'],
+                    'action_time' => $machineCacheInfo[$this->cacheDataKey . '_action_time'],
+                    'change_point_card_status' => $machineCacheInfo[$this->cacheDataKey . '_change_point_card_status'],
+                    'gift_condition' => $machineCacheInfo[$this->cacheDataKey . '_gift_condition'],
+                    'now_turn' => $machineCacheInfo[$this->cacheDataKey . '_now_turn'],
+                    'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'],
+                ];
+
+                // ✅ 从 Redis 读取 gaming_user_id
+                $currentGamingUserId = $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0;
+                if (in_array($name, $this->machineInfo) && !empty($currentGamingUserId)) {
+                    $this->sendMachineNowInfoMessage($currentGamingUserId, $this->machine->id, $name, $info);
+                }
+            }
         }
     }
 
@@ -523,42 +563,8 @@ class SongSlot extends MachineServices implements BaseMachine
                     $this->point = $nowPoint;
                     $this->bet = $nowBet;
                     $this->win = $nowWin;
-
-                    // ✅ 检测 auto 状态变化，推送给玩家
-                    $orgAuto = $this->auto;
-                    $this->auto = $nowAuto;
-
-                    // 调试日志
-                    if ($orgAuto != $nowAuto) {
-                        $this->log->info('[SongSlot-AutoChange] 检测到 auto 状态变化（心跳）', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'player_id' => $gamingUserId,
-                            'old_auto' => $orgAuto,
-                            'new_auto' => $nowAuto,
-                            'has_gaming_user' => !empty($gamingUserId),
-                            'will_push' => !empty($gamingUserId),
-                        ]);
-                    }
-
-                    if ($orgAuto != $nowAuto && !empty($gamingUserId)) {
-                        $channel = 'player-' . $gamingUserId . '-' . $this->machine->id;
-                        $message = [
-                            'msg_type' => 'machine_auto_status_change',
-                            'machine_id' => $this->machine->id,
-                            'auto' => $nowAuto,
-                            'auto_status' => $nowAuto == 1 ? 'on' : 'off',
-                        ];
-
-                        sendSocketMessage($channel, $message);
-
-                        $this->log->info('[SongSlot-AutoChange] Socket 推送完成（心跳）', [
-                            'channel' => $channel,
-                            'message' => $message,
-                        ]);
-                    }
-
-                    $this->reward_status = $nowRewardStatus;
+                    $this->auto = $nowAuto;  // ✅ __set() 会自动推送（通过 machineInfo 机制）
+                    $this->reward_status = $nowRewardStatus;  // ✅ __set() 会自动推送（通过 machineInfo 机制）
                     $this->sendMachineNowStatusMessage($this->machine->id);
                     break;
                 case self::WASH_ZERO:
@@ -636,41 +642,8 @@ class SongSlot extends MachineServices implements BaseMachine
                     $nowAuto = substr($msg, 4, 2) == 'c0' ? 0 : 1;
                     $nowRewardStatus = substr($msg, 6, 2) == 'd0' ? 0 : 1;
 
-                    // ✅ 检测 auto 状态变化，推送给玩家
-                    $orgAuto = $this->auto;
-                    $this->auto = $nowAuto;
-
-                    // 调试日志
-                    if ($orgAuto != $nowAuto) {
-                        $this->log->info('[SongSlot-AutoChange] 检测到 auto 状态变化（READ_STATUS）', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'player_id' => $gamingUserId,
-                            'old_auto' => $orgAuto,
-                            'new_auto' => $nowAuto,
-                            'has_gaming_user' => !empty($gamingUserId),
-                            'will_push' => !empty($gamingUserId),
-                        ]);
-                    }
-
-                    if ($orgAuto != $nowAuto && !empty($gamingUserId)) {
-                        $channel = 'player-' . $gamingUserId . '-' . $this->machine->id;
-                        $message = [
-                            'msg_type' => 'machine_auto_status_change',
-                            'machine_id' => $this->machine->id,
-                            'auto' => $nowAuto,
-                            'auto_status' => $nowAuto == 1 ? 'on' : 'off',
-                        ];
-
-                        sendSocketMessage($channel, $message);
-
-                        $this->log->info('[SongSlot-AutoChange] Socket 推送完成（READ_STATUS）', [
-                            'channel' => $channel,
-                            'message' => $message,
-                        ]);
-                    }
-
-                    $this->reward_status = $nowRewardStatus;
+                    $this->auto = $nowAuto;  // ✅ __set() 会自动推送（通过 machineInfo 机制）
+                    $this->reward_status = $nowRewardStatus;  // ✅ __set() 会自动推送（通过 machineInfo 机制）
                     $this->setActionVersion(self::READ_STATUS);
                     break;
                 default:
