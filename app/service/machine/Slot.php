@@ -403,6 +403,20 @@ class Slot extends MachineServices implements BaseMachine
     public function slotAutoCmd(string $msg): bool
     {
         try {
+            // ✅ 消息长度校验（自动卡消息必须是 16 字符）
+            $msgLen = strlen($msg);
+            if ($msgLen != 16) {
+                $this->log->warning('[Slot-slotAutoCmd] 自动卡消息长度异常，已忽略', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'msg' => $msg,
+                    'msg_length' => $msgLen,
+                    'expected_length' => 16,
+                    'reason' => '可能是硬件故障或通信干扰',
+                ]);
+                return false;  // 忽略异常消息，不抛异常
+            }
+
             slotCheckCRC8($msg);
             $fun = substr($msg, 0, 8);
             if ($fun == Slot::AUTO && $this->machine->is_special == 0) {
@@ -1064,6 +1078,20 @@ class Slot extends MachineServices implements BaseMachine
         $domain = $this->machine->domain;
         $port = $this->machine->port;
         try {
+            // ✅ 消息长度校验（开分卡消息必须是 32 字符）
+            $msgLen = strlen($msg);
+            if ($msgLen != 32) {
+                $this->log->warning('[Slot-slotCmd] 开分卡消息长度异常，已忽略', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'msg' => $msg,
+                    'msg_length' => $msgLen,
+                    'expected_length' => 32,
+                    'reason' => '可能是硬件故障或通信干扰',
+                ]);
+                return false;  // 忽略异常消息，不抛异常
+            }
+
             checkCRC8($msg);
             $fun = substr($msg, 2, 2);
             $data = decodeData($msg); // 解码数据位
