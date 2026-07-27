@@ -753,26 +753,19 @@ class Jackpot extends MachineServices implements BaseMachine
             }
             throw new Exception($e->getMessage());
         }
+        // ✅ 优化：精简日志，只记录关键信息，移除冗余的 machine_data
         $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
         $this->log->info($operatorType . '机台操作', [
             'operator_type' => $source,
             'operator_id' => $source_id,
             'machine_id' => $this->machine->id,
             'machine_code' => $this->machine->code,
-            'machine_name' => $this->machine->name,
-            'machine_type' => $this->machine->type,
-            'machine_cate' => $this->machine->cate_id,
-            'producer_id' => $this->machine->producer_id,
             'player_id' => $this->machine->gamingPlayer->id ?? 0,
             'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',
-            'player_phone' => $this->machine->gamingPlayer->phone ?? '',
-            'player_name' => $this->machine->gamingPlayer->name ?? '',
-            'department_id' => $this->machine->gamingPlayer->department_id ?? 0,
             'action' => $cmd,
             'action_desc' => $this->getDescription($cmd),
-            'is_system' => $isSystem,
             'point' => $data,
-            'machine_data' => $this->getAllData(),
+            // 移除 machine_data（几千字节的冗余数据）
         ]);
 
         return true;

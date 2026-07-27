@@ -51,8 +51,8 @@ $handlers = [
                 'class' => Monolog\Handler\RotatingFileHandler::class,
                 'constructor' => [
                     runtime_path() . '/logs/slot_machine_log.log',
-                    3, //$maxFiles
-                    Monolog\Logger::DEBUG,
+                    2, //$maxFiles (优化：3天 → 2天)
+                    Monolog\Logger::INFO, // 优化：DEBUG → INFO，减少冗余日志
                 ],
                 'formatter' => [
                     'class' => Monolog\Formatter\LineFormatter::class,
@@ -67,8 +67,8 @@ $handlers = [
                 'class' => Monolog\Handler\RotatingFileHandler::class,
                 'constructor' => [
                     runtime_path() . '/logs/jackpot_machine_log.log',
-                    3, //$maxFiles
-                    Monolog\Logger::DEBUG,
+                    2, //$maxFiles (优化：3天 → 2天)
+                    Monolog\Logger::WARNING, // 优化：DEBUG → WARNING
                 ],
                 'formatter' => [
                     'class' => Monolog\Formatter\LineFormatter::class,
@@ -83,8 +83,8 @@ $handlers = [
                 'class' => Monolog\Handler\RotatingFileHandler::class,
                 'constructor' => [
                     runtime_path() . '/logs/song_slot_machine.log',
-                    3, //$maxFiles
-                    Monolog\Logger::DEBUG,
+                    2, //$maxFiles (优化：3天 → 2天)
+                    Monolog\Logger::WARNING, // 优化：DEBUG → WARNING，大幅减少日志量
                 ],
                 'formatter' => [
                     'class' => Monolog\Formatter\LineFormatter::class,
@@ -517,8 +517,8 @@ $handlers = [
                 'class' => Monolog\Handler\RotatingFileHandler::class,
                 'constructor' => [
                     runtime_path() . '/logs/song_jackpot_machine.log',
-                    3, //$maxFiles
-                    Monolog\Logger::DEBUG,
+                    2, //$maxFiles (优化：3天 → 2天)
+                    Monolog\Logger::WARNING, // 优化：DEBUG → WARNING
                 ],
                 'formatter' => [
                     'class' => Monolog\Formatter\LineFormatter::class,
@@ -811,8 +811,8 @@ $handlers = [
                 'class' => Monolog\Handler\RotatingFileHandler::class,
                 'constructor' => [
                     runtime_path() . '/logs/machine_operations.log',
-                    7, // 保留7天，与 gk_api 保持一致
-                    Monolog\Logger::DEBUG,
+                    3, // 保留3天（优化：7天 → 3天）
+                    Monolog\Logger::INFO, // 优化：DEBUG → INFO
                 ],
                 'formatter' => [
                     'class' => Monolog\Formatter\LineFormatter::class,
