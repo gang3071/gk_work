@@ -527,12 +527,34 @@ class SongSlot extends MachineServices implements BaseMachine
                     // ✅ 检测 auto 状态变化，推送给玩家
                     $orgAuto = $this->auto;
                     $this->auto = $nowAuto;
+
+                    // 调试日志
+                    if ($orgAuto != $nowAuto) {
+                        $this->log->info('[SongSlot-AutoChange] 检测到 auto 状态变化（心跳）', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'player_id' => $gamingUserId,
+                            'old_auto' => $orgAuto,
+                            'new_auto' => $nowAuto,
+                            'has_gaming_user' => !empty($gamingUserId),
+                            'will_push' => !empty($gamingUserId),
+                        ]);
+                    }
+
                     if ($orgAuto != $nowAuto && !empty($gamingUserId)) {
-                        sendSocketMessage('player-' . $gamingUserId . '-' . $this->machine->id, [
+                        $channel = 'player-' . $gamingUserId . '-' . $this->machine->id;
+                        $message = [
                             'msg_type' => 'machine_auto_status_change',
                             'machine_id' => $this->machine->id,
                             'auto' => $nowAuto,
                             'auto_status' => $nowAuto == 1 ? 'on' : 'off',
+                        ];
+
+                        sendSocketMessage($channel, $message);
+
+                        $this->log->info('[SongSlot-AutoChange] Socket 推送完成（心跳）', [
+                            'channel' => $channel,
+                            'message' => $message,
                         ]);
                     }
 
@@ -617,12 +639,34 @@ class SongSlot extends MachineServices implements BaseMachine
                     // ✅ 检测 auto 状态变化，推送给玩家
                     $orgAuto = $this->auto;
                     $this->auto = $nowAuto;
+
+                    // 调试日志
+                    if ($orgAuto != $nowAuto) {
+                        $this->log->info('[SongSlot-AutoChange] 检测到 auto 状态变化（READ_STATUS）', [
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'player_id' => $gamingUserId,
+                            'old_auto' => $orgAuto,
+                            'new_auto' => $nowAuto,
+                            'has_gaming_user' => !empty($gamingUserId),
+                            'will_push' => !empty($gamingUserId),
+                        ]);
+                    }
+
                     if ($orgAuto != $nowAuto && !empty($gamingUserId)) {
-                        sendSocketMessage('player-' . $gamingUserId . '-' . $this->machine->id, [
+                        $channel = 'player-' . $gamingUserId . '-' . $this->machine->id;
+                        $message = [
                             'msg_type' => 'machine_auto_status_change',
                             'machine_id' => $this->machine->id,
                             'auto' => $nowAuto,
                             'auto_status' => $nowAuto == 1 ? 'on' : 'off',
+                        ];
+
+                        sendSocketMessage($channel, $message);
+
+                        $this->log->info('[SongSlot-AutoChange] Socket 推送完成（READ_STATUS）', [
+                            'channel' => $channel,
+                            'message' => $message,
                         ]);
                     }
 
