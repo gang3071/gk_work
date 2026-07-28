@@ -40,6 +40,7 @@ return [
     'machine_open_msg3' => '无法再次上分，',
     'machine_present_error_msg2' => '开赠失败，目前开赠权限停用中，请联繫客服',
     'machine_wash_limit_msg1' => '分数总额不得开超过4000分',
+    'machine_wash_point_limit_exceeded' => '下分金额超出限制',
     'machine_odds_error' => '比值错误，请联繫客服',
     'customer_operator' => '客服操作',
     'unlimited' => '不限制',
