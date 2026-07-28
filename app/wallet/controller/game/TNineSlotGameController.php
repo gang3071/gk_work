@@ -515,6 +515,10 @@ class TNineSlotGameController
         $betInfoData = $params['betInfoData'] ?? [];
 
         if (empty($betInfoData) || !is_array($betInfoData)) {
+            $this->logger->warning('[T9SLOT-GameCode] betInfoData 为空或非数组', [
+                'betInfoData' => $betInfoData,
+                'params_keys' => array_keys($params),
+            ]);
             return '';
         }
 
@@ -522,8 +526,24 @@ class TNineSlotGameController
         $firstType = reset($betInfoData);
 
         if (is_array($firstType)) {
-            return $firstType['GameCode'] ?? '';
+            $gameCode = $firstType['GameCode'] ?? '';
+
+            // 如果 GameCode 为空，记录详细日志
+            if (empty($gameCode)) {
+                $this->logger->warning('[T9SLOT-GameCode] GameCode 为空', [
+                    'firstType' => $firstType,
+                    'firstType_keys' => array_keys($firstType),
+                    'betInfoData_keys' => array_keys($betInfoData),
+                ]);
+            }
+
+            return $gameCode;
         }
+
+        $this->logger->warning('[T9SLOT-GameCode] firstType 不是数组', [
+            'firstType' => $firstType,
+            'firstType_type' => gettype($firstType),
+        ]);
 
         return '';
     }
