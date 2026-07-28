@@ -2950,8 +2950,10 @@ if (!function_exists('machineOpenAnyFree')) {
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
             } else {
                 // ✅ 检查机台分数上限（包含赠分）
-                if ($services->point + $totalOpenScore > 4000) {
-                    throw new Exception(trans('machine_wash_point_limit_exceeded', [], 'message'));
+                // 使用机台配置的 max_point，而不是硬编码的 4000
+                $maxPoint = $machine->max_point > 0 ? $machine->max_point : 4000; // 兼容：未配置时使用 4000
+                if ($services->point + $totalOpenScore > $maxPoint) {
+                    throw new Exception(trans('machine_wash_point_limit_exceeded', [], 'message') . "（限制：{$maxPoint}）");
                 }
             }
 

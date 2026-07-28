@@ -84,7 +84,7 @@ $handlers = [
                 'constructor' => [
                     runtime_path() . '/logs/song_slot_machine.log',
                     2, //$maxFiles (优化：3天 → 2天)
-                    Monolog\Logger::WARNING, // 优化：DEBUG → WARNING，大幅减少日志量
+                    Monolog\Logger::INFO, // 临时改为 INFO 查看调试日志（原 WARNING）
                 ],
                 'formatter' => [
                     'class' => Monolog\Formatter\LineFormatter::class,
