@@ -177,11 +177,12 @@ class TNineSlotGameController
 
             // ========== 统一的下注流程 ==========
             // betAmount 可能是 0（子订单/免费游戏）或 >0（主订单）
+            $gameCode = $this->extractGameCode($params);  // ✅ 统一从 betInfoData 提取
             $luaParams = [
                 'order_no' => $orderNo,
                 'platform_id' => $this->service->platform->id,
                 'amount' => $betAmount,
-                'game_code' => $params['gameCode'] ?? '',
+                'game_code' => $gameCode,
                 'transaction_type' => TransactionType::BET,
                 'original_data' => $params,
             ];
@@ -247,6 +248,7 @@ class TNineSlotGameController
                 'platform_id' => $this->service->platform->id,
                 'amount' => max($actualWinAmount, 0),  // 实际 win 金额
                 'diff' => $diff,  // 净盈亏 (win - bet)
+                'game_code' => $gameCode,  // ✅ 复用从 betInfoData 提取的 gameCode
                 'transaction_type' => TransactionType::SETTLE,
                 'original_data' => $params,
             ];
