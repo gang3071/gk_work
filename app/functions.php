@@ -1351,6 +1351,10 @@ function machineWash(
             case GameType::TYPE_STEEL_BALL:
                 // 弃台需要下转,下珠
                 if ($path == 'leave') {
+                    // ✅ 清除累计打码量（2026-07-30）
+                    // 玩家离开机台时，清除所有彩金的累计打码量
+                    \app\service\LotteryServices::clearPlayerAccumulatedBet($player->id, $machine->type);
+
                     if ($machine->control_type == Machine::CONTROL_TYPE_MEI) {
                         $services->sendCmd($services::PUSH . $services::PUSH_STOP, 0, 'player', $player->id,
                             $is_system);
@@ -1518,6 +1522,11 @@ function machineWash(
             // 离开机台参与活动结束
             $activityServices = new ActivityServices($machine, $player);
             $activityServices->playerFinishActivity(true);
+
+            // ✅ 清除累计打码量（2026-07-30）
+            // 玩家离开机台时，清除所有彩金的累计打码量
+            \app\service\LotteryServices::clearPlayerAccumulatedBet($player->id, $machine->type);
+
             // 下分检查彩金获奖情况
             if ($money > 0) {
                 $playerLotteryRecord = (new LotteryServices())->setMachine($machine)->setPlayer($player)->fixedPotCheckLottery($money,
