@@ -2994,15 +2994,18 @@ if (!function_exists('machineOpenAnyFree')) {
             $deductResult = \app\service\WalletService::deduct($player->id, $money);
 
             if (!isset($deductResult['success']) || !$deductResult['success']) {
-                $error = $deductResult['error'] ?? trans('insufficient_balance', [], 'message');
+                $errorCode = $deductResult['error_code'] ?? $deductResult['error'] ?? 'insufficient_balance';
+                $errorMessage = trans($errorCode, [], 'message', $lang);  // ← 根据客户端语言翻译
+
                 Log::warning('[machineOpenAnyFree] 余额不足，拒绝上分', [
                     'player_id' => $player->id,
                     'machine_id' => $machine->id,
                     'required_amount' => $money,
                     'current_balance' => $beforeGameAmount,
-                    'error' => $error,
+                    'error_code' => $errorCode,
+                    'error_message' => $errorMessage,
                 ]);
-                throw new Exception($error);
+                throw new Exception($errorMessage);
             }
 
             // ✅ 扣款成功，获取新余额
