@@ -84,6 +84,11 @@ class Events
         if (!in_array($domain, config('gateway_worker.whitelist'))) {
             return Gateway::closeClient($client_id);
         }
+        $log->info('连接机台', [
+            'remote_addr' => $domain,
+            'remote_port' => $port,
+            'gateway_port' => $_SERVER['GATEWAY_PORT'],
+        ]);
         $machine = self::getMachine($_SERVER['GATEWAY_PORT'], $domain, $port, $client_id);
         if (!empty($machine) && $machine->status == 1 && $machine->deleted_at == null) {
             Gateway::bindUid($client_id, $domain . ':' . $port);
