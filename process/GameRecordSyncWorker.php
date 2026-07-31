@@ -604,10 +604,15 @@ class GameRecordSyncWorker
     }
 
     /**
-     * 批量发送打码量统计到队列（优化版：复用已查询的记录）
+     * 批量发送打码量统计到队列（优化版：按玩家+日期分组合并）
      *
-     * ⚠️ 优化前：每次批量插入后会重新查询一次数据库
-     * ✅ 优化后：直接使用 $existingRecords 中已经查询好的记录
+     * ⚠️ 优化前：每条记录投递一次 → 100笔游戏 = 100条队列消息
+     * ✅ 优化后：按玩家+日期分组 → 100笔游戏 = 1条队列消息
+     *
+     * 优势：
+     * - 减少队列消息数量（最多减少 99%）
+     * - 减少消费者处理次数
+     * - 减少 Redis Lua 脚本执行次数
      *
      * @param array $insertedRecords 已插入的记录数据（用于获取 order_no）
      * @param Collection $existingRecords 已查询的记录集合（keyBy order_no）
@@ -616,12 +621,12 @@ class GameRecordSyncWorker
     private function batchSendBetStatistics(array $insertedRecords, Collection $existingRecords): void
     {
         try {
-            $sentCount = 0;
+            // ✅ 按 player_id + stat_type + date 分组
+            $grouped = [];
 
             foreach ($insertedRecords as $insertData) {
                 $orderNo = $insertData['order_no'];
 
-                // ✅ 直接从 $existingRecords 中获取（避免重复查询）
                 if (!isset($existingRecords[$orderNo])) {
                     continue;
                 }
@@ -629,18 +634,53 @@ class GameRecordSyncWorker
                 $record = $existingRecords[$orderNo];
 
                 // ✅ 过滤条件（已结算、下注类型、有押注金额）
-                if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
-                    && ($record->type ?? PlayGameRecord::TYPE_BET) == PlayGameRecord::TYPE_BET
-                    && $record->bet > 0) {
-                    PlayGameRecord::sendBetStatistics($record);
-                    $sentCount++;
+                if ($record->settlement_status != PlayGameRecord::SETTLEMENT_STATUS_SETTLED
+                    || ($record->type ?? PlayGameRecord::TYPE_BET) != PlayGameRecord::TYPE_BET
+                    || $record->bet <= 0) {
+                    continue;
                 }
+
+                // ✅ 提取日期（处理时区）
+                $createdAt = \Carbon\Carbon::parse($record->created_at)->setTimezone('Asia/Shanghai');
+                $date = $createdAt->format('Y-m-d');
+
+                // ✅ 分组 Key: player_id + date
+                $groupKey = "{$record->player_id}_{$date}";
+
+                if (!isset($grouped[$groupKey])) {
+                    $grouped[$groupKey] = [
+                        'player_id' => $record->player_id,
+                        'bet_amount' => 0,
+                        'count' => 0,
+                        'created_at' => $record->created_at,  // 使用第一条记录的时间
+                        'game_codes' => [],
+                    ];
+                }
+
+                $grouped[$groupKey]['bet_amount'] += $record->bet;
+                $grouped[$groupKey]['count']++;
+                $grouped[$groupKey]['game_codes'][] = $record->game_code ?? 'unknown';
             }
 
-            if ($sentCount > 0) {
-                $this->log->info('[BetStats] 批量投递打码量统计', [
-                    'total' => count($insertedRecords),
-                    'sent' => $sentCount,
+            // ✅ 批量投递（每组一条消息）
+            foreach ($grouped as $groupData) {
+                \Webman\RedisQueue\Client::send('bet-statistics', [
+                    'player_id' => $groupData['player_id'],
+                    'stat_type' => 'game',
+                    'bet_amount' => $groupData['bet_amount'],
+                    'source' => 'batch_' . count(array_unique($groupData['game_codes'])) . '_games',  // 标识批量
+                    'created_at' => $groupData['created_at'],
+                    'batch_count' => $groupData['count'],  // 记录合并的记录数
+                ]);
+            }
+
+            if (!empty($grouped)) {
+                $this->log->info('[BetStats] 批量投递打码量统计（分组优化）', [
+                    'total_records' => count($insertedRecords),
+                    'grouped_messages' => count($grouped),
+                    'reduction' => count($insertedRecords) > 0
+                        ? round((1 - count($grouped) / count($insertedRecords)) * 100, 1) . '%'
+                        : '0%',
                 ]);
             }
         } catch (\Exception $e) {
