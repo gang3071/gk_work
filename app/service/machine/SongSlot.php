@@ -611,6 +611,14 @@ class SongSlot extends MachineServices implements BaseMachine
                                     $betAmount = bcmul($pressureIncrement, $turnUsedPoint, 2);  // 使用 bcmul 保证精度
 
                                     if (bccomp($betAmount, '0', 2) > 0) {
+                                        \support\Log::info('[BetStats] SongSlot 投递打码量', [
+                                            'machine_id' => $this->machine->id,
+                                            'player_id' => $gamingUserId,
+                                            'pressure_increment' => $pressureIncrement,
+                                            'turn_used_point' => $turnUsedPoint,
+                                            'bet_amount' => floatval($betAmount),
+                                        ]);
+
                                         Client::send('bet-statistics', [
                                             'player_id' => $gamingUserId,
                                             'stat_type' => 'machine',
@@ -618,6 +626,11 @@ class SongSlot extends MachineServices implements BaseMachine
                                             'source' => 'song_slot',
                                             'machine_id' => $this->machine->id,
                                             'created_at' => date('Y-m-d H:i:s'),
+                                        ]);
+                                    } else {
+                                        \support\Log::debug('[BetStats] SongSlot 打码量为0，跳过投递', [
+                                            'machine_id' => $this->machine->id,
+                                            'bet_amount' => $betAmount,
                                         ]);
                                     }
                                 }
