@@ -10,6 +10,7 @@ use app\service\GameRecordCacheService;
 use app\service\HighScoreBroadcastService;
 use app\service\MergeBetPlatformHelper;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 use support\Db;
 use support\Log;
 use support\Redis;
@@ -337,7 +338,7 @@ class GameRecordSyncWorker
 
             // 3. 批量插入新记录
             if (!empty($toInsert)) {
-                $inserted = $this->batchInsertRecords($toInsert);
+                $inserted = $this->batchInsertRecords($toInsert, $existingRecords);
             }
 
             // 4. 批量更新已存在记录
@@ -346,12 +347,12 @@ class GameRecordSyncWorker
             }
 
             // 4.5. ✅ 统一查询新插入记录的完整信息（避免重复查询）
-            // 这个查询结果会被彩金检查、高分广播、标记已同步三个功能共享使用
+            // 这个查询结果会被彩金检查、高分广播、打码量统计、标记已同步四个功能共享使用
             if (!empty($toInsert)) {
                 $insertedOrderNos = array_column($toInsert, 'order_no');
                 $newlyInserted = PlayGameRecord::query()
                     ->whereIn('order_no', $insertedOrderNos)
-                    ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id', 'bet', 'win', 'original_data')
+                    ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id', 'bet', 'win', 'original_data', 'game_code', 'created_at', 'type', 'settlement_status')
                     ->get()
                     ->keyBy('order_no');
 
@@ -366,6 +367,12 @@ class GameRecordSyncWorker
 
             // 5.5. 批量触发高分广播检测（使用已更新的 $existingRecords，不再单独查询）
             $this->batchTriggerHighScoreBroadcast($toInsert, $toUpdate, $existingRecords);
+
+            // 5.6. ✅ 批量投递打码量统计（2026-07-31）
+            // 使用已更新的 $existingRecords，不再单独查询
+            if (!empty($toInsert)) {
+                $this->batchSendBetStatistics($toInsert, $existingRecords);
+            }
 
             foreach ($records as $record) {
                 $orderNo = $record['order_no'];
@@ -405,7 +412,7 @@ class GameRecordSyncWorker
     /**
      * 批量插入新记录
      */
-    private function batchInsertRecords(array $records): int
+    private function batchInsertRecords(array $records, $existingRecords): int
     {
         if (empty($records)) {
             return 0;
@@ -586,7 +593,62 @@ class GameRecordSyncWorker
             }
         }
 
+        // 8. ✅ 批量投递打码量统计（2026-07-31）
+        // ⚠️ 因为批量插入（insert）不会触发模型的 created 事件
+        // 所以需要手动调用 sendBetStatistics 方法
+        if (!empty($insertData)) {
+            $this->batchSendBetStatistics($insertData, $existingRecords);
+        }
+
         return count($insertData);
+    }
+
+    /**
+     * 批量发送打码量统计到队列（优化版：复用已查询的记录）
+     *
+     * ⚠️ 优化前：每次批量插入后会重新查询一次数据库
+     * ✅ 优化后：直接使用 $existingRecords 中已经查询好的记录
+     *
+     * @param array $insertedRecords 已插入的记录数据（用于获取 order_no）
+     * @param Collection $existingRecords 已查询的记录集合（keyBy order_no）
+     * @return void
+     */
+    private function batchSendBetStatistics(array $insertedRecords, Collection $existingRecords): void
+    {
+        try {
+            $sentCount = 0;
+            foreach ($insertedRecords as $insertData) {
+                $orderNo = $insertData['order_no'];
+
+                // ✅ 直接从 $existingRecords 中获取（避免重复查询）
+                if (!isset($existingRecords[$orderNo])) {
+                    continue;
+                }
+
+                $record = $existingRecords[$orderNo];
+
+                // ✅ 过滤条件（已结算、下注类型、有押注金额）
+                if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
+                    && ($record->type ?? PlayGameRecord::TYPE_BET) == PlayGameRecord::TYPE_BET
+                    && $record->bet > 0) {
+                    PlayGameRecord::sendBetStatistics($record);
+                    $sentCount++;
+                }
+            }
+
+            if ($sentCount > 0) {
+                $this->log->info('[BetStats] 批量投递打码量统计', [
+                    'total' => count($insertedRecords),
+                    'sent' => $sentCount,
+                ]);
+            }
+        } catch (\Exception $e) {
+            // 统计投递失败不影响主业务
+            $this->log->error('[BetStats] 批量投递失败', [
+                'error' => $e->getMessage(),
+                'count' => count($insertedRecords),
+            ]);
+        }
     }
 
     /**

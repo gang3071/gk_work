@@ -512,7 +512,48 @@ class Jackpot extends MachineServices implements BaseMachine
                         $this->now_turn = bcadd($nowTurn, bcsub($data, $bet, 2), 2);
                         if (!empty($currentGamingUserId)) {
                             $playerNumber = $this->player_win_number;
-                            $this->player_win_number = bcadd($playerNumber, bcsub($data, $bet, 2), 2);
+                            $turnIncrement = bcsub($data, $bet, 2);  // 转数增量
+                            $this->player_win_number = bcadd($playerNumber, $turnIncrement, 2);
+
+                            // ✅ 钢珠机打码量实时统计（2026-07-31）
+                            // 转数增加时立即统计打码量
+                            if (bccomp($turnIncrement, '0', 2) > 0) {
+                                try {
+                                    $turnUsedPoint = $this->machine->machineCategory->turn_used_point ?? null;
+
+                                    // ✅ 验证 turn_used_point 配置有效性
+                                    if ($turnUsedPoint === null || $turnUsedPoint <= 0) {
+                                        \support\Log::warning('[BetStats] Jackpot机台类别缺少有效的 turn_used_point 配置', [
+                                            'machine_id' => $this->machine->id,
+                                            'machine_code' => $this->machine->code,
+                                            'category_id' => $this->machine->machine_category_id ?? null,
+                                            'player_id' => $currentGamingUserId,
+                                            'turn_increment' => $turnIncrement,
+                                        ]);
+                                        // 跳过统计，避免统计到 0 金额
+                                    } else {
+                                        $betAmount = bcmul($turnIncrement, $turnUsedPoint, 2);  // 使用 bcmul 保证精度
+
+                                        if (bccomp($betAmount, '0', 2) > 0) {
+                                            Client::send('bet-statistics', [
+                                                'player_id' => $currentGamingUserId,
+                                                'stat_type' => 'machine',
+                                                'bet_amount' => floatval($betAmount),  // 转为 float 传递
+                                                'source' => 'steel_ball',
+                                                'machine_id' => $this->machine->id,
+                                                'created_at' => date('Y-m-d H:i:s'),
+                                            ], 'fast');
+                                        }
+                                    }
+                                } catch (\Exception $e) {
+                                    // 投递失败不影响主业务
+                                    \support\Log::error('[BetStats] Jackpot打码量投递失败', [
+                                        'machine_id' => $this->machine->id,
+                                        'player_id' => $currentGamingUserId,
+                                        'error' => $e->getMessage(),
+                                    ]);
+                                }
+                            }
                         }
                     }
                     $this->win_number = $data;

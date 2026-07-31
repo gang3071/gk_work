@@ -1200,6 +1200,47 @@ class Slot extends MachineServices implements BaseMachine
                             'machine_id' => $this->machine->id,
                             'player_id' => $gamingUserId,
                         ]);
+
+                        // ✅ 实体机台打码量实时统计（2026-07-31）
+                        // Slot: 压分减少时统计打码量（bet 从高到低）
+                        if ($data < $this->bet) {
+                            try {
+                                $pressureDecrement = bcsub($this->bet, $data, 2);  // 压分减少量（保留2位小数）
+                                $turnUsedPoint = $this->machine->machineCategory->turn_used_point ?? null;
+
+                                // ✅ 验证 turn_used_point 配置有效性
+                                if ($turnUsedPoint === null || $turnUsedPoint <= 0) {
+                                    \support\Log::warning('[BetStats] Slot机台类别缺少有效的 turn_used_point 配置', [
+                                        'machine_id' => $this->machine->id,
+                                        'machine_code' => $this->machine->code,
+                                        'category_id' => $this->machine->machine_category_id ?? null,
+                                        'player_id' => $gamingUserId,
+                                        'pressure_decrement' => $pressureDecrement,
+                                    ]);
+                                    // 跳过统计，避免统计到 0 金额
+                                } else {
+                                    $betAmount = bcmul($pressureDecrement, $turnUsedPoint, 2);  // 使用 bcmul 保证精度
+
+                                    if (bccomp($betAmount, '0', 2) > 0) {
+                                        Client::send('bet-statistics', [
+                                            'player_id' => $gamingUserId,
+                                            'stat_type' => 'machine',
+                                            'bet_amount' => floatval($betAmount),  // 转为 float 传递
+                                            'source' => 'slot',
+                                            'machine_id' => $this->machine->id,
+                                            'created_at' => date('Y-m-d H:i:s'),
+                                        ], 'fast');
+                                    }
+                                }
+                            } catch (\Exception $e) {
+                                // 投递失败不影响主业务
+                                \support\Log::error('[BetStats] Slot打码量投递失败', [
+                                    'machine_id' => $this->machine->id,
+                                    'player_id' => $gamingUserId,
+                                    'error' => $e->getMessage(),
+                                ]);
+                            }
+                        }
                     }
                     if ($this->reward_status == 0) {
                         $nowTurn = $this->now_turn;

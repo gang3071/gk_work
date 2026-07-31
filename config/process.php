@@ -193,6 +193,62 @@ return [
         'handler' => WithdrawRemind::class,
         'count' => 1,
     ],
+
+    // ✅ 打码量统计同步任务（每小时）
+    // 作用：将 Redis 中的实时打码量数据同步到 MySQL
+    'player-bet-stats-sync-hourly' => [
+        'handler' => \Workerman\Crontab\Crontab::class,
+        'constructor' => [
+            'crontab' => '7 * * * *',  // 每小时第7分钟执行
+            'callback' => function() {
+                try {
+                    $count = \app\service\PlayerBetStatisticsService::syncToDatabase(
+                        \app\service\PlayerBetStatisticsService::DIMENSION_DAILY
+                    );
+                    \support\Log::info('[Cron] 日打码量同步完成', ['count' => $count]);
+                } catch (\Exception $e) {
+                    \support\Log::error('[Cron] 日打码量同步失败', [
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString(),
+                    ]);
+                }
+            },
+            'log' => runtime_path() . '/logs/crontab.log',
+        ],
+    ],
+
+    // ✅ 周/月打码量统计同步任务（每天凌晨）
+    // 作用：将周和月维度的打码量数据同步到 MySQL
+    'player-bet-stats-sync-daily' => [
+        'handler' => \Workerman\Crontab\Crontab::class,
+        'constructor' => [
+            'crontab' => '7 3 * * *',  // 每天凌晨3:07执行
+            'callback' => function() {
+                try {
+                    // 同步周统计
+                    $countWeekly = \app\service\PlayerBetStatisticsService::syncToDatabase(
+                        \app\service\PlayerBetStatisticsService::DIMENSION_WEEKLY
+                    );
+
+                    // 同步月统计
+                    $countMonthly = \app\service\PlayerBetStatisticsService::syncToDatabase(
+                        \app\service\PlayerBetStatisticsService::DIMENSION_MONTHLY
+                    );
+
+                    \support\Log::info('[Cron] 周/月打码量同步完成', [
+                        'weekly' => $countWeekly,
+                        'monthly' => $countMonthly,
+                    ]);
+                } catch (\Exception $e) {
+                    \support\Log::error('[Cron] 周/月打码量同步失败', [
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString(),
+                    ]);
+                }
+            },
+            'log' => runtime_path() . '/logs/crontab.log',
+        ],
+    ],
 ];
 
 // ============================================================

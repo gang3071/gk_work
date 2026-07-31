@@ -127,4 +127,68 @@ class PlayGameRecord extends Model
         return $this->belongsTo(GameExtend::class, 'game_code', 'code')
             ->where('platform_id', $this->platform_id);
     }
+
+    /**
+     * 模型事件
+     *
+     * ⚠️ 注意：模型事件仅在单条创建（create/save）时触发
+     * 批量插入（insert）不会触发此事件
+     * 批量插入的打码量统计由 GameRecordSyncWorker 负责
+     */
+    protected static function booted()
+    {
+        // 创建记录后投递打码量统计队列
+        static::created(function (PlayGameRecord $record) {
+            self::sendBetStatistics($record);
+        });
+    }
+
+    /**
+     * 发送打码量统计到队列
+     *
+     * ⚠️ 此方法会被以下地方调用：
+     * 1. 模型 created 事件（单条创建时）
+     * 2. GameRecordSyncWorker（批量插入后）
+     *
+     * @param PlayGameRecord $record
+     * @return void
+     */
+    public static function sendBetStatistics(PlayGameRecord $record): void
+    {
+        // ✅ 只统计已结算的下注记录
+        // 条件：
+        // 1. settlement_status == SETTLED（已结算）
+        // 2. type == TYPE_BET（下注类型，排除打赏、预扣、退款）
+        // 3. bet > 0（有下注金额）
+        if ($record->settlement_status == self::SETTLEMENT_STATUS_SETTLED
+            && ($record->type ?? self::TYPE_BET) == self::TYPE_BET
+            && $record->bet > 0) {
+            try {
+                // 投递到快速队列
+                \Webman\RedisQueue\Client::send('bet-statistics', [
+                    'player_id' => $record->player_id,
+                    'stat_type' => 'game',
+                    'bet_amount' => $record->bet,
+                    'source' => $record->game_code ?? 'unknown',
+                    'play_game_record_id' => $record->id,
+                    'created_at' => $record->created_at,
+                ], 'fast');
+
+                \support\Log::debug('[BetStats] 电子游戏打码量已投递队列', [
+                    'player_id' => $record->player_id,
+                    'bet' => $record->bet,
+                    'game_code' => $record->game_code,
+                    'record_id' => $record->id,
+                    'type' => $record->type ?? self::TYPE_BET,
+                ]);
+            } catch (\Exception $e) {
+                // 队列投递失败不影响主业务
+                \support\Log::error('[BetStats] 投递队列失败', [
+                    'player_id' => $record->player_id,
+                    'record_id' => $record->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+    }
 }

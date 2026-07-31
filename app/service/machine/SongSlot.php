@@ -588,7 +588,48 @@ class SongSlot extends MachineServices implements BaseMachine
                     $orgBet = $this->bet;
                     if (!empty($gamingUserId) && $this->reward_status == 0) {
                         $playerPressure = $this->player_pressure;
-                        $this->player_pressure = bcadd($playerPressure, bcsub($bet, $orgBet, 2), 2);
+                        $pressureIncrement = bcsub($bet, $orgBet, 2);  // 压分增量
+                        $this->player_pressure = bcadd($playerPressure, $pressureIncrement, 2);
+
+                        // ✅ SongSlot 打码量实时统计（2026-07-31）
+                        // 压分增加时立即统计打码量
+                        if (bccomp($pressureIncrement, '0', 2) > 0) {
+                            try {
+                                $turnUsedPoint = $this->machine->machineCategory->turn_used_point ?? null;
+
+                                // ✅ 验证 turn_used_point 配置有效性
+                                if ($turnUsedPoint === null || $turnUsedPoint <= 0) {
+                                    \support\Log::warning('[BetStats] SongSlot机台类别缺少有效的 turn_used_point 配置', [
+                                        'machine_id' => $this->machine->id,
+                                        'machine_code' => $this->machine->code,
+                                        'category_id' => $this->machine->machine_category_id ?? null,
+                                        'player_id' => $gamingUserId,
+                                        'pressure_increment' => $pressureIncrement,
+                                    ]);
+                                    // 跳过统计，避免统计到 0 金额
+                                } else {
+                                    $betAmount = bcmul($pressureIncrement, $turnUsedPoint, 2);  // 使用 bcmul 保证精度
+
+                                    if (bccomp($betAmount, '0', 2) > 0) {
+                                        Client::send('bet-statistics', [
+                                            'player_id' => $gamingUserId,
+                                            'stat_type' => 'machine',
+                                            'bet_amount' => floatval($betAmount),  // 转为 float 传递
+                                            'source' => 'song_slot',
+                                            'machine_id' => $this->machine->id,
+                                            'created_at' => date('Y-m-d H:i:s'),
+                                        ], 'fast');
+                                    }
+                                }
+                            } catch (\Exception $e) {
+                                // 投递失败不影响主业务
+                                \support\Log::error('[BetStats] SongSlot打码量投递失败', [
+                                    'machine_id' => $this->machine->id,
+                                    'player_id' => $gamingUserId,
+                                    'error' => $e->getMessage(),
+                                ]);
+                            }
+                        }
                     }
                     $this->bet = $bet;
                     self::sendCmd('af');
