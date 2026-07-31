@@ -371,6 +371,11 @@ class GameRecordSyncWorker
             // 5.6. ✅ 批量投递打码量统计（2026-07-31）
             // 使用已更新的 $existingRecords，不再单独查询
             if (!empty($toInsert)) {
+                $this->log->debug('[BetStats] 准备批量投递', [
+                    'platform' => $platform,
+                    'toInsert_count' => count($toInsert),
+                    'existingRecords_count' => $existingRecords->count(),
+                ]);
                 $this->batchSendBetStatistics($toInsert, $existingRecords);
             }
 
@@ -617,31 +622,51 @@ class GameRecordSyncWorker
     {
         try {
             $sentCount = 0;
+            $skippedCount = 0;
+            $notFoundCount = 0;
+
+            $this->log->debug('[BetStats] batchSendBetStatistics 开始', [
+                'insertedRecords_count' => count($insertedRecords),
+                'existingRecords_count' => $existingRecords->count(),
+            ]);
+
             foreach ($insertedRecords as $insertData) {
                 $orderNo = $insertData['order_no'];
 
                 // ✅ 直接从 $existingRecords 中获取（避免重复查询）
                 if (!isset($existingRecords[$orderNo])) {
+                    $notFoundCount++;
                     continue;
                 }
 
                 $record = $existingRecords[$orderNo];
 
                 // ✅ 过滤条件（已结算、下注类型、有押注金额）
-                if ($record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
+                $passCheck = $record->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED
                     && ($record->type ?? PlayGameRecord::TYPE_BET) == PlayGameRecord::TYPE_BET
-                    && $record->bet > 0) {
+                    && $record->bet > 0;
+
+                if ($passCheck) {
                     PlayGameRecord::sendBetStatistics($record);
                     $sentCount++;
+                } else {
+                    $skippedCount++;
+                    $this->log->debug('[BetStats] 记录不满足条件', [
+                        'order_no' => $orderNo,
+                        'record_id' => $record->id,
+                        'settlement_status' => $record->settlement_status,
+                        'type' => $record->type ?? PlayGameRecord::TYPE_BET,
+                        'bet' => $record->bet,
+                    ]);
                 }
             }
 
-            if ($sentCount > 0) {
-                $this->log->info('[BetStats] 批量投递打码量统计', [
-                    'total' => count($insertedRecords),
-                    'sent' => $sentCount,
-                ]);
-            }
+            $this->log->info('[BetStats] 批量投递打码量统计完成', [
+                'total' => count($insertedRecords),
+                'sent' => $sentCount,
+                'skipped' => $skippedCount,
+                'not_found' => $notFoundCount,
+            ]);
         } catch (\Exception $e) {
             // 统计投递失败不影响主业务
             $this->log->error('[BetStats] 批量投递失败', [

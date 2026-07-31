@@ -139,6 +139,11 @@ class PlayGameRecord extends Model
     {
         // 创建记录后投递打码量统计队列
         static::created(function (PlayGameRecord $record) {
+            \support\Log::debug('[BetStats] PlayGameRecord created 事件触发', [
+                'record_id' => $record->id,
+                'player_id' => $record->player_id,
+                'bet' => $record->bet,
+            ]);
             self::sendBetStatistics($record);
         });
     }
@@ -155,6 +160,19 @@ class PlayGameRecord extends Model
      */
     public static function sendBetStatistics(PlayGameRecord $record): void
     {
+        // ✅ 记录所有调用，用于调试
+        \support\Log::debug('[BetStats] sendBetStatistics 被调用', [
+            'record_id' => $record->id,
+            'player_id' => $record->player_id,
+            'bet' => $record->bet,
+            'settlement_status' => $record->settlement_status,
+            'type' => $record->type ?? self::TYPE_BET,
+            'game_code' => $record->game_code,
+            'settlement_status_check' => $record->settlement_status == self::SETTLEMENT_STATUS_SETTLED,
+            'type_check' => ($record->type ?? self::TYPE_BET) == self::TYPE_BET,
+            'bet_check' => $record->bet > 0,
+        ]);
+
         // ✅ 只统计已结算的下注记录
         // 条件：
         // 1. settlement_status == SETTLED（已结算）
