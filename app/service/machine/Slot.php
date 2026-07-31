@@ -1222,6 +1222,14 @@ class Slot extends MachineServices implements BaseMachine
                                     $betAmount = bcmul($pressureDecrement, $turnUsedPoint, 2);  // 使用 bcmul 保证精度
 
                                     if (bccomp($betAmount, '0', 2) > 0) {
+                                        \support\Log::info('[BetStats] Slot 投递打码量', [
+                                            'machine_id' => $this->machine->id,
+                                            'player_id' => $gamingUserId,
+                                            'pressure_decrement' => $pressureDecrement,
+                                            'turn_used_point' => $turnUsedPoint,
+                                            'bet_amount' => floatval($betAmount),
+                                        ]);
+
                                         Client::send('bet-statistics', [
                                             'player_id' => $gamingUserId,
                                             'stat_type' => 'machine',
@@ -1229,6 +1237,11 @@ class Slot extends MachineServices implements BaseMachine
                                             'source' => 'slot',
                                             'machine_id' => $this->machine->id,
                                             'created_at' => date('Y-m-d H:i:s'),
+                                        ]);
+                                    } else {
+                                        \support\Log::debug('[BetStats] Slot 打码量为0，跳过投递', [
+                                            'machine_id' => $this->machine->id,
+                                            'bet_amount' => $betAmount,
                                         ]);
                                     }
                                 }

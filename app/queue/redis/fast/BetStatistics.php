@@ -38,6 +38,15 @@ class BetStatistics implements Consumer
      */
     public function consume($data)
     {
+        // ✅ 记录收到的消息（用于调试）
+        $this->log->info('[BetStats] 收到打码量统计消息', [
+            'player_id' => $data['player_id'] ?? null,
+            'stat_type' => $data['stat_type'] ?? null,
+            'bet_amount' => $data['bet_amount'] ?? null,
+            'source' => $data['source'] ?? null,
+            'machine_id' => $data['machine_id'] ?? null,
+        ]);
+
         try {
             // ✅ 验证必要字段（包括 created_at，防止跨天边界错乱）
             if (empty($data['player_id']) || empty($data['stat_type']) || empty($data['bet_amount']) || empty($data['created_at'])) {
@@ -57,8 +66,18 @@ class BetStatistics implements Consumer
 
             // 防止重复消费（使用唯一标识）
             if ($this->isDuplicate($data)) {
+                $this->log->info('[BetStats] 检测到重复消息，已跳过', [
+                    'player_id' => $playerId,
+                    'stat_type' => $statType,
+                ]);
                 return;
             }
+
+            $this->log->debug('[BetStats] 开始累加统计', [
+                'player_id' => $playerId,
+                'stat_type' => $statType,
+                'bet_amount' => $betAmount,
+            ]);
 
             // 调用统计服务累加
             $results = PlayerBetStatisticsService::increment(
@@ -67,6 +86,10 @@ class BetStatistics implements Consumer
                 $betAmount,
                 $createdAt
             );
+
+            $this->log->debug('[BetStats] 统计服务返回结果', [
+                'results' => $results,
+            ]);
 
             $this->log->info('[BetStats] 打码量统计成功', [
                 'player_id' => $playerId,
