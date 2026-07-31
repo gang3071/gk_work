@@ -439,8 +439,77 @@ class SongSlot extends MachineServices implements BaseMachine
                     if ($betAllConditionsMet) {
                         // ⚠️ CRITICAL：重新读取 gaming_user_id，防止使用已被踢出的玩家ID
                         $currentGamingUserId = $this->gaming_user_id;
+
+                        Log::channel('bet_statistics')->debug('[BetStats] SongSlot 压分变化检测', [
+                            'machine_id' => $this->machine->id,
+                            'now_bet' => $nowBet,
+                            'org_bet' => $orgBet,
+                            'reward_status' => $this->reward_status,
+                            'gaming_user_id' => $currentGamingUserId,
+                        ]);
+
                         if (!empty($currentGamingUserId)) {
                             $this->last_play_time = time();
+
+                            // ✅ 实体机台打码量实时统计（SongSlot: 压分增加）
+                            try {
+                                $pressureIncrement = bcsub($nowBet, $orgBet, 2);  // 压分增量
+
+                                // ⚠️ turn_used_point 存储在 MachineCategory，不是 Machine
+                                $cateId = $this->machine->cate_id;
+                                $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+                                $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+
+                                if ($turnUsedPoint === null) {
+                                    $turnUsedPoint = \app\model\MachineCategory::query()
+                                        ->where('id', $cateId)
+                                        ->value('turn_used_point') ?? 0;
+                                    \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+                                }
+
+                                // ✅ 验证 turn_used_point 配置有效性
+                                if ($turnUsedPoint === null || $turnUsedPoint <= 0) {
+                                    Log::channel('bet_statistics')->warning('[BetStats] SongSlot机台类别缺少有效的 turn_used_point 配置', [
+                                        'machine_id' => $this->machine->id,
+                                        'category_id' => $cateId,
+                                        'player_id' => $currentGamingUserId,
+                                        'pressure_increment' => $pressureIncrement,
+                                    ]);
+                                } else {
+                                    $betAmount = bcmul($pressureIncrement, $turnUsedPoint, 2);
+
+                                    if (bccomp($betAmount, '0', 2) > 0) {
+                                        Log::channel('bet_statistics')->info('[BetStats] SongSlot 投递打码量', [
+                                            'machine_id' => $this->machine->id,
+                                            'player_id' => $currentGamingUserId,
+                                            'pressure_increment' => $pressureIncrement,
+                                            'turn_used_point' => $turnUsedPoint,
+                                            'bet_amount' => floatval($betAmount),
+                                        ]);
+
+                                        Client::send('bet-statistics', [
+                                            'player_id' => $currentGamingUserId,
+                                            'stat_type' => 'machine',
+                                            'bet_amount' => floatval($betAmount),
+                                            'source' => 'song_slot',
+                                            'machine_id' => $this->machine->id,
+                                            'created_at' => date('Y-m-d H:i:s'),
+                                        ]);
+                                    } else {
+                                        Log::channel('bet_statistics')->debug('[BetStats] SongSlot 打码量为0，跳过投递', [
+                                            'machine_id' => $this->machine->id,
+                                            'bet_amount' => $betAmount,
+                                        ]);
+                                    }
+                                }
+                            } catch (\Exception $e) {
+                                // 投递失败不影响主业务
+                                Log::channel('bet_statistics')->error('[BetStats] SongSlot打码量投递失败', [
+                                    'machine_id' => $this->machine->id,
+                                    'player_id' => $currentGamingUserId,
+                                    'error' => $e->getMessage(),
+                                ]);
+                            }
                         }
                         if ($this->reward_status == 0 && !empty($currentGamingUserId)) {
                             Client::send('lottery-machine', [
