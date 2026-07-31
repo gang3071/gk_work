@@ -101,32 +101,6 @@ class PlayKeepMachine implements Consumer
                 if ($newKeepSeconds != $oldKeepSeconds) {
                     $keepSecondsChanged = true;
                 }
-
-                // ✅ 投递打码量统计（保留时间增加 = 打码量增加）
-                // 场景：玩家通过打码获得保留时间延长，应同步统计打码量
-                try {
-                    \Webman\RedisQueue\Client::send('bet-statistics', [
-                        'player_id' => $gamingUserId,
-                        'stat_type' => 'machine',
-                        'bet_amount' => floatval($changeAmount),
-                        'source' => 'keep_machine',
-                        'machine_id' => $machineId,
-                        'created_at' => date('Y-m-d H:i:s'),
-                    ]);
-
-                    Log::info('[PlayKeepMachine] 投递打码量统计', [
-                        'machine_id' => $machineId,
-                        'player_id' => $gamingUserId,
-                        'bet_amount' => floatval($changeAmount),
-                        'keep_seconds_added' => $addSeconds,
-                    ]);
-                } catch (\Throwable $e) {
-                    Log::error('[PlayKeepMachine] 投递打码量统计失败', [
-                        'machine_id' => $machineId,
-                        'player_id' => $gamingUserId,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
             }
 
             // 解除保留状态

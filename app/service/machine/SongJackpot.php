@@ -534,8 +534,10 @@ class SongJackpot extends MachineServices implements BaseMachine
                 if ($orgWinNumber > 0 && $orgWinNumber < $nowWinNumber && !empty($currentGamingUserId) && $this->change_point_card_status == 0) {
                     $this->last_play_time = time();
                     if ($nowRewardStatus == 0) {
+                        $changeAmount = abs($nowWinNumber - $orgWinNumber);
+
                         Client::send('play-keep-machine', [
-                            'change_amount' => abs($nowWinNumber - $orgWinNumber),
+                            'change_amount' => $changeAmount,
                             'machine_id' => $this->machine->id,
                             'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
                                 $this->machine->domain, $this->machine->port, $this->machine->type
@@ -545,6 +547,24 @@ class SongJackpot extends MachineServices implements BaseMachine
                             'keep_seconds' => $this->keep_seconds,
                             'keeping' => $this->keeping,
                         ]);
+
+                        // ✅ 同时投递打码量统计（change_amount = 转数增量）
+                        if ($changeAmount > 0) {
+                            $turnUsedPoint = $this->machine->turn_used_point ?? 0;
+                            $betAmount = bcmul($changeAmount, $turnUsedPoint, 2);
+
+                            if (bccomp($betAmount, '0', 2) > 0) {
+                                Client::send('bet-statistics', [
+                                    'player_id' => $currentGamingUserId,
+                                    'stat_type' => 'machine',
+                                    'bet_amount' => floatval($betAmount),
+                                    'source' => 'song_jackpot_keep',
+                                    'machine_id' => $this->machine->id,
+                                    'created_at' => date('Y-m-d H:i:s'),
+                                ]);
+                            }
+                        }
+
                         Client::send('lottery-machine', [
                             'num' => $nowWinNumber,
                             'last_num' => $orgWinNumber,

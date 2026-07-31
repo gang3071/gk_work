@@ -449,8 +449,10 @@ class SongSlot extends MachineServices implements BaseMachine
                                 'machine_id' => $this->machine->id,
                                 'player_id' => $currentGamingUserId,
                             ]);
+                            $changeAmount = abs($nowBet - $orgBet);
+
                             Client::send('play-keep-machine', [
-                                'change_amount' => abs($nowBet - $orgBet),
+                                'change_amount' => $changeAmount,
                                 'machine_id' => $this->machine->id,
                                 'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
                                     $this->machine->domain, $this->machine->port, $this->machine->type
@@ -460,6 +462,23 @@ class SongSlot extends MachineServices implements BaseMachine
                                 'keep_seconds' => $this->keep_seconds,
                                 'keeping' => $this->keeping,
                             ]);
+
+                            // ✅ 同时投递打码量统计（change_amount 就是打码量）
+                            if ($changeAmount > 0) {
+                                $turnUsedPoint = $this->machine->turn_used_point ?? 0;
+                                $betAmount = bcmul($changeAmount, $turnUsedPoint, 2);
+
+                                if (bccomp($betAmount, '0', 2) > 0) {
+                                    Client::send('bet-statistics', [
+                                        'player_id' => $currentGamingUserId,
+                                        'stat_type' => 'machine',
+                                        'bet_amount' => floatval($betAmount),
+                                        'source' => 'song_slot_keep',
+                                        'machine_id' => $this->machine->id,
+                                        'created_at' => date('Y-m-d H:i:s'),
+                                    ]);
+                                }
+                            }
                         }
                     }
                     if ($nowPoint > 0 && $orgPoint != $nowPoint && !empty($currentGamingUserId)) {
