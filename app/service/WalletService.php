@@ -113,7 +113,8 @@ class WalletService
                     'success' => false,
                     'balance' => round((float)$result['balance'], 2),
                     'old_balance' => round((float)$result['balance'], 2),
-                    'error' => $result['error'] ?? '余额不足'
+                    'error' => $result['error'] ?? 'insufficient_balance',  // ← 保持错误码，不翻译
+                    'error_code' => $result['error'] ?? 'insufficient_balance',  // ← 新增：明确的错误码字段
                 ];
             }
 

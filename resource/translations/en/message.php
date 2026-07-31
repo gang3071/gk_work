@@ -40,6 +40,7 @@ return [
     'machine_open_msg3' => 'Unable to score again,',
     'machine_present_error_msg2' => 'Giving failed, giving permission is currently disabled, please contact customer service',
     'machine_wash_limit_msg1' => 'The total number of points must not exceed 2000 points',
+    'machine_wash_point_limit_exceeded' => 'Withdrawal amount exceeds limit',
     'machine_odds_error' => 'Ratio error, please contact customer service',
     'customer_operator' => 'Customer service operation',
     'unlimited' => 'Unlimited',

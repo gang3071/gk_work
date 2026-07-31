@@ -387,19 +387,6 @@ class Jackpot extends MachineServices implements BaseMachine
             $this->handle_status = substr($status1, 4, 1); // 圖柄確認
             $this->auto = substr($status1, 5, 1); // 自动状态
             $this->action_time = getMillisecond();
-            $this->log->info('机器接收指令日志', [
-                'jackPot -> jackPotCmd',
-                [
-                    'code' => $this->machine->code,
-                    'msg' => $msg,
-                    'auto' => $this->auto,
-                    'now_turn' => $this->now_turn,
-                    'reward_status' => $this->reward_status,
-                    'bb_status' => $this->bb_status,
-                    'rush_status' => $this->rush_status,
-                    'player_win_number' => $this->player_win_number,
-                ]
-            ]);
             // 开奖状态和rush确变状态只要一个为1进入开奖状态
             if ($this->bb_status == 1 || $this->rush_status == 1) {
                 $this->reward_status = 1;

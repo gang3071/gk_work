@@ -1351,6 +1351,10 @@ function machineWash(
             case GameType::TYPE_STEEL_BALL:
                 // 弃台需要下转,下珠
                 if ($path == 'leave') {
+                    // ✅ 清除累计打码量（2026-07-30）
+                    // 玩家离开机台时，清除所有彩金的累计打码量
+                    \app\service\LotteryServices::clearPlayerAccumulatedBet($player->id, $machine->type);
+
                     if ($machine->control_type == Machine::CONTROL_TYPE_MEI) {
                         $services->sendCmd($services::PUSH . $services::PUSH_STOP, 0, 'player', $player->id,
                             $is_system);
@@ -1518,6 +1522,11 @@ function machineWash(
             // 离开机台参与活动结束
             $activityServices = new ActivityServices($machine, $player);
             $activityServices->playerFinishActivity(true);
+
+            // ✅ 清除累计打码量（2026-07-30）
+            // 玩家离开机台时，清除所有彩金的累计打码量
+            \app\service\LotteryServices::clearPlayerAccumulatedBet($player->id, $machine->type);
+
             // 下分检查彩金获奖情况
             if ($money > 0) {
                 $playerLotteryRecord = (new LotteryServices())->setMachine($machine)->setPlayer($player)->fixedPotCheckLottery($money,
@@ -2994,15 +3003,18 @@ if (!function_exists('machineOpenAnyFree')) {
             $deductResult = \app\service\WalletService::deduct($player->id, $money);
 
             if (!isset($deductResult['success']) || !$deductResult['success']) {
-                $error = $deductResult['error'] ?? trans('insufficient_balance', [], 'message');
+                $errorCode = $deductResult['error_code'] ?? $deductResult['error'] ?? 'insufficient_balance';
+                $errorMessage = trans($errorCode, [], 'message', $lang);  // ← 根据客户端语言翻译
+
                 Log::warning('[machineOpenAnyFree] 余额不足，拒绝上分', [
                     'player_id' => $player->id,
                     'machine_id' => $machine->id,
                     'required_amount' => $money,
                     'current_balance' => $beforeGameAmount,
-                    'error' => $error,
+                    'error_code' => $errorCode,
+                    'error_message' => $errorMessage,
                 ]);
-                throw new Exception($error);
+                throw new Exception($errorMessage);
             }
 
             // ✅ 扣款成功，获取新余额
@@ -3237,10 +3249,44 @@ if (!function_exists('machineOpenAnyFree')) {
 
             // ✅ 硬件开分指令（在事务内执行，失败可回滚）
             // 首次上分发送移分关闭指令
+            $giftKeepSeconds = 0;  // 初始化保留时间赠送变量
             if ($isFirstOpen) {
                 //斯洛 移分off
                 if ($machine->type == GameType::TYPE_SLOT && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
                     $services->sendCmd($services::MOVE_POINT_OFF, 0, 'admin', $adminId);
+                }
+
+                // ✅ 赠送首次上分保留时间（2026-07-30）
+                try {
+                    /** @var SystemSetting $keepingGiftSetting */
+                    $keepingGiftSetting = SystemSetting::query()
+                        ->where('feature', 'gift_keeping_minutes')
+                        ->where('status', 1)
+                        ->first();
+
+                    if (!empty($keepingGiftSetting) && $keepingGiftSetting->num > 0) {
+                        $giftKeepSeconds = bcmul($keepingGiftSetting->num, 60);  // 分钟转秒
+                        $services->keep_seconds = $giftKeepSeconds;
+
+                        Log::info('[machineOpenAnyFree] 首次上分赠送保留时间', [
+                            'player_id' => $player->id,
+                            'machine_id' => $machine->id,
+                            'gift_minutes' => $keepingGiftSetting->num,
+                            'gift_seconds' => $giftKeepSeconds,
+                        ]);
+                    } else {
+                        Log::debug('[machineOpenAnyFree] 首次上分未配置保留时间赠送', [
+                            'player_id' => $player->id,
+                            'machine_id' => $machine->id,
+                        ]);
+                    }
+                } catch (\Exception $e) {
+                    Log::error('[machineOpenAnyFree] 赠送保留时间失败', [
+                        'player_id' => $player->id,
+                        'machine_id' => $machine->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                    // 失败不影响上分流程，继续执行
                 }
             }
 
@@ -3290,6 +3336,39 @@ if (!function_exists('machineOpenAnyFree')) {
                     'trace' => $redisError->getTraceAsString(),
                 ]);
                 // Redis 失败不影响业务，继续执行
+            }
+
+            // ✅ 如果是首次上分且赠送了保留时间，发送 WebSocket 消息（2026-07-30）
+            if ($isFirstOpen && $giftKeepSeconds > 0) {
+                try {
+                    sendSocketMessage('player-' . $player->id . '-' . $machine->id, [
+                        'msg_type' => 'player_machine_keeping',
+                        'player_id' => $player->id,
+                        'machine_id' => $machine->id,
+                        'keep_seconds' => $giftKeepSeconds,
+                        'keeping' => 0  // 刚上分，还未进入保留状态
+                    ]);
+                    sendSocketMessage('player-' . $player->id, [
+                        'msg_type' => 'player_machine_keeping',
+                        'player_id' => $player->id,
+                        'machine_id' => $machine->id,
+                        'keep_seconds' => $giftKeepSeconds,
+                        'keeping' => 0
+                    ]);
+
+                    Log::info('[machineOpenAnyFree] 首次上分保留时间消息已发送', [
+                        'player_id' => $player->id,
+                        'machine_id' => $machine->id,
+                        'keep_seconds' => $giftKeepSeconds,
+                    ]);
+                } catch (\Exception $socketError) {
+                    Log::error('[machineOpenAnyFree] 发送保留时间消息失败', [
+                        'player_id' => $player->id,
+                        'machine_id' => $machine->id,
+                        'error' => $socketError->getMessage(),
+                    ]);
+                    // 消息发送失败不影响业务
+                }
             }
 
             // ✅ CRITICAL：DB 事务提交并且 Redis 更新后，才能清除 Machine 缓存

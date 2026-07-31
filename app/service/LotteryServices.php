@@ -45,6 +45,15 @@ class LotteryServices
     const COOLDOWN_DURATION = 1800;           // 冷却期时长（秒），30分钟
     const REDIS_KEY_LOTTERY_COOLDOWN = 'machine_lottery_cooldown:';  // 彩金冷却期键
 
+    // 累计打码量配置
+    const REDIS_KEY_ACCUMULATED_BET = 'player_%d_lottery_%d_accumulated_bet';  // 玩家累计打码量键
+
+    // 统计数据键（仅随机彩金）
+    const REDIS_KEY_LOTTERY_STATS_TOTAL = 'machine_lottery_stats:total:';      // 总开奖次数
+    const REDIS_KEY_LOTTERY_STATS_WIN = 'machine_lottery_stats:win:';          // 总中奖次数
+    const REDIS_KEY_LOTTERY_STATS_DAILY_TOTAL = 'machine_lottery_stats:daily:total:';  // 每日开奖次数
+    const REDIS_KEY_LOTTERY_STATS_DAILY_WIN = 'machine_lottery_stats:daily:win:';      // 每日中奖次数
+
     public $slotLotteryList;
     public $jackLotteryList;
     public $machineCache;
@@ -595,25 +604,67 @@ class LotteryServices
                 }
             }
 
-            // ===== 2. 随机彩金处理（新版：概率模式）=====
+            // ===== 2. 随机彩金处理（新版：概率模式 + 累计打码量）=====
             if ($lottery->lottery_type == Lottery::LOTTERY_TYPE_RANDOM) {
-                // 计算下注金额（根据机台类型）
-                $bet = $this->calculateBetAmount();
+                // 计算本次下注金额（根据机台类型）
+                $betAmount = $this->calculateBetAmount();
 
-                // 记录派彩检查
-                \support\Log::info('开始派彩检查:', [
-                    'lottery_id' => $lottery->id,
-                    'lottery_name' => $lottery->name,
-                    'bet' => $bet,
-                    'player_id' => $this->player->id,
-                    'uuid' => $this->player->uuid,
-                ]);
+                // ✅ 累计打码量机制（2026-07-30）
+                // 检查是否启用最低打码量限制
+                if ($lottery->bet_amount > 0) {
+                    // 累加玩家的打码量
+                    $accumulatedResult = $this->accumulateBetAmount($lottery->id, $betAmount);
 
-                // 获取并处理爆彩状态
-                $burstInfo = $this->getBurstInfo($lottery);
+                    \support\Log::info('累计打码量检查:', [
+                        'lottery_id' => $lottery->id,
+                        'lottery_name' => $lottery->name,
+                        'player_id' => $this->player->id,
+                        'uuid' => $this->player->uuid,
+                        'bet_amount_this_time' => $betAmount,
+                        'accumulated_before' => $accumulatedResult['before'],
+                        'accumulated_after' => $accumulatedResult['after'],
+                        'required_amount' => $lottery->bet_amount,
+                        'can_participate' => $accumulatedResult['can_participate'],
+                        'participate_times' => $accumulatedResult['participate_times'],
+                    ]);
 
-                // 处理派彩检查（每次下注检查一次）
-                $this->processLotteryCheck($lottery, $bet, 1, $burstInfo);
+                    // 如果累计未达到最低打码量，跳过抽奖
+                    if (!$accumulatedResult['can_participate']) {
+                        \support\Log::info('累计打码量不足，跳过抽奖:', [
+                            'lottery_id' => $lottery->id,
+                            'accumulated' => $accumulatedResult['after'],
+                            'required' => $lottery->bet_amount,
+                            'diff' => bcsub($lottery->bet_amount, $accumulatedResult['after'], 2),
+                        ]);
+                        continue;
+                    }
+
+                    // 获取并处理爆彩状态
+                    $burstInfo = $this->getBurstInfo($lottery);
+
+                    // 处理派彩检查（参与次数由累计打码量决定）
+                    $this->processLotteryCheck(
+                        $lottery,
+                        $lottery->bet_amount,  // 使用最低打码量作为 bet 记录
+                        $accumulatedResult['participate_times'],
+                        $burstInfo
+                    );
+                } else {
+                    // 未启用最低打码量限制，使用原逻辑
+                    \support\Log::info('开始派彩检查（无打码量限制）:', [
+                        'lottery_id' => $lottery->id,
+                        'lottery_name' => $lottery->name,
+                        'bet' => $betAmount,
+                        'player_id' => $this->player->id,
+                        'uuid' => $this->player->uuid,
+                    ]);
+
+                    // 获取并处理爆彩状态
+                    $burstInfo = $this->getBurstInfo($lottery);
+
+                    // 处理派彩检查（每次下注检查一次）
+                    $this->processLotteryCheck($lottery, $betAmount, 1, $burstInfo);
+                }
             }
         }
 
@@ -630,14 +681,95 @@ class LotteryServices
     }
 
     /**
-     * 计算下注金额
+     * 计算下注金额（用于累计打码量）
      * @return float
      */
     private function calculateBetAmount(): float
     {
         $condition = $this->getCondition();
-        $odds = $this->machine->odds_x / $this->machine->odds_y;
-        return $condition * $odds;
+
+        // Slot机和钢珠机：统一使用 turn_used_point（每转消耗游戏点数）
+        if ($this->machine->type == GameType::TYPE_SLOT || $this->machine->type == GameType::TYPE_STEEL_BALL) {
+            $turnUsedPoint = $this->machine->machineCategory->turn_used_point ?? 0;
+            return $condition * $turnUsedPoint;
+        }
+
+        return 0;
+    }
+
+    /**
+     * 累计玩家打码量（用于最低打码量限制）
+     *
+     * @param int $lotteryId 彩金ID
+     * @param float $betAmount 本次下注金额
+     * @return array [
+     *   'before' => 累加前金额,
+     *   'after' => 累加后金额,
+     *   'can_participate' => 是否可以参与抽奖,
+     *   'participate_times' => 可参与次数
+     * ]
+     */
+    private function accumulateBetAmount(int $lotteryId, float $betAmount): array
+    {
+        $redis = \support\Redis::connection()->client();
+
+        // Redis 键：player_{player_id}_lottery_{lottery_id}_accumulated_bet
+        $redisKey = sprintf(
+            self::REDIS_KEY_ACCUMULATED_BET,
+            $this->player->id,
+            $lotteryId
+        );
+
+        // 获取当前累计金额
+        $before = (float)($redis->get($redisKey) ?? 0);
+
+        // 累加本次下注金额
+        $after = bcadd($before, $betAmount, 2);
+
+        // 获取彩金配置的最低打码量
+        $lottery = Lottery::find($lotteryId);
+        $requiredAmount = $lottery->bet_amount ?? 0;
+
+        // 计算可以参与的次数
+        $participateTimes = 0;
+        $canParticipate = false;
+
+        if ($requiredAmount > 0 && $after >= $requiredAmount) {
+            // 计算可以参与几次（向下取整）
+            $participateTimes = intval(floor($after / $requiredAmount));
+            $canParticipate = true;
+
+            // 计算剩余金额
+            $remaining = bcmod($after, $requiredAmount, 2);
+
+            // 更新 Redis（保留余数）
+            $redis->set($redisKey, $remaining);
+
+            // 设置过期时间（7天）
+            $redis->expire($redisKey, 86400 * 7);
+
+            \support\Log::info('达到打码量，可参与抽奖:', [
+                'player_id' => $this->player->id,
+                'lottery_id' => $lotteryId,
+                'before' => $before,
+                'add' => $betAmount,
+                'after' => $after,
+                'required' => $requiredAmount,
+                'participate_times' => $participateTimes,
+                'remaining' => $remaining,
+            ]);
+        } else {
+            // 未达到打码量，更新累计金额
+            $redis->set($redisKey, $after);
+            $redis->expire($redisKey, 86400 * 7);
+        }
+
+        return [
+            'before' => $before,
+            'after' => $after,
+            'can_participate' => $canParticipate,
+            'participate_times' => $participateTimes,
+        ];
     }
 
     /**
@@ -677,6 +809,11 @@ class LotteryServices
 
         // 循环检查多次派彩机会
         for ($i = 1; $i <= $participateTimes; $i++) {
+            // 记录总抽奖次数（仅随机彩金）
+            if ($lottery->lottery_type == Lottery::LOTTERY_TYPE_RANDOM) {
+                $this->incrementLotteryStats($lottery->id, 'total', 1);
+            }
+
             $service = new LotteryProbabilityService();
             $result = $service->checkSmart($adjustedWinRatio);
 
@@ -706,6 +843,11 @@ class LotteryServices
 
             // 检查中奖条件
             if ($result && $amount > 0) {
+                // 记录中奖次数（仅随机彩金）
+                if ($lottery->lottery_type == Lottery::LOTTERY_TYPE_RANDOM) {
+                    $this->incrementLotteryStats($lottery->id, 'win', 1);
+                }
+
                 // 尝试派发彩金（支持多次中奖，不跳出循环）
                 $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $burstInfo, $i, $participateTimes, $isDoubled);
             }
@@ -1670,6 +1812,305 @@ class LotteryServices
         Cache::delete(self::CACHE_KEY_LOTTERY_LIST . GameType::TYPE_SLOT);
         // 清除钢珠彩金缓存
         Cache::delete(self::CACHE_KEY_LOTTERY_LIST . GameType::TYPE_STEEL_BALL);
+    }
+
+    /**
+     * 清除玩家的累计打码量（玩家离开机台时调用）
+     *
+     * @param int $playerId 玩家ID
+     * @param int $machineType 机台类型（1=Slot, 2=钢珠）
+     * @return int 清除的键数量
+     */
+    public static function clearPlayerAccumulatedBet(int $playerId, int $machineType): int
+    {
+        try {
+            $redis = \support\Redis::connection()->client();
+
+            // 获取该机台类型的所有彩金
+            $lotteries = Lottery::query()
+                ->where('status', 1)
+                ->where('game_type', $machineType)
+                ->where('lottery_type', Lottery::LOTTERY_TYPE_RANDOM)
+                ->whereNull('deleted_at')
+                ->get();
+
+            $clearedCount = 0;
+
+            /** @var Lottery $lottery */
+            foreach ($lotteries as $lottery) {
+                // 只清除启用了打码量限制的彩金
+                if ($lottery->bet_amount > 0) {
+                    $redisKey = sprintf(self::REDIS_KEY_ACCUMULATED_BET, $playerId, $lottery->id);
+                    $existed = $redis->del($redisKey);
+
+                    if ($existed) {
+                        $clearedCount++;
+                        \support\Log::info('清除玩家累计打码量:', [
+                            'player_id' => $playerId,
+                            'lottery_id' => $lottery->id,
+                            'lottery_name' => $lottery->name,
+                            'redis_key' => $redisKey,
+                        ]);
+                    }
+                }
+            }
+
+            if ($clearedCount > 0) {
+                \support\Log::info('玩家离开机台，清除累计打码量完成:', [
+                    'player_id' => $playerId,
+                    'machine_type' => $machineType == GameType::TYPE_SLOT ? 'Slot' : '钢珠',
+                    'cleared_count' => $clearedCount,
+                ]);
+            }
+
+            return $clearedCount;
+        } catch (\Exception $e) {
+            \support\Log::error('清除玩家累计打码量失败:', [
+                'player_id' => $playerId,
+                'machine_type' => $machineType,
+                'error' => $e->getMessage(),
+            ]);
+            return 0;
+        }
+    }
+
+    /**
+     * 增加彩金统计数据（仅随机彩金）
+     *
+     * @param int $lotteryId 彩金ID
+     * @param string $type total|win
+     * @param int $count 增加数量
+     * @return void
+     */
+    private function incrementLotteryStats(int $lotteryId, string $type, int $count = 1): void
+    {
+        try {
+            $redis = \support\Redis::connection()->client();
+            $today = date('Y-m-d');
+
+            // 获取清除时间标记（用于惰性清理）
+            $clearTimeKey = 'machine_lottery_stats:clear_time:' . $lotteryId;
+            $currentClearTime = $redis->get($clearTimeKey) ?: '';
+
+            if ($type === 'total') {
+                $statsKey = self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId;
+                $dailyKey = self::REDIS_KEY_LOTTERY_STATS_DAILY_TOTAL . $lotteryId . ':' . $today;
+                $versionKey = $statsKey . ':version';
+
+                // Lua 脚本：检查版本，必要时清零，然后累加
+                $luaScript = <<<'LUA'
+local stats_key = KEYS[1]
+local daily_key = KEYS[2]
+local version_key = KEYS[3]
+
+local increment = tonumber(ARGV[1])
+local current_clear_time = ARGV[2]
+local ttl = tonumber(ARGV[3])
+
+local old_total = tonumber(redis.call('GET', stats_key) or 0)
+local old_daily = tonumber(redis.call('GET', daily_key) or 0)
+
+local last_version = redis.call('GET', version_key) or ''
+
+local was_cleared = 0
+if last_version ~= current_clear_time then
+    redis.call('SET', stats_key, 0)
+    redis.call('SET', daily_key, 0)
+    redis.call('SET', version_key, current_clear_time)
+    old_total = 0
+    old_daily = 0
+    was_cleared = 1
+end
+
+local new_total = redis.call('INCRBY', stats_key, increment)
+local new_daily = redis.call('INCRBY', daily_key, increment)
+redis.call('EXPIRE', daily_key, ttl)
+
+return {old_total, new_total, old_daily, new_daily, was_cleared}
+LUA;
+
+                $result = $redis->eval($luaScript, [
+                    $statsKey,
+                    $dailyKey,
+                    $versionKey,
+                    $count,
+                    $currentClearTime,
+                    86400 * 2 // TTL: 2天
+                ], 3);
+
+                if ($result[4] == 1) {
+                    \support\Log::warning('🔄 检测到统计已清除，自动重置为0', [
+                        'lottery_id' => $lotteryId,
+                        'type' => 'total',
+                    ]);
+                }
+
+            } elseif ($type === 'win') {
+                $statsKey = self::REDIS_KEY_LOTTERY_STATS_WIN . $lotteryId;
+                $dailyKey = self::REDIS_KEY_LOTTERY_STATS_DAILY_WIN . $lotteryId . ':' . $today;
+                $versionKey = $statsKey . ':version';
+
+                $luaScript = <<<'LUA'
+local stats_key = KEYS[1]
+local daily_key = KEYS[2]
+local version_key = KEYS[3]
+
+local increment = tonumber(ARGV[1])
+local current_clear_time = ARGV[2]
+local ttl = tonumber(ARGV[3])
+
+local old_total = tonumber(redis.call('GET', stats_key) or 0)
+local old_daily = tonumber(redis.call('GET', daily_key) or 0)
+
+local last_version = redis.call('GET', version_key) or ''
+
+local was_cleared = 0
+if last_version ~= current_clear_time then
+    redis.call('SET', stats_key, 0)
+    redis.call('SET', daily_key, 0)
+    redis.call('SET', version_key, current_clear_time)
+    old_total = 0
+    old_daily = 0
+    was_cleared = 1
+end
+
+local new_total = redis.call('INCRBY', stats_key, increment)
+local new_daily = redis.call('INCRBY', daily_key, increment)
+redis.call('EXPIRE', daily_key, ttl)
+
+return {old_total, new_total, old_daily, new_daily, was_cleared}
+LUA;
+
+                $result = $redis->eval($luaScript, [
+                    $statsKey,
+                    $dailyKey,
+                    $versionKey,
+                    $count,
+                    $currentClearTime,
+                    86400 * 2
+                ], 3);
+
+                if ($result[4] == 1) {
+                    \support\Log::warning('🔄 检测到统计已清除，自动重置为0', [
+                        'lottery_id' => $lotteryId,
+                        'type' => 'win',
+                    ]);
+                }
+            }
+        } catch (\Exception $e) {
+            \support\Log::error('记录彩金统计失败', [
+                'lottery_id' => $lotteryId,
+                'type' => $type,
+                'count' => $count,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * 获取彩金统计数据
+     *
+     * @param int $lotteryId 彩金ID
+     * @return array
+     */
+    public static function getLotteryStats(int $lotteryId): array
+    {
+        try {
+            $redis = \support\Redis::connection()->client();
+            $today = date('Y-m-d');
+
+            // 获取总统计
+            $totalChecks = (int)$redis->get(self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId) ?: 0;
+            $totalWins = (int)$redis->get(self::REDIS_KEY_LOTTERY_STATS_WIN . $lotteryId) ?: 0;
+
+            // 获取每日统计
+            $dailyTotalKey = self::REDIS_KEY_LOTTERY_STATS_DAILY_TOTAL . $lotteryId . ':' . $today;
+            $dailyWinKey = self::REDIS_KEY_LOTTERY_STATS_DAILY_WIN . $lotteryId . ':' . $today;
+            $dailyChecks = (int)$redis->get($dailyTotalKey) ?: 0;
+            $dailyWins = (int)$redis->get($dailyWinKey) ?: 0;
+
+            // 计算中奖率
+            $winRate = $totalChecks > 0 ? round(($totalWins / $totalChecks) * 100, 4) . '%' : '0%';
+            $dailyWinRate = $dailyChecks > 0 ? round(($dailyWins / $dailyChecks) * 100, 4) . '%' : '0%';
+
+            return [
+                'total' => $totalChecks,
+                'win' => $totalWins,
+                'win_rate' => $winRate,
+                'daily_total' => $dailyChecks,
+                'daily_win' => $dailyWins,
+                'daily_win_rate' => $dailyWinRate,
+            ];
+        } catch (\Exception $e) {
+            \support\Log::error('获取彩金统计失败', [
+                'lottery_id' => $lotteryId,
+                'error' => $e->getMessage(),
+            ]);
+            return [
+                'total' => 0,
+                'win' => 0,
+                'win_rate' => '0%',
+                'daily_total' => 0,
+                'daily_win' => 0,
+                'daily_win_rate' => '0%',
+            ];
+        }
+    }
+
+    /**
+     * 清除彩金统计数据
+     *
+     * @param int $lotteryId 彩金ID
+     * @return bool
+     */
+    public static function clearLotteryStats(int $lotteryId): bool
+    {
+        try {
+            $redis = \support\Redis::connection()->client();
+
+            // 设置清除时间标记（用于惰性清理）
+            $clearTimeKey = 'machine_lottery_stats:clear_time:' . $lotteryId;
+            $redis->set($clearTimeKey, time());
+
+            // 删除所有统计键
+            $keysToDelete = [
+                self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId,
+                self::REDIS_KEY_LOTTERY_STATS_WIN . $lotteryId,
+                self::REDIS_KEY_LOTTERY_STATS_TOTAL . $lotteryId . ':version',
+                self::REDIS_KEY_LOTTERY_STATS_WIN . $lotteryId . ':version',
+            ];
+
+            // 删除所有每日统计键（使用 SCAN 查找）
+            $pattern = 'machine_lottery_stats:daily:*:' . $lotteryId . ':*';
+            $cursor = 0;
+            do {
+                $result = $redis->scan($cursor, ['MATCH' => $pattern, 'COUNT' => 100]);
+                $cursor = $result[0];
+                $keys = $result[1] ?? [];
+
+                if (!empty($keys)) {
+                    $keysToDelete = array_merge($keysToDelete, $keys);
+                }
+            } while ($cursor != 0);
+
+            // 批量删除
+            if (!empty($keysToDelete)) {
+                $redis->del(...$keysToDelete);
+            }
+
+            \support\Log::info('清除彩金统计数据成功', [
+                'lottery_id' => $lotteryId,
+                'deleted_keys_count' => count($keysToDelete),
+            ]);
+
+            return true;
+        } catch (\Exception $e) {
+            \support\Log::error('清除彩金统计数据失败', [
+                'lottery_id' => $lotteryId,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
     }
 
     /**
