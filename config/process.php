@@ -199,8 +199,8 @@ return [
     'player-bet-stats-sync-hourly' => [
         'handler' => \Workerman\Crontab\Crontab::class,
         'constructor' => [
-            'crontab' => '7 * * * *',  // 每小时第7分钟执行
-            'callback' => function() {
+            '7 * * * *',  // 每小时第7分钟执行（第1个参数：crontab规则）
+            function() {  // 第2个参数：callback
                 try {
                     $count = \app\service\PlayerBetStatisticsService::syncToDatabase(
                         \app\service\PlayerBetStatisticsService::DIMENSION_DAILY
@@ -213,7 +213,7 @@ return [
                     ]);
                 }
             },
-            'log' => runtime_path() . '/logs/crontab.log',
+            'player-bet-stats-sync-hourly',  // 第3个参数：name
         ],
     ],
 
@@ -222,8 +222,8 @@ return [
     'player-bet-stats-sync-daily' => [
         'handler' => \Workerman\Crontab\Crontab::class,
         'constructor' => [
-            'crontab' => '7 3 * * *',  // 每天凌晨3:07执行
-            'callback' => function() {
+            '7 3 * * *',  // 每天凌晨3:07执行（第1个参数：crontab规则）
+            function() {  // 第2个参数：callback
                 try {
                     // 同步周统计
                     $countWeekly = \app\service\PlayerBetStatisticsService::syncToDatabase(
@@ -246,7 +246,7 @@ return [
                     ]);
                 }
             },
-            'log' => runtime_path() . '/logs/crontab.log',
+            'player-bet-stats-sync-daily',  // 第3个参数：name
         ],
     ],
 ];
