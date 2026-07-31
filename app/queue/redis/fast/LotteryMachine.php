@@ -100,9 +100,38 @@ class LotteryMachine implements Consumer
                 'last_num' => $data['last_num']
             ]);
         } catch (Exception $e) {
+            // ✅ 业务校验异常：不需要重试，只记录简单日志
+            $businessErrors = [
+                '机台新数据等于上次数据',
+                '机台新数据小于上次数据',
+                '机台分类未开启彩池累积',
+                '机台分类彩池累积单位设置错误',
+                '机台类型错误',
+            ];
+
+            $errorMsg = $e->getMessage();
+            $isBusinessError = false;
+            foreach ($businessErrors as $businessError) {
+                if (str_contains($errorMsg, $businessError)) {
+                    $isBusinessError = true;
+                    break;
+                }
+            }
+
+            if ($isBusinessError) {
+                // 业务校验失败：仅记录简单日志，不输出堆栈，不重试
+                $log->warning('机台抽奖业务校验失败', [
+                    'machine_id' => $data['machine_id'] ?? null,
+                    'player_id' => $data['player_id'] ?? null,
+                    'error' => $errorMsg,
+                ]);
+                return; // 不重试
+            }
+
+            // 系统异常：记录详细日志并重试
             $log->error('机台抽奖处理失败', [
                 'data' => $data,
-                'error' => $e->getMessage(),
+                'error' => $errorMsg,
                 'trace' => $e->getTraceAsString()
             ]);
 
