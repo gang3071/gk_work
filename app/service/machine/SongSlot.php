@@ -468,6 +468,16 @@ class SongSlot extends MachineServices implements BaseMachine
                                 $turnUsedPoint = $this->machine->turn_used_point ?? 0;
                                 $betAmount = bcmul($changeAmount, $turnUsedPoint, 2);
 
+                                Log::channel('bet_statistics')->debug('[BetStats] SongSlot 保留时计算打码量', [
+                                    'machine_id' => $this->machine->id,
+                                    'player_id' => $currentGamingUserId,
+                                    'change_amount' => $changeAmount,
+                                    'turn_used_point' => $turnUsedPoint,
+                                    'bet_amount' => $betAmount,
+                                    'now_bet' => $nowBet,
+                                    'org_bet' => $orgBet,
+                                ]);
+
                                 if (bccomp($betAmount, '0', 2) > 0) {
                                     Log::channel('bet_statistics')->info('[BetStats] SongSlot 保留时投递打码量', [
                                         'machine_id' => $this->machine->id,
@@ -489,6 +499,8 @@ class SongSlot extends MachineServices implements BaseMachine
                                 } else {
                                     Log::channel('bet_statistics')->debug('[BetStats] SongSlot 保留时打码量为0，跳过投递', [
                                         'machine_id' => $this->machine->id,
+                                        'change_amount' => $changeAmount,
+                                        'turn_used_point' => $turnUsedPoint,
                                         'bet_amount' => $betAmount,
                                     ]);
                                 }
