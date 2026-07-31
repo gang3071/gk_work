@@ -199,8 +199,8 @@ class PlayGameRecord extends Model
 
                 \support\Log::debug('[BetStats] 队列数据', ['data' => $queueData]);
 
-                // 投递到快速队列
-                \Webman\RedisQueue\Client::send('bet-statistics', $queueData, 'fast');
+                // 投递到快速队列（使用 default 连接）
+                \Webman\RedisQueue\Client::send('bet-statistics', $queueData);
 
                 \support\Log::debug('[BetStats] Client::send 执行完成');
 
