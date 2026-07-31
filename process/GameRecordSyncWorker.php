@@ -640,30 +640,46 @@ class GameRecordSyncWorker
                     continue;
                 }
 
-                // ✅ 提取日期（处理时区）
+                // ✅ 提取日期（仅用于分组，实际时区转换在消费者中进行）
+                // ⚠️ 注意：$record->created_at 可能是 UTC 时间（2026-07-31T17:02:01.000000Z）
+                // 这里转换为本地时区只是为了按"本地日期"分组
+                // 消费者会再次转换以确保统计到正确的日期维度
                 $createdAt = \Carbon\Carbon::parse($record->created_at)->setTimezone('Asia/Shanghai');
                 $date = $createdAt->format('Y-m-d');
 
-                // ✅ 分组 Key: player_id + date
+                // ✅ 分组 Key: player_id + date（本地日期）
                 $groupKey = "{$record->player_id}_{$date}";
 
                 if (!isset($grouped[$groupKey])) {
                     $grouped[$groupKey] = [
                         'player_id' => $record->player_id,
+                        'date' => $date,  // ✅ 记录日期（用于批次ID）
                         'bet_amount' => 0,
                         'count' => 0,
                         'created_at' => $record->created_at,  // 使用第一条记录的时间
                         'game_codes' => [],
+                        'record_ids' => [],  // ✅ 记录所有涉及的 record ID（用于生成唯一批次ID）
                     ];
                 }
 
                 $grouped[$groupKey]['bet_amount'] += $record->bet;
                 $grouped[$groupKey]['count']++;
                 $grouped[$groupKey]['game_codes'][] = $record->game_code ?? 'unknown';
+                $grouped[$groupKey]['record_ids'][] = $record->id;  // ✅ 收集 record ID
             }
 
             // ✅ 批量投递（每组一条消息）
             foreach ($grouped as $groupData) {
+                // ✅ 生成唯一批次ID：player_id + date + 所有涉及的 record IDs 的哈希
+                // 用途：防止队列重试时重复累加
+                // 格式：batch_{player_id}_{date}_{md5}
+                $batchId = sprintf(
+                    'batch_%d_%s_%s',
+                    $groupData['player_id'],
+                    $groupData['date'],
+                    substr(md5(implode(',', $groupData['record_ids'])), 0, 8)
+                );
+
                 \Webman\RedisQueue\Client::send('bet-statistics', [
                     'player_id' => $groupData['player_id'],
                     'stat_type' => 'game',
@@ -671,6 +687,7 @@ class GameRecordSyncWorker
                     'source' => 'batch_' . count(array_unique($groupData['game_codes'])) . '_games',  // 标识批量
                     'created_at' => $groupData['created_at'],
                     'batch_count' => $groupData['count'],  // 记录合并的记录数
+                    'batch_id' => $batchId,  // ✅ 批次唯一标识（用于去重）
                 ]);
             }
 

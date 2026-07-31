@@ -140,7 +140,27 @@ class BetStatistics implements Consumer
      */
     private function isDuplicate(array $data): bool
     {
-        // 电子游戏：使用 play_game_record_id 去重
+        // ✅ 批量消息：使用 batch_id 去重（优先级最高）
+        if (!empty($data['batch_id'])) {
+            // 格式：batch_{player_id}_{date}_{hash}
+            $cacheKey = 'gk_work:bet_stats_processed_batch_' . $data['batch_id'];
+            $redis = \support\Redis::connection()->client();
+
+            if ($redis->exists($cacheKey) > 0) {
+                $this->log->info('[BetStats] 检测到重复批次，已跳过', [
+                    'batch_id' => $data['batch_id'],
+                    'player_id' => $data['player_id'] ?? null,
+                ]);
+                return true;
+            }
+
+            // ✅ 1小时 TTL：防止队列重试时重复累加
+            // 内存占用：假设 10 万批次/天，10 万 × 100 字节 × 1 小时/24 小时 ≈ 400KB
+            $redis->setex($cacheKey, 3600, 1);
+            return false;
+        }
+
+        // 电子游戏（单条）：使用 play_game_record_id 去重
         if (!empty($data['play_game_record_id'])) {
             // ✅ 增加项目前缀，防止多项目冲突
             $cacheKey = 'gk_work:bet_stats_processed_game_' . $data['play_game_record_id'];
@@ -199,7 +219,14 @@ class BetStatistics implements Consumer
         try {
             $redis = \support\Redis::connection()->client();
 
-            // 电子游戏：删除去重标记
+            // ✅ 批量消息：删除去重标记
+            if (!empty($data['batch_id'])) {
+                $cacheKey = 'gk_work:bet_stats_processed_batch_' . $data['batch_id'];
+                $redis->del($cacheKey);
+                return;  // 批量消息只有 batch_id，直接返回
+            }
+
+            // 电子游戏（单条）：删除去重标记
             if (!empty($data['play_game_record_id'])) {
                 $cacheKey = 'gk_work:bet_stats_processed_game_' . $data['play_game_record_id'];
                 $redis->del($cacheKey);
