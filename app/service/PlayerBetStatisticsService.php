@@ -9,12 +9,23 @@ use Carbon\Carbon;
 
 /**
  * 玩家打码量统计服务
+ *
+ * 【重要】数据单位说明：
+ * - Redis 存储：整数"分"（避免浮点数精度问题）
+ * - 数据库存储：DECIMAL "元"（方便直接查询）
+ * - 接口传参：float "元"（业务层使用）
+ *
+ * 转换规则：
+ * - 写入 Redis: 元 × 100 → 分（整数）
+ * - 读取显示: 分 ÷ 100 → 元（浮点）
+ * - 同步数据库: 分 ÷ 100 → 元（DECIMAL）
  */
 class PlayerBetStatisticsService
 {
     // Redis Key 前缀
     // ✅ 增加项目前缀，防止多项目共用 Redis 时数据冲突
     // 格式：gk_work:player_bet_stats:{player_id}:{stat_type}:{dimension}:{date}
+    // 存储字段：bet_amount（分，整数）、bet_count（次数）、last_update（时间戳）
     const REDIS_KEY_PREFIX = 'gk_work:player_bet_stats:';
 
     // 统计类型
@@ -161,7 +172,7 @@ LUA;
      * @param string $statType 统计类型
      * @param string $dimension 维度
      * @param string|null $date 日期（可选，默认当前）
-     * @return array|null
+     * @return array|null ['bet_amount' => int(分), 'bet_count' => int, 'last_update' => int]
      */
     public static function getStats(
         int $playerId,
@@ -188,8 +199,9 @@ LUA;
             return null;
         }
 
+        // ✅ Redis 存储的是"分"（整数），返回时保持原值
         return [
-            'bet_amount' => floatval($data['bet_amount'] ?? 0),
+            'bet_amount' => intval($data['bet_amount'] ?? 0),  // 单位：分
             'bet_count' => intval($data['bet_count'] ?? 0),
             'last_update' => intval($data['last_update'] ?? 0),
         ];
@@ -287,17 +299,18 @@ LUA;
                         continue;
                     }
 
-                    // ✅ 使用 round 确保精度一致性（Redis 字符串 → float → 数据库 DECIMAL）
-                    $betAmount = round(floatval($data['bet_amount'] ?? 0), 2);
+                    // ✅ Redis 存储的是"分"（整数），转换为"元"（小数）存入数据库
+                    $betAmountInCents = intval($data['bet_amount'] ?? 0);  // 分
+                    $betAmountInYuan = round($betAmountInCents / 100, 2);  // 转为元
                     $betCount = intval($data['bet_count'] ?? 0);
 
-                    if ($betAmount <= 0) {
+                    if ($betAmountInYuan <= 0) {
                         continue;
                     }
 
                     // ✅ 增加错误处理，防止单条失败导致整个同步中断
                     try {
-                        // 更新或插入数据库
+                        // 更新或插入数据库（数据库存储"元"）
                         PlayerBetStatistics::updateOrCreate(
                             [
                                 'player_id' => $playerId,
@@ -306,7 +319,7 @@ LUA;
                                 'stat_date' => $keyDate,
                             ],
                             [
-                                'bet_amount' => $betAmount,
+                                'bet_amount' => $betAmountInYuan,  // 存储"元"
                                 'bet_count' => $betCount,
                                 'updated_at' => date('Y-m-d H:i:s'),
                             ]
