@@ -63,11 +63,15 @@ class BetStatistics implements Consumer
             // ✅ 强制使用 created_at，不使用 Carbon::now() 作为后备
             // 原因：防止跨天边界时统计到错误的日期
             // 场景：23:59:59 投递，00:00:05 处理 → 应该统计到前一天，而不是当天
-            $createdAt = Carbon::parse($data['created_at']);
+            // ⚠️ 重要：转换为本地时区（Asia/Shanghai）
+            // 数据库可能存储 UTC 时间（2026-07-31T17:02:01.000000Z）
+            // 需要转换为本地时间（2026-08-01 01:02:01）后再统计
+            $createdAt = Carbon::parse($data['created_at'])->setTimezone('Asia/Shanghai');
 
             // ⚠️ 调试：记录解析后的时间
             $this->log->debug('[BetStats] 解析时间', [
                 'raw_created_at' => $data['created_at'],
+                'timezone' => $createdAt->timezone->getName(),
                 'parsed_date' => $createdAt->format('Y-m-d'),
                 'parsed_week' => $createdAt->format('o-\WW'),
                 'parsed_month' => $createdAt->format('Y-m'),
