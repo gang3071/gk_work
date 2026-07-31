@@ -27,9 +27,13 @@ class PlayerBetStatisticsService
     const DIMENSION_MONTHLY = 'monthly';  // 月
 
     // 过期时间（秒）
-    const TTL_DAILY = 86400 * 7;      // 7天
-    const TTL_WEEKLY = 86400 * 35;    // 35天
-    const TTL_MONTHLY = 86400 * 90;   // 90天
+    // ✅ 优化策略：
+    // - daily: 仅保留当天（凌晨2点清理，给跨天统计留缓冲）
+    // - weekly: 保留当周+1周（最多14天）
+    // - monthly: 保留当月+1个月（最多62天）
+    const TTL_DAILY = 86400 * 2;      // 2天（当天+缓冲）
+    const TTL_WEEKLY = 86400 * 14;    // 14天（当周+上周）
+    const TTL_MONTHLY = 86400 * 62;   // 62天（当月+上月）
 
     /**
      * 累加玩家打码量（原子操作）
