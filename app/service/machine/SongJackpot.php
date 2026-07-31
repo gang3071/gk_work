@@ -550,7 +550,18 @@ class SongJackpot extends MachineServices implements BaseMachine
 
                         // ✅ 同时投递打码量统计（change_amount = 转数增量）
                         if ($changeAmount > 0) {
-                            $turnUsedPoint = $this->machine->turn_used_point ?? 0;
+                            // ⚠️ turn_used_point 存储在 MachineCategory，不是 Machine
+                            $cateId = $this->machine->cate_id;
+                            $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+                            $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+
+                            if ($turnUsedPoint === null) {
+                                $turnUsedPoint = \app\model\MachineCategory::query()
+                                    ->where('id', $cateId)
+                                    ->value('turn_used_point') ?? 0;
+                                \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+                            }
+
                             $betAmount = bcmul($changeAmount, $turnUsedPoint, 2);
 
                             if (bccomp($betAmount, '0', 2) > 0) {
