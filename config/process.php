@@ -194,12 +194,15 @@ return [
         'count' => 1,
     ],
 
-    // ✅ 玩家打码量统计同步任务
-    // 作用：定期将 Redis 中的实时打码量数据同步到 MySQL
-    // - 日维度：每小时第7分钟
-    // - 周/月维度：每天凌晨3:07
-    'PlayerBetStatisticsSyncTask' => [
-        'handler' => process\PlayerBetStatisticsSyncTask::class,
+    // ✅ 玩家打码量统计同步任务（每小时）
+    // 作用：将 Redis 中的日维度打码量数据同步到 MySQL
+    'PlayerBetStatisticsSyncHourly' => [
+        'handler' => process\PlayerBetStatisticsSyncHourly::class,
+    ],
+    // ✅ 玩家打码量统计同步任务（每天）
+    // 作用：将 Redis 中的周/月维度打码量数据同步到 MySQL
+    'PlayerBetStatisticsSyncDaily' => [
+        'handler' => process\PlayerBetStatisticsSyncDaily::class,
     ],
 ];
 
