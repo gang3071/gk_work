@@ -139,11 +139,6 @@ class PlayGameRecord extends Model
     {
         // 创建记录后投递打码量统计队列
         static::created(function (PlayGameRecord $record) {
-            \support\Log::debug('[BetStats] PlayGameRecord created 事件触发', [
-                'record_id' => $record->id,
-                'player_id' => $record->player_id,
-                'bet' => $record->bet,
-            ]);
             self::sendBetStatistics($record);
         });
     }
@@ -160,19 +155,6 @@ class PlayGameRecord extends Model
      */
     public static function sendBetStatistics(PlayGameRecord $record): void
     {
-        // ✅ 记录所有调用，用于调试
-        \support\Log::debug('[BetStats] sendBetStatistics 被调用', [
-            'record_id' => $record->id,
-            'player_id' => $record->player_id,
-            'bet' => $record->bet,
-            'settlement_status' => $record->settlement_status,
-            'type' => $record->type ?? self::TYPE_BET,
-            'game_code' => $record->game_code,
-            'settlement_status_check' => $record->settlement_status == self::SETTLEMENT_STATUS_SETTLED,
-            'type_check' => ($record->type ?? self::TYPE_BET) == self::TYPE_BET,
-            'bet_check' => $record->bet > 0,
-        ]);
-
         // ✅ 只统计已结算的下注记录
         // 条件：
         // 1. settlement_status == SETTLED（已结算）
@@ -182,34 +164,14 @@ class PlayGameRecord extends Model
             && ($record->type ?? self::TYPE_BET) == self::TYPE_BET
             && $record->bet > 0) {
             try {
-                \support\Log::debug('[BetStats] 准备投递队列', [
-                    'player_id' => $record->player_id,
-                    'bet' => $record->bet,
-                    'record_id' => $record->id,
-                ]);
-
-                $queueData = [
+                // 投递到快速队列（使用 default 连接）
+                \Webman\RedisQueue\Client::send('bet-statistics', [
                     'player_id' => $record->player_id,
                     'stat_type' => 'game',
                     'bet_amount' => $record->bet,
                     'source' => $record->game_code ?? 'unknown',
                     'play_game_record_id' => $record->id,
                     'created_at' => $record->created_at,
-                ];
-
-                \support\Log::debug('[BetStats] 队列数据', ['data' => $queueData]);
-
-                // 投递到快速队列（使用 default 连接）
-                \Webman\RedisQueue\Client::send('bet-statistics', $queueData);
-
-                \support\Log::debug('[BetStats] Client::send 执行完成');
-
-                \support\Log::debug('[BetStats] 电子游戏打码量已投递队列', [
-                    'player_id' => $record->player_id,
-                    'bet' => $record->bet,
-                    'game_code' => $record->game_code,
-                    'record_id' => $record->id,
-                    'type' => $record->type ?? self::TYPE_BET,
                 ]);
             } catch (\Throwable $e) {
                 // 队列投递失败不影响主业务

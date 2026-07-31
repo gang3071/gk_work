@@ -38,16 +38,12 @@ class BetStatistics implements Consumer
      */
     public function consume($data)
     {
-        $this->log->debug('[BetStats] 消费者开始处理', ['data' => $data]);
-
         try {
             // ✅ 验证必要字段（包括 created_at，防止跨天边界错乱）
             if (empty($data['player_id']) || empty($data['stat_type']) || empty($data['bet_amount']) || empty($data['created_at'])) {
                 $this->log->error('[BetStats] 队列消息字段缺失（拒绝处理）', ['data' => $data]);
                 return;
             }
-
-            $this->log->debug('[BetStats] 字段验证通过');
 
             $playerId = intval($data['player_id']);
             $statType = $data['stat_type'];
@@ -61,7 +57,6 @@ class BetStatistics implements Consumer
 
             // 防止重复消费（使用唯一标识）
             if ($this->isDuplicate($data)) {
-                $this->log->debug('[BetStats] 检测到重复消息，跳过', ['data' => $data]);
                 return;
             }
 
