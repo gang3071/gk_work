@@ -88,52 +88,46 @@ class PlayerBetStatisticsService
      * Lua 脚本原子性累加
      *
      * @param string $key Redis Key
-     * @param float $betAmount 打码金额
+     * @param float $betAmount 打码金额（元）
      * @param int $ttl 过期时间
-     * @return array [旧金额, 新金额, 旧次数, 新次数]
+     * @return array [旧金额(分), 新金额(分), 旧次数, 新次数]
      * @throws \RuntimeException 当 Lua 脚本执行失败或返回格式错误时
      */
     private static function incrementByLua(string $key, float $betAmount, int $ttl): array
     {
         $redis = Redis::connection()->client();
 
-        // ✅ 使用字符串传递金额，避免浮点数精度丢失
-        $betAmountStr = number_format($betAmount, 2, '.', '');
+        // ✅ 修复：金额乘以100转为"分"存储，确保精度
+        // 避免浮点数精度问题，统一以整数"分"为单位存储
+        $betAmountInCents = intval(round($betAmount * 100));
 
         $lua = <<<'LUA'
 local key = KEYS[1]
-local bet_amount_str = ARGV[1]  -- 字符串形式的金额
+local bet_amount_cents = tonumber(ARGV[1])  -- 金额（分）
 local ttl = tonumber(ARGV[2])
 local current_time = tonumber(ARGV[3])
 
--- 读取旧值（字符串形式）
-local old_amount_str = redis.call('HGET', key, 'bet_amount') or "0.00"
+-- 读取旧值（整数"分"）
+local old_amount = tonumber(redis.call('HGET', key, 'bet_amount') or 0)
 local old_count = tonumber(redis.call('HGET', key, 'bet_count') or 0)
 
--- 转换为数值进行计算
-local old_amount = tonumber(old_amount_str) or 0
-local bet_amount = tonumber(bet_amount_str) or 0
-
--- 累加（使用浮点数运算，但立即格式化为字符串）
-local new_amount = old_amount + bet_amount
+-- 累加（整数运算，无精度损失）
+local new_amount = old_amount + bet_amount_cents
 local new_count = old_count + 1
 
--- 格式化为字符串（保留2位小数）
-local new_amount_str = string.format("%.2f", new_amount)
-
--- 更新（存储字符串格式）
-redis.call('HSET', key, 'bet_amount', new_amount_str)
+-- 更新（存储整数"分"）
+redis.call('HSET', key, 'bet_amount', new_amount)
 redis.call('HSET', key, 'bet_count', new_count)
 redis.call('HSET', key, 'last_update', current_time)
 
 -- 设置过期时间
 redis.call('EXPIRE', key, ttl)
 
-return {old_amount_str, new_amount_str, old_count, new_count}
+return {old_amount, new_amount, old_count, new_count}
 LUA;
 
         try {
-            $result = $redis->eval($lua, [$key, $betAmountStr, $ttl, time()], 1);
+            $result = $redis->eval($lua, [$key, $betAmountInCents, $ttl, time()], 1);
 
             // ✅ 验证返回值格式
             if (!is_array($result) || count($result) !== 4) {
@@ -141,8 +135,8 @@ LUA;
             }
 
             return [
-                floatval($result[0]),  // old_amount
-                floatval($result[1]),  // new_amount
+                intval($result[0]),    // old_amount (分)
+                intval($result[1]),    // new_amount (分)
                 intval($result[2]),    // old_count
                 intval($result[3]),    // new_count
             ];
