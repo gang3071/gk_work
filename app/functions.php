@@ -556,10 +556,16 @@ function sendSocketMessage($channels, $content, string $form = 'system'): bool|s
             env('PUSH_APP_KEY', '20f94408fc4c52845f162e92a253c7a3'),
             env('PUSH_APP_SECRET', '3151f8648a6ccd9d4515386f34127e28')
         );
-        return $api->trigger($channels, 'message', [
+        $result = $api->trigger($channels, 'message', [
             'from_uid' => $form,
             'content' => json_encode($content)
         ]);
+        Log::info('[sendSocketMessage] 推送成功', [
+            'channels' => $channels,
+            'msg_type' => $content['msg_type'] ?? '',
+            'content' => $content,
+        ]);
+        return $result;
     } catch (Exception $e) {
         Log::error('sendSocketMessage: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
         return false;
