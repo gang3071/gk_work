@@ -175,7 +175,7 @@ class PlayGameRecord extends Model
                 ]);
             } catch (\Throwable $e) {
                 // 队列投递失败不影响主业务
-                \support\Log::error('[BetStats] 投递队列失败', [
+                \support\Log::channel('bet_statistics')->error('[BetStats] 投递队列失败', [
                     'player_id' => $record->player_id,
                     'record_id' => $record->id,
                     'error' => $e->getMessage(),

@@ -507,7 +507,7 @@ class Jackpot extends MachineServices implements BaseMachine
                                 $betAmount = bcmul($changeAmount, $turnUsedPoint, 2);
 
                                 if (bccomp($betAmount, '0', 2) > 0) {
-                                    \support\Log::info('[BetStats] Jackpot 保留时投递打码量', [
+                                    Log::channel('bet_statistics')->info('[BetStats] Jackpot 保留时投递打码量', [
                                         'machine_id' => $this->machine->id,
                                         'player_id' => $currentGamingUserId,
                                         'change_amount' => $changeAmount,
@@ -525,7 +525,7 @@ class Jackpot extends MachineServices implements BaseMachine
                                         'created_at' => date('Y-m-d H:i:s'),
                                     ]);
                                 } else {
-                                    \support\Log::debug('[BetStats] Jackpot 保留时打码量为0，跳过投递', [
+                                    Log::channel('bet_statistics')->debug('[BetStats] Jackpot 保留时打码量为0，跳过投递', [
                                         'machine_id' => $this->machine->id,
                                         'bet_amount' => $betAmount,
                                     ]);
