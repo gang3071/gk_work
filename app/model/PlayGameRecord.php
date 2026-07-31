@@ -129,21 +129,6 @@ class PlayGameRecord extends Model
     }
 
     /**
-     * 模型事件
-     *
-     * ⚠️ 注意：模型事件仅在单条创建（create/save）时触发
-     * 批量插入（insert）不会触发此事件
-     * 批量插入的打码量统计由 GameRecordSyncWorker 负责
-     */
-    protected static function booted()
-    {
-        // 创建记录后投递打码量统计队列
-        static::created(function (PlayGameRecord $record) {
-            self::sendBetStatistics($record);
-        });
-    }
-
-    /**
      * 发送打码量统计到队列
      *
      * ⚠️ 此方法会被以下地方调用：
@@ -171,10 +156,8 @@ class PlayGameRecord extends Model
                     'bet_amount' => $record->bet,
                     'source' => $record->game_code ?? 'unknown',
                     'play_game_record_id' => $record->id,
-                    // ✅ 使用当前时间而非记录创建时间
-                    // 原因：电子游戏记录可能延迟同步（如从平台拉取历史），created_at 可能是昨天或更早
-                    // 统计到数据入库时间，而非游戏实际发生时间
-                    'created_at' => date('Y-m-d H:i:s'),
+                    // ✅ 使用记录的创建时间（游戏实际发生时间）
+                    'created_at' => $record->created_at,
                 ]);
             } catch (\Throwable $e) {
                 // 队列投递失败不影响主业务
