@@ -111,7 +111,8 @@ class BetStatistics implements Consumer
             $cacheKey = 'gk_work:bet_stats_processed_game_' . $data['play_game_record_id'];
             $redis = \support\Redis::connection()->client();
 
-            if ($redis->exists($cacheKey)) {
+            // ✅ PhpRedis exists() 返回存在的 key 数量（整数），不是布尔值
+            if ($redis->exists($cacheKey) > 0) {
                 return true;
             }
 
@@ -136,7 +137,8 @@ class BetStatistics implements Consumer
 
             $redis = \support\Redis::connection()->client();
 
-            if ($redis->exists($cacheKey)) {
+            // ✅ PhpRedis exists() 返回存在的 key 数量（整数），不是布尔值
+            if ($redis->exists($cacheKey) > 0) {
                 return true;
             }
 
