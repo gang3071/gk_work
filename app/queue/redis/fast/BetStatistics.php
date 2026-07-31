@@ -45,6 +45,7 @@ class BetStatistics implements Consumer
             'bet_amount' => $data['bet_amount'] ?? null,
             'source' => $data['source'] ?? null,
             'machine_id' => $data['machine_id'] ?? null,
+            'created_at' => $data['created_at'] ?? null,  // ⚠️ 关键：显示时间
         ]);
 
         try {
