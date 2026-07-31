@@ -182,6 +182,12 @@ class PlayGameRecord extends Model
             && ($record->type ?? self::TYPE_BET) == self::TYPE_BET
             && $record->bet > 0) {
             try {
+                \support\Log::debug('[BetStats] 准备投递队列', [
+                    'player_id' => $record->player_id,
+                    'bet' => $record->bet,
+                    'record_id' => $record->id,
+                ]);
+
                 // 投递到快速队列
                 \Webman\RedisQueue\Client::send('bet-statistics', [
                     'player_id' => $record->player_id,
