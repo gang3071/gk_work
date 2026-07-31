@@ -129,6 +129,21 @@ class PlayGameRecord extends Model
     }
 
     /**
+     * 模型事件
+     *
+     * ⚠️ 注意：模型事件仅在单条创建（create/save）时触发
+     * 批量插入（insert）不会触发此事件
+     * 批量插入的打码量统计由 GameRecordSyncWorker 负责
+     */
+    protected static function booted()
+    {
+        // 创建记录后投递打码量统计队列
+        static::created(function (PlayGameRecord $record) {
+            self::sendBetStatistics($record);
+        });
+    }
+
+    /**
      * 发送打码量统计到队列
      *
      * ⚠️ 此方法会被以下地方调用：
