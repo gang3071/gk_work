@@ -65,6 +65,14 @@ class BetStatistics implements Consumer
             // 场景：23:59:59 投递，00:00:05 处理 → 应该统计到前一天，而不是当天
             $createdAt = Carbon::parse($data['created_at']);
 
+            // ⚠️ 调试：记录解析后的时间
+            $this->log->debug('[BetStats] 解析时间', [
+                'raw_created_at' => $data['created_at'],
+                'parsed_date' => $createdAt->format('Y-m-d'),
+                'parsed_week' => $createdAt->format('o-\WW'),
+                'parsed_month' => $createdAt->format('Y-m'),
+            ]);
+
             // 防止重复消费（使用唯一标识）
             if ($this->isDuplicate($data)) {
                 $this->log->info('[BetStats] 检测到重复消息，已跳过', [
