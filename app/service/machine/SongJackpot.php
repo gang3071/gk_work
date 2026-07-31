@@ -526,7 +526,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                                                 'source' => 'song_jackpot',
                                                 'machine_id' => $this->machine->id,
                                                 'created_at' => date('Y-m-d H:i:s'),
-                                            ], 'fast');
+                                            ]);
                                         }
                                     }
                                 } catch (\Exception $e) {

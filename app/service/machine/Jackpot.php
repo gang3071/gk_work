@@ -542,7 +542,7 @@ class Jackpot extends MachineServices implements BaseMachine
                                                 'source' => 'steel_ball',
                                                 'machine_id' => $this->machine->id,
                                                 'created_at' => date('Y-m-d H:i:s'),
-                                            ], 'fast');
+                                            ]);
                                         }
                                     }
                                 } catch (\Exception $e) {

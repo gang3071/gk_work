@@ -618,7 +618,7 @@ class SongSlot extends MachineServices implements BaseMachine
                                             'source' => 'song_slot',
                                             'machine_id' => $this->machine->id,
                                             'created_at' => date('Y-m-d H:i:s'),
-                                        ], 'fast');
+                                        ]);
                                     }
                                 }
                             } catch (\Exception $e) {
