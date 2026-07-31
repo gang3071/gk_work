@@ -331,7 +331,7 @@ class MachineServices
                 $info['player_win_number'] = $info['win_number'] - $info['player_win_number'];
                 break;
         }
-        $seconds = $info['keep_seconds'];
+        $seconds = intval($info['keep_seconds']); // 取整，避免小数导致取模运算异常
         if ($seconds > 3600) {
             $hours = intval($seconds / 3600);
             $remainingSeconds = $seconds % 3600;
