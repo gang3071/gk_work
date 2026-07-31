@@ -2,10 +2,10 @@
 
 namespace app\service;
 
-use support\Redis;
-use support\Log;
 use app\model\PlayerBetStatistics;
 use Carbon\Carbon;
+use support\Log;
+use support\Redis;
 
 /**
  * 玩家打码量统计服务
@@ -53,7 +53,8 @@ class PlayerBetStatisticsService
      * @param string $statType 统计类型：machine | game
      * @param float $betAmount 打码金额（元）
      * @param Carbon|null $dateTime 时间（默认当前时间）
-     * @return array 返回三个维度的统计结果
+     * @return array 返回三个维度的统计结果，金额单位为"元"
+     * @throws \InvalidArgumentException 当参数无效时
      */
     public static function increment(
         int $playerId,
@@ -61,6 +62,17 @@ class PlayerBetStatisticsService
         float $betAmount,
         ?Carbon $dateTime = null
     ): array {
+        // ✅ 验证 playerId
+        if ($playerId <= 0) {
+            throw new \InvalidArgumentException('Invalid player ID: ' . $playerId);
+        }
+
+        // ✅ 验证 statType
+        if (!in_array($statType, [self::TYPE_MACHINE, self::TYPE_GAME])) {
+            throw new \InvalidArgumentException('Invalid stat type: ' . $statType);
+        }
+
+        // ✅ 验证 betAmount
         if ($betAmount <= 0) {
             return [];
         }
@@ -83,10 +95,11 @@ class PlayerBetStatisticsService
             // 使用 Lua 脚本原子性累加
             $result = self::incrementByLua($key, $betAmount, $ttl);
 
+            // ✅ 将返回值从"分"转换为"元"，保持接口一致性
             $results[$dimension] = [
                 'date' => $date,
-                'before_amount' => $result[0],
-                'after_amount' => $result[1],
+                'before_amount' => round($result[0] / 100, 2),  // 分 → 元
+                'after_amount' => round($result[1] / 100, 2),   // 分 → 元
                 'before_count' => $result[2],
                 'after_count' => $result[3],
             ];
@@ -228,6 +241,10 @@ LUA;
         $maxIterations = 10000;
         $iterations = 0;
 
+        // ✅ 批量插入缓冲区（每 100 条批量写入一次）
+        $batch = [];
+        $batchSize = 100;
+
         do {
             $result = $redis->scan($cursor, ['MATCH' => $pattern, 'COUNT' => 100]);
             $cursor = $result[0];
@@ -276,7 +293,25 @@ LUA;
                         continue;
                     }
 
-                    // ✅ 验证日期格式
+                    // ✅ 严格验证日期格式（必须与维度匹配）
+                    $expectedFormat = match ($keyDimension) {
+                        self::DIMENSION_DAILY => '/^\d{4}-\d{2}-\d{2}$/',        // 2026-07-31
+                        self::DIMENSION_WEEKLY => '/^\d{4}-W\d{2}$/',           // 2026-W31
+                        self::DIMENSION_MONTHLY => '/^\d{4}-\d{2}$/',           // 2026-07
+                        default => null,
+                    };
+
+                    if ($expectedFormat && !preg_match($expectedFormat, $keyDate)) {
+                        Log::warning('[PlayerBetStatistics] 日期格式与维度不匹配', [
+                            'key' => $key,
+                            'dimension' => $keyDimension,
+                            'date' => $keyDate,
+                            'expected_format' => $expectedFormat,
+                        ]);
+                        continue;
+                    }
+
+                    // 验证日期有效性
                     try {
                         Carbon::parse($keyDate);
                     } catch (\Exception $e) {
@@ -308,33 +343,37 @@ LUA;
                         continue;
                     }
 
-                    // ✅ 增加错误处理，防止单条失败导致整个同步中断
-                    try {
-                        // 更新或插入数据库（数据库存储"元"）
-                        PlayerBetStatistics::updateOrCreate(
-                            [
-                                'player_id' => $playerId,
-                                'stat_type' => $statType,
-                                'dimension' => $keyDimension,
-                                'stat_date' => $keyDate,
-                            ],
-                            [
-                                'bet_amount' => $betAmountInYuan,  // 存储"元"
-                                'bet_count' => $betCount,
-                                'updated_at' => date('Y-m-d H:i:s'),
-                            ]
-                        );
+                    // ✅ 加入批量插入缓冲区
+                    $batch[] = [
+                        'player_id' => $playerId,
+                        'stat_type' => $statType,
+                        'dimension' => $keyDimension,
+                        'stat_date' => $keyDate,
+                        'bet_amount' => $betAmountInYuan,  // 存储"元"
+                        'bet_count' => $betCount,
+                        'created_at' => date('Y-m-d H:i:s'),
+                        'updated_at' => date('Y-m-d H:i:s'),
+                    ];
 
-                        $syncCount++;
-                    } catch (\Exception $e) {
-                        $failedCount++;
-                        Log::error('[PlayerBetStatistics] 同步单条记录失败', [
-                            'player_id' => $playerId,
-                            'key' => $key,
-                            'error' => $e->getMessage(),
-                            'trace' => $e->getTraceAsString(),
-                        ]);
-                        // 继续处理下一条，不中断整个同步
+                    // 每 100 条批量插入一次
+                    if (count($batch) >= $batchSize) {
+                        try {
+                            PlayerBetStatistics::upsert(
+                                $batch,
+                                ['player_id', 'stat_type', 'dimension', 'stat_date'],
+                                ['bet_amount', 'bet_count', 'updated_at']
+                            );
+                            $syncCount += count($batch);
+                            $batch = []; // 清空缓冲区
+                        } catch (\Exception $e) {
+                            $failedCount += count($batch);
+                            Log::error('[PlayerBetStatistics] 批量同步失败', [
+                                'batch_size' => count($batch),
+                                'error' => $e->getMessage(),
+                                'trace' => $e->getTraceAsString(),
+                            ]);
+                            $batch = []; // 清空缓冲区
+                        }
                     }
                 } catch (\Exception $e) {
                     $failedCount++;
@@ -358,6 +397,25 @@ LUA;
                 break;
             }
         } while ($cursor != 0);
+
+        // ✅ 处理剩余的批量数据
+        if (!empty($batch)) {
+            try {
+                PlayerBetStatistics::upsert(
+                    $batch,
+                    ['player_id', 'stat_type', 'dimension', 'stat_date'],
+                    ['bet_amount', 'bet_count', 'updated_at']
+                );
+                $syncCount += count($batch);
+            } catch (\Exception $e) {
+                $failedCount += count($batch);
+                Log::error('[PlayerBetStatistics] 批量同步剩余数据失败', [
+                    'batch_size' => count($batch),
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+            }
+        }
 
         Log::info('[PlayerBetStatistics] 同步完成', [
             'dimension' => $dimension,
