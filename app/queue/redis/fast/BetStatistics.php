@@ -16,8 +16,8 @@ class BetStatistics implements Consumer
     // 队列名
     public $queue = 'bet-statistics';
 
-    // 连接名（使用 fast 队列）
-    public $connection = 'fast';
+    // 连接名（使用 default 连接）
+    public $connection = 'default';
 
     /**
      * 日志通道
@@ -38,12 +38,16 @@ class BetStatistics implements Consumer
      */
     public function consume($data)
     {
+        $this->log->debug('[BetStats] 消费者开始处理', ['data' => $data]);
+
         try {
             // ✅ 验证必要字段（包括 created_at，防止跨天边界错乱）
             if (empty($data['player_id']) || empty($data['stat_type']) || empty($data['bet_amount']) || empty($data['created_at'])) {
                 $this->log->error('[BetStats] 队列消息字段缺失（拒绝处理）', ['data' => $data]);
                 return;
             }
+
+            $this->log->debug('[BetStats] 字段验证通过');
 
             $playerId = intval($data['player_id']);
             $statType = $data['stat_type'];
