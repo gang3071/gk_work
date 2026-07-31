@@ -101,6 +101,32 @@ class PlayKeepMachine implements Consumer
                 if ($newKeepSeconds != $oldKeepSeconds) {
                     $keepSecondsChanged = true;
                 }
+
+                // ✅ 投递打码量统计（保留时间增加 = 打码量增加）
+                // 场景：玩家通过打码获得保留时间延长，应同步统计打码量
+                try {
+                    \Webman\RedisQueue\Client::send('bet-statistics', [
+                        'player_id' => $gamingUserId,
+                        'stat_type' => 'machine',
+                        'bet_amount' => floatval($changeAmount),
+                        'source' => 'keep_machine',
+                        'machine_id' => $machineId,
+                        'created_at' => date('Y-m-d H:i:s'),
+                    ]);
+
+                    Log::info('[PlayKeepMachine] 投递打码量统计', [
+                        'machine_id' => $machineId,
+                        'player_id' => $gamingUserId,
+                        'bet_amount' => floatval($changeAmount),
+                        'keep_seconds_added' => $addSeconds,
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::error('[PlayKeepMachine] 投递打码量统计失败', [
+                        'machine_id' => $machineId,
+                        'player_id' => $gamingUserId,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
 
             // 解除保留状态
@@ -127,51 +153,15 @@ class PlayKeepMachine implements Consumer
                     $currentGamingUserId = $services->gaming_user_id;
                     $currentKeeping = $services->keeping;
 
-                    // C376/C393 调试日志
-                    if ($machine->code === 'C376' || $machine->code === 'C393') {
-                        Log::channel('machine_operations')->info('[' . $machine->code . '-PlayKeepMachine] 队列处理', [
-                            'machine_id' => $machineId,
-                            'machine_code' => $machine->code,
-                            'gaming_user_id_from_queue' => $gamingUserId,
-                            'gaming_user_id_current' => $currentGamingUserId,
-                            'keeping_from_queue' => $oldKeeping,
-                            'keeping_current' => $currentKeeping,
-                            'is_kicked_during_queue' => $gamingUserId != $currentGamingUserId || $oldKeeping != $currentKeeping,
-                            'change_amount' => $changeAmount,
-                            'old_keep_seconds' => $oldKeepSeconds,
-                            'new_keep_seconds' => $newKeepSeconds,
-                        ]);
-                    }
-
                     // 只在玩家还在游戏中时才处理
                     if (empty($currentGamingUserId)) {
-                        // 玩家已离开，丢弃此消息
-                        if ($machine->code === 'C376' || $machine->code === 'C393') {
-                            Log::channel('machine_operations')->info('[' . $machine->code . '-PlayKeepMachine] 玩家已离开，丢弃消息', [
-                                'machine_id' => $machineId,
-                                'gaming_user_id_from_queue' => $gamingUserId,
-                            ]);
-                        }
                         return;
                     }
 
                     // 如果当前已经在保留状态（被踢出/闲置），则解除保留
                     if ($currentKeeping == 1) {
                         $services->keeping = 0;
-                        $keepingChanged = true;
                         $newKeeping = 0;
-
-                        // C376/C393 解除保留日志
-                        if ($machine->code === 'C376' || $machine->code === 'C393') {
-                            Log::channel('machine_operations')->info('[' . $machine->code . '-PlayKeepMachine] 玩家有活动，解除保留状态', [
-                                'machine_id' => $machineId,
-                                'machine_code' => $machine->code,
-                                'player_id' => $currentGamingUserId,
-                                'change_amount' => $changeAmount,
-                                'keep_seconds' => $newKeepSeconds,
-                            ]);
-                        }
-
                         // 更新保留日志
                         try {
                             updateKeepingLog($machineId, $currentGamingUserId);
