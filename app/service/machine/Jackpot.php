@@ -511,7 +511,7 @@ class Jackpot extends MachineServices implements BaseMachine
                                         'player_id' => $currentGamingUserId,
                                         'stat_type' => 'machine',
                                         'bet_amount' => floatval($betAmount),
-                                        'source' => 'jackpot_keep',
+                                        'source' => 'jackpot',
                                         'machine_id' => $this->machine->id,
                                         'created_at' => date('Y-m-d H:i:s'),
                                     ]);
