@@ -381,21 +381,6 @@ class SongSlot extends MachineServices implements BaseMachine
                     }
                     [$nowPoint, $nowBet, $nowWin] = self::parseHeartbeat($msg);
 
-                    // ✅ 诊断日志：记录心跳接收到的状态（仅 S326）
-                    if ($this->machine->code == 'S326') {
-                        \support\Log::channel('machine_keeping')->debug('SongSlot 心跳接收', [
-                        'machine_id' => $this->machine->id,
-                        'machine_code' => $this->machine->code,
-                        'player_id' => $gamingUserId,
-                        'current_bet' => $orgBet,
-                        'new_bet' => $nowBet,
-                        'bet_changed' => $orgBet != $nowBet,
-                        'current_turn' => $orgNowTurn,
-                        'gaming' => $this->gaming,
-                        'change_point_card_status' => $this->change_point_card_status,
-                        ]);
-                    }
-
                     if ($this->bet > 0 && $this->bet > $nowBet && $this->change_point_card_status == 0) {
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_BET);
                         $this->bet = $nowBet;
@@ -433,48 +418,12 @@ class SongSlot extends MachineServices implements BaseMachine
                         $turnCondition2 = !empty($gamingUserId);
                         $turnAllConditionsMet = $turnCondition1 && $turnCondition2;
 
-                        if ($this->machine->code == 'S326') {
-                            \support\Log::channel('machine_keeping')->debug('SongSlot 转数增加条件检查', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'condition_turn_increased' => $turnCondition1,
-                            'condition_has_player' => $turnCondition2,
-                            'all_conditions_met' => $turnAllConditionsMet,
-                            'old_turn' => $orgNowTurn,
-                            'new_turn' => $newTurn,
-                            'turn_diff' => bcsub($newTurn, $orgNowTurn, 2),
-                            'old_bet' => $orgBet,
-                            'new_bet' => $nowBet,
-                            'bet_diff' => bcsub($nowBet, $orgBet, 2),
-                            'gaming_user_id' => $gamingUserId,
-                            'reward_status' => $nowRewardStatus,
-                            ]);
-                        }
-
                         // ✅ 修复：转数增加时也更新活动时间（即使押注金额不变）
                         if ($turnAllConditionsMet) {
                             // ⚠️ CRITICAL：重新读取 gaming_user_id，防止使用已被踢出的玩家ID
                             $currentGamingUserId = $this->gaming_user_id;
                             if (!empty($currentGamingUserId)) {
-                                $oldPlayTime = $this->last_play_time;
                                 $this->last_play_time = time();
-
-                                if ($this->machine->code == 'S326') {
-                                    \support\Log::channel('machine_keeping')->debug('SongSlot 转数增加更新 last_play_time', [
-                                    'machine_id' => $this->machine->id,
-                                    'machine_code' => $this->machine->code,
-                                    'player_id' => $currentGamingUserId,
-                                    'gaming_user_id_cached' => $gamingUserId,
-                                    'gaming_user_id_current' => $currentGamingUserId,
-                                    'old_turn' => $orgNowTurn,
-                                    'new_turn' => $newTurn,
-                                    'old_bet' => $orgBet,
-                                    'new_bet' => $nowBet,
-                                    'old_last_play_time' => $oldPlayTime,
-                                    'new_last_play_time' => $this->last_play_time,
-                                    'time_diff' => $this->last_play_time - $oldPlayTime,
-                                    ]);
-                                }
                             }
                         }
 
@@ -487,43 +436,11 @@ class SongSlot extends MachineServices implements BaseMachine
                     $betCondition4 = $this->change_point_card_status == 0;
                     $betAllConditionsMet = $betCondition1 && $betCondition2 && $betCondition3 && $betCondition4;
 
-                    if ($this->machine->code == 'S326') {
-                        \support\Log::channel('machine_keeping')->debug('SongSlot 押注增加条件检查', [
-                        'machine_id' => $this->machine->id,
-                        'machine_code' => $this->machine->code,
-                        'condition_bet_gt_0' => $betCondition1,
-                        'condition_bet_increased' => $betCondition2,
-                        'condition_has_player' => $betCondition3,
-                        'condition_no_point_card' => $betCondition4,
-                        'all_conditions_met' => $betAllConditionsMet,
-                        'old_bet' => $orgBet,
-                        'new_bet' => $nowBet,
-                        'gaming_user_id' => $gamingUserId,
-                        'change_point_card_status' => $this->change_point_card_status,
-                        ]);
-                    }
-
                     if ($betAllConditionsMet) {
                         // ⚠️ CRITICAL：重新读取 gaming_user_id，防止使用已被踢出的玩家ID
                         $currentGamingUserId = $this->gaming_user_id;
                         if (!empty($currentGamingUserId)) {
-                            $oldPlayTime = $this->last_play_time;
                             $this->last_play_time = time();
-
-                            if ($this->machine->code == 'S326') {
-                                \support\Log::channel('machine_keeping')->debug('SongSlot 押注增加更新 last_play_time', [
-                                'machine_id' => $this->machine->id,
-                                'machine_code' => $this->machine->code,
-                                'player_id' => $currentGamingUserId,
-                                'gaming_user_id_cached' => $gamingUserId,
-                                'gaming_user_id_current' => $currentGamingUserId,
-                                'old_bet' => $orgBet,
-                                'new_bet' => $nowBet,
-                                'old_last_play_time' => $oldPlayTime,
-                                'new_last_play_time' => $this->last_play_time,
-                                'time_diff' => $this->last_play_time - $oldPlayTime,
-                                ]);
-                            }
                         }
                         if ($this->reward_status == 0 && !empty($currentGamingUserId)) {
                             Client::send('lottery-machine', [
@@ -535,13 +452,13 @@ class SongSlot extends MachineServices implements BaseMachine
                             Client::send('play-keep-machine', [
                                 'change_amount' => abs($nowBet - $orgBet),
                                 'machine_id' => $this->machine->id,
-                            'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
-                                $this->machine->domain, $this->machine->port, $this->machine->type
-                            ),
-                            'player_id' => $currentGamingUserId,
-                            'gaming_user_id' => $currentGamingUserId,
-                            'keep_seconds' => $this->keep_seconds,
-                            'keeping' => $this->keeping,
+                                'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                                    $this->machine->domain, $this->machine->port, $this->machine->type
+                                ),
+                                'player_id' => $currentGamingUserId,
+                                'gaming_user_id' => $currentGamingUserId,
+                                'keep_seconds' => $this->keep_seconds,
+                                'keeping' => $this->keeping,
                             ]);
                         }
                     }
@@ -588,61 +505,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     $orgBet = $this->bet;
                     if (!empty($gamingUserId) && $this->reward_status == 0) {
                         $playerPressure = $this->player_pressure;
-                        $pressureIncrement = bcsub($bet, $orgBet, 2);  // 压分增量
-                        $this->player_pressure = bcadd($playerPressure, $pressureIncrement, 2);
-
-                        // ✅ SongSlot 打码量实时统计（2026-07-31）
-                        // 压分增加时立即统计打码量
-                        if (bccomp($pressureIncrement, '0', 2) > 0) {
-                            try {
-                                $turnUsedPoint = $this->machine->machineCategory->turn_used_point ?? null;
-
-                                // ✅ 验证 turn_used_point 配置有效性
-                                if ($turnUsedPoint === null || $turnUsedPoint <= 0) {
-                                    \support\Log::warning('[BetStats] SongSlot机台类别缺少有效的 turn_used_point 配置', [
-                                        'machine_id' => $this->machine->id,
-                                        'machine_code' => $this->machine->code,
-                                        'category_id' => $this->machine->machine_category_id ?? null,
-                                        'player_id' => $gamingUserId,
-                                        'pressure_increment' => $pressureIncrement,
-                                    ]);
-                                    // 跳过统计，避免统计到 0 金额
-                                } else {
-                                    $betAmount = bcmul($pressureIncrement, $turnUsedPoint, 2);  // 使用 bcmul 保证精度
-
-                                    if (bccomp($betAmount, '0', 2) > 0) {
-                                        \support\Log::info('[BetStats] SongSlot 投递打码量', [
-                                            'machine_id' => $this->machine->id,
-                                            'player_id' => $gamingUserId,
-                                            'pressure_increment' => $pressureIncrement,
-                                            'turn_used_point' => $turnUsedPoint,
-                                            'bet_amount' => floatval($betAmount),
-                                        ]);
-
-                                        Client::send('bet-statistics', [
-                                            'player_id' => $gamingUserId,
-                                            'stat_type' => 'machine',
-                                            'bet_amount' => floatval($betAmount),  // 转为 float 传递
-                                            'source' => 'song_slot',
-                                            'machine_id' => $this->machine->id,
-                                            'created_at' => date('Y-m-d H:i:s'),
-                                        ]);
-                                    } else {
-                                        \support\Log::debug('[BetStats] SongSlot 打码量为0，跳过投递', [
-                                            'machine_id' => $this->machine->id,
-                                            'bet_amount' => $betAmount,
-                                        ]);
-                                    }
-                                }
-                            } catch (\Exception $e) {
-                                // 投递失败不影响主业务
-                                \support\Log::error('[BetStats] SongSlot打码量投递失败', [
-                                    'machine_id' => $this->machine->id,
-                                    'player_id' => $gamingUserId,
-                                    'error' => $e->getMessage(),
-                                ]);
-                            }
-                        }
+                        $this->player_pressure = bcadd($playerPressure, bcsub($bet, $orgBet, 2), 2);
                     }
                     $this->bet = $bet;
                     self::sendCmd('af');

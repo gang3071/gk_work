@@ -498,59 +498,6 @@ class SongJackpot extends MachineServices implements BaseMachine
 
                             // ⚠️ CRITICAL：玩家消耗转数说明在游戏，更新 last_play_time
                             $this->last_play_time = time();
-
-                            // ✅ SongJackpot 打码量实时统计（2026-07-31）
-                            // 转数消耗时立即统计打码量
-                            if (bccomp($consumed, '0', 2) > 0) {
-                                try {
-                                    $turnUsedPoint = $this->machine->machineCategory->turn_used_point ?? null;
-
-                                    // ✅ 验证 turn_used_point 配置有效性
-                                    if ($turnUsedPoint === null || $turnUsedPoint <= 0) {
-                                        \support\Log::warning('[BetStats] SongJackpot机台类别缺少有效的 turn_used_point 配置', [
-                                            'machine_id' => $this->machine->id,
-                                            'machine_code' => $this->machine->code,
-                                            'category_id' => $this->machine->machine_category_id ?? null,
-                                            'player_id' => $gamingUserId,
-                                            'turn_consumed' => $consumed,
-                                        ]);
-                                        // 跳过统计，避免统计到 0 金额
-                                    } else {
-                                        $betAmount = bcmul($consumed, $turnUsedPoint, 2);  // 使用 bcmul 保证精度
-
-                                        if (bccomp($betAmount, '0', 2) > 0) {
-                                            \support\Log::info('[BetStats] SongJackpot 投递打码量', [
-                                                'machine_id' => $this->machine->id,
-                                                'player_id' => $gamingUserId,
-                                                'consumed' => $consumed,
-                                                'turn_used_point' => $turnUsedPoint,
-                                                'bet_amount' => floatval($betAmount),
-                                            ]);
-
-                                            Client::send('bet-statistics', [
-                                                'player_id' => $gamingUserId,
-                                                'stat_type' => 'machine',
-                                                'bet_amount' => floatval($betAmount),  // 转为 float 传递
-                                                'source' => 'song_jackpot',
-                                                'machine_id' => $this->machine->id,
-                                                'created_at' => date('Y-m-d H:i:s'),
-                                            ]);
-                                        } else {
-                                            \support\Log::debug('[BetStats] SongJackpot 打码量为0，跳过投递', [
-                                                'machine_id' => $this->machine->id,
-                                                'bet_amount' => $betAmount,
-                                            ]);
-                                        }
-                                    }
-                                } catch (\Exception $e) {
-                                    // 投递失败不影响主业务
-                                    \support\Log::error('[BetStats] SongJackpot打码量投递失败', [
-                                        'machine_id' => $this->machine->id,
-                                        'player_id' => $gamingUserId,
-                                        'error' => $e->getMessage(),
-                                    ]);
-                                }
-                            }
                         } else if (bccomp($turnDelta, '-10', 2) < 0) {
                             $this->log->info('turn大幅减少，可能是下转操作，不累加', [
                                 'machine_code' => $this->machine->code,
