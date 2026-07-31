@@ -85,6 +85,10 @@ class BetStatistics implements Consumer
                 ],
             ]);
 
+            // ✅ 统计成功后立即删除去重标记，节省内存
+            // 如果统计失败会抛异常进入 catch，不会执行到这里，保留标记用于重试
+            $this->cleanupDuplicateFlag($data);
+
         } catch (Exception $e) {
             $this->log->error('[BetStats] 消费失败', [
                 'data' => $data,
@@ -151,5 +155,42 @@ class BetStatistics implements Consumer
 
         // 其他情况：不去重（风险自担）
         return false;
+    }
+
+    /**
+     * 清理去重标记（统计成功后立即删除，节省内存）
+     *
+     * @param array $data
+     * @return void
+     */
+    private function cleanupDuplicateFlag(array $data): void
+    {
+        try {
+            $redis = \support\Redis::connection()->client();
+
+            // 电子游戏：删除去重标记
+            if (!empty($data['play_game_record_id'])) {
+                $cacheKey = 'gk_work:bet_stats_processed_game_' . $data['play_game_record_id'];
+                $redis->del($cacheKey);
+            }
+
+            // 实体机台：删除去重标记
+            if (!empty($data['machine_id'])) {
+                $timestamp = strtotime($data['created_at'] ?? 'now');
+                $cacheKey = sprintf(
+                    'gk_work:bet_stats_processed_machine_%d_%d_%s_%d',
+                    $data['player_id'],
+                    $data['machine_id'],
+                    number_format($data['bet_amount'], 2, '', ''),
+                    floor($timestamp / 5)
+                );
+                $redis->del($cacheKey);
+            }
+        } catch (\Exception $e) {
+            // 清理失败不影响业务，只记录日志
+            $this->log->warning('[BetStats] 清理去重标记失败', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
