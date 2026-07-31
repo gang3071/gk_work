@@ -103,7 +103,6 @@ class LotteryMachine implements Consumer
             $log->error('机台抽奖处理失败', [
                 'data' => $data,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
             ]);
 
             // ✅ 重新抛出异常，让队列重试
