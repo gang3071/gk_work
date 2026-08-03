@@ -185,14 +185,27 @@ class PlayKeepMachine implements Consumer
     {
         // ✅ 直接从 Redis 缓存读取（实时生效）
         // SystemSetting 模型的 updated 事件会自动更新此缓存
-        $setting = Cache::get('setting-max_keeping_minutes-0');
+        $cacheKey = 'setting-max_keeping_minutes-0';
+        $setting = Cache::get($cacheKey);
 
-        if (empty($setting) || !isset($setting->num)) {
+        \support\Log::info('PlayKeepMachine: getMaxKeepSeconds 读取缓存', [
+            'cache_key' => $cacheKey,
+            'setting' => $setting,
+        ]);
+
+        if (empty($setting)) {
             return 0;  // 没有配置或无效，返回 0（不限制）
         }
 
-        $maxMinutes = intval($setting->num);
-        return $maxMinutes > 0 ? $maxMinutes * 60 : 0;
+        $maxMinutes = $setting;
+        $result = $maxMinutes > 0 ? $maxMinutes * 60 : 0;
+
+        \support\Log::info('PlayKeepMachine: max_keeping_minutes 计算结果', [
+            'max_minutes' => $maxMinutes,
+            'max_seconds' => $result,
+        ]);
+
+        return $result;
     }
 
     /**
@@ -200,7 +213,7 @@ class PlayKeepMachine implements Consumer
      *
      * @param int $playerId
      * @param int $machineId
-     * @param int $keepSeconds
+     * @param string|int $keepSeconds
      * @param int $keeping
      * @return void
      */
