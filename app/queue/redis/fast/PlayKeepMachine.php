@@ -101,6 +101,7 @@ class PlayKeepMachine implements Consumer
                     'player_id' => $gamingUserId,
                     'keep_minutes' => $keepMinutes,
                     'change_amount' => $changeAmount,
+                    'cate_id' => $cateId,
                     'add_seconds' => $addSeconds,
                     'old_keep_seconds' => $oldKeepSeconds,
                     'new_keep_seconds' => $newKeepSeconds,
