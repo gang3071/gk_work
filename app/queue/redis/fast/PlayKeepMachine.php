@@ -204,7 +204,7 @@ class PlayKeepMachine implements Consumer
      * @param int $keeping
      * @return void
      */
-    private function pushKeepingStatus(int $playerId, int $machineId, int $keepSeconds, int $keeping): void
+    private function pushKeepingStatus(int $playerId, int $machineId, string|int $keepSeconds, int $keeping): void
     {
         $message = [
             'msg_type' => 'player_machine_keeping',
