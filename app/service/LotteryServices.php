@@ -1773,7 +1773,7 @@ class LotteryServices
             ->where('game_type', GameType::TYPE_SLOT)
             ->whereNull('deleted_at')
             ->orderBy('lottery_type', 'asc')
-            ->orderBy('order', 'desc');
+            ->orderBy('sort', 'asc');
 
         if ($lotteryType) {
             $query->where('lottery_type', $lotteryType);
