@@ -30,12 +30,6 @@ class PlayKeepMachine implements Consumer
     public $connection = 'default';
 
     /**
-     * 最大保留时间缓存（秒）
-     * @var int|null
-     */
-    private static $maxKeepSeconds = null;
-
-    /**
      * 消费消息
      *
      * @param array $data 消息数据
@@ -138,51 +132,15 @@ class PlayKeepMachine implements Consumer
                     $currentGamingUserId = $services->gaming_user_id;
                     $currentKeeping = $services->keeping;
 
-                    // C376/C393 调试日志
-                    if ($machine->code === 'C376' || $machine->code === 'C393') {
-                        Log::channel('machine_operations')->info('[' . $machine->code . '-PlayKeepMachine] 队列处理', [
-                            'machine_id' => $machineId,
-                            'machine_code' => $machine->code,
-                            'gaming_user_id_from_queue' => $gamingUserId,
-                            'gaming_user_id_current' => $currentGamingUserId,
-                            'keeping_from_queue' => $oldKeeping,
-                            'keeping_current' => $currentKeeping,
-                            'is_kicked_during_queue' => $gamingUserId != $currentGamingUserId || $oldKeeping != $currentKeeping,
-                            'change_amount' => $changeAmount,
-                            'old_keep_seconds' => $oldKeepSeconds,
-                            'new_keep_seconds' => $newKeepSeconds,
-                        ]);
-                    }
-
                     // 只在玩家还在游戏中时才处理
                     if (empty($currentGamingUserId)) {
-                        // 玩家已离开，丢弃此消息
-                        if ($machine->code === 'C376' || $machine->code === 'C393') {
-                            Log::channel('machine_operations')->info('[' . $machine->code . '-PlayKeepMachine] 玩家已离开，丢弃消息', [
-                                'machine_id' => $machineId,
-                                'gaming_user_id_from_queue' => $gamingUserId,
-                            ]);
-                        }
                         return;
                     }
 
                     // 如果当前已经在保留状态（被踢出/闲置），则解除保留
                     if ($currentKeeping == 1) {
                         $services->keeping = 0;
-                        $keepingChanged = true;
                         $newKeeping = 0;
-
-                        // C376/C393 解除保留日志
-                        if ($machine->code === 'C376' || $machine->code === 'C393') {
-                            Log::channel('machine_operations')->info('[' . $machine->code . '-PlayKeepMachine] 玩家有活动，解除保留状态', [
-                                'machine_id' => $machineId,
-                                'machine_code' => $machine->code,
-                                'player_id' => $currentGamingUserId,
-                                'change_amount' => $changeAmount,
-                                'keep_seconds' => $newKeepSeconds,
-                            ]);
-                        }
-
                         // 更新保留日志
                         try {
                             updateKeepingLog($machineId, $currentGamingUserId);
@@ -217,21 +175,23 @@ class PlayKeepMachine implements Consumer
     /**
      * 获取最大保留时间（秒）
      *
+     * ✅ 优化：每次从 Redis 读取，确保后台修改实时生效
+     * 性能：Redis 读取耗时 <1ms，可忽略不计
+     *
      * @return int
      */
     private function getMaxKeepSeconds(): int
     {
-        // 进程内缓存
-        if (self::$maxKeepSeconds !== null) {
-            return self::$maxKeepSeconds;
+        // ✅ 直接从 Redis 缓存读取（实时生效）
+        // SystemSetting 模型的 updated 事件会自动更新此缓存
+        $setting = Cache::get('setting-max_keeping_minutes-0');
+
+        if (empty($setting) || !isset($setting->num)) {
+            return 0;  // 没有配置或无效，返回 0（不限制）
         }
 
-        // Redis 缓存读取
-        $setting = Cache::get('setting-max_keeping_minutes-0');
-        $maxMinutes = (!empty($setting) && $setting->num > 0) ? $setting->num : 0;
-
-        self::$maxKeepSeconds = $maxMinutes * 60;
-        return self::$maxKeepSeconds;
+        $maxMinutes = intval($setting->num);
+        return $maxMinutes > 0 ? $maxMinutes * 60 : 0;
     }
 
     /**

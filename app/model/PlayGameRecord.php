@@ -127,4 +127,47 @@ class PlayGameRecord extends Model
         return $this->belongsTo(GameExtend::class, 'game_code', 'code')
             ->where('platform_id', $this->platform_id);
     }
+
+    /**
+     * 发送打码量统计到队列
+     *
+     * ⚠️ 此方法会被以下地方调用：
+     * 1. 模型 created 事件（单条创建时）
+     * 2. GameRecordSyncWorker（批量插入后）
+     *
+     * @param PlayGameRecord $record
+     * @return void
+     */
+    public static function sendBetStatistics(PlayGameRecord $record): void
+    {
+        // ✅ 只统计已结算的下注记录
+        // 条件：
+        // 1. settlement_status == SETTLED（已结算）
+        // 2. type == TYPE_BET（下注类型，排除打赏、预扣、退款）
+        // 3. bet > 0（有下注金额）
+        if ($record->settlement_status == self::SETTLEMENT_STATUS_SETTLED
+            && ($record->type ?? self::TYPE_BET) == self::TYPE_BET
+            && $record->bet > 0) {
+            try {
+                // 投递到快速队列（使用 default 连接）
+                \Webman\RedisQueue\Client::send('bet-statistics', [
+                    'player_id' => $record->player_id,
+                    'stat_type' => 'game',
+                    'bet_amount' => $record->bet,
+                    'source' => $record->game_code ?? 'unknown',
+                    'play_game_record_id' => $record->id,
+                    // ✅ 使用记录的创建时间（游戏实际发生时间）
+                    'created_at' => $record->created_at,
+                ]);
+            } catch (\Throwable $e) {
+                // 队列投递失败不影响主业务
+                \support\Log::channel('bet_statistics')->error('[BetStats] 投递队列失败', [
+                    'player_id' => $record->player_id,
+                    'record_id' => $record->id,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+            }
+        }
+    }
 }

@@ -10,6 +10,7 @@ use app\service\GameRecordCacheService;
 use app\service\HighScoreBroadcastService;
 use app\service\MergeBetPlatformHelper;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 use support\Db;
 use support\Log;
 use support\Redis;
@@ -337,7 +338,7 @@ class GameRecordSyncWorker
 
             // 3. 批量插入新记录
             if (!empty($toInsert)) {
-                $inserted = $this->batchInsertRecords($toInsert);
+                $inserted = $this->batchInsertRecords($toInsert, $existingRecords);
             }
 
             // 4. 批量更新已存在记录
@@ -346,12 +347,12 @@ class GameRecordSyncWorker
             }
 
             // 4.5. ✅ 统一查询新插入记录的完整信息（避免重复查询）
-            // 这个查询结果会被彩金检查、高分广播、标记已同步三个功能共享使用
+            // 这个查询结果会被彩金检查、高分广播、打码量统计、标记已同步四个功能共享使用
             if (!empty($toInsert)) {
                 $insertedOrderNos = array_column($toInsert, 'order_no');
                 $newlyInserted = PlayGameRecord::query()
                     ->whereIn('order_no', $insertedOrderNos)
-                    ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id', 'bet', 'win', 'original_data')
+                    ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id', 'bet', 'win', 'original_data', 'game_code', 'created_at', 'type', 'settlement_status')
                     ->get()
                     ->keyBy('order_no');
 
@@ -366,6 +367,12 @@ class GameRecordSyncWorker
 
             // 5.5. 批量触发高分广播检测（使用已更新的 $existingRecords，不再单独查询）
             $this->batchTriggerHighScoreBroadcast($toInsert, $toUpdate, $existingRecords);
+
+            // 5.6. ✅ 批量投递打码量统计（2026-07-31）
+            // 使用已更新的 $existingRecords，不再单独查询
+            if (!empty($toInsert)) {
+                $this->batchSendBetStatistics($toInsert, $existingRecords);
+            }
 
             foreach ($records as $record) {
                 $orderNo = $record['order_no'];
@@ -405,7 +412,7 @@ class GameRecordSyncWorker
     /**
      * 批量插入新记录
      */
-    private function batchInsertRecords(array $records): int
+    private function batchInsertRecords(array $records, $existingRecords): int
     {
         if (empty($records)) {
             return 0;
@@ -586,7 +593,120 @@ class GameRecordSyncWorker
             }
         }
 
+        // 8. ✅ 批量投递打码量统计（2026-07-31）
+        // ⚠️ 因为批量插入（insert）不会触发模型的 created 事件
+        // 所以需要手动调用 sendBetStatistics 方法
+        if (!empty($insertData)) {
+            $this->batchSendBetStatistics($insertData, $existingRecords);
+        }
+
         return count($insertData);
+    }
+
+    /**
+     * 批量发送打码量统计到队列（优化版：按玩家+日期分组合并）
+     *
+     * ⚠️ 优化前：每条记录投递一次 → 100笔游戏 = 100条队列消息
+     * ✅ 优化后：按玩家+日期分组 → 100笔游戏 = 1条队列消息
+     *
+     * 优势：
+     * - 减少队列消息数量（最多减少 99%）
+     * - 减少消费者处理次数
+     * - 减少 Redis Lua 脚本执行次数
+     *
+     * @param array $insertedRecords 已插入的记录数据（用于获取 order_no）
+     * @param Collection $existingRecords 已查询的记录集合（keyBy order_no）
+     * @return void
+     */
+    private function batchSendBetStatistics(array $insertedRecords, Collection $existingRecords): void
+    {
+        try {
+            // ✅ 按 player_id + stat_type + date 分组
+            $grouped = [];
+
+            foreach ($insertedRecords as $insertData) {
+                $orderNo = $insertData['order_no'];
+
+                if (!isset($existingRecords[$orderNo])) {
+                    continue;
+                }
+
+                $record = $existingRecords[$orderNo];
+
+                // ✅ 过滤条件（已结算、下注类型、有押注金额）
+                if ($record->settlement_status != PlayGameRecord::SETTLEMENT_STATUS_SETTLED
+                    || ($record->type ?? PlayGameRecord::TYPE_BET) != PlayGameRecord::TYPE_BET
+                    || $record->bet <= 0) {
+                    continue;
+                }
+
+                // ✅ 提取日期（仅用于分组，实际时区转换在消费者中进行）
+                // ⚠️ 注意：$record->created_at 可能是 UTC 时间（2026-07-31T17:02:01.000000Z）
+                // 这里转换为本地时区只是为了按"本地日期"分组
+                // 消费者会再次转换以确保统计到正确的日期维度
+                $createdAt = \Carbon\Carbon::parse($record->created_at)->setTimezone('Asia/Shanghai');
+                $date = $createdAt->format('Y-m-d');
+
+                // ✅ 分组 Key: player_id + date（本地日期）
+                $groupKey = "{$record->player_id}_{$date}";
+
+                if (!isset($grouped[$groupKey])) {
+                    $grouped[$groupKey] = [
+                        'player_id' => $record->player_id,
+                        'date' => $date,  // ✅ 记录日期（用于批次ID）
+                        'bet_amount' => 0,
+                        'count' => 0,
+                        'created_at' => $record->created_at,  // 使用第一条记录的时间
+                        'game_codes' => [],
+                        'record_ids' => [],  // ✅ 记录所有涉及的 record ID（用于生成唯一批次ID）
+                    ];
+                }
+
+                $grouped[$groupKey]['bet_amount'] += $record->bet;
+                $grouped[$groupKey]['count']++;
+                $grouped[$groupKey]['game_codes'][] = $record->game_code ?? 'unknown';
+                $grouped[$groupKey]['record_ids'][] = $record->id;  // ✅ 收集 record ID
+            }
+
+            // ✅ 批量投递（每组一条消息）
+            foreach ($grouped as $groupData) {
+                // ✅ 生成唯一批次ID：player_id + date + 所有涉及的 record IDs 的哈希
+                // 用途：防止队列重试时重复累加
+                // 格式：batch_{player_id}_{date}_{md5}
+                $batchId = sprintf(
+                    'batch_%d_%s_%s',
+                    $groupData['player_id'],
+                    $groupData['date'],
+                    substr(md5(implode(',', $groupData['record_ids'])), 0, 8)
+                );
+
+                \Webman\RedisQueue\Client::send('bet-statistics', [
+                    'player_id' => $groupData['player_id'],
+                    'stat_type' => 'game',
+                    'bet_amount' => $groupData['bet_amount'],
+                    'source' => 'batch_' . count(array_unique($groupData['game_codes'])) . '_games',  // 标识批量
+                    'created_at' => $groupData['created_at'],
+                    'batch_count' => $groupData['count'],  // 记录合并的记录数
+                    'batch_id' => $batchId,  // ✅ 批次唯一标识（用于去重）
+                ]);
+            }
+
+            if (!empty($grouped)) {
+                $this->log->info('[BetStats] 批量投递打码量统计（分组优化）', [
+                    'total_records' => count($insertedRecords),
+                    'grouped_messages' => count($grouped),
+                    'reduction' => count($insertedRecords) > 0
+                        ? round((1 - count($grouped) / count($insertedRecords)) * 100, 1) . '%'
+                        : '0%',
+                ]);
+            }
+        } catch (\Exception $e) {
+            // 统计投递失败不影响主业务
+            $this->log->error('[BetStats] 批量投递失败', [
+                'error' => $e->getMessage(),
+                'count' => count($insertedRecords),
+            ]);
+        }
     }
 
     /**

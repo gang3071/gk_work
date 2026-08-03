@@ -534,8 +534,10 @@ class SongJackpot extends MachineServices implements BaseMachine
                 if ($orgWinNumber > 0 && $orgWinNumber < $nowWinNumber && !empty($currentGamingUserId) && $this->change_point_card_status == 0) {
                     $this->last_play_time = time();
                     if ($nowRewardStatus == 0) {
+                        $changeAmount = abs($nowWinNumber - $orgWinNumber);
+
                         Client::send('play-keep-machine', [
-                            'change_amount' => abs($nowWinNumber - $orgWinNumber),
+                            'change_amount' => $changeAmount,
                             'machine_id' => $this->machine->id,
                             'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
                                 $this->machine->domain, $this->machine->port, $this->machine->type
@@ -545,6 +547,49 @@ class SongJackpot extends MachineServices implements BaseMachine
                             'keep_seconds' => $this->keep_seconds,
                             'keeping' => $this->keeping,
                         ]);
+
+                        // ✅ 同时投递打码量统计（change_amount = 转数增量）
+                        if ($changeAmount > 0) {
+                            // ⚠️ turn_used_point 存储在 MachineCategory，不是 Machine
+                            $cateId = $this->machine->cate_id;
+                            $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+                            $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+
+                            if ($turnUsedPoint === null) {
+                                $turnUsedPoint = \app\model\MachineCategory::query()
+                                    ->where('id', $cateId)
+                                    ->value('turn_used_point') ?? 0;
+                                \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+                            }
+
+                            $betAmount = bcmul($changeAmount, $turnUsedPoint, 2);
+
+                            if (bccomp($betAmount, '0', 2) > 0) {
+                                Log::channel('bet_statistics')->info('[BetStats] SongJackpot 保留时投递打码量', [
+                                    'machine_id' => $this->machine->id,
+                                    'player_id' => $currentGamingUserId,
+                                    'change_amount' => $changeAmount,
+                                    'turn_used_point' => $turnUsedPoint,
+                                    'bet_amount' => floatval($betAmount),
+                                    'source' => 'keep_machine',
+                                ]);
+
+                                Client::send('bet-statistics', [
+                                    'player_id' => $currentGamingUserId,
+                                    'stat_type' => 'machine',
+                                    'bet_amount' => floatval($betAmount),
+                                    'source' => 'song_jackpot',
+                                    'machine_id' => $this->machine->id,
+                                    'created_at' => date('Y-m-d H:i:s'),
+                                ]);
+                            } else {
+                                Log::channel('bet_statistics')->debug('[BetStats] SongJackpot 保留时打码量为0，跳过投递', [
+                                    'machine_id' => $this->machine->id,
+                                    'bet_amount' => $betAmount,
+                                ]);
+                            }
+                        }
+
                         Client::send('lottery-machine', [
                             'num' => $nowWinNumber,
                             'last_num' => $orgWinNumber,

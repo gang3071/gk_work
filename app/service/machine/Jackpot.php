@@ -487,8 +487,10 @@ class Jackpot extends MachineServices implements BaseMachine
                         $this->last_play_time = time();
 
                         if ($this->reward_status == 0) {
+                            $changeAmount = abs($data - $this->win_number);
+
                             Client::send('play-keep-machine', [
-                                'change_amount' => abs($data - $this->win_number),
+                                'change_amount' => $changeAmount,
                                 'machine_id' => $this->machine->id,
                                 'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
                                     $this->machine->domain, $this->machine->port, $this->machine->type
@@ -498,6 +500,49 @@ class Jackpot extends MachineServices implements BaseMachine
                                 'keep_seconds' => $this->keep_seconds,
                                 'keeping' => $this->keeping,
                             ]);
+
+                            // ✅ 同时投递打码量统计（change_amount = 转数增量）
+                            if ($changeAmount > 0) {
+                                // ⚠️ turn_used_point 存储在 MachineCategory，不是 Machine
+                                $cateId = $this->machine->cate_id;
+                                $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+                                $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+
+                                if ($turnUsedPoint === null) {
+                                    $turnUsedPoint = \app\model\MachineCategory::query()
+                                        ->where('id', $cateId)
+                                        ->value('turn_used_point') ?? 0;
+                                    \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+                                }
+
+                                $betAmount = bcmul($changeAmount, $turnUsedPoint, 2);
+
+                                if (bccomp($betAmount, '0', 2) > 0) {
+                                    Log::channel('bet_statistics')->info('[BetStats] Jackpot 保留时投递打码量', [
+                                        'machine_id' => $this->machine->id,
+                                        'player_id' => $currentGamingUserId,
+                                        'change_amount' => $changeAmount,
+                                        'turn_used_point' => $turnUsedPoint,
+                                        'bet_amount' => floatval($betAmount),
+                                        'source' => 'keep_machine',
+                                    ]);
+
+                                    Client::send('bet-statistics', [
+                                        'player_id' => $currentGamingUserId,
+                                        'stat_type' => 'machine',
+                                        'bet_amount' => floatval($betAmount),
+                                        'source' => 'jackpot',
+                                        'machine_id' => $this->machine->id,
+                                        'created_at' => date('Y-m-d H:i:s'),
+                                    ]);
+                                } else {
+                                    Log::channel('bet_statistics')->debug('[BetStats] Jackpot 保留时打码量为0，跳过投递', [
+                                        'machine_id' => $this->machine->id,
+                                        'bet_amount' => $betAmount,
+                                    ]);
+                                }
+                            }
+
                             Client::send('lottery-machine', [
                                 'num' => $data,
                                 'last_num' => $this->win_number,

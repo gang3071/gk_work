@@ -1195,11 +1195,55 @@ class Slot extends MachineServices implements BaseMachine
                                 'player_id' => $gamingUserId,
                             ]);
                         }
+                        $changeAmount = abs($data - $this->bet);
+
                         Client::send('play-keep-machine', [
-                            'change_amount' => abs($data - $this->bet),
+                            'change_amount' => $changeAmount,
                             'machine_id' => $this->machine->id,
                             'player_id' => $gamingUserId,
                         ]);
+
+                        // ✅ 同时投递打码量统计（change_amount 就是打码量）
+                        if ($changeAmount > 0) {
+                            // ⚠️ turn_used_point 存储在 MachineCategory，不是 Machine
+                            $cateId = $this->machine->cate_id;
+                            $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+                            $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+
+                            if ($turnUsedPoint === null) {
+                                $turnUsedPoint = \app\model\MachineCategory::query()
+                                    ->where('id', $cateId)
+                                    ->value('turn_used_point') ?? 0;
+                                \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+                            }
+
+                            $betAmount = bcmul($changeAmount, $turnUsedPoint, 2);
+
+                            if (bccomp($betAmount, '0', 2) > 0) {
+                                Log::channel('bet_statistics')->info('[BetStats] Slot 保留时投递打码量', [
+                                    'machine_id' => $this->machine->id,
+                                    'player_id' => $gamingUserId,
+                                    'change_amount' => $changeAmount,
+                                    'turn_used_point' => $turnUsedPoint,
+                                    'bet_amount' => floatval($betAmount),
+                                    'source' => 'keep_machine',
+                                ]);
+
+                                Client::send('bet-statistics', [
+                                    'player_id' => $gamingUserId,
+                                    'stat_type' => 'machine',
+                                    'bet_amount' => floatval($betAmount),
+                                    'source' => 'slot',
+                                    'machine_id' => $this->machine->id,
+                                    'created_at' => date('Y-m-d H:i:s'),
+                                ]);
+                            } else {
+                                Log::channel('bet_statistics')->debug('[BetStats] Slot 保留时打码量为0，跳过投递', [
+                                    'machine_id' => $this->machine->id,
+                                    'bet_amount' => $betAmount,
+                                ]);
+                            }
+                        }
                     }
                     if ($this->reward_status == 0) {
                         $nowTurn = $this->now_turn;

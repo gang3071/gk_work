@@ -821,6 +821,25 @@ $handlers = [
             ]
         ],
     ],
+
+    // ✅ 打码量统计日志通道（2026-07-31）
+    // 用于记录玩家打码量统计队列的消费情况
+    'bet_statistics' => [
+        'handlers' => [
+            [
+                'class' => Monolog\Handler\RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/bet_statistics.log',
+                    7, // 保留7天
+                    Monolog\Logger::DEBUG, // DEBUG 级别，记录详细信息
+                ],
+                'formatter' => [
+                    'class' => Monolog\Formatter\LineFormatter::class,
+                    'constructor' => [null, 'Y-m-d H:i:s', true],
+                ],
+            ]
+        ],
+    ],
 ];
 
 // 如果启用 Telegram 通知，添加到 default 通道
