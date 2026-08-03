@@ -46,9 +46,24 @@ class PlayKeepMachine implements Consumer
             $oldKeeping = $data['keeping'] ?? 0;
             $gamingUserId = $data['gaming_user_id'] ?? $playerId;
 
+            Log::info('[PlayKeepMachine] 开始处理消息', [
+                'machine_id' => $machineId,
+                'player_id' => $gamingUserId,
+                'change_amount' => $changeAmount,
+                'keep_seconds' => $oldKeepSeconds,
+                'keeping' => $oldKeeping,
+                'machine_cache_key' => $machineCacheKey,
+            ]);
+
             // ✅ 快速校验：数据完整性
             if (!$machineId || !$gamingUserId || !$machineCacheKey) {
-                return; // 数据不完整，静默跳过
+                Log::warning('[PlayKeepMachine] 数据校验失败，跳过处理', [
+                    'machine_id' => $machineId,
+                    'player_id' => $gamingUserId,
+                    'machine_cache_key' => $machineCacheKey,
+                    'raw_data' => $data,
+                ]);
+                return;
             }
 
             // ✅ 从 Events::getMachine 的缓存中读取 Machine 对象
@@ -57,8 +72,17 @@ class PlayKeepMachine implements Consumer
                 // 缓存未命中，查询数据库
                 $machine = Machine::query()->find($machineId);
                 if (!$machine) {
-                    return; // 机台不存在
+                    Log::warning('[PlayKeepMachine] 机台不存在', [
+                        'machine_id' => $machineId,
+                        'player_id' => $gamingUserId,
+                        'machine_cache_key' => $machineCacheKey,
+                    ]);
+                    return;
                 }
+                Log::info('[PlayKeepMachine] 缓存未命中，从数据库加载机台', [
+                    'machine_id' => $machineId,
+                    'machine_cache_key' => $machineCacheKey,
+                ]);
             }
 
             // ✅ 使用 cate_id 作为缓存 key（同分类机台共享缓存）
@@ -82,6 +106,16 @@ class PlayKeepMachine implements Consumer
             $newKeeping = $oldKeeping;
 
             // 增加保留时间
+            if ($keepMinutes <= 0 || $changeAmount <= 0) {
+                Log::info('[PlayKeepMachine] 跳过保留时间计算', [
+                    'machine_id' => $machineId,
+                    'player_id' => $gamingUserId,
+                    'keep_minutes' => $keepMinutes,
+                    'change_amount' => $changeAmount,
+                    'reason' => $keepMinutes <= 0 ? 'keep_minutes<=0' : 'change_amount<=0',
+                ]);
+            }
+
             if ($keepMinutes > 0 && $changeAmount > 0) {
                 $addSeconds = bcmul($keepMinutes, $changeAmount, 2);
                 $newKeepSeconds = bcadd($oldKeepSeconds, $addSeconds, 2);
