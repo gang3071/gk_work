@@ -903,22 +903,47 @@ class MachineOperationService
             $adminUsername
         );
 
+        // 记录 machineWash 返回结果
+        Log::channel('machine_operations')->info('[MachineOperationService::wash] machineWash 返回结果', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'player_id' => $player->id,
+            'action' => $action,
+            'has_lottery' => $hasLottery,
+            'result_type' => gettype($result),
+            'result' => $result instanceof \app\model\PlayerLotteryRecord ? $result->toArray() : $result,
+        ]);
+
         // 处理返回结果
         if ($result === false) {
             throw new Exception(trans('wash_failed', [], 'message', $this->lang));
         }
 
         if (is_array($result)) {
-            return [
-                'success' => true,
-                'wash_point' => $result['wash_point'] ?? 0,
-                'gaming_turn_point' => $result['gaming_turn_point'] ?? 0,
-                'gaming_pressure' => $result['gaming_pressure'] ?? 0,
-                'gaming_score' => $result['gaming_score'] ?? 0,
-            ];
+            if(array_key_exists('has_win',$result)){
+                // 彩金预检查命中（has_lottery=1 时）
+                // 直接返回彩金数据给客户端，由客户端决定是否继续下分
+                return [
+                    'success' => true,
+                    'has_win' => $result['has_win'],
+                    'lottery_name' => $result['lottery_name'],
+                    'amount' => $result['amount'],
+                    'current_condition' => $result['current_condition'],
+                    'next_lottery' => $result['next_lottery'],
+                    'lottery_hint' => $result['lottery_hint'],
+                ];
+            }else{
+                return [
+                    'success' => true,
+                    'wash_point' => $result['wash_point'] ?? 0,
+                    'gaming_turn_point' => $result['gaming_turn_point'] ?? 0,
+                    'gaming_pressure' => $result['gaming_pressure'] ?? 0,
+                    'gaming_score' => $result['gaming_score'] ?? 0,
+                ];
+            }
         }
 
-        // PlayerLotteryRecord 对象（中奖）
+        // PlayerLotteryRecord 对象（中奖 - has_lottery=0 确认下分时触发）
         return [
             'success' => true,
             'has_lottery' => true,
