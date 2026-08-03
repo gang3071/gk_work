@@ -1185,7 +1185,10 @@ class Slot extends MachineServices implements BaseMachine
                         }
                         return true;
                     }
-                    if ($this->bet > 0 && $this->bet != $data && !empty($gamingUserId) && $this->change_point_card_status == 0) {
+                    // ✅ 修复：bet=0 时也需要处理首次下注（全新机器首次游玩）
+                    // 条件：(bet>0 且 bet变化) 或 (bet=0 且 data>0 首次下注)
+                    $isFirstBet = ($this->bet == 0 && $data > 0);
+                    if (($this->bet > 0 && $this->bet != $data || $isFirstBet) && !empty($gamingUserId) && $this->change_point_card_status == 0) {
                         $this->last_play_time = time();
                         if ($this->reward_status == 0) {
                             Client::send('lottery-machine', [
