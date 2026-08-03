@@ -540,7 +540,8 @@ class LotteryServices
             'amount' => 0,
             'lottery_pool_amount' => 0,
             'lottery_multiple' => 1,
-            'next_lottery' => []
+            'next_lottery' => [],
+            'created_at' => date('Y-m-d H:i:s')
         ];
 
         $condition = $this->getCondition();
@@ -1418,8 +1419,10 @@ class LotteryServices
                     // 彩金倍数标记（只由双倍派彩决定）
                     $lotteryMultiple = $isDoubled ? 2 : 1;
 
-                    // 只会发放最大金额的中奖
-                    if ($amount >= $fixedAllowLottery['amount']) {
+                    // ✅ 修复：返回 sort 最大的彩金（门槛最低的）
+                    // lotteryList 按 order DESC 排序，sort 是按遍历顺序生成的
+                    // sort 越大 = 遍历越靠后 = 门槛越低
+                    if ($lottery->sort > ($fixedAllowLottery['lottery_sort'] ?? 0)) {
                         $fixedAllowLottery['lottery_id'] = $lottery->id;
                         $fixedAllowLottery['lottery_rate'] = $isDoubled ? ($lottery->rate * 2) : $lottery->rate;
                         $fixedAllowLottery['lottery_name'] = $lottery->name;
@@ -1448,13 +1451,14 @@ class LotteryServices
                 $nextLottery = null;
                 $lotteryHint = '';
 
-                // 查找下一档彩金（condition 大于当前值的最小值，即最接近的下一档）
-                // lotteryList 按 condition DESC 排序：15000, 12000, 10000, 3000
-                // 需要反向遍历，找 condition > $condition 的最小值
+                // 查找下一档彩金（sort 比当前小的，即门槛更高的）
+                // lotteryList 按 order DESC 排序，sort 按遍历顺序生成
+                // sort 越大 = 门槛越低，sort 越小 = 门槛越高
+                // 下一档 = sort 比当前小的彩金中最接近的
                 $closestLottery = null;
                 foreach ($lotteryList as $lottery) {
                     if ($lottery->condition > $condition) {
-                        // 记录最后一个（最小的）符合条件的
+                        // 记录最后一个符合条件的（condition 最接近当前值的）
                         $closestLottery = $lottery;
                     }
                 }
@@ -1769,7 +1773,7 @@ class LotteryServices
             ->where('game_type', GameType::TYPE_SLOT)
             ->whereNull('deleted_at')
             ->orderBy('lottery_type', 'asc')
-            ->orderBy('condition', 'desc');
+            ->orderBy('order', 'desc');
 
         if ($lotteryType) {
             $query->where('lottery_type', $lotteryType);
