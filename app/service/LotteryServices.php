@@ -1448,27 +1448,34 @@ class LotteryServices
                 $nextLottery = null;
                 $lotteryHint = '';
 
-                // 查找下一档彩金（condition 更大的）
+                // 查找下一档彩金（condition 大于当前值的最小值，即最接近的下一档）
+                // lotteryList 按 condition DESC 排序：15000, 12000, 10000, 3000
+                // 需要反向遍历，找 condition > $condition 的最小值
+                $closestLottery = null;
                 foreach ($lotteryList as $lottery) {
                     if ($lottery->condition > $condition) {
-                        // 计算下一档奖励金额（考虑双倍、最大金额限制）
-                        $nextRate = $lottery->rate > 0 ? $lottery->rate : 100;
-                        $nextAmount = bcmul($lottery->amount, bcdiv($nextRate, 100, 4), 2);
-                        if ($this->shouldApplyDouble($lottery)) {
-                            $nextAmount = bcmul($nextAmount, 2, 2);
-                        }
-                        if ($lottery->max_status == 1 && $lottery->max_amount > 0 && $nextAmount > $lottery->max_amount) {
-                            $nextAmount = floatval($lottery->max_amount);
-                        }
-                        $nextAmount = floor($nextAmount);
-
-                        $nextLottery = [
-                            'name' => $lottery->name,
-                            'condition' => $lottery->condition,
-                            'amount' => $nextAmount,
-                        ];
-                        break;
+                        // 记录最后一个（最小的）符合条件的
+                        $closestLottery = $lottery;
                     }
+                }
+
+                if ($closestLottery) {
+                    // 计算下一档奖励金额（考虑双倍、最大金额限制）
+                    $nextRate = $closestLottery->rate > 0 ? $closestLottery->rate : 100;
+                    $nextAmount = bcmul($closestLottery->amount, bcdiv($nextRate, 100, 4), 2);
+                    if ($this->shouldApplyDouble($closestLottery)) {
+                        $nextAmount = bcmul($nextAmount, 2, 2);
+                    }
+                    if ($closestLottery->max_status == 1 && $closestLottery->max_amount > 0 && $nextAmount > $closestLottery->max_amount) {
+                        $nextAmount = floatval($closestLottery->max_amount);
+                    }
+                    $nextAmount = floor($nextAmount);
+
+                    $nextLottery = [
+                        'name' => $closestLottery->name,
+                        'condition' => $closestLottery->condition,
+                        'amount' => $nextAmount,
+                    ];
                 }
 
                 // ✅ 生成多语言提示文案
