@@ -392,6 +392,8 @@ class RsgGameController
             }
 
             $orderNo = (string)$data['SequenNumber'];
+            $belongOrderNo = (string)($data['BelongSequenNumber'] ?? $orderNo);
+            $isMainOrder = ($orderNo === $belongOrderNo);  // ✅ 是否主订单
             $winAmount = $data['Amount'] ?? 0;
 
             // ✅ 从 Redis 读取实际的下注金额（使用统一函数，带日志）
@@ -495,12 +497,15 @@ class RsgGameController
                     'balance_after' => $result['balance'],
                 ]);
 
-                // ✅ 结算成功后检查是否爆机，如果爆机则更新状态
-                WalletService::checkMachineCrashAfterTransaction(
-                    $player->id,
-                    $result['balance'],
-                    $result['old_balance'] ?? null
-                );
+                // ✅ 只有主订单结算时才检查爆机（子订单不检查）
+                // 原因：子订单扣款为0，实际影响余额的是主订单
+                if ($isMainOrder) {
+                    WalletService::checkMachineCrashAfterTransaction(
+                        $player->id,
+                        $result['balance'],
+                        $result['old_balance'] ?? null
+                    );
+                }
             }
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
@@ -543,6 +548,8 @@ class RsgGameController
             }
 
             $orderNo = (string)($data['SequenNumber'] ?? '');
+            $belongOrderNo = (string)($data['BelongSequenNumber'] ?? $orderNo);
+            $isMainOrder = ($orderNo === $belongOrderNo);  // ✅ 是否主订单
 
             // ✅ 从 Redis 读取实际的下注金额
             // 🎯 单位转换：Redis存储的是"分"，需要转换为"元"
@@ -596,6 +603,15 @@ class RsgGameController
                 'balance_after' => $result['balance'],
             ]);
 
+            // ✅ 只有主订单重新结算时才检查爆机（子订单不检查）
+            if ($result['ok'] === 1 && $isMainOrder) {
+                WalletService::checkMachineCrashAfterTransaction(
+                    $player->id,
+                    $result['balance'],
+                    $result['old_balance'] ?? null
+                );
+            }
+
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => round((float)$result['balance'], 2)
             ]);
@@ -645,6 +661,8 @@ class RsgGameController
             }
 
             $orderNo = (string)$data['SequenNumber'];
+            $belongOrderNo = (string)($data['BelongSequenNumber'] ?? $orderNo);
+            $isMainOrder = ($orderNo === $belongOrderNo);  // ✅ 是否主订单
             $jackpotAmount = $data['Amount'] ?? 0;
 
             // ========== 核心：Lua 原子 Jackpot ==========
@@ -702,6 +720,15 @@ class RsgGameController
                 'jackpot_amount' => $jackpotAmount,
                 'balance_after' => $result['balance'],
             ]);
+
+            // ✅ 只有主订单 Jackpot 时才检查爆机（子订单不检查）
+            if ($result['ok'] === 1 && $isMainOrder) {
+                WalletService::checkMachineCrashAfterTransaction(
+                    $player->id,
+                    $result['balance'],
+                    $result['old_balance'] ?? null
+                );
+            }
 
             return $this->success(self::API_CODE_MAP[self::API_CODE_SUCCESS], [
                 'Balance' => round((float)$result['balance'], 2)
