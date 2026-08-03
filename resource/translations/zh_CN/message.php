@@ -450,4 +450,8 @@ return [
     'wash_failed' => '洗分失败',
     'invalid_open_score' => '缺少或无效的参数: open_score (必须大于0)',
     'open_machine_failed' => '上分失败',
+
+    // 固定彩金提示
+    'lottery_hint_with_next' => '您当前能够下分数已达到{current_name}领取条件，若此时下分，可领取{current_amount}游戏点数，当分数达到{next_condition}时，可以领取{next_name}（{next_amount}游戏点数），点击确定按钮后，奖励将直接发放到玩家钱包',
+    'lottery_hint_max' => '您当前能够下分数已达到{current_name}领取条件（最高档位），若此时下分，可领取{current_amount}游戏点数，点击确定按钮后，奖励将直接发放到玩家钱包',
 ];

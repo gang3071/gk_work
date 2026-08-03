@@ -439,4 +439,8 @@ return [
     'wash_failed' => 'Wash failed',
     'invalid_open_score' => 'Missing or invalid parameter: open_score (must be greater than 0)',
     'open_machine_failed' => 'Open machine failed',
+
+    // Fixed lottery hints
+    'lottery_hint_with_next' => 'You have reached the {current_name} claim condition. If you cash out now, you can receive {current_amount} game points. When you reach {next_condition} points, you can claim {next_name} ({next_amount} game points). After clicking confirm, the reward will be directly credited to your wallet',
+    'lottery_hint_max' => 'You have reached the {current_name} claim condition (highest tier). If you cash out now, you can receive {current_amount} game points. After clicking confirm, the reward will be directly credited to your wallet',
 ];

@@ -433,4 +433,8 @@ return [
     'wash_failed' => '洗分失敗',
     'invalid_open_score' => '缺少或無效的參數: open_score (必須大於0)',
     'open_machine_failed' => '上分失敗',
+
+    // 固定彩金提示
+    'lottery_hint_with_next' => '現在{current_name}の受取条件に達しました。今すぐキャッシュアウトすると、{current_amount}ゲームポイントを受け取れます。{next_condition}ポイントに達すると、{next_name}（{next_amount}ゲームポイント）を受け取れます。確認ボタンをクリック後、報酬は直接ウォレットに入金されます',
+    'lottery_hint_max' => '現在{current_name}の受取条件に達しました（最高ティア）。今すぐキャッシュアウトすると、{current_amount}ゲームポイントを受け取れます。確認ボタンをクリック後、報酬は直接ウォレットに入金されます',
 ];
