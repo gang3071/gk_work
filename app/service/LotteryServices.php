@@ -1388,7 +1388,8 @@ class LotteryServices
                 'amount' => 0,
                 'lottery_pool_amount' => 0,
                 'lottery_multiple' => 1,
-                'next_lottery' => []
+                'next_lottery' => [],
+                'created_at' => date('Y-m-d H:i:s')
             ];
             $lotteryIndex = 0;
             $isLottery = false;
