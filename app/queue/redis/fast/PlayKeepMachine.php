@@ -30,12 +30,6 @@ class PlayKeepMachine implements Consumer
     public $connection = 'default';
 
     /**
-     * 最大保留时间缓存（秒）
-     * @var int|null
-     */
-    private static $maxKeepSeconds = null;
-
-    /**
      * 消费消息
      *
      * @param array $data 消息数据
@@ -170,21 +164,23 @@ class PlayKeepMachine implements Consumer
     /**
      * 获取最大保留时间（秒）
      *
+     * ✅ 优化：每次从 Redis 读取，确保后台修改实时生效
+     * 性能：Redis 读取耗时 <1ms，可忽略不计
+     *
      * @return int
      */
     private function getMaxKeepSeconds(): int
     {
-        // 进程内缓存
-        if (self::$maxKeepSeconds !== null) {
-            return self::$maxKeepSeconds;
+        // ✅ 直接从 Redis 缓存读取（实时生效）
+        // SystemSetting 模型的 updated 事件会自动更新此缓存
+        $setting = Cache::get('setting-max_keeping_minutes-0');
+
+        if (empty($setting) || !isset($setting->num)) {
+            return 0;  // 没有配置或无效，返回 0（不限制）
         }
 
-        // Redis 缓存读取
-        $setting = Cache::get('setting-max_keeping_minutes-0');
-        $maxMinutes = (!empty($setting) && $setting->num > 0) ? $setting->num : 0;
-
-        self::$maxKeepSeconds = $maxMinutes * 60;
-        return self::$maxKeepSeconds;
+        $maxMinutes = intval($setting->num);
+        return $maxMinutes > 0 ? $maxMinutes * 60 : 0;
     }
 
     /**
