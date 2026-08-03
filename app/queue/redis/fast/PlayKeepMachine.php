@@ -46,15 +46,6 @@ class PlayKeepMachine implements Consumer
             $oldKeeping = $data['keeping'] ?? 0;
             $gamingUserId = $data['gaming_user_id'] ?? $playerId;
 
-            Log::info('[PlayKeepMachine] 开始处理消息', [
-                'machine_id' => $machineId,
-                'player_id' => $gamingUserId,
-                'change_amount' => $changeAmount,
-                'keep_seconds' => $oldKeepSeconds,
-                'keeping' => $oldKeeping,
-                'machine_cache_key' => $machineCacheKey,
-            ]);
-
             // ✅ 快速校验：数据完整性
             if (!$machineId || !$gamingUserId || !$machineCacheKey) {
                 Log::warning('[PlayKeepMachine] 数据校验失败，跳过处理', [
@@ -72,17 +63,8 @@ class PlayKeepMachine implements Consumer
                 // 缓存未命中，查询数据库
                 $machine = Machine::query()->find($machineId);
                 if (!$machine) {
-                    Log::warning('[PlayKeepMachine] 机台不存在', [
-                        'machine_id' => $machineId,
-                        'player_id' => $gamingUserId,
-                        'machine_cache_key' => $machineCacheKey,
-                    ]);
                     return;
                 }
-                Log::info('[PlayKeepMachine] 缓存未命中，从数据库加载机台', [
-                    'machine_id' => $machineId,
-                    'machine_cache_key' => $machineCacheKey,
-                ]);
             }
 
             // ✅ 使用 cate_id 作为缓存 key（同分类机台共享缓存）
@@ -106,16 +88,6 @@ class PlayKeepMachine implements Consumer
             $newKeeping = $oldKeeping;
 
             // 增加保留时间
-            if ($keepMinutes <= 0 || $changeAmount <= 0) {
-                Log::info('[PlayKeepMachine] 跳过保留时间计算', [
-                    'machine_id' => $machineId,
-                    'player_id' => $gamingUserId,
-                    'keep_minutes' => $keepMinutes,
-                    'change_amount' => $changeAmount,
-                    'reason' => $keepMinutes <= 0 ? 'keep_minutes<=0' : 'change_amount<=0',
-                ]);
-            }
-
             if ($keepMinutes > 0 && $changeAmount > 0) {
                 $addSeconds = bcmul($keepMinutes, $changeAmount, 2);
                 $newKeepSeconds = bcadd($oldKeepSeconds, $addSeconds, 2);
@@ -129,18 +101,6 @@ class PlayKeepMachine implements Consumer
                 if ($newKeepSeconds != $oldKeepSeconds) {
                     $keepSecondsChanged = true;
                 }
-
-                Log::info('[PlayKeepMachine] 保留时间计算', [
-                    'machine_id' => $machineId,
-                    'player_id' => $gamingUserId,
-                    'keep_minutes' => $keepMinutes,
-                    'change_amount' => $changeAmount,
-                    'cate_id' => $cateId,
-                    'add_seconds' => $addSeconds,
-                    'old_keep_seconds' => $oldKeepSeconds,
-                    'new_keep_seconds' => $newKeepSeconds,
-                    'max_keep_seconds' => $maxKeepSeconds,
-                ]);
             }
 
             // 解除保留状态
@@ -222,24 +182,12 @@ class PlayKeepMachine implements Consumer
         $cacheKey = 'setting-max_keeping_minutes-0';
         $setting = Cache::get($cacheKey);
 
-        \support\Log::info('PlayKeepMachine: getMaxKeepSeconds 读取缓存', [
-            'cache_key' => $cacheKey,
-            'setting' => $setting,
-        ]);
-
         if (empty($setting)) {
             return 0;  // 没有配置或无效，返回 0（不限制）
         }
 
         $maxMinutes = $setting;
-        $result = $maxMinutes > 0 ? $maxMinutes * 60 : 0;
-
-        \support\Log::info('PlayKeepMachine: max_keeping_minutes 计算结果', [
-            'max_minutes' => $maxMinutes,
-            'max_seconds' => $result,
-        ]);
-
-        return $result;
+        return $maxMinutes > 0 ? $maxMinutes * 60 : 0;
     }
 
     /**
