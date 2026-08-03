@@ -101,6 +101,17 @@ class PlayKeepMachine implements Consumer
                 if ($newKeepSeconds != $oldKeepSeconds) {
                     $keepSecondsChanged = true;
                 }
+
+                Log::info('[PlayKeepMachine] 保留时间计算', [
+                    'machine_id' => $machineId,
+                    'player_id' => $gamingUserId,
+                    'keep_minutes' => $keepMinutes,
+                    'change_amount' => $changeAmount,
+                    'add_seconds' => $addSeconds,
+                    'old_keep_seconds' => $oldKeepSeconds,
+                    'new_keep_seconds' => $newKeepSeconds,
+                    'max_keep_seconds' => $maxKeepSeconds,
+                ]);
             }
 
             // 解除保留状态
