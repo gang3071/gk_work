@@ -1420,10 +1420,9 @@ class LotteryServices
                     // 彩金倍数标记（只由双倍派彩决定）
                     $lotteryMultiple = $isDoubled ? 2 : 1;
 
-                    // ✅ 修复：返回 sort 最大的彩金（门槛最低的）
-                    // lotteryList 按 order DESC 排序，sort 是按遍历顺序生成的
-                    // sort 越大 = 遍历越靠后 = 门槛越低
-                    if ($lottery->sort > ($fixedAllowLottery['lottery_sort'] ?? 0)) {
+                    // ✅ 返回 sort 最小的彩金（门槛最低的）
+                    // 先满足触发条件，然后在满足条件的彩金中选 sort 最小的
+                    if (!isset($fixedAllowLottery['lottery_sort']) || $lottery->sort < $fixedAllowLottery['lottery_sort']) {
                         $fixedAllowLottery['lottery_id'] = $lottery->id;
                         $fixedAllowLottery['lottery_rate'] = $isDoubled ? ($lottery->rate * 2) : $lottery->rate;
                         $fixedAllowLottery['lottery_name'] = $lottery->name;
