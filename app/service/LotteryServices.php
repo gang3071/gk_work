@@ -1441,32 +1441,61 @@ class LotteryServices
                 $odds = $this->machine->machineCategory->name;
             }
             if ($hasLottery && $isLottery) {
+                // ✅ 获取语言（默认繁体中文）
+                $lang = locale() ?? 'zh_TW';
+
+                // ✅ 组装下一档彩金信息
+                $nextLottery = null;
+                $lotteryHint = '';
+
+                // 查找下一档彩金（condition 更大的）
+                foreach ($lotteryList as $lottery) {
+                    if ($lottery->condition > $condition) {
+                        // 计算下一档奖励金额（考虑双倍、最大金额限制）
+                        $nextRate = $lottery->rate > 0 ? $lottery->rate : 100;
+                        $nextAmount = bcmul($lottery->amount, bcdiv($nextRate, 100, 4), 2);
+                        if ($this->shouldApplyDouble($lottery)) {
+                            $nextAmount = bcmul($nextAmount, 2, 2);
+                        }
+                        if ($lottery->max_status == 1 && $lottery->max_amount > 0 && $nextAmount > $lottery->max_amount) {
+                            $nextAmount = floatval($lottery->max_amount);
+                        }
+                        $nextAmount = floor($nextAmount);
+
+                        $nextLottery = [
+                            'name' => $lottery->name,
+                            'condition' => $lottery->condition,
+                            'amount' => $nextAmount,
+                        ];
+                        break;
+                    }
+                }
+
+                // ✅ 生成多语言提示文案
+                if ($nextLottery) {
+                    // 有下一档彩金
+                    $lotteryHint = trans('lottery_hint_with_next', [
+                        '{current_name}' => $fixedAllowLottery['lottery_name'],
+                        '{current_amount}' => $fixedAllowLottery['amount'],
+                        '{next_condition}' => $nextLottery['condition'],
+                        '{next_name}' => $nextLottery['name'],
+                        '{next_amount}' => $nextLottery['amount'],
+                    ], 'message', $lang);
+                } else {
+                    // 已是最高档位
+                    $lotteryHint = trans('lottery_hint_max', [
+                        '{current_name}' => $fixedAllowLottery['lottery_name'],
+                        '{current_amount}' => $fixedAllowLottery['amount'],
+                    ], 'message', $lang);
+                }
+
                 return [
-                    'player_id' => $this->player->id,
-                    'uuid' => $this->player->uuid,
-                    'player_phone' => $this->player->phone,
-                    'player_name' => $this->player->name,
-                    'department_id' => $this->player->department_id,
-                    'machine_id' => $this->machine->id,
-                    'machine_name' => $this->machine->name,
-                    'machine_code' => $this->machine->code,
-                    'machine_type' => $this->machine->type,
-                    'game_type' => $this->machine->type,
                     'has_win' => 1,
-                    'odds' => $odds,
-                    'amount' => $fixedAllowLottery['amount'],
-                    'is_max' => $fixedAllowLottery['amount'] == $fixedAllowLottery['max_amount'] ? 1 : 0,
-                    'lottery_id' => $fixedAllowLottery['lottery_id'],
                     'lottery_name' => $fixedAllowLottery['lottery_name'],
-                    'lottery_pool_amount' => $fixedAllowLottery['lottery_pool_amount'],
-                    'lottery_rate' => $fixedAllowLottery['lottery_rate'],
-                    'cate_rate' => $this->machine->machineCategory->lottery_rate,
-                    'lottery_type' => Lottery::LOTTERY_TYPE_FIXED,
-                    'lottery_multiple' => $fixedAllowLottery['lottery_multiple'],
-                    'lottery_sort' => $fixedAllowLottery['lottery_sort'],
-                    'is_doubled' => $fixedAllowLottery['is_doubled'],
-                    'has_lottery' => true,
-                    'next_lottery' => !empty($lotteryList[$lotteryIndex - 1]) ? $lotteryList[$lotteryIndex - 1] : []
+                    'amount' => $fixedAllowLottery['amount'],
+                    'current_condition' => $condition,
+                    'next_lottery' => $nextLottery,
+                    'lottery_hint' => $lotteryHint,  // ← 多语言提示文案
                 ];
             }
             if (isset($fixedAllowLottery['amount']) && $fixedAllowLottery['amount'] > 0) {

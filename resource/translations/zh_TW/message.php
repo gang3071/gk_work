@@ -440,4 +440,8 @@ return [
     'wash_failed' => '洗分失敗',
     'invalid_open_score' => '缺少或無效的參數: open_score (必須大於0)',
     'open_machine_failed' => '上分失敗',
+
+    // 固定彩金提示
+    'lottery_hint_with_next' => '您當前能夠下分數已達到{current_name}領取條件，若此時下分，可領取{current_amount}遊戲點數，當分數達到{next_condition}時，可以領取{next_name}（{next_amount}遊戲點數），點擊確定按鈕後，獎勵將直接發放到玩家錢包',
+    'lottery_hint_max' => '您當前能夠下分數已達到{current_name}領取條件（最高檔位），若此時下分，可領取{current_amount}遊戲點數，點擊確定按鈕後，獎勵將直接發放到玩家錢包',
 ];
