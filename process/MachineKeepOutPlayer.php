@@ -27,7 +27,7 @@ class MachineKeepOutPlayer
         $log->info('MachineKeepOutPlayer Worker 启动');
 
         // 获取配置的检查间隔（默认60秒）
-        $interval = config('machine.kick.check_interval', 60);
+        $interval = config('machine.kick.check_interval', 10);
 
         // 定时执行踢出检查
         Timer::add($interval, function () use ($log) {
