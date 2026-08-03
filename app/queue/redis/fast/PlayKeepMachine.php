@@ -83,8 +83,8 @@ class PlayKeepMachine implements Consumer
 
             // 增加保留时间
             if ($keepMinutes > 0 && $changeAmount > 0) {
-                $addSeconds = bcmul($keepMinutes, $changeAmount);
-                $newKeepSeconds = bcadd($oldKeepSeconds, $addSeconds);
+                $addSeconds = bcmul($keepMinutes, $changeAmount, 2);
+                $newKeepSeconds = bcadd($oldKeepSeconds, $addSeconds, 2);
 
                 // 检查最大保留时间限制
                 $maxKeepSeconds = $this->getMaxKeepSeconds();
