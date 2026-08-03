@@ -1422,7 +1422,7 @@ class LotteryServices
 
                     // ✅ 返回 sort 最小的彩金（门槛最低的）
                     // 先满足触发条件，然后在满足条件的彩金中选 sort 最小的
-                    if (!isset($fixedAllowLottery['lottery_sort']) || $lottery->sort < $fixedAllowLottery['lottery_sort']) {
+                    if ($fixedAllowLottery['lottery_sort'] === '' || $lottery->sort < $fixedAllowLottery['lottery_sort']) {
                         $fixedAllowLottery['lottery_id'] = $lottery->id;
                         $fixedAllowLottery['lottery_rate'] = $isDoubled ? ($lottery->rate * 2) : $lottery->rate;
                         $fixedAllowLottery['lottery_name'] = $lottery->name;
@@ -1449,7 +1449,6 @@ class LotteryServices
 
                 // ✅ 组装下一档彩金信息
                 $nextLottery = null;
-                $lotteryHint = '';
 
                 // 查找下一档彩金（sort 比当前小的，即门槛更高的）
                 // lotteryList 按 order DESC 排序，sort 按遍历顺序生成
@@ -1499,6 +1498,17 @@ class LotteryServices
                         '{current_amount}' => $fixedAllowLottery['amount'],
                     ], 'message', $lang);
                 }
+
+                // ✅ 记录语言和翻译结果
+                \support\Log::channel('slot_machine')->info('[LotteryServices] 彩金提示文案生成', [
+                    'machine_code' => $this->machine->code,
+                    'player_id' => $this->player->id,
+                    'lang' => $lang,
+                    'locale' => locale(),
+                    'lottery_name' => $fixedAllowLottery['lottery_name'],
+                    'lottery_hint' => $lotteryHint,
+                    'next_lottery' => $nextLottery,
+                ]);
 
                 return [
                     'has_win' => 1,
