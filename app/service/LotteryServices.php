@@ -410,7 +410,8 @@ class LotteryServices
                     'machine_code' => $this->machine->code,
                     'base_amount' => $baseAmount,                      // 基数金额（变化量 × 单位金额）
                     'pool_ratio' => $lottery->pool_ratio . '%',         // 入池比例
-                    'add_amount' => $addAmount,                         // 本次累加金额
+                    'add_amount' => $addAmount,
+                    '$num' => $num,// 本次累加金额
                     'db_amount' => $lottery->amount,                    // 数据库金额（固定）
                     'redis_before' => $beforeRedisAmount,               // ✅ Redis累加前
                     'redis_after' => $currentRedisAmount,               // ✅ Redis累加后
