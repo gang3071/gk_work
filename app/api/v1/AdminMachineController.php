@@ -749,6 +749,84 @@ class AdminMachineController
     }
 
     /**
+     * 获取机台状态（包含数据库信息和 Redis 缓存数据）
+     * POST /api/admin/machine/status
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function getMachineStatus(Request $request): Response
+    {
+        try {
+            $lang = $this->setLanguage($request);
+
+            // 验证参数
+            $machineId = (int)$request->post('machine_id');
+            if ($machineId <= 0) {
+                return $this->fail(trans('invalid_machine_id', [], 'admin_machine'), 400);
+            }
+
+            // 查询机台
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return $this->fail(trans('machine_not_found', [], 'admin_machine'), 404);
+            }
+
+            // 创建机台服务（会自动加载 Redis 缓存数据）
+            $services = MachineServices::createServices($machine, $lang);
+
+            // 从数据库获取机台基本信息
+            $machineInfo = [
+                'id' => $machine->id,
+                'name' => $machine->name,
+                'code' => $machine->code,
+                'type' => $machine->type,
+                'control_type' => $machine->control_type,
+                'status' => $machine->status,
+                'is_use' => $machine->is_use,
+                'maintaining' => $machine->maintaining,
+                'domain' => $machine->domain,
+                'port' => $machine->port,
+                'odds_x' => $machine->odds_x,
+                'odds_y' => $machine->odds_y,
+                'min_point' => $machine->min_point,
+                'max_point' => $machine->max_point,
+                'seat' => $machine->seat,
+                'gaming' => $machine->gaming,
+                'gaming_user_id' => $machine->gaming_user_id,
+                'keeping' => $machine->keeping,
+                'keeping_user_id' => $machine->keeping_user_id,
+                'last_keep_at' => $machine->last_keep_at,
+                'last_play_time' => $machine->last_play_time,
+            ];
+
+            // 从 Redis 缓存获取实时数据
+            $cacheData = [];
+            if ($services && isset($services->cacheData) && is_array($services->cacheData)) {
+                $cacheData = $services->cacheData;
+            }
+
+            Log::info('getMachineStatus success', [
+                'machine_id' => $machineId,
+                'cache_data_keys' => array_keys($cacheData),
+                'keep_seconds_key' => MachineServices::MACHINE_DATA_PREFIX . $machineId . '_keep_seconds',
+                'keep_seconds_value' => $cacheData[MachineServices::MACHINE_DATA_PREFIX . $machineId . '_keep_seconds'] ?? 'NOT_FOUND',
+            ]);
+
+            return $this->success([
+                'machine_info' => $machineInfo,
+                'cache_data' => $cacheData,
+            ]);
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '【管理员操作】获取机台状态失败', [
+                'operator_type' => 'admin',
+                'machine_id' => $machineId ?? null
+            ]);
+        }
+    }
+
+    /**
      * 获取机台操作描述
      * POST /api/admin/machine/get-description
      *

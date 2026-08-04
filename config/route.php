@@ -66,6 +66,8 @@ Route::group('/api', function () {
             // ✅ 管理后台专用接口
             // 获取Gateway信息（调试用）
             Route::get('/gateway-info', [\app\api\v1\AdminMachineController::class, 'getGatewayInfo']);
+            // 获取机台状态（包含数据库信息和 Redis 缓存数据）
+            Route::post('/status', [\app\api\v1\AdminMachineController::class, 'getMachineStatus']);
             // 检查单个机台在线状态
             Route::post('/check-online', [\app\api\v1\AdminMachineController::class, 'checkOnline']);
             // 获取所有机台在线状态（批量）
