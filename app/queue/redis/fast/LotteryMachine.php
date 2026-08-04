@@ -63,14 +63,22 @@ class LotteryMachine implements Consumer
                 $redis = \support\Redis::connection()->client();
 
                 // 使用 SET NX（只在key不存在时设置）来防止重复处理
-                $lockResult = $redis->set($cacheKey, time(), ['NX', 'EX' => 3600]); // 1小时过期
+                // ✅ 缩短过期时间：1小时 → 5分钟（300秒）
+                $lockResult = $redis->set($cacheKey, time(), ['NX', 'EX' => 300]);
 
                 if (!$lockResult) {
+                    // 获取上次处理时间
+                    $lastProcessedTime = $redis->get($cacheKey);
+                    $timeAgo = $lastProcessedTime ? (time() - $lastProcessedTime) : 0;
+
                     $log->warning('该机台押注已处理过，跳过重复检查', [
                         'machine_id' => $machineId,
                         'player_id' => $playerId,
                         'num' => $num,
-                        'last_num' => $lastNum
+                        'last_num' => $lastNum,
+                        'unique_key' => $uniqueKey,
+                        'last_processed_at' => $lastProcessedTime ? date('Y-m-d H:i:s', $lastProcessedTime) : 'unknown',
+                        'time_ago_seconds' => $timeAgo,
                     ]);
                     return;
                 }
