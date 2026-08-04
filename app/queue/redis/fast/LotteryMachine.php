@@ -43,10 +43,6 @@ class LotteryMachine implements Consumer
             }
 
             if ($player->channel->lottery_status == 0) {
-                $log->info('渠道抽奖功能未开启', [
-                    'player_id' => $data['player_id'],
-                    'channel_id' => $player->channel->id
-                ]);
                 return;
             }
             // 通知后台管理系统玩家正在游戏
