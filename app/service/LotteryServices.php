@@ -388,24 +388,35 @@ class LotteryServices
                 $redisKey = self::REDIS_KEY_LOTTERY_AMOUNT . $lottery->id;
                 $redis = \support\Redis::connection()->client();
 
+                // 获取累加前的Redis金额
+                $beforeRedisAmount = (float)($redis->get($redisKey) ?? 0);
+
                 // 使用 Redis 的 INCRBYFLOAT 原子操作累积
                 $currentRedisAmount = $redis->incrByFloat($redisKey, (float)$addAmount);
+
+                // 计算总彩池（DB + Redis）
+                $totalPoolBefore = bcadd($lottery->amount, $beforeRedisAmount, 4);
+                $totalPoolAfter = bcadd($lottery->amount, $currentRedisAmount, 4);
 
                 // 📊 记录每次彩金累加
                 \support\Log::info('💰 彩金累加到Redis', [
                     'lottery_id' => $lottery->id,
-                    'lottery_point' => $this->machine->machineCategory->lottery_point,
-                    'id' => $this->machine->machineCategory->id,
                     'lottery_name' => $lottery->name,
+                    'lottery_point' => $this->machine->machineCategory->lottery_point,
+                    'machine_category_id' => $this->machine->machineCategory->id,
                     'player_id' => $this->player->id,
                     'uuid' => $this->player->uuid,
                     'machine_id' => $this->machine->id,
                     'machine_code' => $this->machine->code,
-                    'base_amount' => $baseAmount,              // 基数金额（变化量 × 单位金额）
-                    'pool_ratio' => $lottery->pool_ratio . '%', // 入池比例
-                    'add_amount' => $addAmount,                 // 本次累加金额
-                    'redis_accumulated' => $currentRedisAmount, // Redis累计金额（未同步到DB）
-                    'db_amount' => $lottery->amount,            // 数据库金额
+                    'base_amount' => $baseAmount,                      // 基数金额（变化量 × 单位金额）
+                    'pool_ratio' => $lottery->pool_ratio . '%',         // 入池比例
+                    'add_amount' => $addAmount,
+                    '$num' => $num,// 本次累加金额
+                    'db_amount' => $lottery->amount,                    // 数据库金额（固定）
+                    'redis_before' => $beforeRedisAmount,               // ✅ Redis累加前
+                    'redis_after' => $currentRedisAmount,               // ✅ Redis累加后
+                    'total_pool_before' => $totalPoolBefore,            // ✅ 总彩池（累加前）
+                    'total_pool_after' => $totalPoolAfter,              // ✅ 总彩池（累加后）
                 ]);
 
                 // 注意：不要更新内存中的 lottery.amount，同步时会从数据库 refresh() 重新读取
