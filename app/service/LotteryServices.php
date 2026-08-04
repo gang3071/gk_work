@@ -394,6 +394,8 @@ class LotteryServices
                 // 📊 记录每次彩金累加
                 \support\Log::info('💰 彩金累加到Redis', [
                     'lottery_id' => $lottery->id,
+                    'lottery_point' => $this->machine->machineCategory->lottery_point,
+                    'id' => $this->machine->machineCategory->id,
                     'lottery_name' => $lottery->name,
                     'player_id' => $this->player->id,
                     'uuid' => $this->player->uuid,
