@@ -1197,6 +1197,18 @@ class Slot extends MachineServices implements BaseMachine
                                 'machine_id' => $this->machine->id,
                                 'player_id' => $gamingUserId,
                             ]);
+                        } else {
+                            // 📊 调试日志：开奖中跳过彩金
+                            \support\Log::info('⏸️ Slot开奖中，跳过彩金累加和检查', [
+                                'machine_id' => $this->machine->id,
+                                'machine_code' => $this->machine->code,
+                                'player_id' => $gamingUserId,
+                                'bet' => $data,
+                                'last_bet' => $this->bet,
+                                'reward_status' => $this->reward_status,
+                                'bb_status' => $this->bb_status,
+                                'rb_status' => $this->rb_status,
+                            ]);
                         }
                         $changeAmount = abs($data - $this->bet);
 

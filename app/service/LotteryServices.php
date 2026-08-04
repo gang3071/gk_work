@@ -358,12 +358,6 @@ class LotteryServices
         foreach ($lotteryList as $lottery) {
             // 检查是否达到最大彩池限制
             if ($lottery->max_pool_amount > 0 && $lottery->amount >= $lottery->max_pool_amount) {
-                \support\Log::info('彩金池累计已达最大彩池上限:', [
-                    'lottery_id' => $lottery->id,
-                    'name' => $lottery->name,
-                    'amount' => $lottery->amount,
-                    'max_pool_amount' => $lottery->max_pool_amount,
-                ]);
                 continue;
             }
 
@@ -371,34 +365,13 @@ class LotteryServices
             $addAmount = bcmul($baseAmount, bcdiv($lottery->pool_ratio, 100, 4), 4);
 
             if ($addAmount <= 0) {
-                \support\Log::info('彩金池累计为 0', [
-                    'lottery_id' => $lottery->id,
-                    'pool_ratio' => $lottery->pool_ratio,
-                    'addAmount' => $addAmount,
-                ]);
                 continue;
             }
 
             // 累加前检查保底金额：如果启用了保底金额且当前彩池低于保底金额，先补充到保底金额
             if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
                 if ($lottery->amount < $lottery->auto_refill_amount) {
-                    $refillAmount = bcsub($lottery->auto_refill_amount, $lottery->amount, 4);
-                    $beforeRefillAmount = $lottery->amount;
                     $lottery->amount = $lottery->auto_refill_amount;
-
-                    // 记录累加前补充日志
-                    \support\Log::info('彩金池累加前自动补充到保底金额:', [
-                        'lottery_id' => $lottery->id,
-                        'lottery_name' => $lottery->name,
-                        'before_refill_amount' => $beforeRefillAmount,
-                        'target_amount' => $lottery->auto_refill_amount,
-                        'refill_amount' => $refillAmount,
-                        'after_refill_amount' => $lottery->amount,
-                        'player_id' => $this->player->id,
-                        'uuid' => $this->player->uuid,
-                        'machine_id' => $this->machine->id,
-                        'trigger_time' => date('Y-m-d H:i:s'),
-                    ]);
                 }
             }
 
@@ -418,6 +391,21 @@ class LotteryServices
                 // 使用 Redis 的 INCRBYFLOAT 原子操作累积
                 $currentRedisAmount = $redis->incrByFloat($redisKey, (float)$addAmount);
 
+                // 📊 记录每次彩金累加
+                \support\Log::info('💰 彩金累加到Redis', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                    'player_id' => $this->player->id,
+                    'uuid' => $this->player->uuid,
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'base_amount' => $baseAmount,              // 基数金额（变化量 × 单位金额）
+                    'pool_ratio' => $lottery->pool_ratio . '%', // 入池比例
+                    'add_amount' => $addAmount,                 // 本次累加金额
+                    'redis_accumulated' => $currentRedisAmount, // Redis累计金额（未同步到DB）
+                    'db_amount' => $lottery->amount,            // 数据库金额
+                ]);
+
                 // 注意：不要更新内存中的 lottery.amount，同步时会从数据库 refresh() 重新读取
                 // 避免内存值覆盖导致数据丢失（Redis累积金额会在同步时叠加到数据库值）
                 // $lottery->amount = $newAmount;  // ← 已禁用
@@ -431,8 +419,9 @@ class LotteryServices
                 // 检查是否需要同步到数据库
                 if ($currentRedisAmount >= self::DB_SYNC_THRESHOLD) {
                     $shouldSyncToDB = true;
-                    \support\Log::debug('达到同步阈值，将彩金同步到数据库', [
+                    \support\Log::info('💾 达到同步阈值，将彩金同步到数据库', [
                         'lottery_id' => $lottery->id,
+                        'lottery_name' => $lottery->name,
                         'redis_amount' => $currentRedisAmount,
                         'threshold' => self::DB_SYNC_THRESHOLD,
                     ]);
@@ -443,6 +432,13 @@ class LotteryServices
 
                     if (!$lastSync || (time() - $lastSync) >= self::DB_SYNC_INTERVAL) {
                         $shouldSyncToDB = true;
+                        \support\Log::info('⏰ 达到同步时间间隔，将彩金同步到数据库', [
+                            'lottery_id' => $lottery->id,
+                            'lottery_name' => $lottery->name,
+                            'redis_amount' => $currentRedisAmount,
+                            'interval' => self::DB_SYNC_INTERVAL . '秒',
+                            'last_sync' => $lastSync ? date('Y-m-d H:i:s', $lastSync) : '从未同步',
+                        ]);
                     }
                 }
 
@@ -462,6 +458,14 @@ class LotteryServices
                         // 更新数据库
                         $lottery->save();
 
+                        \support\Log::info('✅ 彩金已同步到数据库', [
+                            'lottery_id' => $lottery->id,
+                            'lottery_name' => $lottery->name,
+                            'old_db_amount' => $oldAmount,
+                            'redis_accumulated' => $accumulatedAmount,
+                            'new_db_amount' => $lottery->amount,
+                        ]);
+
                         // 清除 Redis 累积计数（重置为0）
                         $redis->del($redisKey);
 
@@ -471,25 +475,10 @@ class LotteryServices
 
                         // 清除彩金缓存
                         self::clearLotteryListCache($machineType);
-
-                        \support\Log::debug('彩金已同步到数据库', [
-                            'lottery_id' => $lottery->id,
-                            'old_amount' => $oldAmount,
-                            'accumulated' => $accumulatedAmount,
-                            'new_amount' => $lottery->amount,
-                        ]);
-
                         // 注意：推送已在Redis累积时触发，这里不需要重复推送
                     }
                 }
             } catch (\Exception $e) {
-                // Redis 操作失败，降级到直接数据库操作
-                \support\Log::warning('Redis 操作失败，降级到数据库操作', [
-                    'error' => $e->getMessage(),
-                    'lottery_id' => $lottery->id,
-                    'add_amount' => $addAmount
-                ]);
-
                 // 更新内存中的金额
                 $lottery->amount = $newAmount;
 
