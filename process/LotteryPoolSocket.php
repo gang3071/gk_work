@@ -101,8 +101,8 @@ class LotteryPoolSocket
             }
 
             // 限制不超过最大金额
-            if ($lottery->max_amount > 0) {
-                $amount = min($amount, floatval($lottery->max_amount));
+            if ($lottery->max_pool_amount > 0) {
+                $amount = min($amount, floatval($lottery->max_pool_amount));
             }
 
             $result[] = [
