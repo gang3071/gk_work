@@ -40,7 +40,6 @@ use support\Db;
 use support\Log;
 use Webman\Push\Api;
 use Webman\Push\PushException;
-use Webman\RedisQueue\Client as queueClient;
 use yzh52521\WebmanLock\Locker;
 
 /**
@@ -1310,21 +1309,6 @@ function machineWash(
     string  $adminUsername = ''
 ): PlayerLotteryRecord|bool|array
 {
-    // ⚠️ C376 洗分日志（开始）
-    if ($machine->code === 'C376') {
-        Log::channel('machine_operations')->info('[C376-MachineWash] 开始洗分流程', [
-            'machine_id' => $machine->id,
-            'machine_code' => $machine->code,
-            'player_id' => $player->id,
-            'player_uuid' => $player->uuid,
-            'path' => $path,
-            'is_system' => $is_system,
-            'has_lottery' => $hasLottery,
-            'admin_id' => $adminId,
-            'admin_username' => $adminUsername,
-        ]);
-    }
-
     // 分布式锁：防止上下分并发
     $actionLockerKey = 'machine_operation_lock_' . $machine->id;
     $lock = Locker::lock($actionLockerKey, 30, true);
@@ -1483,7 +1467,7 @@ function machineWash(
             $washResult = null;
             // ⚠️ CRITICAL：只有 money > 0 时才创建洗分记录
             // 防止竞态条件导致创建 0 分记录但硬件有分的情况
-            if ($money > 0) {
+            if ($money >= 0) {
                 $washResult = machineWashZero($player, $machine, $money, $is_system, max($gamingPressure, 0),
                     max($gamingScore, 0), max($gamingTurnPoint, 0), $path, $adminId, $adminUsername);
                 $machine = $washResult['machine'];
@@ -1689,19 +1673,6 @@ function machineWash(
 
         } catch (Exception $e) {
             DB::rollback();
-
-            // ⚠️ C376 洗分日志（失败）
-            if ($machine->code === 'C376') {
-                Log::channel('machine_operations')->error('[C376-MachineWash] 洗分失败', [
-                    'machine_id' => $machine->id,
-                    'machine_code' => $machine->code,
-                    'player_id' => $player->id,
-                    'path' => $path,
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                ]);
-            }
-
             throw new Exception($e->getMessage());
         }
 
@@ -1718,16 +1689,11 @@ function machineWash(
         } catch (Exception $e) {
             Log::error('游戏结束同步彩金失败: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
         }
-        queueClient::send('media-recording', [
-            'machine_id' => $machine->id,
-            'action' => 'stop',
-        ], 10);
         //下分成功 下分&下轉限制歸零 開獎中結束 關閉 push auto
         $services->last_play_time = time();
         if ($path == 'leave') {
             $services->gaming_user_id = 0;
             $services->gaming = 0;
-            // ✅ keeping、player_pressure、player_score、player_win_number 已在事务提交后立即更新，此处无需重复
             $services->player_open_point = 0;
             $services->player_wash_point = 0;
         }
@@ -1745,21 +1711,6 @@ function machineWash(
 
         // 清理消息缓存
         LotteryServices::clearNoticeCache($player->id, $machine->id);
-
-        // ⚠️ C376 洗分日志（成功）
-        if ($machine->code === 'C376') {
-            Log::channel('machine_operations')->info('[C376-MachineWash] 洗分成功完成', [
-                'machine_id' => $machine->id,
-                'machine_code' => $machine->code,
-                'player_id' => $player->id,
-                'path' => $path,
-                'wash_point' => $washResult['wash_point'] ?? 0,
-                'gaming_turn_point' => $washResult['gaming_turn_point'] ?? 0,
-                'gaming_pressure' => $washResult['gaming_pressure'] ?? 0,
-                'gaming_score' => $washResult['gaming_score'] ?? 0,
-                'has_lottery' => isset($playerLotteryRecord),
-            ]);
-        }
 
         return $playerLotteryRecord ?? true;
 
@@ -1861,6 +1812,7 @@ function machineWashZero(
             } elseif ($machine->type == GameType::TYPE_STEEL_BALL) {
                 $playerGameLog->chip_amount = bcmul($machine->machineCategory?->turn_used_point ?? 0, $gamingTurnPoint);
             }
+            Log::error('这里开始添加洗分记录');
             extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint, $adminId, $adminUsername);
 
             //寫入金流明細

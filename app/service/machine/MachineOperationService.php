@@ -5,9 +5,9 @@ namespace app\service\machine;
 use app\model\GameType;
 use app\model\Machine;
 use app\model\Player;
+use Exception;
 use GatewayWorker\Lib\Gateway;
 use support\Log;
-use Exception;
 
 /**
  * 机台操作统一服务类
@@ -875,6 +875,7 @@ class MachineOperationService
 
         // 获取玩家
         // ✅ 预加载 recommend_promoter 和 national_promoter 关系，避免 N+1 查询
+        /** @var Player $player */
         $player = Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
             ->find($params['player_id']);
         if (!$player) {
@@ -959,6 +960,7 @@ class MachineOperationService
      * - 数据库事务
      * - 钱包操作
      * - 游戏记录
+     * @throws Exception
      */
     private function open(array $params): array
     {
@@ -973,6 +975,7 @@ class MachineOperationService
 
         // 获取玩家
         // ✅ 预加载 recommend_promoter 和 national_promoter 关系，避免 N+1 查询
+        /** @var Player $player */
         $player = Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
             ->find($params['player_id']);
         if (!$player) {
