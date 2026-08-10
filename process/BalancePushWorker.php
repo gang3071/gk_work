@@ -138,57 +138,26 @@ class BalancePushWorker
      */
     public function handleMessage($redis, string $channel, string $message): void
     {
-        $startTime = microtime(true);
-
         try {
-            // ✅ 步骤1：收到 Redis 消息
-            $this->log->info("📨 收到 Redis 消息", [
-                'channel' => $channel,
-                'message_preview' => substr($message, 0, 200),
-            ]);
-
-            // ✅ 步骤2：解析 JSON 消息
+            // 解析消息
             $data = json_decode($message, true);
             if (!$data) {
-                $this->log->warning("❌ 消息解析失败", [
+                $this->log->warning("余额推送消息解析失败", [
                     'message' => substr($message, 0, 200),
                     'json_error' => json_last_error_msg(),
                 ]);
                 return;
             }
 
-            $this->log->info("✅ 消息解析成功", [
-                'player_id' => $data['player_id'] ?? 'null',
-                'reason' => $data['reason'] ?? 'null',
-                'platform' => $data['platform'] ?? '',
-            ]);
-
-            // ✅ 步骤3：验证必要字段
+            // 验证必要字段
             if (!isset($data['player_id'], $data['new_balance'], $data['reason'])) {
-                $this->log->warning("❌ 消息缺少必要字段", [
+                $this->log->warning("余额推送消息缺少必要字段", [
                     'data' => $data,
-                    'missing_fields' => array_diff(
-                        ['player_id', 'new_balance', 'reason'],
-                        array_keys($data)
-                    ),
                 ]);
                 return;
             }
 
-            $this->log->info("✅ 字段验证通过", [
-                'player_id' => $data['player_id'],
-                'old_balance' => $data['old_balance'] ?? 0,
-                'new_balance' => $data['new_balance'],
-                'change_amount' => bcsub($data['new_balance'], $data['old_balance'] ?? 0, 2),
-                'reason' => $data['reason'],
-            ]);
-
-            // ✅ 步骤4：调用推送服务
-            $this->log->info("🚀 开始调用推送服务", [
-                'player_id' => $data['player_id'],
-                'channel' => 'player-' . $data['player_id'],
-            ]);
-
+            // 推送余额变化
             $result = BalancePushService::pushBalanceChange(
                 (int)$data['player_id'],
                 (float)($data['old_balance'] ?? 0),
@@ -200,32 +169,21 @@ class BalancePushWorker
                 ]
             );
 
-            // ✅ 步骤5：记录推送结果
-            $duration = round((microtime(true) - $startTime) * 1000, 2);
-
-            if ($result) {
-                $this->log->info("✅ 推送成功", [
+            // 只记录失败日志，减少 I/O
+            if (!$result) {
+                $this->log->warning("实时推送失败", [
                     'player_id' => $data['player_id'],
                     'reason' => $data['reason'],
                     'platform' => $data['platform'] ?? '',
-                    'duration_ms' => $duration,
-                ]);
-            } else {
-                $this->log->warning("❌ 推送失败", [
-                    'player_id' => $data['player_id'],
-                    'reason' => $data['reason'],
-                    'platform' => $data['platform'] ?? '',
-                    'duration_ms' => $duration,
                 ]);
             }
 
         } catch (\Throwable $e) {
-            $this->log->error("💥 处理推送消息异常", [
+            $this->log->error("处理推送消息异常", [
                 'error' => $e->getMessage(),
                 'message' => substr($message, 0, 200),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
             ]);
         }
     }

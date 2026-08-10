@@ -43,19 +43,9 @@ class BalancePushService
         array  $extra = []
     ): bool
     {
-        $log = Log::channel('balance_push');
-
         try {
             // 映射操作原因到交易类型
             $type = self::REASON_TYPE_MAP[$reason] ?? PlayerDeliveryRecord::TYPE_SETTLEMENT;
-
-            $log->info("🔧 构建推送数据", [
-                'player_id' => $playerId,
-                'reason' => $reason,
-                'type' => $type,
-                'old_balance' => $oldBalance,
-                'new_balance' => $newBalance,
-            ]);
 
             // ✅ 构建推送数据（与 PlayerDeliveryRecord 模型事件格式完全一致）
             $pushData = [
@@ -69,46 +59,27 @@ class BalancePushService
                 'machine_type' => 0,  // 游戏平台固定为 0
             ];
 
-            $log->info("📡 调用 sendSocketMessage", [
-                'channel' => 'player-' . $playerId,
-                'push_data' => $pushData,
-            ]);
-
             // 使用系统统一的推送函数
             $result = sendSocketMessage('player-' . $playerId, $pushData);
 
-            $log->info("📬 sendSocketMessage 返回结果", [
-                'player_id' => $playerId,
-                'result' => $result,
-                'result_type' => gettype($result),
-            ]);
-
             if (!$result) {
-                $log->warning('❌ 游戏余额推送失败（sendSocketMessage 返回 false）', [
+                Log::warning('游戏余额推送失败', [
                     'player_id' => $playerId,
                     'reason' => $reason,
                     'platform' => $extra['platform'] ?? '',
-                    'channel' => 'player-' . $playerId,
                 ]);
                 return false;
             }
 
-            $log->info("✅ 游戏余额推送成功", [
-                'player_id' => $playerId,
-                'reason' => $reason,
-                'platform' => $extra['platform'] ?? '',
-            ]);
-
             return true;
 
         } catch (\Throwable $e) {
-            $log->error('💥 游戏余额推送异常', [
+            Log::error('游戏余额推送异常', [
                 'player_id' => $playerId,
                 'reason' => $reason,
                 'error' => $e->getMessage(),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
             ]);
             return false;
         }
