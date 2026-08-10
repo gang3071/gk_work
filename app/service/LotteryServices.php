@@ -585,8 +585,8 @@ class LotteryServices
                         'requiredAmount' => $lottery->bet_amount,
                     ]);
 
-                    // 累加玩家的打码量
-                    $accumulatedResult = $this->accumulateBetAmount($lottery->id, $betAmount);
+                    // 累加玩家的打码量（✅ 直接传入 requiredAmount，避免重复查询数据库）
+                    $accumulatedResult = $this->accumulateBetAmount($lottery->id, $betAmount, floatval($lottery->bet_amount));
 
                     // 🔧 临时调试日志
                     \support\Log::info('打码量累积结果', [
@@ -673,6 +673,7 @@ class LotteryServices
      *
      * @param int $lotteryId 彩金ID
      * @param float $betAmount 本次下注金额
+     * @param float $requiredAmount 最低打码量要求
      * @return array [
      *   'before' => 累加前金额,
      *   'after' => 累加后金额,
@@ -680,11 +681,12 @@ class LotteryServices
      *   'participate_times' => 可参与次数
      * ]
      */
-    private function accumulateBetAmount(int $lotteryId, float $betAmount): array
+    private function accumulateBetAmount(int $lotteryId, float $betAmount, float $requiredAmount): array
     {
         \support\Log::info('🔧 accumulateBetAmount 方法开始', [
             'lottery_id' => $lotteryId,
             'bet_amount' => $betAmount,
+            'required_amount' => $requiredAmount,
             'player_id' => $this->player->id,
         ]);
 
@@ -696,32 +698,6 @@ class LotteryServices
             $this->player->id,
             $lotteryId
         );
-
-        \support\Log::info('🔧 准备查询彩金配置', [
-            'lottery_id' => $lotteryId,
-        ]);
-
-        // 获取彩金配置的最低打码量
-        $lottery = Lottery::find($lotteryId);
-        if (!$lottery) {
-            \support\Log::error('累计打码量：彩金不存在', [
-                'lottery_id' => $lotteryId,
-                'player_id' => $this->player->id,
-            ]);
-            return [
-                'before' => 0,
-                'after' => 0,
-                'can_participate' => false,
-                'participate_times' => 0,
-            ];
-        }
-
-        \support\Log::info('🔧 彩金配置查询成功', [
-            'lottery_id' => $lotteryId,
-            'bet_amount_limit' => $lottery->bet_amount,
-        ]);
-
-        $requiredAmount = $lottery->bet_amount ?? 0;
 
         // ✅ 使用 Lua 脚本原子性累加打码量并计算参与次数
         $lua = <<<'LUA'
