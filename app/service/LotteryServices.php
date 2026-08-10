@@ -878,11 +878,9 @@ class LotteryServices
 
             // 派彩成功后补充到目标金额（如果启用了自动补充）
             if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
-                $beforeRefillAmount = $lottery->amount;
 
                 // 只有当彩池低于目标金额时才补充
                 if ($lottery->amount < $lottery->auto_refill_amount) {
-                    $refillAmount = bcsub($lottery->auto_refill_amount, $lottery->amount, 4);
                     $lottery->amount = $lottery->auto_refill_amount;
                 }
             }
