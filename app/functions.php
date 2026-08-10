@@ -548,21 +548,52 @@ function createOrderNo(): string
  */
 function sendSocketMessage($channels, $content, string $form = 'system'): bool|string
 {
+    $log = Log::channel('balance_push');
+
     try {
+        $pushApiUrl = env('PUSH_API_URL', 'http://10.140.0.6:3232');
+        $pushAppKey = env('PUSH_APP_KEY', '20f94408fc4c52845f162e92a253c7a3');
+
+        $log->info("🌐 准备连接 Push 服务", [
+            'push_api_url' => $pushApiUrl,
+            'push_app_key' => substr($pushAppKey, 0, 8) . '...',
+            'channels' => $channels,
+            'from' => $form,
+        ]);
+
         // 直接读取 .env 配置，连接到 gk_api 的推送服务
         $api = new Api(
-            env('PUSH_API_URL', 'http://10.140.0.6:3232'),
-            env('PUSH_APP_KEY', '20f94408fc4c52845f162e92a253c7a3'),
+            $pushApiUrl,
+            $pushAppKey,
             env('PUSH_APP_SECRET', '3151f8648a6ccd9d4515386f34127e28')
         );
+
+        $log->info("📤 发送 Push 请求", [
+            'channels' => $channels,
+            'event' => 'message',
+            'content_preview' => is_array($content) ? json_encode($content) : substr($content, 0, 200),
+        ]);
+
         $result = $api->trigger($channels, 'message', [
             'from_uid' => $form,
             'content' => json_encode($content)
         ]);
 
+        $log->info("📥 Push 服务响应", [
+            'channels' => $channels,
+            'result' => $result,
+            'result_type' => gettype($result),
+        ]);
+
         return $result;
     } catch (Exception $e) {
-        Log::error('sendSocketMessage: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+        $log->error('💥 sendSocketMessage 异常', [
+            'channels' => $channels,
+            'error' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString(),
+        ]);
         return false;
     }
 }
