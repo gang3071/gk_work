@@ -745,6 +745,17 @@ LUA;
                 'required_amount' => $requiredAmount,
             ]);
 
+            // 🔧 临时：先测试简单的 Lua 脚本
+            \support\Log::info('🔧 测试 Redis eval 是否可用');
+            try {
+                $testResult = $redis->eval("return 'OK'", 0);
+                \support\Log::info('🔧 Redis eval 测试成功', ['result' => $testResult]);
+            } catch (\Exception $testE) {
+                \support\Log::error('🔧 Redis eval 测试失败', ['error' => $testE->getMessage()]);
+                throw $testE;
+            }
+
+            \support\Log::info('🔧 开始执行实际 Lua 脚本');
             $resultJson = $redis->eval(
                 $lua,
                 1,  // KEYS 数量
