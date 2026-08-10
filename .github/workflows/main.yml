@@ -33,23 +33,10 @@ jobs:
           echo "   URL参数: $BRANCH_PARAM"
 
           # 根据分支名判断环境
-          if [ "${{ env.BRANCH_NAME }}" == "super9-main" ]; then
-            echo ""
-            echo "🚀 目标环境: 正式线 (Production)"
-            echo "   服务器: 34.80.234.173"
-            WEBHOOK_URL="https://34.80.234.173:35812/hook?access_key=rMlbPzdFL295OEzGrgLIkTEvEoxqgMln1ZoN0JTY8VBZghzA&param=$BRANCH_PARAM"
-          elif [[ "${{ env.BRANCH_NAME }}" == release/* ]]; then
-            echo ""
-            echo "🎯 目标环境: 预发布线 (Pre-release)"
-            echo "   服务器: 35.194.231.219"
-            WEBHOOK_URL="https://35.194.231.219:35812/hook?access_key=ZbVfTXP8aMvRvlGW08F58fyxDpjQwCik2V2tMRhJSPAgNkkt&param=$BRANCH_PARAM"
-          else
-            echo ""
-            echo "🧪 目标环境: 测试线 (Test)"
-            echo "   服务器: 34.81.124.226"
-            WEBHOOK_URL="https://34.81.124.226:14843/hook?access_key=VA7Uj5LdFuBkmsnUB4bdw64ji89fffYF9Yb1N71i4OLpCPEE&param=$BRANCH_PARAM"
-          fi
-
+          echo ""
+          echo "🧪 目标环境: 测试线 (Test)"
+          echo "   服务器: 34.81.124.226"
+          WEBHOOK_URL="https://34.81.124.226:14843/hook?access_key=VA7Uj5LdFuBkmsnUB4bdw64ji89fffYF9Yb1N71i4OLpCPEE&param=$BRANCH_PARAM"
           echo ""
           echo "📡 触发 Webhook..."
           if curl -k -X GET "$WEBHOOK_URL" -w "\n状态码: %{http_code}\n"; then
