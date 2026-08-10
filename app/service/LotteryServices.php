@@ -682,6 +682,12 @@ class LotteryServices
      */
     private function accumulateBetAmount(int $lotteryId, float $betAmount): array
     {
+        \support\Log::info('🔧 accumulateBetAmount 方法开始', [
+            'lottery_id' => $lotteryId,
+            'bet_amount' => $betAmount,
+            'player_id' => $this->player->id,
+        ]);
+
         $redis = \support\Redis::connection()->client();
 
         // Redis 键：player_{player_id}_lottery_{lottery_id}_accumulated_bet
@@ -690,6 +696,10 @@ class LotteryServices
             $this->player->id,
             $lotteryId
         );
+
+        \support\Log::info('🔧 准备查询彩金配置', [
+            'lottery_id' => $lotteryId,
+        ]);
 
         // 获取彩金配置的最低打码量
         $lottery = Lottery::find($lotteryId);
@@ -705,6 +715,12 @@ class LotteryServices
                 'participate_times' => 0,
             ];
         }
+
+        \support\Log::info('🔧 彩金配置查询成功', [
+            'lottery_id' => $lotteryId,
+            'bet_amount_limit' => $lottery->bet_amount,
+        ]);
+
         $requiredAmount = $lottery->bet_amount ?? 0;
 
         // ✅ 使用 Lua 脚本原子性累加打码量并计算参与次数
@@ -753,6 +769,12 @@ return cjson.encode({
 LUA;
 
         try {
+            \support\Log::info('🔧 准备执行 Lua 脚本', [
+                'redis_key' => $redisKey,
+                'bet_amount' => $betAmount,
+                'required_amount' => $requiredAmount,
+            ]);
+
             $resultJson = $redis->eval(
                 $lua,
                 1,  // KEYS 数量
@@ -762,12 +784,20 @@ LUA;
                 86400 * 7          // ARGV[3] - 7天过期
             );
 
+            \support\Log::info('🔧 Lua 脚本执行完成', [
+                'result_json' => $resultJson,
+            ]);
+
             $result = json_decode($resultJson, true);
 
             // ✅ 检查 JSON 解析是否成功
             if (!is_array($result)) {
                 throw new \Exception('Lua 脚本返回的 JSON 解析失败: ' . substr($resultJson, 0, 100));
             }
+
+            \support\Log::info('🔧 accumulateBetAmount 方法返回', [
+                'result' => $result,
+            ]);
 
             return [
                 'before' => (float)($result['before'] ?? 0),
