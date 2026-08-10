@@ -100,9 +100,9 @@ class LotteryServices
             // 发送消息
             sendSocketMessage('group-lottery-pool', $messageData);
 
-            // 更新最后推送时间和数据哈希
-            $redis->set(self::REDIS_KEY_LAST_PUSH_TIME, time());
-            $redis->set(self::REDIS_KEY_LAST_PUSH_HASH, $currentHash);
+]            // 更新最后推送时间和数据哈希（✅ 使用 setex 原子操作）
+            $redis->setex(self::REDIS_KEY_LAST_PUSH_TIME, 86400 * 7, time());
+            $redis->setex(self::REDIS_KEY_LAST_PUSH_HASH, 86400 * 7, $currentHash);
         } catch (\Throwable $e) {
             \support\Log::error('实时推送彩池数据失败: ' . $e->getMessage(), [
                 'file' => $e->getFile(),
@@ -421,9 +421,9 @@ class LotteryServices
                         // 清除 Redis 累积计数（重置为0）
                         $redis->del($redisKey);
 
-                        // 更新最后同步时间
+                        // 更新最后同步时间（✅ 使用 setex 原子操作）
                         $lastSyncKey = 'machine_lottery_last_sync:' . $lottery->id;
-                        $redis->set($lastSyncKey, time());
+                        $redis->setex($lastSyncKey, 86400 * 7, time());
 
                         // 清除彩金缓存
                         self::clearLotteryListCache($machineType);
@@ -630,6 +630,8 @@ class LotteryServices
     /**
      * 累计玩家打码量（用于最低打码量限制）
      *
+     * ✅ 使用 Lua 脚本实现原子操作，避免并发竞态条件
+     *
      * @param int $lotteryId 彩金ID
      * @param float $betAmount 本次下注金额
      * @return array [
@@ -650,45 +652,90 @@ class LotteryServices
             $lotteryId
         );
 
-        // 获取当前累计金额
-        $before = (float)($redis->get($redisKey) ?? 0);
-
-        // 累加本次下注金额
-        $after = bcadd($before, $betAmount, 2);
-
         // 获取彩金配置的最低打码量
         $lottery = Lottery::find($lotteryId);
         $requiredAmount = $lottery->bet_amount ?? 0;
 
-        // 计算可以参与的次数
-        $participateTimes = 0;
-        $canParticipate = false;
+        // ✅ 使用 Lua 脚本原子性累加打码量并计算参与次数
+        $lua = <<<'LUA'
+-- KEYS[1] = Redis 键
+-- ARGV[1] = 本次下注金额
+-- ARGV[2] = 最低打码量
+-- ARGV[3] = 过期时间（秒）
 
-        if ($requiredAmount > 0 && $after >= $requiredAmount) {
-            // 计算可以参与几次（向下取整）
-            $participateTimes = intval(floor($after / $requiredAmount));
-            $canParticipate = true;
+local key = KEYS[1]
+local betAmount = tonumber(ARGV[1]) or 0
+local requiredAmount = tonumber(ARGV[2]) or 0
+local ttl = tonumber(ARGV[3]) or 604800
 
-            // 计算剩余金额
-            $remaining = bcmod($after, $requiredAmount, 2);
+-- 获取当前累计金额
+local before = tonumber(redis.call('GET', key)) or 0
 
-            // 更新 Redis（保留余数）
-            $redis->set($redisKey, $remaining);
+-- 累加本次下注金额
+local after = before + betAmount
 
-            // 设置过期时间（7天）
-            $redis->expire($redisKey, 86400 * 7);
-        } else {
-            // 未达到打码量，更新累计金额
-            $redis->set($redisKey, $after);
-            $redis->expire($redisKey, 86400 * 7);
+-- 计算可以参与的次数和剩余金额
+local participateTimes = 0
+local canParticipate = 0
+local remaining = after
+
+if requiredAmount > 0 and after >= requiredAmount then
+    -- 计算可以参与几次（向下取整）
+    participateTimes = math.floor(after / requiredAmount)
+    canParticipate = 1
+
+    -- 计算剩余金额（取模）
+    remaining = after - (participateTimes * requiredAmount)
+end
+
+-- 原子性更新 Redis（带过期时间）
+redis.call('SETEX', key, ttl, tostring(remaining))
+
+-- 返回结果
+return cjson.encode({
+    before = before,
+    after = after,
+    can_participate = canParticipate == 1,
+    participate_times = participateTimes,
+    remaining = remaining
+})
+LUA;
+
+        try {
+            $resultJson = $redis->eval(
+                $lua,
+                1,  // KEYS 数量
+                $redisKey,         // KEYS[1]
+                $betAmount,        // ARGV[1]
+                $requiredAmount,   // ARGV[2]
+                86400 * 7          // ARGV[3] - 7天过期
+            );
+
+            $result = json_decode($resultJson, true);
+
+            return [
+                'before' => (float)$result['before'],
+                'after' => (float)$result['after'],
+                'can_participate' => (bool)$result['can_participate'],
+                'participate_times' => (int)$result['participate_times'],
+            ];
+
+        } catch (\Exception $e) {
+            \support\Log::error('累计打码量 Lua 脚本执行失败', [
+                'lottery_id' => $lotteryId,
+                'player_id' => $this->player->id,
+                'bet_amount' => $betAmount,
+                'error' => $e->getMessage(),
+            ]);
+
+            // 降级处理：返回不能参与
+            return [
+                'before' => 0,
+                'after' => 0,
+                'can_participate' => false,
+                'participate_times' => 0,
+            ];
         }
-
-        return [
-            'before' => $before,
-            'after' => $after,
-            'can_participate' => $canParticipate,
-            'participate_times' => $participateTimes,
-        ];
     }
 
     /**
@@ -841,6 +888,16 @@ class LotteryServices
                 return false;
             }
 
+            // 验证玩家钱包存在
+            $machineWallet = $this->player->machine_wallet()->first();
+            if (!$machineWallet) {
+                DB::rollback();
+                return false;
+            }
+
+            // 获取玩家当前余额（用于记录交易前余额）
+            $beforeAmount = WalletService::getBalance($this->player->id);
+
             // 创建派彩记录
             $playerLotteryRecord = $this->createLotteryRecord($lottery, $amount, $lotteryMultiple, $bet, $isDoubled);
 
@@ -850,24 +907,7 @@ class LotteryServices
             // 发送站内信
             $notice = $this->sendNotice($playerLotteryRecord->id, $playerLotteryRecord->lottery_name);
 
-            // 更新玩家钱包（加彩金金额）
-            // 1. 从 Redis 读取余额（唯一可信源）
-            $beforeAmount = WalletService::getBalance($this->player->id);
-
-            // 2. 使用 WalletService 原子性加款（Redis）
-            $incrementResult = WalletService::atomicIncrement($this->player->id, $amount);
-            $newBalance = $incrementResult['balance'];
-
-            // ✅ 3. 验证玩家钱包存在（但不需要手动同步数据库）
-            // WalletService::atomicIncrement() 内部已自动调用 asyncUpdateDB()
-            $machineWallet = $this->player->machine_wallet()->first();
-            if (!$machineWallet) {
-                DB::rollback();
-                return false;
-            }
-            // ✅ 删除手动同步代码：数据库同步由 WalletService 异步队列自动完成
-
-            // 创建交易记录
+            // 创建交易记录（先记录预期的交易，余额变化在事务提交后执行）
             $playerDeliveryRecord = new PlayerDeliveryRecord();
             $playerDeliveryRecord->player_id = $this->player->id;
             $playerDeliveryRecord->department_id = $this->player->department_id;
@@ -878,7 +918,7 @@ class LotteryServices
             $playerDeliveryRecord->source = 'lottery_random';
             $playerDeliveryRecord->amount = $amount;
             $playerDeliveryRecord->amount_before = $beforeAmount;
-            $playerDeliveryRecord->amount_after = $newBalance;
+            $playerDeliveryRecord->amount_after = bcadd($beforeAmount, $amount, 2);  // 预期余额
             $playerDeliveryRecord->tradeno = '';
             $playerDeliveryRecord->remark = '随机彩金派彩';
             $playerDeliveryRecord->user_id = 0;
@@ -907,7 +947,59 @@ class LotteryServices
 
             $lottery->save();
 
+            // ✅ 提交数据库事务（此时所有数据库操作成功）
             DB::commit();
+
+            // ✅ 事务提交后，更新 Redis 余额（两阶段提交）
+            // 优势：数据库操作失败时 Redis 不会被修改，保证数据一致性
+            // 风险：Redis 操作失败时数据库已提交，需要补偿机制
+            try {
+                $incrementResult = WalletService::atomicIncrement($this->player->id, $amount);
+                $newBalance = $incrementResult['balance'];
+
+                // 更新交易记录的实际余额（异步更新，不影响主流程）
+                try {
+                    $playerDeliveryRecord->amount_after = $newBalance;
+                    $playerDeliveryRecord->save();
+                } catch (\Exception $e) {
+                    // 余额记录更新失败不影响主流程
+                    \support\Log::warning('更新交易记录实际余额失败', [
+                        'delivery_id' => $playerDeliveryRecord->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            } catch (\Exception $e) {
+                // ❌ Redis 加款失败（严重问题：数据库已提交但 Redis 未更新）
+                // 记录补偿日志，需要人工或定时任务补偿
+                \support\Log::critical('彩金派发：Redis 加款失败，需要补偿', [
+                    'player_id' => $this->player->id,
+                    'amount' => $amount,
+                    'lottery_id' => $lottery->id,
+                    'delivery_record_id' => $playerDeliveryRecord->id,
+                    'lottery_record_id' => $playerLotteryRecord->id,
+                    'error' => $e->getMessage(),
+                    'compensate_action' => 'WalletService::atomicIncrement',
+                    'compensate_params' => [
+                        'player_id' => $this->player->id,
+                        'amount' => $amount,
+                    ],
+                ]);
+
+                // 尝试回滚彩池扣减（尽力而为，可能失败）
+                try {
+                    $lottery->amount = bcadd($lottery->amount, $baseDeductAmount, 2);
+                    $lottery->lottery_times = $lottery->lottery_times - 1;
+                    $lottery->save();
+                } catch (\Exception $rollbackException) {
+                    \support\Log::critical('彩池回滚失败', [
+                        'lottery_id' => $lottery->id,
+                        'error' => $rollbackException->getMessage(),
+                    ]);
+                }
+
+                // 不抛出异常，避免影响后续流程
+                // return false;  // 可选：返回 false 表示失败
+            }
 
             // 设置冷却期：中奖后30分钟内不再触发中奖
             $this->setCooldown($lottery->id);
@@ -1849,9 +1941,9 @@ LUA;
         try {
             $redis = \support\Redis::connection()->client();
 
-            // 设置清除时间标记（用于惰性清理）
+            // 设置清除时间标记（用于惰性清理）（✅ 使用 setex 原子操作）
             $clearTimeKey = 'machine_lottery_stats:clear_time:' . $lotteryId;
-            $redis->set($clearTimeKey, time());
+            $redis->setex($clearTimeKey, 86400 * 30, time());  // 30天过期
 
             // 删除所有统计键
             $keysToDelete = [
@@ -1924,9 +2016,9 @@ LUA;
                         // 清除 Redis 累积计数
                         $redis->del($redisKey);
 
-                        // 更新最后同步时间
+                        // 更新最后同步时间（✅ 使用 setex 原子操作）
                         $lastSyncKey = 'machine_lottery_last_sync:' . $lottery->id;
-                        $redis->set($lastSyncKey, time());
+                        $redis->setex($lastSyncKey, 86400 * 7, time());
 
                         $result['synced_count']++;
                         $result['details'][] = [
@@ -2179,8 +2271,8 @@ LUA;
                 return;
             }
 
-            // 更新最后检查时间
-            $redis->set($lastCheckKey, time());
+            // 更新最后检查时间（✅ 使用 setex 原子操作）
+            $redis->setex($lastCheckKey, 3600, time());  // 1小时过期
 
             // 执行实际的爆彩检查
             $this->checkAndTriggerBurst($lottery);
