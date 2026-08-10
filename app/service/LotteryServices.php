@@ -457,14 +457,10 @@ class LotteryServices
     }
 
     /**
-     * 实时中奖（新版：概率派彩模式）
-     * @return bool
-     * @throws Exception|PushException
-     */
-    /**
      * 检查彩金
      * @param float $incrementNum 本次游戏的增量（newNum - lastNum）
      * @return bool
+     * @throws PushException
      */
     public function checkLottery(float $incrementNum = 0): bool
     {
@@ -565,45 +561,14 @@ class LotteryServices
                 // 计算本次下注金额（根据机台类型和增量）
                 $betAmount = $this->calculateBetAmount($incrementNum);
 
-                // 🔧 临时调试日志
-                \support\Log::info('随机彩金检查', [
-                    'lottery_id' => $lottery->id,
-                    'lottery_name' => $lottery->name,
-                    'incrementNum' => $incrementNum,
-                    'betAmount' => $betAmount,
-                    'bet_amount_limit' => $lottery->bet_amount,
-                    'win_ratio' => $lottery->win_ratio,
-                ]);
-
                 // ✅ 累计打码量机制（2026-07-30）
                 // 检查是否启用最低打码量限制
                 if ($lottery->bet_amount > 0) {
-                    // 🔧 临时调试日志
-                    \support\Log::info('进入打码量累积逻辑', [
-                        'lottery_id' => $lottery->id,
-                        'betAmount' => $betAmount,
-                        'requiredAmount' => $lottery->bet_amount,
-                    ]);
-
                     // 累加玩家的打码量（✅ 直接传入 requiredAmount，避免重复查询数据库）
                     $accumulatedResult = $this->accumulateBetAmount($lottery->id, $betAmount, floatval($lottery->bet_amount));
 
-                    // 🔧 临时调试日志
-                    \support\Log::info('打码量累积结果', [
-                        'lottery_id' => $lottery->id,
-                        'before' => $accumulatedResult['before'],
-                        'after' => $accumulatedResult['after'],
-                        'can_participate' => $accumulatedResult['can_participate'],
-                        'participate_times' => $accumulatedResult['participate_times'],
-                    ]);
-
                     // 如果累计未达到最低打码量，跳过抽奖
                     if (!$accumulatedResult['can_participate']) {
-                        \support\Log::info('打码量不足，跳过抽奖', [
-                            'lottery_id' => $lottery->id,
-                            'accumulated' => $accumulatedResult['after'],
-                            'required' => $lottery->bet_amount,
-                        ]);
                         continue;
                     }
 
@@ -742,12 +707,6 @@ return cjson.encode({
 LUA;
 
         try {
-            \support\Log::info('🔧 准备执行 Lua 脚本', [
-                'redis_key' => $redisKey,
-                'bet_amount' => $betAmount,
-                'required_amount' => $requiredAmount,
-            ]);
-
             // ✅ 使用 Redis 门面类（与系统其他地方一致）
             $resultJson = \support\Redis::eval(
                 $lua,
@@ -755,22 +714,14 @@ LUA;
                 $redisKey,         // KEYS[1]
                 $betAmount,        // ARGV[1]
                 $requiredAmount,   // ARGV[2]
-                86400 * 7          // ARGV[3] - 7天过期
+                86400          // ARGV[3] - 7天过期
             );
-
-            \support\Log::info('🔧 Lua 脚本执行完成', [
-                'result_json' => $resultJson,
-            ]);
 
             // 解析 JSON 结果
             $result = json_decode($resultJson, true);
             if (!is_array($result)) {
                 throw new \Exception('Lua 脚本返回 JSON 解析失败: ' . substr($resultJson, 0, 100));
             }
-
-            \support\Log::info('🔧 accumulateBetAmount 方法返回', [
-                'result' => $result,
-            ]);
 
             return [
                 'before' => (float)($result['before'] ?? 0),
@@ -780,14 +731,6 @@ LUA;
             ];
 
         } catch (\Exception $e) {
-            \support\Log::error('累计打码量 Lua 脚本执行失败', [
-                'lottery_id' => $lotteryId,
-                'player_id' => $this->player->id,
-                'bet_amount' => $betAmount,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
             // 降级处理：返回不能参与
             return [
                 'before' => 0,
@@ -815,11 +758,9 @@ LUA;
         array     $burstInfo
     ): void
     {
-        // 🔧 临时禁用：冷却期检查（方便测试）
-        // TODO: 测试完成后恢复此检查
-        // if ($this->isInCooldown($lottery->id)) {
-        //     return;
-        // }
+        if ($this->isInCooldown($lottery->id)) {
+            return;
+        }
 
         // 应用爆彩概率倍数到中奖检查
         // 🔧 修复：使用sprintf格式化，避免科学计数法导致bcmul报错（2026-05-11）
@@ -1030,22 +971,6 @@ LUA;
                     ]);
                 }
             } catch (\Exception $e) {
-                // ❌ Redis 加款失败（严重问题：数据库已提交但 Redis 未更新）
-                // 记录补偿日志，需要人工或定时任务补偿
-                \support\Log::critical('彩金派发：Redis 加款失败，需要补偿', [
-                    'player_id' => $this->player->id,
-                    'amount' => $amount,
-                    'lottery_id' => $lottery->id,
-                    'delivery_record_id' => $playerDeliveryRecord->id,
-                    'lottery_record_id' => $playerLotteryRecord->id,
-                    'error' => $e->getMessage(),
-                    'compensate_action' => 'WalletService::atomicIncrement',
-                    'compensate_params' => [
-                        'player_id' => $this->player->id,
-                        'amount' => $amount,
-                    ],
-                ]);
-
                 // 尝试回滚彩池扣减（尽力而为，可能失败）
                 try {
                     $lottery->amount = bcadd($lottery->amount, $baseDeductAmount, 2);
@@ -1661,22 +1586,6 @@ LUA;
                             throw new \Exception($result['error'] ?? 'Redis 加款失败');
                         }
                     } catch (\Exception $e) {
-                        // ❌ Redis 加款失败（严重问题：数据库已提交但 Redis 未更新）
-                        // 记录补偿日志，需要人工或定时任务补偿
-                        \support\Log::critical('固定彩金派发：Redis 加款失败，需要补偿', [
-                            'player_id' => $this->player->id,
-                            'amount' => $fixedAllowLottery['amount'],
-                            'lottery_id' => $fixedAllowLottery['lottery_id'],
-                            'delivery_record_id' => $playerDeliveryRecord->id,
-                            'lottery_record_id' => $playerLotteryRecord->id,
-                            'error' => $e->getMessage(),
-                            'compensate_action' => 'WalletService::add',
-                            'compensate_params' => [
-                                'player_id' => $this->player->id,
-                                'amount' => $fixedAllowLottery['amount'],
-                            ],
-                        ]);
-
                         // 尝试回滚彩池扣减（尽力而为，可能失败）
                         try {
                             $lotteryModel->refresh();  // 重新加载最新数据
@@ -2502,10 +2411,6 @@ LUA;
             $key = self::REDIS_KEY_LOTTERY_COOLDOWN . $lotteryId;
             return $redis->exists($key) > 0;
         } catch (\Exception $e) {
-            \support\Log::error('检查彩金冷却期失败', [
-                'lottery_id' => $lotteryId,
-                'error' => $e->getMessage(),
-            ]);
             // 出错时保守处理，不阻止中奖检查
             return false;
         }
