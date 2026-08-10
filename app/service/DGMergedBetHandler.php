@@ -283,6 +283,34 @@ LUA;
                 $decoded['total_amount'] = round((int)$decoded['total_amount'] / 100, 2);
             }
 
+            // ✅ 发布余额变化消息到 Redis Pub/Sub（实时推送到客户端）
+            if ($decoded['ok'] === 1 && isset($decoded['balance'], $decoded['old_balance'])) {
+                try {
+                    // 余额变化大于 0.01 才推送
+                    if (abs($decoded['balance'] - $decoded['old_balance']) >= 0.01) {
+                        $message = json_encode([
+                            'player_id' => $playerId,
+                            'platform' => 'DG',
+                            'reason' => 'bet',
+                            'old_balance' => $decoded['old_balance'],
+                            'new_balance' => $decoded['balance'],
+                            'order_no' => $ticketId,
+                            'amount' => -round($amountInCents / 100, 2),  // 下注是负数
+                            'timestamp' => time(),
+                        ], JSON_UNESCAPED_UNICODE);
+
+                        Redis::publish('balance:change', $message);
+                    }
+                } catch (\Throwable $e) {
+                    // 推送失败不影响核心业务
+                    Log::channel('dg_server')->warning('DG余额变化消息发布失败', [
+                        'player_id' => $playerId,
+                        'ticketId' => $ticketId,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
             // 记录审计日志
             Log::channel('dg_server')->info('[DG合并下注] Lua执行结果', [
                 'ticketId' => $ticketId,
