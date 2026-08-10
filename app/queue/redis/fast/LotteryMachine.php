@@ -60,7 +60,13 @@ class LotteryMachine implements Consumer
                     break;
             }
 
-            $lotteryServices->setMachine($machine)->setPlayer($player)->addLotteryPool($data['num'], $data['last_num'])->checkLottery();
+            // ✅ 分步执行，便于定位错误
+            $lotteryServices->setMachine($machine)
+                ->setPlayer($player)
+                ->addLotteryPool($data['num'], $data['last_num']);
+
+            // 🎰 执行彩金检查（可能抛出异常）
+            $lotteryServices->checkLottery();
 
             $log->info('机台抽奖处理完成', [
                 'machine_id' => $data['machine_id'],
@@ -72,6 +78,8 @@ class LotteryMachine implements Consumer
             $log->error('机台抽奖处理失败', [
                 'data' => $data,
                 'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
             ]);
 
             // ✅ 重新抛出异常，让队列重试
