@@ -840,6 +840,25 @@ $handlers = [
             ]
         ],
     ],
+
+    // ✅ 实时余额推送日志通道（2026-08-10）
+    // 用于记录 Redis 订阅、重连、推送等详细信息
+    'balance_push' => [
+        'handlers' => [
+            [
+                'class' => Monolog\Handler\RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/balance_push.log',
+                    7, // 保留7天
+                    Monolog\Logger::DEBUG, // DEBUG 级别，记录订阅状态、重连、推送详情
+                ],
+                'formatter' => [
+                    'class' => Monolog\Formatter\LineFormatter::class,
+                    'constructor' => [null, 'Y-m-d H:i:s', true],
+                ],
+            ]
+        ],
+    ],
 ];
 
 // 如果启用 Telegram 通知，添加到 default 通道

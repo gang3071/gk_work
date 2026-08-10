@@ -38,7 +38,8 @@ class BalancePushWorker
 
     public function __construct()
     {
-        $this->log = Log::channel('default');
+        // 使用独立的日志通道，便于问题排查
+        $this->log = Log::channel('balance_push');
     }
 
     /**
@@ -52,6 +53,19 @@ class BalancePushWorker
             'worker_id' => $worker->id,
         ]);
 
+        // 延迟启动订阅，确保 Redis 服务已就绪（重启场景）
+        \Workerman\Timer::add(1, function () {
+            $this->subscribeWithRetry();
+        }, [], false);  // 只执行一次
+    }
+
+    /**
+     * 带重试的订阅逻辑
+     */
+    private function subscribeWithRetry(int $attempt = 1): void
+    {
+        $maxRetries = 10;
+
         try {
             // 使用 queue 连接池（支持阻塞操作，不影响 igaming 核心业务）
             $redisConnection = \support\Redis::connection('queue');
@@ -60,18 +74,59 @@ class BalancePushWorker
             // 设置为阻塞模式（Redis Pub/Sub 需要）
             $this->redis->setOption(\Redis::OPT_READ_TIMEOUT, -1);
 
-            $this->log->info("开始订阅 Redis 频道: balance:change");
+            $this->log->info("开始订阅 Redis 频道: balance:change", [
+                'attempt' => $attempt,
+            ]);
 
             // 订阅频道（阻塞模式）
+            // ⚠️ 此调用永不返回，除非连接断开
             $this->redis->subscribe(['balance:change'], [$this, 'handleMessage']);
 
+            // 如果执行到这里，说明订阅中断了
+            $this->log->warning("Redis 订阅意外中断，尝试重连", [
+                'attempt' => $attempt,
+            ]);
+
+            // 订阅中断后立即重连
+            $this->scheduleReconnect($attempt + 1);
+
         } catch (\Throwable $e) {
-            $this->log->error("实时余额推送进程启动失败", [
+            $this->log->error("Redis 订阅失败", [
+                'attempt' => $attempt,
+                'max_retries' => $maxRetries,
                 'error' => $e->getMessage(),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
             ]);
+
+            // 重试逻辑
+            if ($attempt < $maxRetries) {
+                $this->scheduleReconnect($attempt + 1);
+            } else {
+                $this->log->critical("Redis 订阅失败次数过多，放弃重试", [
+                    'max_retries' => $maxRetries,
+                ]);
+                // 触发 Worker 退出，让 Workerman 主进程重启此进程
+                $this->worker->stop();
+            }
         }
+    }
+
+    /**
+     * 安排下次重连
+     */
+    private function scheduleReconnect(int $nextAttempt): void
+    {
+        // 指数退避：2^attempt 秒，最大 60 秒
+        $delay = min(pow(2, $nextAttempt - 1), 60);
+
+        $this->log->info("将在 {$delay} 秒后尝试重新订阅", [
+            'next_attempt' => $nextAttempt,
+        ]);
+
+        \Workerman\Timer::add($delay, function () use ($nextAttempt) {
+            $this->subscribeWithRetry($nextAttempt);
+        }, [], false);  // 只执行一次
     }
 
     /**
