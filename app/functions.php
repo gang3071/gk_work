@@ -559,11 +559,7 @@ function sendSocketMessage($channels, $content, string $form = 'system'): bool|s
             'from_uid' => $form,
             'content' => json_encode($content)
         ]);
-        Log::info('[sendSocketMessage] 推送成功', [
-            'channels' => $channels,
-            'msg_type' => $content['msg_type'] ?? '',
-            'content' => $content,
-        ]);
+
         return $result;
     } catch (Exception $e) {
         Log::error('sendSocketMessage: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
