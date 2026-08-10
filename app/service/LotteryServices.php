@@ -572,9 +572,10 @@ class LotteryServices
                     $burstInfo = $this->getBurstInfo($lottery);
 
                     // 处理派彩检查（参与次数由累计打码量决定）
+                    // ✅ 修复：bet 字段应记录本次下注金额，而不是最低打码量
                     $this->processLotteryCheck(
                         $lottery,
-                        $lottery->bet_amount,  // 使用最低打码量作为 bet 记录
+                        $betAmount,  // 使用本次下注金额作为 bet 记录
                         $accumulatedResult['participate_times'],
                         $burstInfo
                     );
