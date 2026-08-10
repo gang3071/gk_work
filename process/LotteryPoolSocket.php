@@ -62,11 +62,6 @@ class LotteryPoolSocket
         // 发送消息
         try {
             sendSocketMessage('group-lottery-pool', $messageData);
-            Log::info('LotteryPoolSocket定时推送成功', [
-                'slot_count' => count($messageData['slot_amount']),
-                'jack_count' => count($messageData['jack_amount']),
-                'game_count' => count($messageData['game_lottery_list']),
-            ]);
         } catch (PushException $e) {
             Log::error($e->getMessage());
             return;

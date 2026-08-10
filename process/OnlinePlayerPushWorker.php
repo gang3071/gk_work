@@ -144,14 +144,6 @@ class OnlinePlayerPushWorker
                 ]);
 
                 $duration = round((microtime(true) - $startTime) * 1000, 2);
-
-                Log::info('[在线玩家推送] 推送成功', [
-                    'player_count' => count($players),
-                    'cache_hit' => $cacheHit,
-                    'cache_miss' => $cacheMiss,
-                    'cache_hit_rate' => $cacheHit > 0 ? round($cacheHit / ($cacheHit + $cacheMiss) * 100, 2) . '%' : '0%',
-                    'duration_ms' => $duration,
-                ]);
             }
 
         } catch (\Exception $e) {
