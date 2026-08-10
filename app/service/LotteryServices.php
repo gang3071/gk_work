@@ -854,21 +854,6 @@ class LotteryServices
                 return false;
             }
 
-            // ✅ 检查彩池最低维持金额（扣减前检查）
-            // 计算扣减金额
-            $rate = $lottery->rate > 0 ? $lottery->rate : 100;
-            $baseDeductAmount = bcmul($lottery->amount, bcdiv($rate, 100, 4), 2);
-            $afterDeductAmount = bcsub($lottery->amount, $baseDeductAmount, 2);
-
-            // 如果启用了自动补充，检查扣减后是否低于最低维持金额
-            if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
-                // 扣减后低于最低维持金额，不派发
-                if ($afterDeductAmount < $lottery->auto_refill_amount) {
-                    DB::rollback();
-                    return false;
-                }
-            }
-
             // 创建派彩记录
             $playerLotteryRecord = $this->createLotteryRecord($lottery, $amount, $lotteryMultiple, $bet, $isDoubled);
 
@@ -913,8 +898,19 @@ class LotteryServices
             $playerDeliveryRecord->user_name = '';
             $playerDeliveryRecord->save();
 
-            // 扣减彩金池（使用前面计算好的扣减金额）
-            $lottery->amount = $afterDeductAmount;
+            // 扣减彩金池（从lottery.amount扣减）
+            // 根据rate计算实际扣减金额
+            $rate = $lottery->rate > 0 ? $lottery->rate : 100;
+            $baseDeductAmount = bcmul($lottery->amount, bcdiv($rate, 100, 4), 2);
+            $lottery->amount = bcsub($lottery->amount, $baseDeductAmount, 2);
+
+            // 派彩成功后补充到目标金额（如果启用了自动补充）
+            if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
+                // 只有当彩池低于目标金额时才补充
+                if ($lottery->amount < $lottery->auto_refill_amount) {
+                    $lottery->amount = $lottery->auto_refill_amount;
+                }
+            }
 
             // 更新彩金池的最后中奖信息和中奖次数
             $lottery->last_player_id = $this->player->id;
