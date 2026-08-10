@@ -578,6 +578,13 @@ class LotteryServices
                 // ✅ 累计打码量机制（2026-07-30）
                 // 检查是否启用最低打码量限制
                 if ($lottery->bet_amount > 0) {
+                    // 🔧 临时调试日志
+                    \support\Log::info('进入打码量累积逻辑', [
+                        'lottery_id' => $lottery->id,
+                        'betAmount' => $betAmount,
+                        'requiredAmount' => $lottery->bet_amount,
+                    ]);
+
                     // 累加玩家的打码量
                     $accumulatedResult = $this->accumulateBetAmount($lottery->id, $betAmount);
 
@@ -686,6 +693,18 @@ class LotteryServices
 
         // 获取彩金配置的最低打码量
         $lottery = Lottery::find($lotteryId);
+        if (!$lottery) {
+            \support\Log::error('累计打码量：彩金不存在', [
+                'lottery_id' => $lotteryId,
+                'player_id' => $this->player->id,
+            ]);
+            return [
+                'before' => 0,
+                'after' => 0,
+                'can_participate' => false,
+                'participate_times' => 0,
+            ];
+        }
         $requiredAmount = $lottery->bet_amount ?? 0;
 
         // ✅ 使用 Lua 脚本原子性累加打码量并计算参与次数
@@ -763,6 +782,7 @@ LUA;
                 'player_id' => $this->player->id,
                 'bet_amount' => $betAmount,
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
 
             // 降级处理：返回不能参与
