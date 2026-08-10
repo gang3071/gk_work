@@ -494,23 +494,9 @@ class LotteryServices
 
         /** @var Lottery $lottery */
         foreach ($lotteryList as $key => $lottery) {
-            // ===== 1. 固定彩金处理（支持 Slot 和钢珠机）=====
+            // ===== 1. 固定彩金处理（基于条件触发，不检查打码量）=====
             if ($lottery->lottery_type == Lottery::LOTTERY_TYPE_FIXED) {
-                // ✅ 累计打码量机制（固定彩金也需要检查打码量）
-                if ($lottery->bet_amount > 0) {
-                    // 计算本次下注金额
-                    $betAmount = $this->calculateBetAmount($incrementNum);
-
-                    // 累加玩家的打码量
-                    $accumulatedResult = $this->accumulateBetAmount($lottery->id, $betAmount);
-
-                    // 如果累计未达到最低打码量，跳过此彩金
-                    if (!$accumulatedResult['can_participate']) {
-                        continue;
-                    }
-                }
-
-                // 检查条件是否满足
+                // 检查条件是否满足（固定彩金只看 condition，不看打码量）
                 if ($lottery->condition <= $condition) {
                     // 1. 根据rate计算派彩金额（默认100%全派）
                     $rate = $lottery->rate > 0 ? $lottery->rate : 100;
