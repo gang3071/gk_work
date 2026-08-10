@@ -627,12 +627,20 @@ class LotteryServices
      */
     private function calculateBetAmount(): float
     {
-        $condition = $this->getCondition();
-
-        // Slot机和钢珠机：统一使用 turn_used_point（每转消耗游戏点数）
+        // Slot机和钢珠机：直接使用 turn_used_point（每转消耗游戏点数）作为下注金额
+        // ✅ 修复：不再依赖 condition（可能为0），每次游戏直接累加一个 turn_used_point
         if ($this->machine->type == GameType::TYPE_SLOT || $this->machine->type == GameType::TYPE_STEEL_BALL) {
             $turnUsedPoint = $this->machine->machineCategory->turn_used_point ?? 0;
-            return $condition * $turnUsedPoint;
+
+            // 🔍 调试：记录计算过程
+            \support\Log::info('💰 计算下注金额', [
+                'machine_id' => $this->machine->id,
+                'machine_type' => $this->machine->type,
+                'turn_used_point' => $turnUsedPoint,
+                'result' => $turnUsedPoint,
+            ]);
+
+            return floatval($turnUsedPoint);
         }
 
         return 0;
