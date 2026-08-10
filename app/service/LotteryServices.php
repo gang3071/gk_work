@@ -734,14 +734,8 @@ end
 -- 原子性更新 Redis（带过期时间）
 redis.call('SETEX', key, ttl, tostring(remaining))
 
--- 返回结果
-return cjson.encode({
-    before = before,
-    after = after,
-    can_participate = canParticipate == 1,
-    participate_times = participateTimes,
-    remaining = remaining
-})
+-- 返回结果（使用简单的字符串拼接，避免依赖 cjson）
+return before .. '|' .. after .. '|' .. canParticipate .. '|' .. participateTimes
 LUA;
 
         try {
@@ -761,26 +755,27 @@ LUA;
             );
 
             \support\Log::info('🔧 Lua 脚本执行完成', [
-                'result_json' => $resultJson,
+                'result_string' => $resultJson,
             ]);
 
-            $result = json_decode($resultJson, true);
-
-            // ✅ 检查 JSON 解析是否成功
-            if (!is_array($result)) {
-                throw new \Exception('Lua 脚本返回的 JSON 解析失败: ' . substr($resultJson, 0, 100));
+            // 解析返回结果（格式：before|after|canParticipate|participateTimes）
+            $parts = explode('|', $resultJson);
+            if (count($parts) !== 4) {
+                throw new \Exception('Lua 脚本返回格式错误: ' . $resultJson);
             }
+
+            $result = [
+                'before' => (float)$parts[0],
+                'after' => (float)$parts[1],
+                'can_participate' => (bool)$parts[2],
+                'participate_times' => (int)$parts[3],
+            ];
 
             \support\Log::info('🔧 accumulateBetAmount 方法返回', [
                 'result' => $result,
             ]);
 
-            return [
-                'before' => (float)($result['before'] ?? 0),
-                'after' => (float)($result['after'] ?? 0),
-                'can_participate' => (bool)($result['can_participate'] ?? false),
-                'participate_times' => (int)($result['participate_times'] ?? 0),
-            ];
+            return $result;
 
         } catch (\Exception $e) {
             \support\Log::error('累计打码量 Lua 脚本执行失败', [
