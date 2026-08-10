@@ -211,6 +211,28 @@ class KTGameController
                 $newBalanceInCents = (int)round($newBalance * 100);
                 $redis->set($balanceKey, $newBalanceInCents);
 
+                // ✅ 发布余额变化消息到 Redis Pub/Sub（实时推送到客户端）
+                try {
+                    $message = json_encode([
+                        'player_id' => $player->id,
+                        'platform' => 'KT',
+                        'reason' => bccomp($balanceChange, '0', 2) >= 0 ? 'settle' : 'bet',
+                        'old_balance' => $oldBalance,
+                        'new_balance' => $newBalance,
+                        'order_no' => $orderNo,
+                        'amount' => $balanceChange,
+                        'timestamp' => time(),
+                    ], JSON_UNESCAPED_UNICODE);
+
+                    $redis->publish('balance:change', $message);
+                } catch (\Throwable $e) {
+                    // 推送失败不影响核心业务
+                    $this->logger->warning('KT余额变化消息发布失败', [
+                        'player_id' => $player->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+
                 // 爆机检测（仅加款时）
                 if (bccomp($balanceChange, '0', 2) > 0) {
                     WalletService::checkMachineCrashAfterTransaction($player->id, $newBalance, $oldBalance);
