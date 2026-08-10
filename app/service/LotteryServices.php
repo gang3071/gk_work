@@ -63,6 +63,12 @@ class LotteryServices
     private $player;
 
     /**
+     * 本次游戏的增量数据
+     * @var float
+     */
+    private $incrementNum = 0;
+
+    /**
      * 实时推送彩池数据变化（带防抖和数据变化检测）
      * @return void
      */
@@ -330,6 +336,10 @@ class LotteryServices
 
         // 计算本次累积的基数
         $num = $newNum - $lastNum;
+
+        // ✅ 保存增量，供 checkLottery() 使用（打码量计算）
+        $this->incrementNum = $num;
+
         $baseAmount = bcmul($num, $this->machine->machineCategory->lottery_point, 4);
 
         if ($baseAmount <= 0) {
@@ -551,40 +561,14 @@ class LotteryServices
                 // 计算本次下注金额（根据机台类型）
                 $betAmount = $this->calculateBetAmount();
 
-                // 🔍 调试日志：打印下注金额和机台配置
-                \support\Log::info('🎰 随机彩金检查 - 下注金额计算', [
-                    'lottery_id' => $lottery->id,
-                    'lottery_name' => $lottery->name,
-                    'bet_amount_required' => $lottery->bet_amount,
-                    'calculated_bet_amount' => $betAmount,
-                    'condition' => $this->getCondition(),
-                    'turn_used_point' => $this->machine->machineCategory->turn_used_point ?? 'NULL',
-                    'machine_id' => $this->machine->id,
-                    'machine_type' => $this->machine->type,
-                ]);
-
                 // ✅ 累计打码量机制（2026-07-30）
                 // 检查是否启用最低打码量限制
                 if ($lottery->bet_amount > 0) {
                     // 累加玩家的打码量
                     $accumulatedResult = $this->accumulateBetAmount($lottery->id, $betAmount);
 
-                    // 🔍 调试日志：打印累积结果
-                    \support\Log::info('🎰 随机彩金检查 - 打码量累积结果', [
-                        'lottery_id' => $lottery->id,
-                        'before' => $accumulatedResult['before'],
-                        'after' => $accumulatedResult['after'],
-                        'can_participate' => $accumulatedResult['can_participate'],
-                        'participate_times' => $accumulatedResult['participate_times'],
-                    ]);
-
                     // 如果累计未达到最低打码量，跳过抽奖
                     if (!$accumulatedResult['can_participate']) {
-                        \support\Log::info('⏭️ 随机彩金跳过 - 打码量不足', [
-                            'lottery_id' => $lottery->id,
-                            'accumulated' => $accumulatedResult['after'],
-                            'required' => $lottery->bet_amount,
-                        ]);
                         continue;
                     }
 
@@ -627,20 +611,15 @@ class LotteryServices
      */
     private function calculateBetAmount(): float
     {
-        // Slot机和钢珠机：直接使用 turn_used_point（每转消耗游戏点数）作为下注金额
-        // ✅ 修复：不再依赖 condition（可能为0），每次游戏直接累加一个 turn_used_point
+        // Slot机和钢珠机：使用本次增量 × turn_used_point 计算下注金额
+        // ✅ 修复：与彩池累加逻辑一致，使用 incrementNum（newNum - lastNum）
         if ($this->machine->type == GameType::TYPE_SLOT || $this->machine->type == GameType::TYPE_STEEL_BALL) {
             $turnUsedPoint = $this->machine->machineCategory->turn_used_point ?? 0;
 
-            // 🔍 调试：记录计算过程
-            \support\Log::info('💰 计算下注金额', [
-                'machine_id' => $this->machine->id,
-                'machine_type' => $this->machine->type,
-                'turn_used_point' => $turnUsedPoint,
-                'result' => $turnUsedPoint,
-            ]);
+            // 使用本次增量计算下注金额（与彩池累加逻辑一致）
+            $betAmount = bcmul($this->incrementNum, $turnUsedPoint, 4);
 
-            return floatval($turnUsedPoint);
+            return floatval($betAmount);
         }
 
         return 0;
