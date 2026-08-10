@@ -65,8 +65,9 @@ class LotteryMachine implements Consumer
                 ->setPlayer($player)
                 ->addLotteryPool($data['num'], $data['last_num']);
 
-            // 🎰 执行彩金检查（可能抛出异常）
-            $lotteryServices->checkLottery();
+            // 🎰 执行彩金检查（传入增量用于打码量计算）
+            $incrementNum = $data['num'] - $data['last_num'];
+            $lotteryServices->checkLottery($incrementNum);
 
             $log->info('机台抽奖处理完成', [
                 'machine_id' => $data['machine_id'],

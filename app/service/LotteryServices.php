@@ -63,12 +63,6 @@ class LotteryServices
     private $player;
 
     /**
-     * 本次游戏的增量数据
-     * @var float
-     */
-    private $incrementNum = 0;
-
-    /**
      * 实时推送彩池数据变化（带防抖和数据变化检测）
      * @return void
      */
@@ -334,12 +328,8 @@ class LotteryServices
             throw new Exception('机台类型错误');
         }
 
-        // 计算本次累积的基数
+        // 计算本次累积的基数（增量）
         $num = $newNum - $lastNum;
-
-        // ✅ 保存增量，供 checkLottery() 使用（打码量计算）
-        $this->incrementNum = $num;
-
         $baseAmount = bcmul($num, $this->machine->machineCategory->lottery_point, 4);
 
         if ($baseAmount <= 0) {
@@ -463,7 +453,12 @@ class LotteryServices
      * @return bool
      * @throws Exception|PushException
      */
-    public function checkLottery(): bool
+    /**
+     * 检查彩金
+     * @param float $incrementNum 本次游戏的增量（newNum - lastNum）
+     * @return bool
+     */
+    public function checkLottery(float $incrementNum = 0): bool
     {
         if ($this->machine->machineCategory->lottery_assign_status == 0) {
             return false;
@@ -558,8 +553,8 @@ class LotteryServices
 
             // ===== 2. 随机彩金处理（新版：概率模式 + 累计打码量）=====
             if ($lottery->lottery_type == Lottery::LOTTERY_TYPE_RANDOM) {
-                // 计算本次下注金额（根据机台类型）
-                $betAmount = $this->calculateBetAmount();
+                // 计算本次下注金额（根据机台类型和增量）
+                $betAmount = $this->calculateBetAmount($incrementNum);
 
                 // ✅ 累计打码量机制（2026-07-30）
                 // 检查是否启用最低打码量限制
@@ -609,7 +604,12 @@ class LotteryServices
      * 计算下注金额（用于累计打码量）
      * @return float
      */
-    private function calculateBetAmount(): float
+    /**
+     * 计算下注金额（用于打码量累积）
+     * @param float $incrementNum 本次游戏的增量（newNum - lastNum）
+     * @return float
+     */
+    private function calculateBetAmount(float $incrementNum): float
     {
         // Slot机和钢珠机：使用本次增量 × turn_used_point 计算下注金额
         // ✅ 修复：与彩池累加逻辑一致，使用 incrementNum（newNum - lastNum）
@@ -617,7 +617,7 @@ class LotteryServices
             $turnUsedPoint = $this->machine->machineCategory->turn_used_point ?? 0;
 
             // 使用本次增量计算下注金额（与彩池累加逻辑一致）
-            $betAmount = bcmul($this->incrementNum, $turnUsedPoint, 4);
+            $betAmount = bcmul($incrementNum, $turnUsedPoint, 4);
 
             return floatval($betAmount);
         }
