@@ -100,7 +100,7 @@ class LotteryServices
             // 发送消息
             sendSocketMessage('group-lottery-pool', $messageData);
 
-]            // 更新最后推送时间和数据哈希（✅ 使用 setex 原子操作）
+            // 更新最后推送时间和数据哈希（✅ 使用 setex 原子操作）
             $redis->setex(self::REDIS_KEY_LAST_PUSH_TIME, 86400 * 7, time());
             $redis->setex(self::REDIS_KEY_LAST_PUSH_HASH, 86400 * 7, $currentHash);
         } catch (\Throwable $e) {
