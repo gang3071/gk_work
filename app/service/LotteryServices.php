@@ -415,6 +415,14 @@ class LotteryServices
                         // 累加Redis中的金额到数据库金额
                         $lottery->amount = bcadd($lottery->amount, $accumulatedAmount, 4);
 
+                        // ✅ 同步时也要检查保底金额（自动补充机制）
+                        // 如果启用了保底金额且当前彩池低于保底金额，补充到保底金额
+                        if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
+                            if ($lottery->amount < $lottery->auto_refill_amount) {
+                                $lottery->amount = $lottery->auto_refill_amount;
+                            }
+                        }
+
                         // 更新数据库
                         $lottery->save();
 
