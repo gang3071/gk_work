@@ -565,14 +565,38 @@ class LotteryServices
                 // 计算本次下注金额（根据机台类型和增量）
                 $betAmount = $this->calculateBetAmount($incrementNum);
 
+                // 🔧 临时调试日志
+                \support\Log::info('随机彩金检查', [
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name,
+                    'incrementNum' => $incrementNum,
+                    'betAmount' => $betAmount,
+                    'bet_amount_limit' => $lottery->bet_amount,
+                    'win_ratio' => $lottery->win_ratio,
+                ]);
+
                 // ✅ 累计打码量机制（2026-07-30）
                 // 检查是否启用最低打码量限制
                 if ($lottery->bet_amount > 0) {
                     // 累加玩家的打码量
                     $accumulatedResult = $this->accumulateBetAmount($lottery->id, $betAmount);
 
+                    // 🔧 临时调试日志
+                    \support\Log::info('打码量累积结果', [
+                        'lottery_id' => $lottery->id,
+                        'before' => $accumulatedResult['before'],
+                        'after' => $accumulatedResult['after'],
+                        'can_participate' => $accumulatedResult['can_participate'],
+                        'participate_times' => $accumulatedResult['participate_times'],
+                    ]);
+
                     // 如果累计未达到最低打码量，跳过抽奖
                     if (!$accumulatedResult['can_participate']) {
+                        \support\Log::info('打码量不足，跳过抽奖', [
+                            'lottery_id' => $lottery->id,
+                            'accumulated' => $accumulatedResult['after'],
+                            'required' => $lottery->bet_amount,
+                        ]);
                         continue;
                     }
 
@@ -768,10 +792,11 @@ LUA;
         array     $burstInfo
     ): void
     {
-        // 冷却期检查：该彩金中奖后半小时内不再触发中奖
-        if ($this->isInCooldown($lottery->id)) {
-            return;
-        }
+        // 🔧 临时禁用：冷却期检查（方便测试）
+        // TODO: 测试完成后恢复此检查
+        // if ($this->isInCooldown($lottery->id)) {
+        //     return;
+        // }
 
         // 应用爆彩概率倍数到中奖检查
         // 🔧 修复：使用sprintf格式化，避免科学计数法导致bcmul报错（2026-05-11）
