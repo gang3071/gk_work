@@ -246,9 +246,11 @@ LUA;
         $batchSize = 100;
 
         do {
-            $result = $redis->scan($cursor, ['MATCH' => $pattern, 'COUNT' => 100]);
-            $cursor = $result[0];
-            $keys = $result[1] ?? [];
+            // Redis::scan($cursor, $pattern, $count) - PhpRedis 扩展语法
+            $keys = $redis->scan($cursor, $pattern, 100);
+            if ($keys === false) {
+                $keys = [];
+            }
 
             foreach ($keys as $key) {
                 try {
