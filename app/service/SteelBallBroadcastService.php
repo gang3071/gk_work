@@ -104,11 +104,11 @@ class SteelBallBroadcastService
                 'player_id' => $machine->gaming_user_id,
                 'player_name' => $player->name ?? '',
                 'device_name' => $messageData['device_name'] ?? '',
-                'vip_level' => $player->vipLevel->name ?? '',
-                'store_name' => $player->storeAdmin->nickname ?? '',
+                'vip_level' => $player->vipLevel?->name ?? '',
+                'store_name' => $player->storeAdmin?->nickname ?? '',
                 'machine_code' => $machine->code,
                 'machine_name' => $machine->name ?? '',
-                'machine_label' => $machine->machineLabel->name ?? '',
+                'machine_label' => $machine->machineLabel?->name ?? '',
                 'ball_count' => $ballCount,
                 'threshold' => $threshold,
                 'department_id' => $machine->department_id,
@@ -242,7 +242,7 @@ class SteelBallBroadcastService
         $machineName = $machine->name ?? $machine->code;
 
         // 获取机台标签
-        $machineLabel = $machine->machineLabel->name ?? '';
+        $machineLabel = $machine->machineLabel?->name ?? '';
 
         // 拼接机台全名（机台名+标签，避免翻译文件中占位符连在一起）
         $machineFullName = $machineName . $machineLabel;
