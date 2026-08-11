@@ -103,6 +103,7 @@ class SteelBallBroadcastService
             Log::info('钢珠报喜成功', [
                 'player_id' => $machine->gaming_user_id,
                 'player_name' => $player->name ?? '',
+                'device_name' => $messageData['device_name'] ?? '',
                 'vip_level' => $player->vipLevel->name ?? '',
                 'store_name' => $player->storeAdmin->nickname ?? '',
                 'machine_code' => $machine->code,
@@ -161,14 +162,8 @@ class SteelBallBroadcastService
                 return null;
             }
 
-            // 检查是否启用
-            if (empty($setting->status)) {
-                return null;
-            }
-
-            $threshold = (float)($setting->num ?? 0);
-
-            return $threshold > 0 ? $threshold : null;
+            // 提取阈值
+            return self::extractThreshold($setting);
 
         } catch (\Throwable $e) {
             Log::error('获取钢珠报喜阈值失败', [
@@ -177,6 +172,24 @@ class SteelBallBroadcastService
             ]);
             return null;
         }
+    }
+
+    /**
+     * 从 setting 对象提取阈值
+     *
+     * @param mixed $setting SystemSetting 对象
+     * @return float|null 阈值，null表示未启用或无效
+     */
+    private static function extractThreshold($setting): ?float
+    {
+        // 检查是否启用
+        if (empty($setting->status)) {
+            return null;
+        }
+
+        $threshold = (float)($setting->num ?? 0);
+
+        return $threshold > 0 ? $threshold : null;
     }
 
     /**
@@ -204,18 +217,26 @@ class SteelBallBroadcastService
      * @param Channel $channel 渠道
      * @param Machine $machine 机台
      * @param int $ballCount 下珠数
-     * @return array ['message' => string, 'lang' => string] 消息和语言代码
+     * @return array ['message' => string, 'lang' => string, 'device_name' => string] 消息和语言代码
      */
     private static function buildMessage(Player $player, Channel $channel, Machine $machine, int $ballCount): array
     {
-        // 获取玩家VIP等级名称
+        // ✅ 优化1：对玩家名称进行脱敏处理（与高分广播保持一致）
+        $rawName = $player->name ?? 'Unknown';
+        $nameLength = mb_strlen($rawName);
+        if ($nameLength <= 2) {
+            // 1-2个字：显示第1个字 + *，如 "张*"
+            $deviceName = mb_substr($rawName, 0, 1) . '*';
+        } else {
+            // 3个字及以上：显示第1个字 + ***，如 "王***"
+            $deviceName = mb_substr($rawName, 0, 1) . '***';
+        }
+
+        // 获取玩家VIP等级名称（如果没有VIP等级，使用空字符串，在消息模板中处理）
         $vipLevel = '';
         if ($player->vipLevel && !empty($player->vipLevel->name)) {
             $vipLevel = $player->vipLevel->name;
         }
-
-        // 获取玩家名称
-        $playerName = $player->name ?? 'Unknown';
 
         // 获取机台名称
         $machineName = $machine->name ?? $machine->code;
@@ -232,13 +253,32 @@ class SteelBallBroadcastService
         // 格式化珠数
         $formattedBallCount = number_format($ballCount, 0);
 
-        // 构建消息（按照需求文案：恭喜{vip_level}会员{player_name} 游戏{machine_name}{machine_label}高中{ball_count}珠）
-        $vipPrefix = $vipLevel ? "{$vipLevel}會員" : '會員';
-        $message = "恭喜{$vipPrefix}{$playerName} 遊戲{$machineName}{$machineLabel}高中{$formattedBallCount}珠";
+        // ✅ 优化2：使用多语言翻译（与高分广播保持一致）
+        try {
+            // 构建VIP等级前缀（如果有VIP等级就显示，否则为空）
+            $vipPrefix = $vipLevel ? $vipLevel : '';
+
+            $message = trans('message', [
+                'vip_level' => $vipPrefix,
+                'device_name' => $deviceName,
+                'machine_name' => $machineName,
+                'machine_label' => $machineLabel,
+                'ball_count' => $formattedBallCount,
+            ], 'steel_ball_broadcast', $lang);
+        } catch (\Throwable $e) {
+            // 降级：如果翻译失败，使用默认繁体中文
+            $vipLevelText = $vipLevel ? "{$vipLevel}會員" : '會員';
+            $message = "恭喜{$vipLevelText}{$deviceName} 遊戲{$machineName}{$machineLabel}高中{$formattedBallCount}珠";
+            Log::warning('钢珠报喜翻译失败，使用默认文案', [
+                'lang' => $lang,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         return [
             'message' => $message,
             'lang' => $channelLang,
+            'device_name' => $deviceName, // 返回脱敏后的名称用于日志
         ];
     }
 
@@ -253,10 +293,20 @@ class SteelBallBroadcastService
     private static function broadcast(int $departmentId, string $message, string $lang = 'zh-TW'): void
     {
         try {
+            // 转换语言格式：zh-TW -> zh_TW
+            $locale = str_replace('-', '_', $lang);
+
+            // ✅ 优化3：标题支持多语言（与高分广播保持一致）
+            try {
+                $title = trans('title', [], 'steel_ball_broadcast', $locale);
+            } catch (\Throwable $e) {
+                $title = '🎊 鋼珠報喜'; // 降级默认值
+            }
+
             // 构建推送数据
             $data = [
                 'msg_type' => 'steel_ball_broadcast',
-                'title' => '🎊 鋼珠報喜',
+                'title' => $title,
                 'content' => $message,
                 'timestamp' => time(),
                 'department_id' => $departmentId,
