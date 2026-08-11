@@ -267,10 +267,10 @@ class SteelBallBroadcastService
         // ✅ 优化2：使用多语言翻译（与高分广播保持一致）
         try {
             $message = trans('message', [
-                'vip_text' => $vipText,
-                'device_name' => $deviceName,
-                'machine_full_name' => $machineFullName,
-                'ball_count' => $formattedBallCount,
+                '{vip_text}' => $vipText,
+                '{device_name}' => $deviceName,
+                '{machine_full_name}' => $machineFullName,
+                '{ball_count}' => $formattedBallCount,
             ], 'steel_ball_broadcast', $lang);
         } catch (\Throwable $e) {
             // 降级：如果翻译失败，使用默认繁体中文
