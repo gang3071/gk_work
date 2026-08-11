@@ -458,6 +458,8 @@ class SongJackpot extends MachineServices implements BaseMachine
                                 'player_id' => $gamingUserId,
                                 'point' => $nowScore,
                             ]);
+                            // 钢珠报喜：检测珠数是否达到阈值并广播
+                            \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $nowScore);
                         }
                         // 开奖结束后需剔除其他观看中玩家
                         sendSocketMessage('group-' . $this->machine->id, [
