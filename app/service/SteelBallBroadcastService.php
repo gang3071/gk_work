@@ -232,7 +232,7 @@ class SteelBallBroadcastService
             $deviceName = mb_substr($rawName, 0, 1) . '***';
         }
 
-        // 获取玩家VIP等级名称（如果没有VIP等级，使用空字符串，在消息模板中处理）
+        // 获取玩家VIP等级名称
         $vipLevel = '';
         if ($player->vipLevel && !empty($player->vipLevel->name)) {
             $vipLevel = $player->vipLevel->name;
@@ -244,6 +244,9 @@ class SteelBallBroadcastService
         // 获取机台标签
         $machineLabel = $machine->machineLabel->name ?? '';
 
+        // 拼接机台全名（机台名+标签，避免翻译文件中占位符连在一起）
+        $machineFullName = $machineName . $machineLabel;
+
         // 根据渠道语言返回不同的文本
         $channelLang = $channel->lang ?? 'zh-TW';
 
@@ -253,22 +256,25 @@ class SteelBallBroadcastService
         // 格式化珠数
         $formattedBallCount = number_format($ballCount, 0);
 
+        // 根据语言构建VIP文本（避免翻译占位符边界问题，在代码中拼接）
+        $vipText = match($lang) {
+            'en' => $vipLevel ? "{$vipLevel} Member" : 'Member',
+            'jp' => $vipLevel ? "{$vipLevel}メンバー" : 'メンバー',
+            'zh_CN' => $vipLevel ? "{$vipLevel}会员" : '会员',
+            default => $vipLevel ? "{$vipLevel}會員" : '會員', // zh_TW 或其他
+        };
+
         // ✅ 优化2：使用多语言翻译（与高分广播保持一致）
         try {
-            // 构建VIP等级前缀（如果有VIP等级就显示，否则为空）
-            $vipPrefix = $vipLevel ? $vipLevel : '';
-
             $message = trans('message', [
-                'vip_level' => $vipPrefix,
+                'vip_text' => $vipText,
                 'device_name' => $deviceName,
-                'machine_name' => $machineName,
-                'machine_label' => $machineLabel,
+                'machine_full_name' => $machineFullName,
                 'ball_count' => $formattedBallCount,
             ], 'steel_ball_broadcast', $lang);
         } catch (\Throwable $e) {
             // 降级：如果翻译失败，使用默认繁体中文
-            $vipLevelText = $vipLevel ? "{$vipLevel}會員" : '會員';
-            $message = "恭喜{$vipLevelText}{$deviceName} 遊戲{$machineName}{$machineLabel}高中{$formattedBallCount}珠";
+            $message = "恭喜{$vipText}【{$deviceName}】遊戲《{$machineFullName}》高中{$formattedBallCount}珠";
             Log::warning('钢珠报喜翻译失败，使用默认文案', [
                 'lang' => $lang,
                 'error' => $e->getMessage(),
