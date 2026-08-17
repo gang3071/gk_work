@@ -295,7 +295,6 @@ class GameRecordSyncWorker
 
         // 4. 构建插入数据
         $insertData = [];
-        $deliveryRecords = [];
         $now = Carbon::now()->toDateTimeString();
 
         foreach ($records as $record) {
@@ -364,13 +363,6 @@ class GameRecordSyncWorker
                     'order_no' => $record['order_no'],
                 ]);
 
-                // 收集 DeliveryRecord 数据（插入后需要 record ID）
-                $deliveryRecords[$record['order_no']] = [
-                    'player_id' => $playerId,
-                    'department_id' => $player->department_id ?? 0,
-                    'platform_id' => $record['platform_id'],
-                    'record' => $record,
-                ];
             }
         }
 
@@ -397,29 +389,6 @@ class GameRecordSyncWorker
         $this->log->info("批量插入记录", [
             'count' => count($insertData),
         ]);
-
-        // 7. 批量创建 DeliveryRecord（需要查询新插入记录的 ID）
-        if (!empty($deliveryRecords)) {
-            $orderNos = array_keys($deliveryRecords);
-            $newRecords = PlayGameRecord::query()
-                                ->whereIn('order_no', $orderNos)
-                ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id')
-                ->get()
-                ->keyBy('order_no');
-
-            foreach ($deliveryRecords as $orderNo => $deliveryData) {
-                $gameRecord = $newRecords[$orderNo] ?? null;
-                if ($gameRecord) {
-                    MergeBetPlatformHelper::createDeliveryFromSnapshot(
-                        $deliveryData['player_id'],
-                        $deliveryData['platform_id'],
-                        $deliveryData['record'],
-                        $gameRecord,
-                        $deliveryData['department_id']
-                    );
-                }
-            }
-        }
 
         return count($insertData);
     }
@@ -1013,14 +982,6 @@ class GameRecordSyncWorker
                     }
                 }
 
-                // 4. 创建交易记录（使用余额快照）
-                MergeBetPlatformHelper::createDeliveryFromSnapshot(
-                    $playerId,
-                    $platformId,
-                    $record,
-                    $gameRecord,
-                    $player->department_id ?? 0
-                );
 
                 $this->log->info("创建游戏记录", [
                     'order_no' => $orderNo,
@@ -1126,72 +1087,6 @@ class GameRecordSyncWorker
         }
 
         return true;
-    }
-
-    /**
-     * ❌ 已废弃：批量推送余额变化到客户端
-     *
-     * 原因：现在通过 Redis Pub/Sub 实时推送
-     * 位置：RedisLuaScripts::atomicBet/Settle/Cancel 自动触发 publishBalanceChange()
-     * 延迟：< 50ms（相比定时推送降低 90%）
-     *
-     * ⚠️ 保留此方法仅用于兜底或紧急回退，正常情况下不应调用
-     *
-     * @param array $records Redis 缓存记录数组
-     * @param string $reason 推送原因（bet | settle | cancel）
-     * @deprecated 已废弃，使用 Redis Pub/Sub 实时推送
-     */
-    private function batchPushBalanceChanges(array $records, string $reason): void
-    {
-        $pushCount = 0;
-        $skipCount = 0;
-
-        foreach ($records as $record) {
-            try {
-                $playerId = $record['player_id'] ?? null;
-                $platform = $record['platform'] ?? '';
-
-                // ✅ 统一使用 balance_before 和 balance_after 字段
-                $oldBalance = $record['balance_before'] ?? '';
-                $newBalance = $record['balance_after'] ?? '';
-
-                // 检查是否有余额信息
-                if (!$playerId || $oldBalance === '' || $newBalance === '') {
-                    $skipCount++;
-                    continue;
-                }
-
-                // 调用推送服务
-                \app\service\BalancePushService::pushBalanceChange(
-                    (int)$playerId,
-                    (float)$oldBalance,
-                    (float)$newBalance,
-                    $reason,
-                    [
-                        'platform' => $platform,
-                        'order_no' => $record['order_no'] ?? '',
-                    ]
-                );
-
-                $pushCount++;
-
-            } catch (\Throwable $e) {
-                // 推送失败不影响同步，仅记录日志
-                $this->log->warning('余额推送失败', [
-                    'order_no' => $record['order_no'] ?? 'unknown',
-                    'reason' => $reason,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        if ($pushCount > 0) {
-            $this->log->info('批量推送余额变化', [
-                'reason' => $reason,
-                'pushed' => $pushCount,
-                'skipped' => $skipCount,
-            ]);
-        }
     }
 
 }

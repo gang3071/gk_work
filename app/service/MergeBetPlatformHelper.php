@@ -148,50 +148,6 @@ class MergeBetPlatformHelper
     }
 
     /**
-     * 使用余额快照创建 PlayerDeliveryRecord
-     *
-     * @param int $playerId 玩家ID
-     * @param int $platformId 平台ID
-     * @param array $record Redis 缓存记录（含 balance_before, balance_after, amount, order_no）
-     * @param PlayGameRecord $gameRecord 游戏记录
-     * @param int $departmentId 渠道ID
-     */
-    public static function createDeliveryFromSnapshot(
-        int $playerId,
-        int $platformId,
-        array $record,
-        PlayGameRecord $gameRecord,
-        int $departmentId
-    ): void {
-        $beforeBalance = $record['balance_before'] ?? null;
-        $afterBalance = $record['balance_after'] ?? null;
-
-        if ($beforeBalance === null || $afterBalance === null || $beforeBalance === '' || $afterBalance === '') {
-            return;
-        }
-
-        $beforeBalance = (float)$beforeBalance;
-        $afterBalance = (float)$afterBalance;
-
-        $delivery = new PlayerDeliveryRecord();
-        $delivery->player_id = $playerId;
-        $delivery->department_id = $departmentId;
-        $delivery->target = $gameRecord->getTable();
-        $delivery->target_id = $gameRecord->id;
-        $delivery->platform_id = $platformId;
-        $delivery->type = PlayerDeliveryRecord::TYPE_BET;
-        $delivery->source = 'player_bet';
-        $delivery->remark = '游戏下注';
-        $delivery->amount = (float)($record['amount'] ?? 0);
-        $delivery->amount_before = $beforeBalance;
-        $delivery->amount_after = $afterBalance;
-        $delivery->tradeno = $record['order_no'] ?? '';
-        $delivery->user_id = 0;
-        $delivery->user_name = '';
-        $delivery->save();
-    }
-
-    /**
      * 从 Redis 缓存记录读取余额快照，用于钱包同步
      *
      * @param array $record Redis 缓存记录

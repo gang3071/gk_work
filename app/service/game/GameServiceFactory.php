@@ -174,69 +174,24 @@ class GameServiceFactory
 
         //todo 语言文件后续处理
         //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
-        $playerDeliveryRecord = new PlayerDeliveryRecord;
-        $playerDeliveryRecord->player_id = $player->id;
-        $playerDeliveryRecord->department_id = $player->department_id;
-        $playerDeliveryRecord->target = $record->getTable();
-        $playerDeliveryRecord->target_id = $record->id;
-        $playerDeliveryRecord->platform_id = $this->platform->id;
-        $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_BET;
-        $playerDeliveryRecord->source = 'player_bet';
-        $playerDeliveryRecord->amount = $bet;
-        $playerDeliveryRecord->amount_before = $beforeGameAmount;
-        $playerDeliveryRecord->amount_after = $machineWallet->money;
-        $playerDeliveryRecord->tradeno = $record->order_no ?? '';
-        $playerDeliveryRecord->remark = '遊戲下注';
-        $playerDeliveryRecord->user_id = 0;
-        $playerDeliveryRecord->user_name = '';
-        $playerDeliveryRecord->save();
 
-        return $machineWallet->money;
-    }
-
-    /**
-     * 记录取消下注
-     * @param PlayGameRecord $record
-     * @param array $data
-     * @param $bet
-     * @return float|string
-     */
-    public function createCancelBetRecord(PlayGameRecord $record, array $data, $bet): float|string
-    {
-        $record->platform_action_at = Carbon::now()->toDateTimeString();
-        $record->settlement_status = PlayGameRecord::SETTLEMENT_STATUS_CANCELLED;
-        $record->action_data = json_encode($data, JSON_UNESCAPED_UNICODE);
-        $record->save();
-
-
-        /** @var PlayerPlatformCash $machineWallet */
-        $machineWallet = $this->player->machine_wallet()->lockForUpdate()->first();
-
-        $beforeGameAmount = $machineWallet->money;
-        //处理用户金额记录
-        // 更新玩家统计
-        $machineWallet->money = bcadd($machineWallet->money, $bet, 2);
-        $machineWallet->save();
-
-        $player = $this->player;
-        //todo 语言文件后续处理
-        //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
-        $playerDeliveryRecord = new PlayerDeliveryRecord;
-        $playerDeliveryRecord->player_id = $player->id;
-        $playerDeliveryRecord->department_id = $player->department_id;
-        $playerDeliveryRecord->target = $record->getTable();
-        $playerDeliveryRecord->target_id = $record->id;
-        $playerDeliveryRecord->platform_id = $this->platform->id;
-        $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_CANCEL_BET;
-        $playerDeliveryRecord->source = 'player_cancel_bet';
-        $playerDeliveryRecord->amount = $bet;
-        $playerDeliveryRecord->amount_before = $beforeGameAmount;
-        $playerDeliveryRecord->amount_after = $machineWallet->money;
-        $playerDeliveryRecord->tradeno = $record->order_no ?? '';
-        $playerDeliveryRecord->remark = '取消下注';
-        $playerDeliveryRecord->user_id = 0;
-        $playerDeliveryRecord->user_name = '';
-        $playerDeliveryRecord->save();
+        // ⚠️ 已废弃：PlayGameRecord 已记录完整余额快照，不再需要重复写入 PlayerDeliveryRecord（2026-08-17）
+        // $playerDeliveryRecord = new PlayerDeliveryRecord;
+        // $playerDeliveryRecord->player_id = $player->id;
+        // $playerDeliveryRecord->department_id = $player->department_id;
+        // $playerDeliveryRecord->target = $record->getTable();
+        // $playerDeliveryRecord->target_id = $record->id;
+        // $playerDeliveryRecord->platform_id = $this->platform->id;
+        // $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_BET;
+        // $playerDeliveryRecord->source = 'player_bet';
+        // $playerDeliveryRecord->amount = $bet;
+        // $playerDeliveryRecord->amount_before = $beforeGameAmount;
+        // $playerDeliveryRecord->amount_after = $machineWallet->money;
+        // $playerDeliveryRecord->tradeno = $record->order_no ?? '';
+        // $playerDeliveryRecord->remark = '遊戲下注';
+        // $playerDeliveryRecord->user_id = 0;
+        // $playerDeliveryRecord->user_name = '';
+        // $playerDeliveryRecord->save();
 
         return $machineWallet->money;
     }
