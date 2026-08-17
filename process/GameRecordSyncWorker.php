@@ -450,7 +450,7 @@ class GameRecordSyncWorker
 
         // 4. 构建插入数据
         $insertData = [];
-        $deliveryRecords = [];
+        // ⚠️ 已删除：$deliveryRecords（PlayerDeliveryRecord.TYPE_BET 已废弃，2026-08-18）
         $now = Carbon::now()->toDateTimeString();
 
         foreach ($records as $record) {
@@ -541,13 +541,7 @@ class GameRecordSyncWorker
                     'order_no' => $record['order_no'],
                 ]);
 
-                // 收集 DeliveryRecord 数据（插入后需要 record ID）
-                $deliveryRecords[$record['order_no']] = [
-                    'player_id' => $playerId,
-                    'department_id' => $player->department_id ?? 0,
-                    'platform_id' => $record['platform_id'],
-                    'record' => $record,
-                ];
+                // ⚠️ 已删除：不再收集 DeliveryRecord 数据（PlayerDeliveryRecord.TYPE_BET 已废弃）
             }
         }
 
@@ -570,28 +564,9 @@ class GameRecordSyncWorker
             'count' => count($insertData),
         ]);
 
-        // 7. 批量创建 DeliveryRecord（需要查询新插入记录的 ID）
-        if (!empty($deliveryRecords)) {
-            $orderNos = array_keys($deliveryRecords);
-            $newRecords = PlayGameRecord::query()
-                ->whereIn('order_no', $orderNos)
-                ->select('id', 'order_no', 'platform_id', 'player_id', 'department_id')
-                ->get()
-                ->keyBy('order_no');
-
-            foreach ($deliveryRecords as $orderNo => $deliveryData) {
-                $gameRecord = $newRecords[$orderNo] ?? null;
-                if ($gameRecord) {
-                    MergeBetPlatformHelper::createDeliveryFromSnapshot(
-                        $deliveryData['player_id'],
-                        $deliveryData['platform_id'],
-                        $deliveryData['record'],
-                        $gameRecord,
-                        $deliveryData['department_id']
-                    );
-                }
-            }
-        }
+        // ⚠️ 已删除：批量创建 DeliveryRecord（PlayerDeliveryRecord.TYPE_BET 已废弃，2026-08-18）
+        // 理由：PlayGameRecord 已记录完整余额快照，不需要重复写入 PlayerDeliveryRecord
+        // 性能收益：减少不必要的数据库查询和循环操作
 
         // 8. ✅ 批量投递打码量统计（2026-07-31）
         // ⚠️ 因为批量插入（insert）不会触发模型的 created 事件
@@ -1405,14 +1380,8 @@ class GameRecordSyncWorker
                     }
                 }
 
-                // 4. 创建交易记录（使用余额快照）
-                MergeBetPlatformHelper::createDeliveryFromSnapshot(
-                    $playerId,
-                    $platformId,
-                    $record,
-                    $gameRecord,
-                    $player->department_id ?? 0
-                );
+                // ⚠️ 已删除：创建交易记录（PlayerDeliveryRecord.TYPE_BET 已废弃，2026-08-18）
+                // MergeBetPlatformHelper::createDeliveryFromSnapshot(...);
 
                 $this->log->info("创建游戏记录", [
                     'order_no' => $orderNo,
