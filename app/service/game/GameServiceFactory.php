@@ -166,50 +166,6 @@ class GameServiceFactory
     }
 
     /**
-     * 记录用户下注记录
-     * @param PlayerPlatformCash $machineWallet
-     * @param Player $player
-     * @param $record
-     * @param $bet
-     * @return float|string
-     */
-    public function createBetRecord(PlayerPlatformCash $machineWallet, Player $player, $record, $bet): float|string
-    {
-        // ✅ 从 Redis 读取余额（下注前）
-        $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
-
-        // ✅ 使用 WalletService 原子扣款
-        $result = \app\service\WalletService::deduct($player->id, $bet);
-        if (!$result['success']) {
-            throw new \Exception($result['error'] ?? '余额不足');
-        }
-        $afterGameAmount = $result['balance'];
-
-        //todo 语言文件后续处理
-        //用户交易记录  现在单一钱包没有转账的说法 暂不记录转账记录
-
-        // ⚠️ 已废弃：PlayGameRecord 已记录完整余额快照，不再需要重复写入 PlayerDeliveryRecord（2026-08-18）
-        // $playerDeliveryRecord = new PlayerDeliveryRecord;
-        // $playerDeliveryRecord->player_id = $player->id;
-        // $playerDeliveryRecord->department_id = $player->department_id;
-        // $playerDeliveryRecord->target = $record->getTable();
-        // $playerDeliveryRecord->target_id = $record->id;
-        // $playerDeliveryRecord->platform_id = $this->platform->id;
-        // $playerDeliveryRecord->type = PlayerDeliveryRecord::TYPE_BET;
-        // $playerDeliveryRecord->source = 'player_bet';
-        // $playerDeliveryRecord->amount = $bet;
-        // $playerDeliveryRecord->amount_before = $beforeGameAmount;
-        // $playerDeliveryRecord->amount_after = $afterGameAmount;
-        // $playerDeliveryRecord->tradeno = $record->order_no ?? '';
-        // $playerDeliveryRecord->remark = '遊戲下注';
-        // $playerDeliveryRecord->user_id = 0;
-        // $playerDeliveryRecord->user_name = '';
-        // $playerDeliveryRecord->save();
-
-        return $afterGameAmount;
-    }
-
-    /**
      * 记录取消下注
      * @param PlayGameRecord $record
      * @param array $data

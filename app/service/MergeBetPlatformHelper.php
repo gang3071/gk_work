@@ -149,37 +149,6 @@ class MergeBetPlatformHelper
     }
 
     /**
-     * 使用余额快照创建 PlayerDeliveryRecord
-     *
-     * ⚠️ 已废弃：PlayGameRecord 已记录完整余额快照，不再需要重复写入 PlayerDeliveryRecord
-     *
-     * 废弃理由：
-     * 1. ✅ PlayGameRecord 已包含所有字段（player_id, platform_id, bet, order_no, balance_before, balance_after）
-     * 2. ✅ 结算系统不查询 TYPE_BET（只查充值、彩金、机台等类型）
-     * 3. ✅ 实时推送已由 BalancePushService 接管（不依赖 PlayerDeliveryRecord 事件）
-     * 4. ✅ 减少 80%+ 的 player_delivery_record 表写入量，降低数据库 I/O 压力
-     *
-     * 如需查询下注流水，请使用：
-     * SELECT * FROM play_game_record WHERE player_id = ? AND type = 1
-     *
-     * @param int $playerId 玩家ID
-     * @param int $platformId 平台ID
-     * @param array $record Redis 缓存记录（含 balance_before, balance_after, amount, order_no）
-     * @param PlayGameRecord $gameRecord 游戏记录
-     * @param int $departmentId 渠道ID
-     */
-    public static function createDeliveryFromSnapshot(
-        int $playerId,
-        int $platformId,
-        array $record,
-        PlayGameRecord $gameRecord,
-        int $departmentId
-    ): void {
-        // 🚀 不再写入，避免数据冗余（2026-08-18）
-        return;
-    }
-
-    /**
      * 从 Redis 缓存记录读取余额快照，用于钱包同步
      *
      * @param array $record Redis 缓存记录

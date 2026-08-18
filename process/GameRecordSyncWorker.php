@@ -450,7 +450,6 @@ class GameRecordSyncWorker
 
         // 4. 构建插入数据
         $insertData = [];
-        // ⚠️ 已删除：$deliveryRecords（PlayerDeliveryRecord.TYPE_BET 已废弃，2026-08-18）
         $now = Carbon::now()->toDateTimeString();
 
         foreach ($records as $record) {
@@ -540,8 +539,6 @@ class GameRecordSyncWorker
                     'after' => $wallet->money,
                     'order_no' => $record['order_no'],
                 ]);
-
-                // ⚠️ 已删除：不再收集 DeliveryRecord 数据（PlayerDeliveryRecord.TYPE_BET 已废弃）
             }
         }
 
@@ -1379,9 +1376,6 @@ class GameRecordSyncWorker
                         ]);
                     }
                 }
-
-                // ⚠️ 已删除：创建交易记录（PlayerDeliveryRecord.TYPE_BET 已废弃，2026-08-18）
-                // MergeBetPlatformHelper::createDeliveryFromSnapshot(...);
 
                 $this->log->info("创建游戏记录", [
                     'order_no' => $orderNo,
