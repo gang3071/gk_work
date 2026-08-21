@@ -13,7 +13,7 @@ return [
             'lanIp' => '127.0.0.1',  // 自动获取局域网 IP
             'startPort' => 2700,
             'pingInterval' => 10,
-            'pingData' => hex2bin('FAEA0102000000FBEB'),  // 精灵球心跳包
+            'pingData' => hex2bin('FAEA0102000306FBEB'),  // 精灵球心跳包
             'registerAddress' => '127.0.0.1:1236',
             'onConnect' => function () {
             },
