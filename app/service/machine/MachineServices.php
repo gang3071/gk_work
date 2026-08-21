@@ -26,7 +26,7 @@ class MachineServices
      * 创建机台服务
      * @param Machine $machine 机台
      * @param string $lang 语言
-     * @return Jackpot|Slot|SongSlot|SongJackpot
+     * @return Jackpot|Slot|SongSlot|SongJackpot|PokemonBall
      * @throws Exception
      */
     public static function createServices(Machine $machine, string $lang = 'zh_CN')
@@ -50,6 +50,8 @@ class MachineServices
                     default:
                         throw new Exception('Invalid product type');
                 }
+            case GameType::TYPE_POKEMON_BALL:
+                return new PokemonBall($machine, $lang);
             default:
                 throw new Exception('Invalid product type');
         }

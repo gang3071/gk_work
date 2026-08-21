@@ -16,6 +16,7 @@ return [
     'slot_port' => '8855',
     'slot_auto_port' => '8866',
     'jackpot_port' => '8888',
+    'pokemon_ball_port' => '8899',
     'whitelist' => [
         '59.120.86.58',
         '210.59.240.147',

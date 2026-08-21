@@ -30,6 +30,7 @@ class GameType extends Model
     const TYPE_SLOT = 1; // 斯洛
     const TYPE_STEEL_BALL = 2; // 钢珠
     const TYPE_FISH = 3; // 鱼机
+    const TYPE_POKEMON_BALL = 4; // 精灵球
     const TYPE_GAME = 9; // 电子游戏
 
     const CATE_PHYSICAL_MACHINE = 1; // 实体机台

@@ -527,6 +527,22 @@ $handlers = [
             ]
         ],
     ],
+    'pokemon_ball_machine' => [
+        'handlers' => [
+            [
+                'class' => Monolog\Handler\RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/pokemon_ball_machine.log',
+                    2, //$maxFiles
+                    Monolog\Logger::INFO,
+                ],
+                'formatter' => [
+                    'class' => Monolog\Formatter\LineFormatter::class,
+                    'constructor' => [null, 'Y-m-d H:i:s', true],
+                ],
+            ]
+        ],
+    ],
     'game_lottery' => [
         'handlers' => [
             [

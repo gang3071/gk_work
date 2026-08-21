@@ -41,6 +41,11 @@ class Events
                 'type' => GameType::TYPE_SLOT,
                 'domain_field' => 'auto_card_domain',
                 'port_field' => 'auto_card_port'
+            ],
+            config('gateway_worker.pokemon_ball_port') => [
+                'type' => GameType::TYPE_POKEMON_BALL,
+                'domain_field' => 'domain',
+                'port_field' => 'port'
             ]
         ];
 
@@ -153,6 +158,8 @@ class Events
                     default:
                         return true;
                 }
+            case config('gateway_worker.pokemon_ball_port'):
+                return $service->pokemonBallCmd(strtoupper(bin2hex($message)));
             default:
                 return Gateway::closeClient($client_id);
         }
