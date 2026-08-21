@@ -408,6 +408,14 @@ class PokemonBall extends MachineServices implements BaseMachine
     public function pokemonBallCmd(string $msg): bool
     {
         try {
+
+            $this->log->warning('[PokemonBall-pokemonBallCmd] 消息接受测试', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'msg' => $msg,
+                'msg_length' => strlen($msg),
+            ]);
+
             // 验证帧格式
             if (strlen($msg) < 20) {
                 $this->log->warning('[PokemonBall-pokemonBallCmd] 消息长度异常', [
