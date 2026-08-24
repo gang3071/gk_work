@@ -27,6 +27,11 @@ class WalletService
     // 默认平台ID（实体机平台）
     private const DEFAULT_PLATFORM_ID = 1;
 
+    // 钱包锁定状态 Redis 缓存前缀
+    private const LOCK_CACHE_PREFIX = 'wallet:locked:';
+    // 钱包锁定状态缓存过期时间（秒）
+    private const LOCK_CACHE_TTL = 3600;
+
     /**
      * 🚨 紧急开关：禁用 Redis 缓存
      * 在 .env 中设置 WALLET_CACHE_ENABLED=false 可立即禁用缓存
@@ -964,6 +969,138 @@ LUA;
             }
         } catch (\Throwable $e) {
             Log::error('WalletService: checkMachineCrash failed', [
+                'player_id' => $playerId,
+                'error' => $e->getMessage(),
+            ]);
+        } finally {
+            // ✅ 无论爆机检查结果如何，都检查钱包解锁
+            self::autoUnlockIfBalanceSufficient($playerId);
+        }
+    }
+
+    /**
+     * 获取钱包锁定状态缓存键
+     *
+     * @param int $playerId 玩家ID
+     * @return string
+     */
+    private static function getLockCacheKey(int $playerId): string
+    {
+        return self::LOCK_CACHE_PREFIX . $playerId;
+    }
+
+    /**
+     * 检查钱包是否被锁定
+     *
+     * @param int $playerId 玩家ID
+     * @return bool
+     */
+    public static function isWalletLocked(int $playerId): bool
+    {
+        try {
+            $cacheKey = self::getLockCacheKey($playerId);
+
+            try {
+                $cached = Redis::get($cacheKey);
+                if ($cached) {
+                    return (int)$cached === 1;
+                }
+            } catch (\Throwable $e) {
+                Log::warning('WalletService: Redis查询锁定状态失败，降级到数据库', [
+                    'player_id' => $playerId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // 从数据库查询
+            $locked = \support\Db::table('player_platform_cash')
+                ->where('player_id', $playerId)
+                ->where('platform_id', self::DEFAULT_PLATFORM_ID)
+                ->value('wallet_locked') == 1;
+
+            // 写入 Redis 缓存
+            try {
+                Redis::setex($cacheKey, self::LOCK_CACHE_TTL, $locked ? 1 : 0);
+            } catch (\Throwable $e) {
+                // 缓存写入失败不影响结果
+            }
+
+            return $locked;
+        } catch (\Throwable $e) {
+            Log::error('WalletService: 检查钱包锁定状态失败', [
+                'player_id' => $playerId,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * 解锁钱包
+     *
+     * @param int $playerId 玩家ID
+     * @return bool
+     */
+    public static function unlockWallet(int $playerId): bool
+    {
+        try {
+            \support\Db::table('player_platform_cash')
+                ->where('player_id', $playerId)
+                ->where('platform_id', self::DEFAULT_PLATFORM_ID)
+                ->update(['wallet_locked' => 0]);
+
+            // 更新 Redis 缓存
+            try {
+                Redis::setex(self::getLockCacheKey($playerId), self::LOCK_CACHE_TTL, 0);
+            } catch (\Throwable $e) {
+                Log::warning('WalletService: 锁定状态更新Redis失败', [
+                    'player_id' => $playerId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            Log::info('WalletService: 钱包已解锁', [
+                'player_id' => $playerId,
+            ]);
+
+            return true;
+        } catch (\Throwable $e) {
+            Log::error('WalletService: 解锁钱包失败', [
+                'player_id' => $playerId,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * 余额增加后自动检查是否需要解锁钱包
+     *
+     * 当钱包处于锁定状态且余额达到配置的解锁阈值时，自动解锁
+     *
+     * @param int $playerId 玩家ID
+     * @return void
+     */
+    public static function autoUnlockIfBalanceSufficient(int $playerId): void
+    {
+        try {
+            if (!self::isWalletLocked($playerId)) {
+                return;
+            }
+
+            $issueThreshold = (int) config('welfare_ticket.issue_threshold', 5000);
+            $balance = self::getBalance($playerId);
+
+            if ($balance >= $issueThreshold) {
+                self::unlockWallet($playerId);
+                Log::info('WalletService: 余额达到解锁阈值，自动解锁钱包', [
+                    'player_id' => $playerId,
+                    'balance' => $balance,
+                    'threshold' => $issueThreshold,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::error('WalletService: 自动解锁检查失败', [
                 'player_id' => $playerId,
                 'error' => $e->getMessage(),
             ]);

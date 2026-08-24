@@ -16,6 +16,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property float money 点数
  * @property int status 遊戲平台狀態 0=鎖定 1=正常
  * @property bool is_crashed 是否爆机 0=正常 1=已爆机
+ * @property int wallet_locked 钱包锁定状态 0=未锁定 1=锁定
  * @property string created_at 创建时间
  * @property string updated_at 最后一次修改时间
  *
