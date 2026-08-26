@@ -447,6 +447,14 @@ class PokemonBall extends MachineServices implements BaseMachine
             $dataLen = hexdec(substr($msg, 8, 2));
             $dataHex = substr($msg, 10, $dataLen * 2);
 
+            // 无安卓模式下(cmd_category=0x01)，主板上传数据前4字节是唯一码
+            $uid = '';
+            if ($cmdCategory === self::CMD_CATEGORY_SERVER && $dataLen >= 4) {
+                $uid = substr($dataHex, 0, 8); // 4字节 = 8个hex字符
+                $dataHex = substr($dataHex, 8);
+                $dataLen = $dataLen - 4;
+            }
+
             $this->log->info('[PokemonBall-pokemonBallCmd] 收到消息', [
                 'machine_id' => $this->machine->id,
                 'machine_code' => $this->machine->code,
@@ -454,14 +462,18 @@ class PokemonBall extends MachineServices implements BaseMachine
                 'cmd' => $cmd,
                 'data_len' => $dataLen,
                 'data_hex' => $dataHex,
+                'uid' => $uid,
             ]);
 
             // 根据命令类别处理
             switch ($cmdCategory) {
-                case self::CMD_CATEGORY_BOARD:
+                case self::CMD_CATEGORY_SERVER:  // 0x01: 无安卓模式下主板上传
+                case self::CMD_CATEGORY_BOARD:   // 0x02: 有安卓模式下主板上传
                     return $this->handleBoardCommand($cmd, $dataHex);
-                case self::CMD_CATEGORY_RESPONSE:
+                case self::CMD_CATEGORY_RESPONSE: // 0xF1: 主板回复（服务器/安卓命令）
                     return $this->handleResponseCommand($cmd, $dataHex);
+                case self::CMD_CATEGORY_ACK:     // 0xF2: 安卓回复（主板上传命令）
+                    return $this->handleAckCommand($cmd, $dataHex);
                 default:
                     $this->log->warning('[PokemonBall-pokemonBallCmd] 未知命令类别', [
                         'machine_id' => $this->machine->id,
@@ -641,6 +653,30 @@ class PokemonBall extends MachineServices implements BaseMachine
         $cmdName = $this->getProtocolCmdName($originalCmd);
 
         $this->log->info('[PokemonBall] 收到主板回复', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'cmd' => $cmd,
+            'cmd_name' => $cmdName,
+            'data_hex' => $dataHex,
+            'data_len' => strlen($dataHex) / 2,
+        ]);
+        return true;
+    }
+
+    /**
+     * 处理安卓回复指令（0xF2）
+     *
+     * @param string $cmd 指令代码
+     * @param string $dataHex 数据
+     * @return bool
+     */
+    protected function handleAckCommand(string $cmd, string $dataHex): bool
+    {
+        // 安卓回复对应原始主板上传指令类别 02
+        $originalCmd = self::CMD_CATEGORY_BOARD . $cmd;
+        $cmdName = $this->getProtocolCmdName($originalCmd);
+
+        $this->log->info('[PokemonBall] 收到安卓回复', [
             'machine_id' => $this->machine->id,
             'machine_code' => $this->machine->code,
             'cmd' => $cmd,
