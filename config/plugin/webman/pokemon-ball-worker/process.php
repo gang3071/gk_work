@@ -1,6 +1,8 @@
 <?php
 
+use Webman\GatewayWorker\BusinessWorker;
 use Webman\GatewayWorker\Gateway;
+use Webman\GatewayWorker\Register;
 
 // 精灵球机台连接
 return [
@@ -18,5 +20,20 @@ return [
             'onConnect' => function () {
             },
         ]]
+    ],
+    'worker' => [
+        'handler' => BusinessWorker::class,
+        'count' => cpu_count() * 2,
+        'constructor' => ['config' => [
+            'eventHandler' => plugin\webman\gateway\Events::class,
+            'name' => 'pokemonBallWorker',
+            'registerAddress' => '127.0.0.1:1236',
+        ]]
+    ],
+    'register' => [
+        'handler' => Register::class,
+        'listen' => 'text://0.0.0.0:1236',  // 允许外部 BusinessWorker 连接
+        'count' => 1, // Must be 1
+        'constructor' => []
     ],
 ];
