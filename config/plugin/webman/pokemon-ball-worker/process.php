@@ -2,9 +2,9 @@
 
 use Webman\GatewayWorker\BusinessWorker;
 use Webman\GatewayWorker\Gateway;
-use Webman\GatewayWorker\Register;
 
 // 精灵球机台连接
+// Register 已在 jackpot-worker 中定义，所有 Gateway/Worker 共享同一个 Register
 return [
     'gateway' => [
         'handler' => Gateway::class,
@@ -26,14 +26,8 @@ return [
         'count' => cpu_count() * 2,
         'constructor' => ['config' => [
             'eventHandler' => plugin\webman\gateway\Events::class,
-            'name' => 'pokemonBallWorker',
+            'name' => 'pokemonBallBusinessWorker',
             'registerAddress' => '127.0.0.1:1236',
         ]]
-    ],
-    'register' => [
-        'handler' => Register::class,
-        'listen' => 'text://0.0.0.0:1236',  // 允许外部 BusinessWorker 连接
-        'count' => 1, // Must be 1
-        'constructor' => []
     ],
 ];
