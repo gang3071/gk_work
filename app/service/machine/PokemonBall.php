@@ -141,6 +141,11 @@ class PokemonBall extends MachineServices implements BaseMachine
     public $log = null;
 
     /**
+     * @var bool 机台连接状态（用于无安卓模式区分连接/心跳）
+     */
+    protected bool $connected = false;
+
+    /**
      * 构造函数
      *
      * @param Machine $machine 机台对象
@@ -502,29 +507,54 @@ class PokemonBall extends MachineServices implements BaseMachine
         ];
 
         switch ($cmd) {
-            case substr(self::CMD_CONNECT, 2, 2): // 发起连接
-                $this->log->info('[PokemonBall] 机台连接', $baseLog);
-                $this->sendFrame(self::CMD_CATEGORY_SERVER, '01');
+            case substr(self::CMD_CONNECT, 2, 2): // 0x01: 发起连接 或 心跳（无安卓模式下相同命令码）
+                // 无安卓模式下，连接和心跳都用 0x01 0x01，根据连接状态区分
+                // 超过30秒未收到心跳，视为断线重连
+                if ($this->connected && $this->action_time > 0 && (time() - $this->action_time) > 30) {
+                    $this->connected = false;
+                    $this->log->warning('[PokemonBall] 心跳超时，重置连接状态', array_merge($baseLog, [
+                        'last_action' => $this->action_time,
+                        'timeout' => time() - $this->action_time,
+                    ]));
+                }
+
+                if (!$this->connected) {
+                    // 首次收到或重连 → 连接命令，回复 0xF1 0x01 确认连接
+                    $this->connected = true;
+                    $this->action_time = time();
+                    $this->log->info('[PokemonBall] 机台连接', array_merge($baseLog, [
+                        'uid' => $dataHex,
+                    ]));
+                    $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '01'); // 回复 F1 01
+                } else {
+                    // 已连接 → 心跳，回复 0xF1 0x02
+                    $this->action_time = time();
+                    $this->log->info('[PokemonBall] 心跳', array_merge($baseLog, [
+                        'action_time' => $this->action_time,
+                    ]));
+                    $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '02'); // 回复 F1 02
+                }
                 return true;
 
-            case substr(self::CMD_HEARTBEAT, 2, 2): // 心跳
+            case substr(self::CMD_HEARTBEAT, 2, 2): // 0x02: 心跳（有安卓模式）
                 $this->action_time = time();
                 $this->log->info('[PokemonBall] 心跳', array_merge($baseLog, [
                     'action_time' => $this->action_time,
                 ]));
-                $this->sendFrame(self::CMD_CATEGORY_SERVER, '02');
+                $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '02'); // 回复 F1 02
                 return true;
 
-            case substr(self::CMD_INSERT_MONEY, 2, 2): // 投入金额
+            case substr(self::CMD_INSERT_MONEY, 2, 2): // 投入金额 (0x02 0x01)
                 $amount = hexdec($dataHex);
                 $this->insert_money = ($this->insert_money ?? 0) + $amount;
                 $this->log->info('[PokemonBall] 投入金额', array_merge($baseLog, [
                     'amount' => $amount,
                     'total_insert' => $this->insert_money,
                 ]));
+                $this->sendFrame(self::CMD_CATEGORY_ACK, '01'); // 回复 F2 01
                 return true;
 
-            case substr(self::CMD_SCORE_UP, 2, 2): // 上分金额
+            case substr(self::CMD_SCORE_UP, 2, 2): // 上分金额 (0x02 0x02)
                 $amount = hexdec($dataHex);
                 $this->point = ($this->point ?? 0) + $amount;
                 $this->open_point = ($this->open_point ?? 0) + $amount;
@@ -534,9 +564,10 @@ class PokemonBall extends MachineServices implements BaseMachine
                     'point' => $this->point,
                     'open_point' => $this->open_point,
                 ]));
+                $this->sendFrame(self::CMD_CATEGORY_ACK, '02'); // 回复 F2 02
                 return true;
 
-            case substr(self::CMD_WASH_SCORE, 2, 2): // 洗分金额
+            case substr(self::CMD_WASH_SCORE, 2, 2): // 洗分金额 (0x02 0x03)
                 $amount = hexdec($dataHex);
                 $this->point = max(0, ($this->point ?? 0) - $amount);
                 $this->wash_point = ($this->wash_point ?? 0) + $amount;
@@ -545,6 +576,7 @@ class PokemonBall extends MachineServices implements BaseMachine
                     'point' => $this->point,
                     'wash_point' => $this->wash_point,
                 ]));
+                $this->sendFrame(self::CMD_CATEGORY_ACK, '03'); // 回复 F2 03
                 return true;
 
             case substr(self::CMD_GAME_START, 2, 2): // 游戏开始
@@ -574,7 +606,7 @@ class PokemonBall extends MachineServices implements BaseMachine
                 ]));
                 return true;
 
-            case substr(self::CMD_GAME_RESULT, 2, 2): // 游戏结果
+            case substr(self::CMD_GAME_RESULT, 2, 2): // 游戏结果 (0x01 0x09)
                 $result = hexdec($dataHex);
                 $this->win = ($this->win ?? 0) + $result;
                 $this->score = ($this->score ?? 0) + $result;
@@ -584,6 +616,7 @@ class PokemonBall extends MachineServices implements BaseMachine
                     'win' => $this->win,
                     'score' => $this->score,
                 ]));
+                $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '09'); // 回复 F1 09
                 return true;
 
             case substr(self::CMD_BUTTON_SIGNAL, 2, 2): // 按钮信号
@@ -593,12 +626,14 @@ class PokemonBall extends MachineServices implements BaseMachine
                 ]));
                 return true;
 
-            case substr(self::CMD_ASK_TIME, 2, 2): // 询问时间
-                $timeHex = sprintf('%08X', time());
+            case substr(self::CMD_ASK_TIME, 2, 2): // 询问时间 (0x01 0x0D)
+                // 回复时间：年(2字节) 月 日 时 分
+                $now = getdate();
+                $timeHex = sprintf('%04X%02X%02X%02X%02X', $now['year'], $now['mon'], $now['mday'], $now['hours'], $now['minutes']);
                 $this->log->info('[PokemonBall] 询问时间', array_merge($baseLog, [
                     'response_time' => $timeHex,
                 ]));
-                $this->sendFrame(self::CMD_CATEGORY_SERVER, '0D', $timeHex);
+                $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '0D', $timeHex); // 回复 F1 0D
                 return true;
 
             case substr(self::CMD_DOOR_SWITCH, 2, 2): // 开门微动
@@ -610,12 +645,13 @@ class PokemonBall extends MachineServices implements BaseMachine
                 ]));
                 return true;
 
-            case substr(self::CMD_JP_ENTER, 2, 2): // 进入JP
+            case substr(self::CMD_JP_ENTER, 2, 2): // 进入JP (0x01 0x13)
                 $level = hexdec($dataHex);
                 $this->jp_level = $level;
                 $this->log->info('[PokemonBall] 进入JP', array_merge($baseLog, [
                     'level' => $level,
                 ]));
+                $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '13'); // 回复 F1 13
                 return true;
 
             default:
