@@ -489,6 +489,17 @@ class PokemonBall extends MachineServices implements BaseMachine
      */
     protected function handleBoardCommand(string $cmd, string $dataHex): bool
     {
+        // 记录所有主板上传指令的入口日志
+        $cmdName = $this->getProtocolCmdName(self::CMD_CATEGORY_BOARD . $cmd);
+        $this->log->info('[PokemonBall] 收到主板上传指令', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'cmd' => $cmd,
+            'cmd_name' => $cmdName,
+            'data_hex' => $dataHex,
+            'data_len' => strlen($dataHex) / 2,
+        ]);
+
         switch ($cmd) {
             case substr(self::CMD_CONNECT, 2, 2): // 发起连接
                 $this->log->info('[PokemonBall] 机台连接', [
@@ -625,12 +636,59 @@ class PokemonBall extends MachineServices implements BaseMachine
      */
     protected function handleResponseCommand(string $cmd, string $dataHex): bool
     {
+        // 回复指令类别 F1 对应原始指令类别 01，转换后查找名称
+        $originalCmd = self::CMD_CATEGORY_SERVER . $cmd;
+        $cmdName = $this->getProtocolCmdName($originalCmd);
+
         $this->log->info('[PokemonBall] 收到主板回复', [
             'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
             'cmd' => $cmd,
+            'cmd_name' => $cmdName,
             'data_hex' => $dataHex,
+            'data_len' => strlen($dataHex) / 2,
         ]);
         return true;
+    }
+
+    /**
+     * 获取协议指令名称
+     *
+     * @param string $fullCmd 完整指令代码（类别+命令，如 '0101'）
+     * @return string
+     */
+    protected function getProtocolCmdName(string $fullCmd): string
+    {
+        return match ($fullCmd) {
+            self::CMD_CONNECT => '发起连接',
+            self::CMD_HEARTBEAT => '联机心跳',
+            self::CMD_GAME_ENABLE => '游戏使能',
+            self::CMD_VERSION => '获取版本号',
+            self::CMD_INSERT_MONEY => '投入金额',
+            self::CMD_SCORE_UP => '上分金额',
+            self::CMD_WASH_SCORE => '洗分金额',
+            self::CMD_GAME_START => '游戏开始',
+            self::CMD_BET_AMOUNT => '本次压分',
+            self::CMD_LIGHT_HOLES => '亮灯洞口',
+            self::CMD_FALL_HOLES => '落入洞口',
+            self::CMD_GAME_RESULT => '游戏结果',
+            self::CMD_BUTTON_SIGNAL => '按钮信号',
+            self::CMD_ASK_TIME => '询问时间',
+            self::CMD_DOOR_SWITCH => '开门微动',
+            self::CMD_JP_ENTER => '进入JP',
+            self::CMD_GAME_END => '游戏结束',
+            self::CMD_CONFIRM_CLOSE => '确认关门',
+            self::CMD_SCORE_UP_AMOUNT => '上分数量',
+            self::CMD_SCORE_DOWN => '下分',
+            self::CMD_ENTER_JP1 => '进入JP1',
+            self::CMD_JACKPOT_SCORE => '彩金分数',
+            self::CMD_ADD_SUB_START => '加分/减分/启动',
+            self::CMD_QUERY_UID => '查询UID',
+            self::CMD_SET_BALL_LIGHT => '设置球数/灯数',
+            self::CMD_SET_MULTIPLIER => '设置关卡倍数',
+            self::CMD_ASK_ACCOUNT => '查询帐目',
+            default => '未知指令(' . $fullCmd . ')',
+        };
     }
 
     /**
@@ -755,12 +813,12 @@ class PokemonBall extends MachineServices implements BaseMachine
     /**
      * 获取指令描述
      *
-     * @param string $cmd 指令代码
+     * @param string $fun 指令代码
      * @return string
      */
-    protected function getDescription(string $cmd): string
+    public function getDescription(string $fun = ''): string
     {
-        return match ($cmd) {
+        return match ($fun) {
             self::ALL => '查询状态',
             self::WASH_ZERO => '洗分清零',
             self::OPEN_ANY_POINT => '开分',
@@ -793,71 +851,83 @@ class PokemonBall extends MachineServices implements BaseMachine
      */
     protected function buildCommandFrame(string $cmd, int $data = 0): ?string
     {
-        switch ($cmd) {
-            case self::ALL:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '23');
+        $frame = match ($cmd) {
+            // 查询帐目 / 机台状态 → 命令 0x23
+            self::ALL, self::QUERY_ACCOUNT
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '23'),
 
-            case self::WASH_ZERO:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '11');
+            // 洗分清零 / 下分 → 命令 0x11
+            self::WASH_ZERO, self::SCORE_DOWN
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '11'),
 
-            case self::OPEN_ANY_POINT:
-                $dataHex = sprintf('%06X', $data);
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '10', $dataHex);
+            // 开任意分 / 上分 → 命令 0x10 + 分数(3字节)
+            self::OPEN_ANY_POINT, self::SCORE_UP
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '10', sprintf('%06X', $data)),
 
-            case self::SCORE_UP:
-                $dataHex = sprintf('%06X', $data);
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '10', $dataHex);
+            // 游戏使能开 → 命令 0x03 + 0x01
+            self::GAME_ENABLE_ON
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '03', '01'),
 
-            case self::SCORE_DOWN:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '11');
+            // 游戏使能关 → 命令 0x03 + 0x00
+            self::GAME_ENABLE_OFF
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '03', '00'),
 
-            case self::GAME_ENABLE_ON:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '03', '01');
+            // 游戏结束 → 命令 0x0C
+            self::GAME_END
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '0C'),
 
-            case self::GAME_ENABLE_OFF:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '03', '00');
+            // 进入JP1 → 命令 0x12
+            self::ENTER_JP1
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '12'),
 
-            case self::GAME_END:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '0C');
+            // 设置彩金分数 → 命令 0x14 + 分数(3字节)
+            self::SET_JACKPOT
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '14', sprintf('%06X', $data)),
 
-            case self::ENTER_JP1:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '12');
+            // 查询UID → 命令 0x16
+            self::QUERY_UID
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '16'),
 
-            case self::SET_JACKPOT:
-                $dataHex = sprintf('%06X', $data);
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '14', $dataHex);
+            // 设置关卡倍数 → 命令 0x22 + 倍数(10字节)
+            self::SET_MULTIPLIER
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '22', sprintf('%020X', $data)),
 
-            case self::QUERY_UID:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '16');
+            // 加分/减分/启动/自动启动 → 命令 0x15 + 子命令(1字节)
+            self::ADD_SCORE
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '15', sprintf('%02X', self::ADD_SUB_ADD)),
+            self::SUB_SCORE
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '15', sprintf('%02X', self::ADD_SUB_SUB)),
+            self::START_GAME
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '15', sprintf('%02X', self::ADD_SUB_START)),
+            self::AUTO_START
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '15', sprintf('%02X', self::ADD_SUB_AUTO)),
 
-            case self::QUERY_ACCOUNT:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '23');
+            // 设置球数/灯数 → 命令 0x21 + 数量(1字节)
+            self::SET_BALL_COUNT, self::SET_LIGHT_COUNT
+                => self::buildFrame(self::CMD_CATEGORY_SERVER, '21', sprintf('%02X', $data)),
 
-            case self::SET_MULTIPLIER:
-                $dataHex = sprintf('%020X', $data);
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '22', $dataHex);
+            default => null,
+        };
 
-            case self::ADD_SCORE:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '15', sprintf('%02X', self::ADD_SUB_ADD));
-
-            case self::SUB_SCORE:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '15', sprintf('%02X', self::ADD_SUB_SUB));
-
-            case self::START_GAME:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '15', sprintf('%02X', self::ADD_SUB_START));
-
-            case self::AUTO_START:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '15', sprintf('%02X', self::ADD_SUB_AUTO));
-
-            case self::SET_BALL_COUNT:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '21', sprintf('%02X', $data));
-
-            case self::SET_LIGHT_COUNT:
-                return self::buildFrame(self::CMD_CATEGORY_SERVER, '21', sprintf('%02X', $data));
-
-            default:
-                return null;
+        // 记录指令构建日志
+        if ($frame !== null) {
+            $this->log->info('[PokemonBall] 构建指令帧', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'cmd_name' => $this->getDescription($cmd),
+                'data' => $data,
+                'frame' => $frame,
+            ]);
+        } else {
+            $this->log->warning('[PokemonBall] 未知指令', [
+                'machine_id' => $this->machine->id,
+                'cmd' => $cmd,
+                'data' => $data,
+            ]);
         }
+
+        return $frame;
     }
 
     /**
