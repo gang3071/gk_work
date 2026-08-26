@@ -763,33 +763,42 @@ class PokemonBall extends MachineServices implements BaseMachine
     {
         $frame = self::buildFrame($cmdCategory, $cmd, $dataHex);
 
-        try {
-            $result = \app\service\MachineApiService::sendCmd(
-                $this->machine->id,
-                $frame,
-                0,
-                0,
-                $this->lang
-            );
+        // 获取机台连接UID
+        $uid = $this->machine->domain . ':' . $this->machine->port;
 
-            $this->log->info('[PokemonBall-sendFrame] 发送帧', [
+        $this->log->info('[PokemonBall] 发送帧', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'uid' => $uid,
+            'category' => $cmdCategory,
+            'cmd' => $cmd,
+            'data_hex' => $dataHex,
+            'frame' => $frame,
+        ]);
+
+        try {
+            // 检查机台是否在线
+            if (!\GatewayWorker\Lib\Gateway::isUidOnline($uid)) {
+                $this->log->warning('[PokemonBall] 机台离线', [
+                    'machine_id' => $this->machine->id,
+                    'uid' => $uid,
+                ]);
+                return false;
+            }
+
+            // 发送帧到机台
+            \GatewayWorker\Lib\Gateway::sendToUid($uid, hex2bin($frame));
+
+            $this->log->info('[PokemonBall] 发送成功', [
                 'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'cmd_category' => $cmdCategory,
-                'cmd' => $cmd,
-                'data_hex' => $dataHex,
                 'frame' => $frame,
-                'result' => $result,
             ]);
 
             return true;
         } catch (Exception $e) {
-            $this->log->error('[PokemonBall-sendFrame] 发送帧失败', [
+            $this->log->error('[PokemonBall] 发送失败', [
                 'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'cmd_category' => $cmdCategory,
-                'cmd' => $cmd,
-                'data_hex' => $dataHex,
+                'frame' => $frame,
                 'error' => $e->getMessage(),
             ]);
             return false;
