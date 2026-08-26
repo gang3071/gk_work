@@ -408,17 +408,9 @@ class PokemonBall extends MachineServices implements BaseMachine
     public function pokemonBallCmd(string $msg): bool
     {
         try {
-
-            $this->log->warning('[PokemonBall-pokemonBallCmd] 消息接受测试', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'msg' => $msg,
-                'msg_length' => strlen($msg),
-            ]);
-
             // 验证帧格式
             if (strlen($msg) < 20) {
-                $this->log->warning('[PokemonBall-pokemonBallCmd] 消息长度异常', [
+                $this->log->warning('[PokemonBall] 消息长度异常', [
                     'machine_id' => $this->machine->id,
                     'machine_code' => $this->machine->code,
                     'msg' => $msg,
@@ -431,7 +423,7 @@ class PokemonBall extends MachineServices implements BaseMachine
             $start = substr($msg, 0, 4);
             $end = substr($msg, -4);
             if ($start !== 'FAEA' || $end !== 'FBEB') {
-                $this->log->warning('[PokemonBall-pokemonBallCmd] 帧格式错误', [
+                $this->log->warning('[PokemonBall] 帧格式错误', [
                     'machine_id' => $this->machine->id,
                     'machine_code' => $this->machine->code,
                     'msg' => $msg,
@@ -455,10 +447,12 @@ class PokemonBall extends MachineServices implements BaseMachine
                 $dataLen = $dataLen - 4;
             }
 
-            $this->log->info('[PokemonBall-pokemonBallCmd] 收到消息', [
+            // 记录原始消息（所有消息统一记录）
+            $this->log->info('[PokemonBall] 接收消息', [
                 'machine_id' => $this->machine->id,
                 'machine_code' => $this->machine->code,
-                'cmd_category' => $cmdCategory,
+                'raw' => $msg,
+                'category' => $cmdCategory,
                 'cmd' => $cmd,
                 'data_len' => $dataLen,
                 'data_hex' => $dataHex,
@@ -475,14 +469,15 @@ class PokemonBall extends MachineServices implements BaseMachine
                 case self::CMD_CATEGORY_ACK:     // 0xF2: 安卓回复（主板上传命令）
                     return $this->handleAckCommand($cmd, $dataHex);
                 default:
-                    $this->log->warning('[PokemonBall-pokemonBallCmd] 未知命令类别', [
+                    $this->log->warning('[PokemonBall] 未知命令类别', [
                         'machine_id' => $this->machine->id,
-                        'cmd_category' => $cmdCategory,
+                        'machine_code' => $this->machine->code,
+                        'category' => $cmdCategory,
                     ]);
                     return false;
             }
         } catch (\Exception $e) {
-            $this->log->error('[PokemonBall-pokemonBallCmd] 处理消息异常', [
+            $this->log->error('[PokemonBall] 处理消息异常', [
                 'machine_id' => $this->machine->id,
                 'machine_code' => $this->machine->code,
                 'msg' => $msg,
@@ -501,41 +496,32 @@ class PokemonBall extends MachineServices implements BaseMachine
      */
     protected function handleBoardCommand(string $cmd, string $dataHex): bool
     {
-        // 记录所有主板上传指令的入口日志
-        $cmdName = $this->getProtocolCmdName(self::CMD_CATEGORY_BOARD . $cmd);
-        $this->log->info('[PokemonBall] 收到主板上传指令', [
+        $baseLog = [
             'machine_id' => $this->machine->id,
             'machine_code' => $this->machine->code,
-            'cmd' => $cmd,
-            'cmd_name' => $cmdName,
-            'data_hex' => $dataHex,
-            'data_len' => strlen($dataHex) / 2,
-        ]);
+        ];
 
         switch ($cmd) {
             case substr(self::CMD_CONNECT, 2, 2): // 发起连接
-                $this->log->info('[PokemonBall] 机台连接', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                ]);
-                // 发送连接确认
+                $this->log->info('[PokemonBall] 机台连接', $baseLog);
                 $this->sendFrame(self::CMD_CATEGORY_SERVER, '01');
                 return true;
 
             case substr(self::CMD_HEARTBEAT, 2, 2): // 心跳
-                // 更新操作时间
                 $this->action_time = time();
-                // 发送心跳响应
+                $this->log->info('[PokemonBall] 心跳', array_merge($baseLog, [
+                    'action_time' => $this->action_time,
+                ]));
                 $this->sendFrame(self::CMD_CATEGORY_SERVER, '02');
                 return true;
 
             case substr(self::CMD_INSERT_MONEY, 2, 2): // 投入金额
                 $amount = hexdec($dataHex);
                 $this->insert_money = ($this->insert_money ?? 0) + $amount;
-                $this->log->info('[PokemonBall] 投入金额', [
-                    'machine_id' => $this->machine->id,
+                $this->log->info('[PokemonBall] 投入金额', array_merge($baseLog, [
                     'amount' => $amount,
-                ]);
+                    'total_insert' => $this->insert_money,
+                ]));
                 return true;
 
             case substr(self::CMD_SCORE_UP, 2, 2): // 上分金额
@@ -543,52 +529,49 @@ class PokemonBall extends MachineServices implements BaseMachine
                 $this->point = ($this->point ?? 0) + $amount;
                 $this->open_point = ($this->open_point ?? 0) + $amount;
                 $this->last_point_at = time();
-                $this->log->info('[PokemonBall] 上分', [
-                    'machine_id' => $this->machine->id,
+                $this->log->info('[PokemonBall] 上分', array_merge($baseLog, [
                     'amount' => $amount,
-                ]);
+                    'point' => $this->point,
+                    'open_point' => $this->open_point,
+                ]));
                 return true;
 
             case substr(self::CMD_WASH_SCORE, 2, 2): // 洗分金额
                 $amount = hexdec($dataHex);
                 $this->point = max(0, ($this->point ?? 0) - $amount);
                 $this->wash_point = ($this->wash_point ?? 0) + $amount;
-                $this->log->info('[PokemonBall] 洗分', [
-                    'machine_id' => $this->machine->id,
+                $this->log->info('[PokemonBall] 洗分', array_merge($baseLog, [
                     'amount' => $amount,
-                ]);
+                    'point' => $this->point,
+                    'wash_point' => $this->wash_point,
+                ]));
                 return true;
 
             case substr(self::CMD_GAME_START, 2, 2): // 游戏开始
                 $this->gaming = 1;
-                $this->log->info('[PokemonBall] 游戏开始', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                $this->log->info('[PokemonBall] 游戏开始', $baseLog);
                 return true;
 
             case substr(self::CMD_BET_AMOUNT, 2, 2): // 本次压分
                 $amount = hexdec($dataHex);
                 $this->bet = $amount;
-                $this->log->info('[PokemonBall] 压分', [
-                    'machine_id' => $this->machine->id,
+                $this->log->info('[PokemonBall] 压分', array_merge($baseLog, [
                     'amount' => $amount,
-                ]);
+                ]));
                 return true;
 
             case substr(self::CMD_LIGHT_HOLES, 2, 2): // 亮灯洞口
                 $this->light_holes = $dataHex;
-                $this->log->info('[PokemonBall] 亮灯洞口', [
-                    'machine_id' => $this->machine->id,
+                $this->log->info('[PokemonBall] 亮灯洞口', array_merge($baseLog, [
                     'light_holes' => $dataHex,
-                ]);
+                ]));
                 return true;
 
             case substr(self::CMD_FALL_HOLES, 2, 2): // 落入洞口
                 $this->fall_holes = $dataHex;
-                $this->log->info('[PokemonBall] 落入洞口', [
-                    'machine_id' => $this->machine->id,
+                $this->log->info('[PokemonBall] 落入洞口', array_merge($baseLog, [
                     'fall_holes' => $dataHex,
-                ]);
+                ]));
                 return true;
 
             case substr(self::CMD_GAME_RESULT, 2, 2): // 游戏结果
@@ -596,45 +579,50 @@ class PokemonBall extends MachineServices implements BaseMachine
                 $this->win = ($this->win ?? 0) + $result;
                 $this->score = ($this->score ?? 0) + $result;
                 $this->gaming = 0;
-                $this->log->info('[PokemonBall] 游戏结果', [
-                    'machine_id' => $this->machine->id,
+                $this->log->info('[PokemonBall] 游戏结果', array_merge($baseLog, [
                     'result' => $result,
-                ]);
+                    'win' => $this->win,
+                    'score' => $this->score,
+                ]));
                 return true;
 
             case substr(self::CMD_BUTTON_SIGNAL, 2, 2): // 按钮信号
                 $this->action_time = time();
+                $this->log->info('[PokemonBall] 按钮信号', array_merge($baseLog, [
+                    'action_time' => $this->action_time,
+                ]));
                 return true;
 
             case substr(self::CMD_ASK_TIME, 2, 2): // 询问时间
                 $timeHex = sprintf('%08X', time());
+                $this->log->info('[PokemonBall] 询问时间', array_merge($baseLog, [
+                    'response_time' => $timeHex,
+                ]));
                 $this->sendFrame(self::CMD_CATEGORY_SERVER, '0D', $timeHex);
                 return true;
 
             case substr(self::CMD_DOOR_SWITCH, 2, 2): // 开门微动
                 $status = hexdec($dataHex);
                 $this->door_status = $status;
-                $this->log->info('[PokemonBall] 开关门状态', [
-                    'machine_id' => $this->machine->id,
+                $this->log->info('[PokemonBall] 开关门状态', array_merge($baseLog, [
                     'status' => $status,
-                ]);
+                    'status_text' => $status ? '开门' : '关门',
+                ]));
                 return true;
 
             case substr(self::CMD_JP_ENTER, 2, 2): // 进入JP
                 $level = hexdec($dataHex);
                 $this->jp_level = $level;
-                $this->log->info('[PokemonBall] 进入JP', [
-                    'machine_id' => $this->machine->id,
+                $this->log->info('[PokemonBall] 进入JP', array_merge($baseLog, [
                     'level' => $level,
-                ]);
+                ]));
                 return true;
 
             default:
-                $this->log->warning('[PokemonBall] 未知主板指令', [
-                    'machine_id' => $this->machine->id,
+                $this->log->warning('[PokemonBall] 未知主板指令', array_merge($baseLog, [
                     'cmd' => $cmd,
                     'data_hex' => $dataHex,
-                ]);
+                ]));
                 return false;
         }
     }
