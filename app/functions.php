@@ -1689,6 +1689,14 @@ function machineWashZero(
             $playerGameLog->before_game_amount = $beforeGameAmount;
             $playerGameLog->after_game_amount = $beforeGameAmount;
             $playerGameLog->action = ($action == 'leave' ? PlayerGameLog::ACTION_LEAVE : PlayerGameLog::ACTION_DOWN);
+            // 修复：即使没有下分，也要计算打码量（玩家产生了游戏行为）
+            $playerGameLog->chip_amount = 0;
+            if ($machine->type == GameType::TYPE_SLOT) {
+                $ratio = ($machine->odds_x ?? 1) / ($machine->odds_y ?? 1);
+                $playerGameLog->chip_amount = bcmul($gamingPressure, $ratio, 2);
+            } elseif ($machine->type == GameType::TYPE_STEEL_BALL) {
+                $playerGameLog->chip_amount = bcmul($machine->machineCategory?->turn_used_point ?? 0, $gamingTurnPoint);
+            }
             extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint, $adminId, $adminUsername);
 
             if (!empty($gameRecord)) {
