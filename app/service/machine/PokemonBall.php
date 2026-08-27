@@ -587,38 +587,67 @@ class PokemonBall extends MachineServices implements BaseMachine
                 return true;
 
             case substr(self::CMD_BET_AMOUNT, 2, 2): // 本次压分
-                $amount = hexdec($dataHex);
+                // 去掉前缀 AB154771，获取实际数据
+                $actualData = $this->extractActualData($dataHex);
+                $amount = hexdec($actualData);
                 $this->bet = $amount;
                 $this->log->info('[PokemonBall] 压分', array_merge($baseLog, [
+                    'raw_data' => $dataHex,
+                    'actual_data' => $actualData,
                     'amount' => $amount,
                 ]));
                 return true;
 
             case substr(self::CMD_LIGHT_HOLES, 2, 2): // 亮灯洞口
-                $this->light_holes = $dataHex;
+                // 去掉前缀，解析位掩码
+                $actualData = $this->extractActualData($dataHex);
+                $holes = $this->parseHoleBitmask($actualData);
+                $this->light_holes = $actualData;
                 $this->log->info('[PokemonBall] 亮灯洞口', array_merge($baseLog, [
-                    'light_holes' => $dataHex,
+                    'raw_data' => $dataHex,
+                    'actual_data' => $actualData,
+                    'light_holes' => $holes,
+                    'light_holes_binary' => $this->hexToBinaryString($actualData),
                 ]));
                 return true;
 
             case substr(self::CMD_FALL_HOLES, 2, 2): // 落入洞口
-                $this->fall_holes = $dataHex;
+                // 去掉前缀，解析位掩码
+                $actualData = $this->extractActualData($dataHex);
+                $holes = $this->parseHoleBitmask($actualData);
+                $this->fall_holes = $actualData;
                 $this->log->info('[PokemonBall] 落入洞口', array_merge($baseLog, [
-                    'fall_holes' => $dataHex,
+                    'raw_data' => $dataHex,
+                    'actual_data' => $actualData,
+                    'fall_holes' => $holes,
+                    'fall_holes_binary' => $this->hexToBinaryString($actualData),
                 ]));
                 return true;
 
             case substr(self::CMD_GAME_RESULT, 2, 2): // 游戏结果 (0x01 0x09)
-                $result = hexdec($dataHex);
-                $this->win = ($this->win ?? 0) + $result;
-                $this->score = ($this->score ?? 0) + $result;
-                $this->gaming = 0;
+                // 去掉前缀，解析4字节结果
+                $actualData = $this->extractActualData($dataHex);
+                $resultParsed = $this->parseGameResult($actualData);
+
+                // 记录游戏结果日志
                 $this->log->info('[PokemonBall] 游戏结果', array_merge($baseLog, [
-                    'result' => $result,
-                    'win' => $this->win,
-                    'score' => $this->score,
+                    'is_winner' => $resultParsed['is_winner'],
+                    'is_winner_text' => $resultParsed['is_winner'] ? '中奖' : '未中奖',
+                    'level' => $resultParsed['level'],
+                    'hole9_full' => $resultParsed['hole9_full'],
+                    'hole9_full_text' => $resultParsed['hole9_full'] ? '已满' : '未满',
+                    'light3_full' => $resultParsed['light3_full'],
+                    'light3_full_text' => $resultParsed['light3_full'] ? '已满' : '未满',
+                    'raw_data' => $dataHex,
+                    'actual_data' => $actualData,
                 ]));
                 $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '09'); // 回复 F1 09
+
+                // 自动发送游戏结束指令给主板
+                $this->log->info('[PokemonBall] 游戏结束', array_merge($baseLog, [
+                    'game_over' => true,
+                ]));
+                $this->sendFrame(self::CMD_CATEGORY_SERVER, '0C'); // 发送 01 0C
                 return true;
 
             case substr(self::CMD_BUTTON_SIGNAL, 2, 2): // 按钮信号
@@ -663,6 +692,113 @@ class PokemonBall extends MachineServices implements BaseMachine
                 ]));
                 return false;
         }
+    }
+
+    /**
+     * 提取实际数据（去掉 AB154771 前缀）
+     *
+     * @param string $dataHex 原始数据
+     * @return string 实际数据
+     */
+    protected function extractActualData(string $dataHex): string
+    {
+        // AB154771 是固定前缀（8个字符 = 4字节）
+        $prefix = 'AB154771';
+        if (strlen($dataHex) > 8 && strtoupper(substr($dataHex, 0, 8)) === $prefix) {
+            return substr($dataHex, 8);
+        }
+        return $dataHex;
+    }
+
+    /**
+     * 解析洞口位掩码
+     *
+     * @param string $hex 数据（2字节 = 4个hex字符）
+     * @return array 亮灯的洞口号数组（1-9）
+     */
+    protected function parseHoleBitmask(string $hex): array
+    {
+        $holes = [];
+        if (strlen($hex) < 4) {
+            return $holes;
+        }
+
+        // 2字节数据，低字节在前
+        $low = hexdec(substr($hex, 0, 2));   // 第1字节（1-8号洞）
+        $high = hexdec(substr($hex, 2, 2));  // 第2字节（9号洞）
+
+        // 解析低字节（第1-8号洞）
+        for ($i = 0; $i < 8; $i++) {
+            if (($low >> $i) & 1) {
+                $hole = 1 + $i;
+                if ($hole <= 9) {
+                    $holes[] = $hole;
+                }
+            }
+        }
+
+        // 解析高字节（第9号洞）
+        for ($i = 0; $i < 8; $i++) {
+            if (($high >> $i) & 1) {
+                $hole = 9 + $i;
+                if ($hole <= 9) {
+                    $holes[] = $hole;
+                }
+            }
+        }
+
+        sort($holes);
+        return $holes;
+    }
+
+    /**
+     * 将hex字符串转换为二进制字符串（用于日志）
+     *
+     * @param string $hex hex字符串
+     * @return string 二进制字符串
+     */
+    protected function hexToBinaryString(string $hex): string
+    {
+        $binary = '';
+        for ($i = 0; $i < strlen($hex); $i += 2) {
+            $byte = hexdec(substr($hex, $i, 2));
+            $binary .= sprintf('%08b', $byte) . ' ';
+        }
+        return trim($binary);
+    }
+
+    /**
+     * 解析游戏结果（4字节）
+     *
+     * @param string $hex 8个hex字符（4字节）
+     * @return array 解析结果
+     */
+    protected function parseGameResult(string $hex): array
+    {
+        $result = [
+            'is_winner' => false,
+            'level' => 0,
+            'hole9_full' => false,
+            'light3_full' => false,
+        ];
+
+        if (strlen($hex) < 8) {
+            return $result;
+        }
+
+        // 字节1：是否中奖
+        $result['is_winner'] = (hexdec(substr($hex, 0, 2)) === 1);
+
+        // 字节2：当前关卡
+        $result['level'] = hexdec(substr($hex, 2, 2));
+
+        // 字节3：9洞累积是否满了
+        $result['hole9_full'] = (hexdec(substr($hex, 4, 2)) === 1);
+
+        // 字节4：3关累积灯是否满了
+        $result['light3_full'] = (hexdec(substr($hex, 6, 2)) === 1);
+
+        return $result;
     }
 
     /**
