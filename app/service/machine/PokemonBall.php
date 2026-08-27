@@ -452,8 +452,8 @@ class PokemonBall extends MachineServices implements BaseMachine
                 $dataLen = $dataLen - 4;
             }
 
-            // 判断是否为心跳/连接消息（cmd=01连接，cmd=02心跳）
-            $isHeartbeat = ($cmd === '01' || $cmd === '02');
+            // 判断是否为心跳消息（cmd=02心跳），心跳不记录日志
+            $isHeartbeat = ($cmd === '02');
 
             // 非心跳消息才记录日志
             if (!$isHeartbeat) {
