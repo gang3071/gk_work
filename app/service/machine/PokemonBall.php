@@ -452,17 +452,22 @@ class PokemonBall extends MachineServices implements BaseMachine
                 $dataLen = $dataLen - 4;
             }
 
-            // 记录原始消息（所有消息统一记录）
-            $this->log->info('[PokemonBall] 接收消息', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'raw' => $msg,
-                'category' => $cmdCategory,
-                'cmd' => $cmd,
-                'data_len' => $dataLen,
-                'data_hex' => $dataHex,
-                'uid' => $uid,
-            ]);
+            // 判断是否为心跳/连接消息（cmd=01连接，cmd=02心跳）
+            $isHeartbeat = ($cmd === '01' || $cmd === '02');
+
+            // 非心跳消息才记录日志
+            if (!$isHeartbeat) {
+                $this->log->info('[PokemonBall] 接收消息', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'raw' => $msg,
+                    'category' => $cmdCategory,
+                    'cmd' => $cmd,
+                    'data_len' => $dataLen,
+                    'data_hex' => $dataHex,
+                    'uid' => $uid,
+                ]);
+            }
 
             // 根据命令类别处理
             switch ($cmdCategory) {
@@ -527,20 +532,14 @@ class PokemonBall extends MachineServices implements BaseMachine
                     ]));
                     $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '01'); // 回复 F1 01
                 } else {
-                    // 已连接 → 心跳，回复 0xF1 0x02
+                    // 已连接 → 心跳，静默处理（不记录日志）
                     $this->action_time = time();
-                    $this->log->info('[PokemonBall] 心跳', array_merge($baseLog, [
-                        'action_time' => $this->action_time,
-                    ]));
                     $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '02'); // 回复 F1 02
                 }
                 return true;
 
-            case substr(self::CMD_HEARTBEAT, 2, 2): // 0x02: 心跳（有安卓模式）
+            case substr(self::CMD_HEARTBEAT, 2, 2): // 0x02: 心跳（有安卓模式），静默处理
                 $this->action_time = time();
-                $this->log->info('[PokemonBall] 心跳', array_merge($baseLog, [
-                    'action_time' => $this->action_time,
-                ]));
                 $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '02'); // 回复 F1 02
                 return true;
 
@@ -766,15 +765,20 @@ class PokemonBall extends MachineServices implements BaseMachine
         // 获取机台连接UID
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
-        $this->log->info('[PokemonBall] 发送帧', [
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'uid' => $uid,
-            'category' => $cmdCategory,
-            'cmd' => $cmd,
-            'data_hex' => $dataHex,
-            'frame' => $frame,
-        ]);
+        // 判断是否为心跳响应（F1 02），心跳响应不记录日志
+        $isHeartbeatResponse = ($cmdCategory === self::CMD_CATEGORY_RESPONSE && $cmd === '02');
+
+        if (!$isHeartbeatResponse) {
+            $this->log->info('[PokemonBall] 发送帧', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'uid' => $uid,
+                'category' => $cmdCategory,
+                'cmd' => $cmd,
+                'data_hex' => $dataHex,
+                'frame' => $frame,
+            ]);
+        }
 
         try {
             // 检查机台是否在线
@@ -789,10 +793,12 @@ class PokemonBall extends MachineServices implements BaseMachine
             // 发送帧到机台
             \GatewayWorker\Lib\Gateway::sendToUid($uid, hex2bin($frame));
 
-            $this->log->info('[PokemonBall] 发送成功', [
-                'machine_id' => $this->machine->id,
-                'frame' => $frame,
-            ]);
+            if (!$isHeartbeatResponse) {
+                $this->log->info('[PokemonBall] 发送成功', [
+                    'machine_id' => $this->machine->id,
+                    'frame' => $frame,
+                ]);
+            }
 
             return true;
         } catch (Exception $e) {
