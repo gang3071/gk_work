@@ -131,6 +131,17 @@ class Events
             ]);
             return Gateway::closeClient($client_id);
         }
+
+        // 兜底：确保 UID 已绑定（防止 onConnect 事件丢失的情况）
+        $uid = $domain . ':' . $port;
+        if (!Gateway::isUidOnline($uid)) {
+            Gateway::bindUid($client_id, $uid);
+            $log->info('机台UID补绑', [
+                'code' => $machine->code,
+                'uid' => $uid,
+                'client_id' => $client_id,
+            ]);
+        }
         $service = MachineServices::createServices($machine);
         switch ($gatewayPort) {
             case config('gateway_worker.slot_port'):
