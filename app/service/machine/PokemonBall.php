@@ -678,15 +678,139 @@ class PokemonBall extends MachineServices implements BaseMachine
         $originalCmd = self::CMD_CATEGORY_SERVER . $cmd;
         $cmdName = $this->getProtocolCmdName($originalCmd);
 
-        $this->log->info('[PokemonBall] 收到主板回复', [
+        // 解析数据含义
+        $parsed = $this->parseResponseData($cmd, $dataHex);
+
+        $this->log->info('[PokemonBall] 收到主板回复', array_merge([
             'machine_id' => $this->machine->id,
             'machine_code' => $this->machine->code,
             'cmd' => $cmd,
             'cmd_name' => $cmdName,
             'data_hex' => $dataHex,
             'data_len' => strlen($dataHex) / 2,
-        ]);
+        ], $parsed));
         return true;
+    }
+
+    /**
+     * 解析主板回复数据
+     *
+     * @param string $cmd 指令代码
+     * @param string $dataHex 数据
+     * @return array 解析结果
+     */
+    protected function parseResponseData(string $cmd, string $dataHex): array
+    {
+        $result = [];
+
+        // 无安卓模式下，回复数据可能包含唯一码（前4字节）
+        // 实际数据从第9个字符开始（4字节唯一码 = 8个hex字符）
+        $actualData = $dataHex;
+        if (strlen($dataHex) > 8) {
+            $uid = substr($dataHex, 0, 8);
+            $actualData = substr($dataHex, 8);
+            $result['uid'] = $uid;
+        }
+
+        switch ($cmd) {
+            case '03': // 游戏使能回复
+                $result['data_desc'] = '无数据';
+                break;
+
+            case '04': // 版本号回复
+                if (strlen($actualData) >= 4) {
+                    $major = hexdec(substr($actualData, 0, 2));
+                    $minor = hexdec(substr($actualData, 2, 2));
+                    $result['version'] = "$major.$minor";
+                    $result['data_desc'] = "版本号: $major.$minor";
+                }
+                break;
+
+            case '09': // 游戏结果回复
+                $result['data_desc'] = '无数据';
+                break;
+
+            case '10': // 上分数量回复
+                $result['data_desc'] = '无数据';
+                break;
+
+            case '11': // 下分回复
+                if (strlen($actualData) >= 6) {
+                    $amount = hexdec(substr($actualData, 0, 6));
+                    $result['amount'] = $amount;
+                    $result['data_desc'] = "下分金额: $amount";
+                }
+                break;
+
+            case '12': // 进入JP1回复
+                $result['data_desc'] = '无数据';
+                break;
+
+            case '14': // 彩金分数回复
+                if (strlen($actualData) >= 6) {
+                    $score = hexdec(substr($actualData, 0, 6));
+                    $result['jackpot_score'] = $score;
+                    $result['data_desc'] = "彩金分数: $score";
+                }
+                break;
+
+            case '15': // 加分/减分/启动回复
+                if (strlen($actualData) >= 2) {
+                    $status = hexdec(substr($actualData, 0, 2));
+                    $statusText = match ($status) {
+                        1 => '加分成功',
+                        2 => '减分成功',
+                        3 => '启动成功',
+                        4 => '自动启动成功',
+                        default => "状态: $status",
+                    };
+                    $result['status'] = $status;
+                    $result['status_text'] = $statusText;
+                    $result['data_desc'] = $statusText;
+                }
+                break;
+
+            case '16': // 查询UID回复
+                if (strlen($actualData) >= 16) {
+                    $uid = substr($actualData, 0, 16);
+                    $ballCount = hexdec(substr($actualData, 0, 2));
+                    $gameType = hexdec(substr($actualData, 2, 2));
+                    $lightCount = hexdec(substr($actualData, 4, 2));
+                    $result['uid'] = $uid;
+                    $result['ball_count'] = $ballCount;
+                    $result['game_type'] = $gameType;
+                    $result['game_type_text'] = $gameType === 1 ? 'A型' : 'B型';
+                    $result['light_count'] = $lightCount;
+                    $result['data_desc'] = "UID: $uid, 球数: $ballCount, 类型: " . ($gameType === 1 ? 'A' : 'B') . ", 灯数: $lightCount";
+                }
+                break;
+
+            case '21': // 设置球数/灯数回复
+                $result['data_desc'] = '无数据';
+                break;
+
+            case '22': // 设置关卡倍数回复
+                $result['data_desc'] = '无数据';
+                break;
+
+            case '23': // 查询帐目回复
+                if (strlen($actualData) >= 12) {
+                    $insertTotal = hexdec(substr($actualData, 0, 4));
+                    $openTotal = hexdec(substr($actualData, 4, 4));
+                    $washTotal = hexdec(substr($actualData, 8, 4));
+                    $result['insert_total'] = $insertTotal;
+                    $result['open_total'] = $openTotal;
+                    $result['wash_total'] = $washTotal;
+                    $result['data_desc'] = "投币: $insertTotal, 上分: $openTotal, 洗分: $washTotal";
+                }
+                break;
+
+            default:
+                $result['data_desc'] = '未知数据';
+                break;
+        }
+
+        return $result;
     }
 
     /**
