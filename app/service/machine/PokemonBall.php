@@ -452,10 +452,8 @@ class PokemonBall extends MachineServices implements BaseMachine
                 $dataLen = $dataLen - 4;
             }
 
-            // 判断是否为心跳消息（cmd=02心跳），心跳不记录日志
+            // 记录原始消息（心跳消息不记录）
             $isHeartbeat = ($cmd === '02');
-
-            // 非心跳消息才记录日志
             if (!$isHeartbeat) {
                 $this->log->info('[PokemonBall] 接收消息', [
                     'machine_id' => $this->machine->id,
@@ -534,17 +532,16 @@ class PokemonBall extends MachineServices implements BaseMachine
                     ]));
                     $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '01'); // 回复 F1 01
 
-                    // 连接后主动发送游戏使能指令（根据当前机台状态）
-                    $gameEnabled = $this->game_enabled ?? 0;
-                    $this->sendGameEnable($gameEnabled);
+                    // 连接后默认发送允许游戏指令
+                    $this->sendGameEnable(1);
                 } else {
-                    // 已连接 → 心跳，静默处理（不记录日志）
+                    // 已连接 → 心跳（静默处理）
                     $this->action_time = time();
                     $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '02'); // 回复 F1 02
                 }
                 return true;
 
-            case substr(self::CMD_HEARTBEAT, 2, 2): // 0x02: 心跳（有安卓模式），静默处理
+            case substr(self::CMD_HEARTBEAT, 2, 2): // 0x02: 心跳（有安卓模式，静默处理）
                 $this->action_time = time();
                 $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '02'); // 回复 F1 02
                 return true;
@@ -818,10 +815,6 @@ class PokemonBall extends MachineServices implements BaseMachine
             \GatewayWorker\Lib\Gateway::sendToUid($uid, hex2bin($frame));
 
             if (!$isHeartbeatResponse) {
-                $this->log->info('[PokemonBall] 发送成功', [
-                    'machine_id' => $this->machine->id,
-                    'frame' => $frame,
-                ]);
             }
 
             return true;

@@ -100,6 +100,17 @@ class Events
                 'remote_port' => $port,
                 'gateway_port' => $_SERVER['GATEWAY_PORT'],
             ]);
+
+            // 精灵球机台连接后，默认发送允许游戏指令
+            if ($_SERVER['GATEWAY_PORT'] == config('gateway_worker.pokemon_ball_port')) {
+                $service = MachineServices::createServices($machine);
+                if ($service instanceof \app\service\machine\PokemonBall) {
+                    $service->sendGameEnable(1); // 默认允许游戏
+                    $log->info('精灵球连接，发送允许游戏', [
+                        'code' => $machine->code,
+                    ]);
+                }
+            }
         } else {
             return Gateway::closeClient($client_id);
         }
