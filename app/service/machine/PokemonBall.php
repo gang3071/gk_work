@@ -521,6 +521,8 @@ class PokemonBall extends MachineServices implements BaseMachine
                         'last_action' => $this->action_time,
                         'timeout' => time() - $this->action_time,
                     ]));
+                    // 断线后发送禁止游戏指令
+                    $this->sendGameEnable(0);
                 }
 
                 if (!$this->connected) {
@@ -531,6 +533,10 @@ class PokemonBall extends MachineServices implements BaseMachine
                         'uid' => $dataHex,
                     ]));
                     $this->sendFrame(self::CMD_CATEGORY_RESPONSE, '01'); // 回复 F1 01
+
+                    // 连接后主动发送游戏使能指令（根据当前机台状态）
+                    $gameEnabled = $this->game_enabled ?? 0;
+                    $this->sendGameEnable($gameEnabled);
                 } else {
                     // 已连接 → 心跳，静默处理（不记录日志）
                     $this->action_time = time();
@@ -758,6 +764,24 @@ class PokemonBall extends MachineServices implements BaseMachine
      * @param string $dataHex 数据
      * @return bool
      */
+    /**
+     * 发送游戏使能指令
+     *
+     * @param int $enabled 1=允许游戏, 0=禁止游戏
+     * @return bool
+     */
+    public function sendGameEnable(int $enabled): bool
+    {
+        $dataHex = sprintf('%02X', $enabled);
+        $this->log->info('[PokemonBall] 发送游戏使能', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'enabled' => $enabled,
+            'enabled_text' => $enabled ? '允许游戏' : '禁止游戏',
+        ]);
+        return $this->sendFrame(self::CMD_CATEGORY_SERVER, '03', $dataHex);
+    }
+
     protected function sendFrame(string $cmdCategory, string $cmd, string $dataHex = ''): bool
     {
         $frame = self::buildFrame($cmdCategory, $cmd, $dataHex);
