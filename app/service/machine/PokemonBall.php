@@ -612,14 +612,15 @@ class PokemonBall extends MachineServices implements BaseMachine
                 return true;
 
             case substr(self::CMD_FALL_HOLES, 2, 2): // 落入洞口
-                // 去掉前缀，解析位掩码
+                // 去掉前缀，解析落入洞口（与亮灯不同）
                 $actualData = $this->extractActualData($dataHex);
-                $holes = $this->parseHoleBitmask($actualData);
+                $fallHole = $this->parseFallHole($actualData);
                 $this->fall_holes = $actualData;
                 $this->log->info('[PokemonBall] 落入洞口', array_merge($baseLog, [
                     'raw_data' => $dataHex,
                     'actual_data' => $actualData,
-                    'fall_holes' => $holes,
+                    'fall_hole' => $fallHole,
+                    'fall_hole_text' => $fallHole > 0 ? $fallHole . '号洞' : '未知',
                     'fall_holes_binary' => $this->hexToBinaryString($actualData),
                 ]));
                 return true;
@@ -723,32 +724,81 @@ class PokemonBall extends MachineServices implements BaseMachine
             return $holes;
         }
 
-        // 2字节数据，低字节在前
-        $low = hexdec(substr($hex, 0, 2));   // 第1字节（1-8号洞）
-        $high = hexdec(substr($hex, 2, 2));  // 第2字节（9号洞）
+        // 2字节数据，大端序（高字节在前）
+        // 合并为16位值
+        $high = hexdec(substr($hex, 0, 2));
+        $low = hexdec(substr($hex, 2, 2));
+        $value = ($high << 8) | $low;
 
-        // 解析低字节（第1-8号洞）
-        for ($i = 0; $i < 8; $i++) {
-            if (($low >> $i) & 1) {
-                $hole = 1 + $i;
-                if ($hole <= 9) {
-                    $holes[] = $hole;
-                }
-            }
-        }
+        // 九宫格布局:
+        // 1 2 3
+        // 4 5 6
+        // 7 8 9
 
-        // 解析高字节（第9号洞）
-        for ($i = 0; $i < 8; $i++) {
-            if (($high >> $i) & 1) {
-                $hole = 9 + $i;
-                if ($hole <= 9) {
-                    $holes[] = $hole;
-                }
+        // 亮灯位映射表（根据文档：0x01 0x23 → 9,6,2,1号洞）
+        // 高字节 bit 0 → 9号洞
+        // 低字节 bit 0-7 → 1-8号洞
+        // 验证: 0x01=00000001→bit0→9号洞, 0x23=00100011→bit0,1,5→1,2,6号洞
+        $bitMap = [
+            15 => 9,  // 高字节 bit 0 → 9号洞
+            0 => 1,   // 低字节 bit 0 → 1号洞
+            1 => 2,   // 低字节 bit 1 → 2号洞
+            2 => 3,   // 低字节 bit 2 → 3号洞
+            3 => 4,   // 低字节 bit 3 → 4号洞
+            4 => 5,   // 低字节 bit 4 → 5号洞
+            5 => 6,   // 低字节 bit 5 → 6号洞
+            6 => 7,   // 低字节 bit 6 → 7号洞
+            7 => 8,   // 低字节 bit 7 → 8号洞
+        ];
+
+        foreach ($bitMap as $bit => $hole) {
+            if (($value >> $bit) & 1) {
+                $holes[] = $hole;
             }
         }
 
         sort($holes);
         return $holes;
+    }
+
+    /**
+     * 解析落入洞口号
+     *
+     * @param string $hex 数据（2字节 = 4个hex字符）
+     * @return int 洞口号（1-9），0表示未知
+     */
+    protected function parseFallHole(string $hex): int
+    {
+        if (strlen($hex) < 4) {
+            return 0;
+        }
+
+        $high = hexdec(substr($hex, 0, 2));
+        $low = hexdec(substr($hex, 2, 2));
+        $value = ($high << 8) | $low;
+
+        // 入洞位映射表（与亮灯不同！）
+        // 已确认: 0004→5, 0080→2, 8000→8
+        // 入洞使用非标准映射
+        $fallBitMap = [
+            2 => 5,   // bit 2 → 5号洞 (已确认)
+            7 => 2,   // bit 7 → 2号洞 (已确认)
+            15 => 8,  // bit 15 → 8号洞 (已确认)
+            0 => 1,   // 待验证
+            1 => 3,   // 待验证
+            3 => 4,   // 待验证
+            4 => 6,   // 待验证
+            5 => 7,   // 待验证
+            6 => 9,   // 待验证
+        ];
+
+        foreach ($fallBitMap as $bit => $hole) {
+            if (($value >> $bit) & 1) {
+                return $hole;
+            }
+        }
+
+        return 0;
     }
 
     /**
@@ -839,14 +889,20 @@ class PokemonBall extends MachineServices implements BaseMachine
     {
         $result = [];
 
-        // 无安卓模式下，回复数据可能包含唯一码（前4字节）
-        // 实际数据从第9个字符开始（4字节唯一码 = 8个hex字符）
+        // 无安卓模式下，回复数据可能包含：
+        // 1. 唯一码（前4字节 = 8个hex字符）
+        // 2. AB154771 前缀（4字节 = 8个hex字符）
         $actualData = $dataHex;
-        if (strlen($dataHex) > 8) {
-            $uid = substr($dataHex, 0, 8);
-            $actualData = substr($dataHex, 8);
+
+        // 去除唯一码（如果存在）
+        if (strlen($actualData) > 8) {
+            $uid = substr($actualData, 0, 8);
+            $actualData = substr($actualData, 8);
             $result['uid'] = $uid;
         }
+
+        // 去除 AB154771 前缀（如果存在）
+        $actualData = $this->extractActualData($actualData);
 
         switch ($cmd) {
             case '03': // 游戏使能回复
