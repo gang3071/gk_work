@@ -736,20 +736,19 @@ class PokemonBall extends MachineServices implements BaseMachine
         // 4 5 6
         // 7 8 9
 
-        // 亮灯位映射表（位→位置→洞口）
-        // 位置: 123/456/789
-        // 洞口: 639/741/852
-        // 809C = bits 2,3,4,7,15 → 位置2,3,5,7,8 → 洞口 [3,4,5,8,9]
+        // 亮灯/入洞位映射表（位→洞口）
+        // 0001 = bit 0 → 1号洞
+        // 00E4 = bits 2,5,6,7 → 洞口 [3,6,7,8]
         $bitMap = [
-            5 => 6,   // bit 5 → 位置1 → 6号洞
-            2 => 3,   // bit 2 → 位置2 → 3号洞 (已确认)
-            4 => 9,   // bit 4 → 位置3 → 9号洞 (已确认)
-            6 => 7,   // bit 6 → 位置4 → 7号洞
-            3 => 4,   // bit 3 → 位置5 → 4号洞 (已确认)
-            0 => 1,   // bit 0 → 位置6 → 1号洞
-            15 => 8,  // bit 15 → 位置7 → 8号洞 (已确认)
-            7 => 5,   // bit 7 → 位置8 → 5号洞 (已确认)
-            1 => 2,   // bit 1 → 位置9 → 2号洞
+            0 => 1,   // bit 0 → 1号洞 (已确认)
+            1 => 2,   // bit 1 → 2号洞 (已确认)
+            2 => 3,   // bit 2 → 3号洞 (已确认)
+            3 => 4,   // 待验证
+            4 => 5,   // bit 4 → 5号洞 (待验证)
+            5 => 6,   // bit 5 → 6号洞 (已确认)
+            6 => 7,   // bit 6 → 7号洞 (已确认)
+            7 => 8,   // bit 7 → 8号洞 (已确认)
+            15 => 9,  // 待验证
         ];
 
         foreach ($bitMap as $bit => $hole) {
@@ -780,15 +779,15 @@ class PokemonBall extends MachineServices implements BaseMachine
 
         // 入洞位映射表（与亮灯相同）
         $fallBitMap = [
-            5 => 6,   // bit 5 → 位置1 → 6号洞
-            2 => 3,   // bit 2 → 位置2 → 3号洞
-            4 => 9,   // bit 4 → 位置3 → 9号洞
-            6 => 7,   // bit 6 → 位置4 → 7号洞
-            3 => 4,   // bit 3 → 位置5 → 4号洞
-            0 => 1,   // bit 0 → 位置6 → 1号洞
-            15 => 8,  // bit 15 → 位置7 → 8号洞
-            7 => 5,   // bit 7 → 位置8 → 5号洞
-            1 => 2,   // bit 1 → 位置9 → 2号洞
+            0 => 1,   // bit 0 → 1号洞 (已确认)
+            1 => 2,   // 待验证
+            2 => 3,   // bit 2 → 3号洞 (已确认)
+            3 => 4,   // 待验证
+            4 => 5,   // 待验证
+            5 => 6,   // bit 5 → 6号洞 (已确认)
+            6 => 7,   // bit 6 → 7号洞 (已确认)
+            7 => 8,   // bit 7 → 8号洞 (已确认)
+            15 => 9,  // 待验证
         ];
 
         foreach ($fallBitMap as $bit => $hole) {
@@ -808,18 +807,33 @@ class PokemonBall extends MachineServices implements BaseMachine
      */
     protected function formatHoleGrid(array $holes): string
     {
-        // 九宫格布局:
-        // 1 2 3
-        // 4 5 6
-        // 7 8 9
+        // 位置→洞口映射:
+        // 位置1=6, 位置2=3, 位置3=9
+        // 位置4=7, 位置5=4, 位置6=1
+        // 位置7=8, 位置8=5, 位置9=2
+        $holeToPosition = [
+            1 => 6, 2 => 9, 3 => 2,
+            4 => 5, 5 => 8, 6 => 1,
+            7 => 4, 8 => 7, 9 => 3,
+        ];
+
+        // 将洞口号转换为位置号
+        $positions = [];
+        foreach ($holes as $hole) {
+            if (isset($holeToPosition[$hole])) {
+                $positions[] = $holeToPosition[$hole];
+            }
+        }
+
+        // 按位置生成九宫格
         $grid = '';
         for ($row = 0; $row < 3; $row++) {
             for ($col = 0; $col < 3; $col++) {
-                $hole = $row * 3 + $col + 1;
-                $grid .= in_array($hole, $holes) ? '√' : '×';
+                $pos = $row * 3 + $col + 1;
+                $grid .= in_array($pos, $positions) ? '√' : '×';
                 if ($col < 2) $grid .= ' ';
             }
-            if ($row < 2) $grid .= '\n';
+            if ($row < 2) $grid .= "\n";
         }
         return $grid;
     }
