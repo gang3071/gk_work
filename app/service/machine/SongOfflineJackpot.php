@@ -303,6 +303,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     'push_auto' => $machineCacheInfo[$this->cacheDataKey . '_push_auto'],
                     'now_turn' => $machineCacheInfo[$this->cacheDataKey . '_now_turn'],
                     'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'],
+                    // ✅ 玩家使用转数（线下版简化处理，设为win_number使计算结果为0）
+                    // 父类会计算：win_number - player_win_number = 0（表示玩家未消耗转数）
+                    'player_win_number' => $machineCacheInfo[$this->cacheDataKey . '_win_number'],
                     // ✅ 外部按钮计数器（仅线下版）
                     'external_open_count' => $machineCacheInfo[$this->cacheDataKey . '_external_open_count'] ?? 0,
                     'external_wash_count' => $machineCacheInfo[$this->cacheDataKey . '_external_wash_count'] ?? 0,
