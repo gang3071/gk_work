@@ -286,6 +286,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $info = [
                     'id' => $this->machine->id,
                     'last_game_at' => $this->machine->last_game_at,
+                    'last_point_at' => 0, // ✅ 线下版不跟踪上下分时间
                     'odds_x' => $this->machine->odds_x,
                     'odds_y' => $this->machine->odds_y,
                     'type' => $this->machine->type,
@@ -303,6 +304,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     'push_auto' => $machineCacheInfo[$this->cacheDataKey . '_push_auto'],
                     'now_turn' => $machineCacheInfo[$this->cacheDataKey . '_now_turn'],
                     'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'],
+                    'keep_seconds' => $this->machine->keep_seconds ?? 0, // ✅ 从数据库读取保留时间配置
                     // ✅ 玩家使用转数（线下版简化处理，设为win_number使计算结果为0）
                     // 父类会计算：win_number - player_win_number = 0（表示玩家未消耗转数）
                     'player_win_number' => $machineCacheInfo[$this->cacheDataKey . '_win_number'],
