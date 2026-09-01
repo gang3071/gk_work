@@ -440,25 +440,60 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // ==================== 处理独立的外部按钮指令（如果有）====================
             // ✅ P1-3修复：独立B5/B7指令也需要记录到数据库，调用统一处理逻辑
-            if (substr($msg, 0, 2) == 'b5' && $len >= 10) {
-                $this->log->info('[B5协议-独立] 收到独立外部按钮开分指令', [
-                    'machine_code' => $this->machine->code,
-                    'data_length' => $len,
-                ]);
-                // 调用统一处理逻辑（会检测增量并记录到数据库）
-                $this->handleExternalButtonData(substr($msg, 0, 10));
-                return true;
+            // ✅ P0-10修复：支持两种格式（防御性）：无前缀 "b5..." 或有前缀 "46b5..."
+
+            // 检查独立B5指令
+            if ($len >= 10) {
+                // 格式1：无分机号前缀 "b5..."
+                if (substr($msg, 0, 2) == 'b5') {
+                    $this->log->info('[B5协议-独立-无前缀] 收到独立外部按钮开分指令', [
+                        'machine_code' => $this->machine->code,
+                        'data_length' => $len,
+                    ]);
+                    // 调用统一处理逻辑（会检测增量并记录到数据库）
+                    $this->handleExternalButtonData(substr($msg, 0, 10));
+                    return true;
+                }
+
+                // 格式2：有分机号前缀 "46b5..." 或 "{分机号}b5..."
+                if ($len >= 12 && substr($msg, 2, 2) == 'b5') {
+                    $this->log->info('[B5协议-独立-有前缀] 收到独立外部按钮开分指令', [
+                        'machine_code' => $this->machine->code,
+                        'extension' => substr($msg, 0, 2),
+                        'data_length' => $len,
+                    ]);
+                    // 跳过分机号，传递 b5... 部分（10字符）
+                    $this->handleExternalButtonData(substr($msg, 2, 10));
+                    return true;
+                }
             }
 
-            if (substr($msg, 0, 2) == 'b7' && $len >= 12) {
-                $availableLen = min(14, $len);
-                $this->log->info('[B7协议-独立] 收到独立外部按钮洗分指令', [
-                    'machine_code' => $this->machine->code,
-                    'data_length' => $availableLen,
-                ]);
-                // 调用统一处理逻辑（会检测增量并记录到数据库）
-                $this->handleExternalButtonData(substr($msg, 0, $availableLen));
-                return true;
+            // 检查独立B7指令
+            if ($len >= 12) {
+                // 格式1：无分机号前缀 "b7..."
+                if (substr($msg, 0, 2) == 'b7') {
+                    $availableLen = min(14, $len);
+                    $this->log->info('[B7协议-独立-无前缀] 收到独立外部按钮洗分指令', [
+                        'machine_code' => $this->machine->code,
+                        'data_length' => $availableLen,
+                    ]);
+                    // 调用统一处理逻辑（会检测增量并记录到数据库）
+                    $this->handleExternalButtonData(substr($msg, 0, $availableLen));
+                    return true;
+                }
+
+                // 格式2：有分机号前缀 "46b7..." 或 "{分机号}b7..."
+                if ($len >= 14 && substr($msg, 2, 2) == 'b7') {
+                    $availableLen = min(14, $len - 2);
+                    $this->log->info('[B7协议-独立-有前缀] 收到独立外部按钮洗分指令', [
+                        'machine_code' => $this->machine->code,
+                        'extension' => substr($msg, 0, 2),
+                        'data_length' => $availableLen,
+                    ]);
+                    // 跳过分机号，传递 b7... 部分（12-14字符）
+                    $this->handleExternalButtonData(substr($msg, 2, $availableLen));
+                    return true;
+                }
             }
 
             // ==================== 处理指令回复 ====================
