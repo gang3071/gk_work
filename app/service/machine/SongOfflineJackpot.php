@@ -41,9 +41,23 @@ use Webman\RedisQueue\Client;
  * - B7指令: 外部按钮洗分次数（⚠️ 次数，不是金额）
  * - 可配置分机号（默认46H）
  *
- * Redis 动态属性（通过 __get/__set 访问）：
- * - external_open_count: 外部按钮开分次数（B5协议）
- * - external_wash_count: 外部按钮洗分次数（B7协议）
+ * @property int $auto 自动状态（0=停止 1=启动）
+ * @property int $reward_status 开奖状态（0=未开奖 1=开奖中）
+ * @property int $play_start_time 开始游戏时间
+ * @property int $gaming_user_id 游戏中玩家ID
+ * @property int $gaming 是否游戏中
+ * @property int $turn 剩余转数
+ * @property int $point 当前分数（金额）
+ * @property int $score 当前得分（WIN）
+ * @property int $last_play_time 最后游戏时间
+ * @property int $action_time 操作时间
+ * @property int $win_number 累积转数（中洞对奖次数）
+ * @property int $push_auto push auto状态
+ * @property int $now_turn 当前累积转数
+ * @property int $has_lock 机台锁定状态
+ * @property int $ratio 扣趴比例（10-15%）
+ * @property int $external_open_count 外部按钮开分次数（B5协议，次数非金额）
+ * @property int $external_wash_count 外部按钮洗分次数（B7协议，次数非金额）
  *
  * @package app\service\machine
  * @author Claude Code
