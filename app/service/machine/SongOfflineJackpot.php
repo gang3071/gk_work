@@ -1243,6 +1243,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $this->setActionVersion($fun);
                 break;
 
+            // ✅ P0-14修复：SCORE_TO_POINT 是6位指令，需要用 $fun 匹配
+            case self::SCORE_TO_POINT:
+                $this->setActionVersion(self::SCORE_TO_POINT);
+                break;
+
             default:
                 return $this->handleActionReply($msg, $fun1, $gamingUserId);
         }
@@ -1331,9 +1336,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $this->setActionVersion(self::WIN_NUMBER);
                 break;
 
-            case self::SCORE_TO_POINT:
-                $this->setActionVersion(self::SCORE_TO_POINT);
-                break;
+            // ✅ P0-14修复：SCORE_TO_POINT 已移至 handleCommandReply()（6位指令用$fun匹配）
 
             default:
                 throw new \Exception('不存在的指令: ' . $action);
