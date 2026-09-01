@@ -116,7 +116,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     public $expirationTime = 5000000;  // 5秒超时
     public $log = null;
     private string $extensionNumber = '46'; // 分机号（默认46H=70号）
-    private array $lastCounterUpdateTime = []; // 记录上次计数器更新时间（用于去重）
+    // ⚠️ P1-4修复：去重时间改用 Cache 存储，支持跨请求去重
+    // 已移除 private array $lastCounterUpdateTime（实例变量跨请求失效）
 
     public function __construct(Machine $machine, $lang = 'zh_CN')
     {
@@ -438,27 +439,25 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
 
             // ==================== 处理独立的外部按钮指令（如果有）====================
+            // ✅ P1-3修复：独立B5/B7指令也需要记录到数据库，调用统一处理逻辑
             if (substr($msg, 0, 2) == 'b5' && $len >= 10) {
-                // B5 xx xx S1 S2: 外部按钮开分次数（⚠️ 次数，不是金额）
-                $count = hexdec(substr($msg, 2, 2)) * 100 + hexdec(substr($msg, 4, 2));
-                $this->external_open_count = $count;
-                $this->log->info('[B5协议-独立] 外部按钮开分次数更新', [
+                $this->log->info('[B5协议-独立] 收到独立外部按钮开分指令', [
                     'machine_code' => $this->machine->code,
-                    'count' => $count,
-                    'note' => '这是操作次数，不是金额'
+                    'data_length' => $len,
                 ]);
+                // 调用统一处理逻辑（会检测增量并记录到数据库）
+                $this->handleExternalButtonData(substr($msg, 0, 10));
                 return true;
             }
 
             if (substr($msg, 0, 2) == 'b7' && $len >= 12) {
-                // B7 xx xx xx S1 S2: 外部按钮洗分次数（⚠️ 次数，不是金额）
-                $count = hexdec(substr($msg, 2, 2)) * 10000 + hexdec(substr($msg, 4, 2)) * 100 + hexdec(substr($msg, 6, 2));
-                $this->external_wash_count = $count;
-                $this->log->info('[B7协议-独立] 外部按钮洗分次数更新', [
+                $availableLen = min(14, $len);
+                $this->log->info('[B7协议-独立] 收到独立外部按钮洗分指令', [
                     'machine_code' => $this->machine->code,
-                    'count' => $count,
-                    'note' => '这是操作次数，不是金额'
+                    'data_length' => $availableLen,
                 ]);
+                // 调用统一处理逻辑（会检测增量并记录到数据库）
+                $this->handleExternalButtonData(substr($msg, 0, $availableLen));
                 return true;
             }
 
@@ -484,78 +483,119 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function handleExternalButtonData(string $data): void
     {
-        $offset = 0;
-        $len = strlen($data);
-        $now = time();
+        // ✅ P0-2修复：使用分布式锁防止并发读取-计算-更新的竞态条件
+        $lockKey = "external_button_parse_{$this->machine->id}";
+        $lock = \support\Locker::lock($lockKey, 10);
 
-        while ($offset < $len) {
-            $cmd = substr($data, $offset, 2);
-
-            if ($cmd == 'b5' && ($len - $offset) >= 10) {
-                // B5 xx xx S1 S2: 外部按钮开分次数（10字符）
-                // ⚠️ count 是次数，不是金额
-                $b5Data = substr($data, $offset, 10);
-                $newCount = hexdec(substr($b5Data, 2, 2)) * 100 + hexdec(substr($b5Data, 4, 2));
-                $oldCount = $this->external_open_count ?? 0;
-
-                // ✅ 处理计数器变化
-                $result = $this->processCounterChange('open', $oldCount, $newCount, $now);
-
-                if ($result['should_update']) {
-                    $this->external_open_count = $newCount;
-                }
-
-                $this->log->info('[B5协议] 外部按钮开分次数更新', [
+        try {
+            if (!$lock->acquire()) {
+                $this->log->warning('[外部按钮] 获取解析锁失败，跳过本次处理', [
                     'machine_code' => $this->machine->code,
-                    'old_count' => $oldCount,
-                    'new_count' => $newCount,
-                    'increment' => $newCount - $oldCount,
-                    'recorded' => $result['recorded'],
-                    'reason' => $result['reason'] ?? '',
-                    'data' => $b5Data,
+                    'data_length' => strlen($data),
                 ]);
+                return;
+            }
 
-                $offset += 10;
-            } elseif ($cmd == 'b7' && ($len - $offset) >= 12) {
-                // B7 xx xx xx S1 S2: 外部按钮洗分次数（实际可能是12或14字符）
-                // ⚠️ count 是次数，不是金额
-                $availableLen = min(14, $len - $offset);
-                $b7Data = substr($data, $offset, $availableLen);
+            $offset = 0;
+            $len = strlen($data);
+            $now = time();
 
-                if ($availableLen >= 12) {
-                    $newCount = hexdec(substr($b7Data, 2, 2)) * 10000
-                        + hexdec(substr($b7Data, 4, 2)) * 100
-                        + hexdec(substr($b7Data, 6, 2));
-                    $oldCount = $this->external_wash_count ?? 0;
+            while ($offset < $len) {
+                $cmd = substr($data, $offset, 2);
 
-                    // ✅ 处理计数器变化
-                    $result = $this->processCounterChange('wash', $oldCount, $newCount, $now);
+                if ($cmd == 'b5' && ($len - $offset) >= 10) {
+                    // B5 xx xx S1 S2: 外部按钮开分次数（10字符）
+                    // ⚠️ count 是次数，不是金额
+                    $b5Data = substr($data, $offset, 10);
+                    $newCount = hexdec(substr($b5Data, 2, 2)) * 100 + hexdec(substr($b5Data, 4, 2));
 
-                    if ($result['should_update']) {
-                        $this->external_wash_count = $newCount;
+                    // ✅ P2-5修复：检测计数器溢出（B5最大9999）
+                    if ($newCount > 9999) {
+                        $this->log->error('[B5协议] 计数器溢出，数据异常', [
+                            'machine_code' => $this->machine->code,
+                            'new_count' => $newCount,
+                            'data' => $b5Data,
+                        ]);
+                        $offset += 10;
+                        continue;
                     }
 
-                    $this->log->info('[B7协议] 外部按钮洗分次数更新', [
+                    $oldCount = $this->external_open_count ?? 0;
+
+                    // ✅ 处理计数器变化
+                    $result = $this->processCounterChange('open', $oldCount, $newCount, $now);
+
+                    if ($result['should_update']) {
+                        $this->external_open_count = $newCount;
+                    }
+
+                    $this->log->info('[B5协议] 外部按钮开分次数更新', [
                         'machine_code' => $this->machine->code,
                         'old_count' => $oldCount,
                         'new_count' => $newCount,
                         'increment' => $newCount - $oldCount,
                         'recorded' => $result['recorded'],
                         'reason' => $result['reason'] ?? '',
-                        'data' => $b7Data,
+                        'data' => $b5Data,
                     ]);
-                }
 
-                $offset += $availableLen;
-            } else {
-                // 未知指令，跳过2字符
-                $this->log->warning('未知的附加指令', [
-                    'machine_code' => $this->machine->code,
-                    'cmd' => $cmd,
-                    'remaining_data' => substr($data, $offset)
-                ]);
-                break;
+                    $offset += 10;
+                } elseif ($cmd == 'b7' && ($len - $offset) >= 12) {
+                    // B7 xx xx xx S1 S2: 外部按钮洗分次数（实际可能是12或14字符）
+                    // ⚠️ count 是次数，不是金额
+                    $availableLen = min(14, $len - $offset);
+                    $b7Data = substr($data, $offset, $availableLen);
+
+                    if ($availableLen >= 12) {
+                        $newCount = hexdec(substr($b7Data, 2, 2)) * 10000
+                            + hexdec(substr($b7Data, 4, 2)) * 100
+                            + hexdec(substr($b7Data, 6, 2));
+
+                        // ✅ P2-5修复：检测计数器溢出（B7最大999999）
+                        if ($newCount > 999999) {
+                            $this->log->error('[B7协议] 计数器溢出，数据异常', [
+                                'machine_code' => $this->machine->code,
+                                'new_count' => $newCount,
+                                'data' => $b7Data,
+                            ]);
+                            $offset += $availableLen;
+                            continue;
+                        }
+
+                        $oldCount = $this->external_wash_count ?? 0;
+
+                        // ✅ 处理计数器变化
+                        $result = $this->processCounterChange('wash', $oldCount, $newCount, $now);
+
+                        if ($result['should_update']) {
+                            $this->external_wash_count = $newCount;
+                        }
+
+                        $this->log->info('[B7协议] 外部按钮洗分次数更新', [
+                            'machine_code' => $this->machine->code,
+                            'old_count' => $oldCount,
+                            'new_count' => $newCount,
+                            'increment' => $newCount - $oldCount,
+                            'recorded' => $result['recorded'],
+                            'reason' => $result['reason'] ?? '',
+                            'data' => $b7Data,
+                        ]);
+                    }
+
+                    $offset += $availableLen;
+                } else {
+                    // 未知指令，跳过2字符
+                    $this->log->warning('未知的附加指令', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'remaining_data' => substr($data, $offset)
+                    ]);
+                    break;
+                }
             }
+        } finally {
+            // ✅ 确保锁被释放
+            $lock->release();
         }
     }
 
@@ -611,8 +651,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // ========== 情况3：计数器增加 ==========
         $increment = $newCount - $oldCount;
 
-        // 去重检查（2秒内的重复心跳）
-        $lastUpdate = $this->lastCounterUpdateTime[$type] ?? 0;
+        // ✅ P1-4修复：使用 Cache 存储去重时间，支持跨请求去重
+        $cacheKey = "last_counter_update_{$this->machine->id}_{$type}";
+        $lastUpdate = Cache::get($cacheKey, 0);
         if ($now - $lastUpdate < 2) {
             $this->log->warning("[{$type}计数器] 短时间内重复心跳，跳过", [
                 'machine_code' => $this->machine->code,
@@ -635,7 +676,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
         // 记录操作
         $this->recordExternalButtonOperation($type, $increment);
-        $this->lastCounterUpdateTime[$type] = $now;
+
+        // ✅ P1-4修复：更新去重时间到 Cache（5秒有效期）
+        Cache::set($cacheKey, $now, 5);
 
         return ['should_update' => true, 'recorded' => true, 'reason' => '正常增量'];
     }
@@ -797,9 +840,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             $playerGameLog->save();
 
-            // ✅ 更新 PlayerGameRecord：累加金额并标记
+            // ✅ 更新 PlayerGameRecord：累加金额并标记（使用行锁防止并发丢失数据）
             if ($gameRecordId) {
-                $gameRecord = \app\model\PlayerGameRecord::find($gameRecordId);
+                // ⚠️ 使用 lockForUpdate 防止并发更新时的 Read-Modify-Write 竞态条件
+                $gameRecord = \app\model\PlayerGameRecord::query()
+                    ->where('id', $gameRecordId)
+                    ->lockForUpdate()  // SELECT ... FOR UPDATE
+                    ->first();
+
                 if ($gameRecord) {
                     // 累加机台分数和钱包金额
                     if ($type === 'open') {
