@@ -41,8 +41,9 @@ use Webman\RedisQueue\Client;
  * - B7指令: 外部按钮洗分次数（⚠️ 次数，不是金额）
  * - 可配置分机号（默认46H）
  *
- * @property int $external_open_count 外部按钮开分次数（B5协议）
- * @property int $external_wash_count 外部按钮洗分次数（B7协议）
+ * Redis 动态属性（通过 __get/__set 访问）：
+ * - external_open_count: 外部按钮开分次数（B5协议）
+ * - external_wash_count: 外部按钮洗分次数（B7协议）
  *
  * @package app\service\machine
  * @author Claude Code
