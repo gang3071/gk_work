@@ -674,20 +674,40 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // 仍然记录，但记录警告
         }
 
-        // 记录操作
-        $this->recordExternalButtonOperation($type, $increment);
+        // ✅ P0-6修复：记录操作（捕获异常，防止 Redis-数据库不一致）
+        try {
+            $this->recordExternalButtonOperation($type, $increment);
+            $recorded = true;
+            $reason = '正常增量';
 
-        // ✅ P1-4修复：更新去重时间到 Cache（5秒有效期）
-        Cache::set($cacheKey, $now, 5);
+            // ✅ P1-4修复：只有数据库记录成功才更新去重时间（5秒有效期）
+            Cache::set($cacheKey, $now, 5);
 
-        return ['should_update' => true, 'recorded' => true, 'reason' => '正常增量'];
+        } catch (\Exception $e) {
+            $this->log->error("[{$type}计数器] 数据库记录失败，不更新Redis", [
+                'machine_code' => $this->machine->code,
+                'increment' => $increment,
+                'error' => $e->getMessage(),
+            ]);
+            $recorded = false;
+            $reason = '数据库记录失败';
+        }
+
+        return [
+            'should_update' => $recorded,  // ✅ 只有数据库成功才允许更新 Redis
+            'recorded' => $recorded,
+            'reason' => $reason
+        ];
     }
 
     /**
-     * 记录外部按钮开洗分操作（带分布式锁）
+     * 记录外部按钮开洗分操作
+     *
+     * ⚠️ P1-7修复：移除内层锁（外层 handleExternalButtonData 已有锁保护）
      *
      * @param string $type 类型：open=开分, wash=洗分
      * @param int $times 次数（每次固定100分）
+     * @throws \Exception 数据库操作失败时抛出异常
      */
     private function recordExternalButtonOperation(string $type, int $times): void
     {
@@ -695,69 +715,44 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             return;
         }
 
-        // ✅ 使用分布式锁防止并发重复记录
-        $lockKey = "external_button_lock_{$this->machine->id}_{$type}";
-        $lock = \support\Locker::lock($lockKey, 5);
+        // 每次固定100分（机台分数）
+        $machinePointPerTime = 100;
+        $totalMachinePoint = $machinePointPerTime * $times;
 
-        try {
-            if (!$lock->acquire()) {
-                $this->log->warning('[外部按钮] 获取锁失败，跳过记录', [
-                    'machine_code' => $this->machine->code,
-                    'type' => $type,
-                    'times' => $times,
-                ]);
-                return;
-            }
-
-            // 每次固定100分（机台分数）
-            $machinePointPerTime = 100;
-            $totalMachinePoint = $machinePointPerTime * $times;
-
-            // 根据机台比值转换成玩家钱包分数
-            // 公式：walletAmount = machinePoint / odds_y * odds_x
-            if (!$this->machine->odds_y || $this->machine->odds_y <= 0) {
-                $this->log->error('[外部按钮] 机台odds_y无效，无法记录', [
-                    'machine_code' => $this->machine->code,
-                    'odds_y' => $this->machine->odds_y,
-                ]);
-                return;
-            }
-
-            $walletAmount = floor($totalMachinePoint / $this->machine->odds_y * $this->machine->odds_x);
-
-            // 获取当前游戏玩家（可能为空）
-            $gamingUserId = $this->gaming_user_id ?? 0;
-            $player = null;
-
-            if ($gamingUserId > 0) {
-                $player = \app\model\Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
-                    ->find($gamingUserId);
-            }
-
-            // ✅ 创建 PlayerGameLog（带事务保护）
-            $this->createExternalButtonGameLog($type, $totalMachinePoint, $walletAmount, $player);
-
-            $this->log->info('[外部按钮] 记录开洗分操作', [
+        // 根据机台比值转换成玩家钱包分数
+        // 公式：walletAmount = machinePoint / odds_y * odds_x
+        if (!$this->machine->odds_y || $this->machine->odds_y <= 0) {
+            $this->log->error('[外部按钮] 机台odds_y无效，无法记录', [
                 'machine_code' => $this->machine->code,
-                'type' => $type,
-                'times' => $times,
-                'machine_point' => $totalMachinePoint,
-                'wallet_amount' => $walletAmount,
-                'player_id' => $gamingUserId,
-                'has_player' => !empty($player),
+                'odds_y' => $this->machine->odds_y,
             ]);
-
-        } catch (\Exception $e) {
-            $this->log->error('[外部按钮] 记录操作失败', [
-                'machine_code' => $this->machine->code,
-                'type' => $type,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-        } finally {
-            // ✅ 确保锁被释放
-            $lock->release();
+            throw new \Exception("机台 {$this->machine->code} 的 odds_y 无效");
         }
+
+        $walletAmount = floor($totalMachinePoint / $this->machine->odds_y * $this->machine->odds_x);
+
+        // 获取当前游戏玩家（可能为空）
+        $gamingUserId = $this->gaming_user_id ?? 0;
+        $player = null;
+
+        if ($gamingUserId > 0) {
+            $player = \app\model\Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
+                ->find($gamingUserId);
+        }
+
+        // ✅ 创建 PlayerGameLog（带事务保护）
+        // ⚠️ P0-6修复：如果失败会抛出异常，不再吞掉
+        $this->createExternalButtonGameLog($type, $totalMachinePoint, $walletAmount, $player);
+
+        $this->log->info('[外部按钮] 记录开洗分操作', [
+            'machine_code' => $this->machine->code,
+            'type' => $type,
+            'times' => $times,
+            'machine_point' => $totalMachinePoint,
+            'wallet_amount' => $walletAmount,
+            'player_id' => $gamingUserId,
+            'has_player' => !empty($player),
+        ]);
     }
 
     /**
