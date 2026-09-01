@@ -486,6 +486,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // ✅ P0-2修复：使用分布式锁防止并发读取-计算-更新的竞态条件
         $lockKey = "external_button_parse_{$this->machine->id}";
         $lock = \support\Locker::lock($lockKey, 10);
+        $lockAcquired = false;  // ✅ P2-9修复：标记锁是否成功获取
 
         try {
             if (!$lock->acquire()) {
@@ -495,6 +496,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 ]);
                 return;
             }
+            $lockAcquired = true;  // ✅ 标记已成功获取锁
 
             $offset = 0;
             $len = strlen($data);
@@ -594,8 +596,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 }
             }
         } finally {
-            // ✅ 确保锁被释放
-            $lock->release();
+            // ✅ P2-9修复：只有成功获取锁才释放
+            if ($lockAcquired) {
+                $lock->release();
+            }
         }
     }
 
@@ -837,9 +841,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // ✅ 更新 PlayerGameRecord：累加金额并标记（使用行锁防止并发丢失数据）
             if ($gameRecordId) {
-                // ⚠️ 使用 lockForUpdate 防止并发更新时的 Read-Modify-Write 竞态条件
+                // ⚠️ P0-8修复：使用 lockForUpdate 并检查 status，防止更新到已结束的游戏记录
                 $gameRecord = \app\model\PlayerGameRecord::query()
                     ->where('id', $gameRecordId)
+                    ->where('status', \app\model\PlayerGameRecord::STATUS_START)  // ✅ 必须再次检查状态
                     ->lockForUpdate()  // SELECT ... FOR UPDATE
                     ->first();
 
@@ -868,6 +873,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         'wallet_amount' => $walletAmount,
                         'updated_open_point' => $gameRecord->open_point,
                         'updated_wash_point' => $gameRecord->wash_point,
+                    ]);
+                } else {
+                    // ✅ P0-8修复：游戏记录已结束或不存在，不累加（只记录日志）
+                    $this->log->warning('[外部按钮] 游戏记录已结束或不存在，跳过更新 PlayerGameRecord', [
+                        'game_record_id' => $gameRecordId,
+                        'type' => $type,
+                        'machine_point' => $machinePoint,
+                        'wallet_amount' => $walletAmount,
                     ]);
                 }
             }
