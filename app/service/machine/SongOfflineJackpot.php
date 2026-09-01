@@ -386,7 +386,47 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 ]);
             }
 
-            // 校验 S1/S2
+            $gamingUserId = $this->gaming_user_id;
+            $orgRewardStatus = $this->reward_status;
+            $orgTurn = $this->turn;
+            $orgWinNumber = $this->win_number;
+
+            // ==================== 处理心跳（可能包含附加数据）====================
+            // ✅ P0-11修复：心跳+附加数据是组合消息，每部分有独立的S1/S2
+            // 心跳特征：分机号 + C0/C6
+            $statusCode = substr($msg, 2, 2);
+            if ($len >= 36 && ($statusCode == 'c0' || $statusCode == 'c6')) {
+                // 提取心跳部分（前36字符）
+                $heartbeat = substr($msg, 0, 36);
+
+                // ✅ 只校验心跳部分的 S1/S2（附加数据有独立的S1/S2）
+                $s1 = substr($heartbeat, -4, 2);
+                $s2 = substr($heartbeat, -2, 2);
+                $data = substr($heartbeat, 0, -4);
+
+                $calculatedS1 = self::calculateS1($data);
+                if ($s1 != $calculatedS1) {
+                    throw new \Exception('心跳S1校验失败');
+                }
+
+                $calculatedS2 = self::calculateS2($data, $calculatedS1);
+                if ($s2 != $calculatedS2) {
+                    throw new \Exception('心跳S2校验失败');
+                }
+
+                $result = $this->handleHeartbeat($heartbeat, $gamingUserId, $orgRewardStatus, $orgWinNumber, $orgTurn);
+
+                // 处理附加数据（B5/B7外部按钮开洗分次数）
+                // ⚠️ B5/B7 各有独立的S1/S2，在 handleExternalButtonData() 中校验
+                if ($len > 36) {
+                    $remaining = substr($msg, 36);
+                    $this->handleExternalButtonData($remaining);
+                }
+
+                return $result;
+            }
+
+            // ==================== 非心跳消息：校验整个消息的 S1/S2 ====================
             $s1 = substr($msg, -4, 2);
             $s2 = substr($msg, -2, 2);
             $data = substr($msg, 0, -4);
@@ -414,28 +454,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     'msg' => substr($msg, 0, 20) . '...'
                 ]);
                 // 仍然处理（可能是配置错误），但记录日志
-            }
-
-            $gamingUserId = $this->gaming_user_id;
-            $orgRewardStatus = $this->reward_status;
-            $orgTurn = $this->turn;
-            $orgWinNumber = $this->win_number;
-
-            // ==================== 处理心跳（可能包含附加数据）====================
-            // 心跳特征：分机号 + C0/C6
-            $statusCode = substr($msg, 2, 2);
-            if ($len >= 36 && ($statusCode == 'c0' || $statusCode == 'c6')) {
-                // 提取心跳部分（前36字符）
-                $heartbeat = substr($msg, 0, 36);
-                $result = $this->handleHeartbeat($heartbeat, $gamingUserId, $orgRewardStatus, $orgWinNumber, $orgTurn);
-
-                // 处理附加数据（B5/B7外部按钮开洗分次数）
-                if ($len > 36) {
-                    $remaining = substr($msg, 36);
-                    $this->handleExternalButtonData($remaining);
-                }
-
-                return $result;
             }
 
             // ==================== 处理独立的外部按钮指令（如果有）====================
@@ -544,6 +562,36 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     // B5 xx xx S1 S2: 外部按钮开分次数（10字符）
                     // ⚠️ count 是次数，不是金额
                     $b5Data = substr($data, $offset, 10);
+
+                    // ✅ P0-11修复：校验B5的S1/S2
+                    $s1 = substr($b5Data, -4, 2);
+                    $s2 = substr($b5Data, -2, 2);
+                    $b5Content = substr($b5Data, 0, -4);
+
+                    $calculatedS1 = self::calculateS1($b5Content);
+                    if ($s1 != $calculatedS1) {
+                        $this->log->error('[B5协议] S1校验失败', [
+                            'machine_code' => $this->machine->code,
+                            'data' => $b5Data,
+                            'expected_s1' => $calculatedS1,
+                            'actual_s1' => $s1,
+                        ]);
+                        $offset += 10;
+                        continue;
+                    }
+
+                    $calculatedS2 = self::calculateS2($b5Content, $calculatedS1);
+                    if ($s2 != $calculatedS2) {
+                        $this->log->error('[B5协议] S2校验失败', [
+                            'machine_code' => $this->machine->code,
+                            'data' => $b5Data,
+                            'expected_s2' => $calculatedS2,
+                            'actual_s2' => $s2,
+                        ]);
+                        $offset += 10;
+                        continue;
+                    }
+
                     $newCount = hexdec(substr($b5Data, 2, 2)) * 100 + hexdec(substr($b5Data, 4, 2));
 
                     // ✅ P2-5修复：检测计数器溢出（B5最大9999）
@@ -584,6 +632,35 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     $b7Data = substr($data, $offset, $availableLen);
 
                     if ($availableLen >= 12) {
+                        // ✅ P0-11修复：校验B7的S1/S2
+                        $s1 = substr($b7Data, -4, 2);
+                        $s2 = substr($b7Data, -2, 2);
+                        $b7Content = substr($b7Data, 0, -4);
+
+                        $calculatedS1 = self::calculateS1($b7Content);
+                        if ($s1 != $calculatedS1) {
+                            $this->log->error('[B7协议] S1校验失败', [
+                                'machine_code' => $this->machine->code,
+                                'data' => $b7Data,
+                                'expected_s1' => $calculatedS1,
+                                'actual_s1' => $s1,
+                            ]);
+                            $offset += $availableLen;
+                            continue;
+                        }
+
+                        $calculatedS2 = self::calculateS2($b7Content, $calculatedS1);
+                        if ($s2 != $calculatedS2) {
+                            $this->log->error('[B7协议] S2校验失败', [
+                                'machine_code' => $this->machine->code,
+                                'data' => $b7Data,
+                                'expected_s2' => $calculatedS2,
+                                'actual_s2' => $s2,
+                            ]);
+                            $offset += $availableLen;
+                            continue;
+                        }
+
                         $newCount = hexdec(substr($b7Data, 2, 2)) * 10000
                             + hexdec(substr($b7Data, 4, 2)) * 100
                             + hexdec(substr($b7Data, 6, 2));
