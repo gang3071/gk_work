@@ -17,6 +17,7 @@ use Webman\Event\Event;
  * @property int agent_player_id 代理玩家id
  * @property int parent_player_id 上级玩家id
  * @property int type 类型
+ * @property int has_external_button 是否包含实体按键操作 0=否 1=是
  * @property float open_point 游戏上点
  * @property float wash_point 游戏下点
  * @property float open_amount 机台上分

@@ -76,11 +76,12 @@ class MachineOperationService
     /**
      * 初始化硬件服务类
      *
-     * 根据机台类型和控制类型选择对应的服务类：
+     * 根据机台类型、控制类型和机器来源选择对应的服务类：
      * - 斯洛机 + 双美 → Slot
      * - 斯洛机 + 小淞 → SongSlot
      * - 钢珠机 + 双美 → Jackpot
-     * - 钢珠机 + 小淞 → SongJackpot
+     * - 钢珠机 + 小淞 + 线上 → SongJackpot
+     * - 钢珠机 + 小淞 + 线下 → SongOfflineJackpot
      */
     private function initServices(): void
     {
@@ -91,9 +92,15 @@ class MachineOperationService
                 : \app\service\machine\SongSlot::class;
         } else {
             // 钢珠机 (TYPE_STEEL_BALL) 或其他类型
-            $serviceClass = ($this->machine->control_type === Machine::CONTROL_TYPE_MEI)
-                ? \app\service\machine\Jackpot::class
-                : \app\service\machine\SongJackpot::class;
+            if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
+                // 双美工控
+                $serviceClass = \app\service\machine\Jackpot::class;
+            } else {
+                // 小淞工控：区分线上/线下
+                $serviceClass = ($this->machine->machine_source === Machine::MACHINE_SOURCE_OFFLINE)
+                    ? \app\service\machine\SongOfflineJackpot::class
+                    : \app\service\machine\SongJackpot::class;
+            }
         }
 
         $this->services = new $serviceClass($this->machine, $this->lang);

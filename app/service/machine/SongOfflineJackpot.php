@@ -1,0 +1,1620 @@
+<?php
+
+namespace app\service\machine;
+
+use app\model\GameType;
+use app\model\Machine;
+use app\model\MachineLotteryRecord;
+use app\model\Notice;
+use app\service\LotteryServices;
+use Exception;
+use GatewayWorker\Lib\Gateway;
+use Illuminate\Support\Str;
+use support\Cache;
+use support\Log;
+use support\Redis;
+use Webman\Push\PushException;
+use Webman\RedisQueue\Client;
+
+/**
+ * 线下版钢珠机（小淞工控）
+ *
+ * 基于 2024线上85x 协议（小淞线下版钢珠工控协议）
+ *
+ * 协议要点：
+ * - 波特率: 9600，停止位: 1
+ * - 默认分机号: 46H（70号）
+ * - 分数上限: 建议 5万
+ * - 转数上限: 980转（硬限制）
+ * - 校验算法: S1=XOR, S2=ADD取后2位
+ *
+ * 主要指令：
+ * - 心跳: 46C0/46C6 (36字节)
+ * - 上分: 46CA + 上分码 + 金额
+ * - 下分: 46CC + 下分码 (三次握手)
+ * - 故障排除: 46CCB4（会清除外部按钮计数器）
+ * - 查询: 46CEA2(分数) / 46CEA5(得分) / 46CEA6(转数) / 46CEA9(累积转数)
+ * - 操作: 46CEC1(上转) / 46CEC9(下转) / 46CECD(启动) / 46CECE(停止)
+ *
+ * 线下版特有功能：
+ * - B5指令: 外部按钮开分次数（⚠️ 次数，不是金额）
+ * - B7指令: 外部按钮洗分次数（⚠️ 次数，不是金额）
+ * - 可配置分机号（默认46H）
+ *
+ * @property int $external_open_count 外部按钮开分次数（B5协议）
+ * @property int $external_wash_count 外部按钮洗分次数（B7协议）
+ *
+ * @package app\service\machine
+ * @author Claude Code
+ * @date 2026-08-31
+ */
+class SongOfflineJackpot extends MachineServices implements BaseMachine
+{
+    // ==================== 查询指令（主动获取数据） ====================
+    const MACHINE_POINT = '46cea2';    // 读取机台当前分数
+    const MACHINE_SCORE = '46cea5';    // 读取机台当前得分（WIN）
+    const MACHINE_TURN = '46cea6';     // 读取机台当前剩余转数
+    const WIN_NUMBER = '46cea9';       // 读取中洞对奖次数（累积转数）
+
+    // ==================== 心跳状态码（被动接收） ====================
+    const GET_MACHINE_POINT = '46c0';  // 心跳-停止状态下的分数
+    const AUTO_MACHINE_POINT = '46c6'; // 心跳-自动状态下的分数
+    const GET_MACHINE_SCORE = '46da';  // 心跳-正常状态下的得分
+    const FAULT1_MACHINE_SCORE = '46db'; // 心跳-故障1状态
+    const FAULT_MACHINE_SCORE = '46dc';  // 心跳-故障2状态
+    const GET_MACHINE_TURN = '46de';   // 心跳-剩余转数
+    const GET_WIN_NUMBER = '46d0';     // 心跳-累积转数（未开奖）
+    const REWARD_WIN_NUMBER = '46d5';  // 心跳-累积转数（开奖中）
+
+    // ==================== 管理指令 ====================
+    const CHECK = '46ccb4';            // 故障排除（故排）
+    const CLEAR_LOG = '46ccba';        // 清除历史记录（开洗分次数）
+    const MACHINE_OPEN = '46cebe';     // 开机
+    const MACHINE_CLOSE = '46cebc';    // 关机
+    const REWARD_SWITCH = '46ceb8';    // 大賞燈切換
+
+    // ==================== 游戏控制指令 ====================
+    const AUTO_UP_TURN = '46cecd';     // 自动上转（启动机台）
+    const AUTO_STOP = '46cece';        // 停止游戏
+    const PUSH_THREE = '46ceb6';       // 连发PUSH
+    const PUSH_ONE = '46ceb2';         // 单发PUSH
+
+    // ==================== 转数/分数转换指令 ====================
+    const POINT_TO_TURN = '46cec1';    // 分数→转数（上转一次）
+    const TURN_UP_ALL = '46cecb';      // 分数→转数（全部上转）
+    const TURN_TO_POINT = '46ceca';    // 转数→分数（下转一次）
+    const TURN_DOWN_ALL = '46cec9';    // 转数→分数（全部下转）
+    const SCORE_TO_POINT = '46cec8';   // 得分→分数（WIN按扣趴换算）
+
+    // ==================== 资金操作指令 ====================
+    const OPEN_ANY_POINT = '46ca';     // 开任意分数（上分）
+    const WASH_ZERO = '46cc';          // 洗分清零（下分）
+
+    // ==================== 心跳指令 ====================
+    const TESTING = '46c0';            // 心跳（停止状态）
+    const TESTING2 = '46c6';           // 心跳（自动状态）
+
+    // ==================== 业务限制 ====================
+    const MAX_TURN = 980;              // 转数上限（协议限制）
+
+    public $cacheData = [];
+    public $expirationTime = 5000000;  // 5秒超时
+    public $log = null;
+    private string $extensionNumber = '46'; // 分机号（默认46H=70号）
+    private array $lastCounterUpdateTime = []; // 记录上次计数器更新时间（用于去重）
+
+    public function __construct(Machine $machine, $lang = 'zh_CN')
+    {
+        $this->machine = $machine;
+
+        // ✅ 支持动态分机号配置（如果数据库中有配置则使用，否则使用默认46H）
+        if (!empty($machine->extension_number)) {
+            $this->extensionNumber = strtolower($machine->extension_number);
+        }
+        $this->cacheKey = self::CACHE_PREFIX . $this->machine->id;
+        $this->cacheDataKey = self::MACHINE_DATA_PREFIX . $this->machine->id;
+
+        // Redis缓存字段列表
+        $this->cacheDataKeyArr = [
+            $this->cacheDataKey . '_auto',           // 自动状态（0=停止 1=启动）
+            $this->cacheDataKey . '_reward_status',  // 开奖状态（0=未开奖 1=开奖中）
+            $this->cacheDataKey . '_play_start_time',
+            $this->cacheDataKey . '_gaming_user_id', // 游戏中玩家ID
+            $this->cacheDataKey . '_gaming',         // 是否游戏中
+            $this->cacheDataKey . '_turn',           // 剩余转数
+            $this->cacheDataKey . '_point',          // 当前分数（金额）
+            $this->cacheDataKey . '_score',          // 当前得分（WIN）
+            $this->cacheDataKey . '_last_play_time',
+            $this->cacheDataKey . '_action_time',
+            $this->cacheDataKey . '_win_number',     // 累积转数（中洞对奖次数）
+            $this->cacheDataKey . '_push_auto',
+            $this->cacheDataKey . '_now_turn',       // 当前累积转数
+            $this->cacheDataKey . '_has_lock',       // 机台锁定状态
+            $this->cacheDataKey . '_ratio',          // 扣趴比例（10-15%）
+            // ✅ 外部按钮计数器（B5/B7协议，仅线下版）
+            $this->cacheDataKey . '_external_open_count',  // 外部按钮开分次数（B5）
+            $this->cacheDataKey . '_external_wash_count',  // 外部按钮洗分次数（B7）
+        ];
+
+        // 推送到前端的关键字段
+        $this->machineInfo = [
+            'auto',
+            'reward_status',
+            'turn',
+            'point',
+            'score',
+            'win_number',
+            'push_auto',
+            'has_lock',
+        ];
+
+        $this->lang = $lang;
+        $this->cacheData = $this->getMachineCache();
+        $this->log = Log::channel('song_offline_jackpot_machine');
+    }
+
+    /**
+     * 获取属性（从Redis读取）
+     */
+    public function __get($name)
+    {
+        $key = $this->cacheDataKey . '_' . $name;
+        if (in_array($key, $this->cacheDataKeyArr)) {
+            try {
+                return Cache::get($key, 0);
+            } catch (\Exception $e) {
+                try {
+                    $value = Cache::get($key, 0);
+                    \support\Log::warning('Redis缓存读取失败后重试成功', [
+                        'machine_id' => $this->machine->id,
+                        'field' => $name,
+                        'error' => $e->getMessage()
+                    ]);
+                    return $value;
+                } catch (\Exception $e2) {
+                    \support\Log::error('Redis缓存读取失败（重试1次后仍失败）', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'field' => $name,
+                        'key' => $key,
+                        'error' => $e2->getMessage()
+                    ]);
+                    return 0;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 设置属性（写入Redis并推送WebSocket）
+     */
+    public function __set($name, $value)
+    {
+        $key = $this->cacheDataKey . '_' . $name;
+        if (in_array($key, $this->cacheDataKeyArr)) {
+            // ⚠️ CRITICAL：上分成功时（gaming_user_id 从0变为非0），立即更新 last_play_time
+            if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
+                Cache::set($this->cacheDataKey . '_last_play_time', time());
+            }
+
+            try {
+                $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
+                if (!$saveResult) {
+                    $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
+                }
+            } catch (\Exception $e) {
+                try {
+                    $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
+                    \support\Log::warning('Redis缓存保存异常后重试成功', [
+                        'machine_id' => $this->machine->id,
+                        'field' => $name,
+                        'error' => $e->getMessage()
+                    ]);
+                } catch (\Exception $e2) {
+                    $saveResult = false;
+                    \support\Log::error('Redis缓存保存异常（重试1次后仍失败）', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'field' => $name,
+                        'value' => $value,
+                        'error' => $e2->getMessage()
+                    ]);
+                }
+            }
+
+            // ✅ 关键字段保存失败时必须抛出异常
+            if (!$saveResult) {
+                $mustSuccessFields = ['has_lock', 'gaming', 'gaming_user_id'];
+                if (in_array($name, $mustSuccessFields)) {
+                    \support\Log::critical('关键字段Redis保存失败，抛出异常', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'field' => $name,
+                        'value' => $value
+                    ]);
+
+                    // ✅ 发送 Telegram CRITICAL 告警
+                    try {
+                        $token = env('TELEGRAM_BOT_TOKEN');
+                        $chatId = env('TELEGRAM_CHAT_ID');
+
+                        if (!empty($token) && !empty($chatId)) {
+                            $telegram = new \app\service\TelegramService($token, $chatId, \Monolog\Logger::ERROR);
+                            $telegram->sendAlert([
+                                'datetime' => new \DateTime(),
+                                'level_name' => 'CRITICAL',
+                                'message' => '[MachineServices:SongOfflineJackpot] Redis 关键字段保存失败',
+                                'context' => [
+                                    'machine_id' => $this->machine->id ?? null,
+                                    'machine_code' => $this->machine->code ?? '',
+                                    'field' => $name,
+                                    'value' => $value,
+                                    'error' => 'Redis关键字段保存失败，可能导致DB/Redis数据不一致',
+                                ],
+                            ]);
+                        }
+                    } catch (\Throwable $telegramEx) {
+                        \support\Log::warning('[MachineServices:SongOfflineJackpot] Telegram 告警发送失败', [
+                            'error' => $telegramEx->getMessage(),
+                        ]);
+                    }
+
+                    throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
+                }
+            }
+
+            // 推送WebSocket消息
+            $machineCacheInfo = $this->getAllData() ?? [];
+            if (!empty($machineCacheInfo)) {
+                $info = [
+                    'id' => $this->machine->id,
+                    'last_game_at' => $this->machine->last_game_at,
+                    'odds_x' => $this->machine->odds_x,
+                    'odds_y' => $this->machine->odds_y,
+                    'type' => $this->machine->type,
+                    'gaming_user_id' => $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0,
+                    'gaming' => $machineCacheInfo[$this->cacheDataKey . '_gaming'] ?? 0,
+                    'auto' => $machineCacheInfo[$this->cacheDataKey . '_auto'],
+                    'reward_status' => $machineCacheInfo[$this->cacheDataKey . '_reward_status'],
+                    'play_start_time' => $machineCacheInfo[$this->cacheDataKey . '_play_start_time'],
+                    'turn' => $machineCacheInfo[$this->cacheDataKey . '_turn'],
+                    'point' => $machineCacheInfo[$this->cacheDataKey . '_point'],
+                    'score' => $machineCacheInfo[$this->cacheDataKey . '_score'],
+                    'last_play_time' => $machineCacheInfo[$this->cacheDataKey . '_last_play_time'],
+                    'action_time' => $machineCacheInfo[$this->cacheDataKey . '_action_time'],
+                    'win_number' => $machineCacheInfo[$this->cacheDataKey . '_win_number'],
+                    'push_auto' => $machineCacheInfo[$this->cacheDataKey . '_push_auto'],
+                    'now_turn' => $machineCacheInfo[$this->cacheDataKey . '_now_turn'],
+                    'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'],
+                    // ✅ 外部按钮计数器（仅线下版）
+                    'external_open_count' => $machineCacheInfo[$this->cacheDataKey . '_external_open_count'] ?? 0,
+                    'external_wash_count' => $machineCacheInfo[$this->cacheDataKey . '_external_wash_count'] ?? 0,
+                ];
+
+                switch ($name) {
+                    case 'gaming_user_id':
+                        if (!empty($this->machine->gamingPlayer)) {
+                            $this->sendMachineRealTimeInformation($this->machine->gamingPlayer->department_id,
+                                'game_start', $info);
+                        }
+                        break;
+                    case 'auto':
+                    case 'turn':
+                    case 'win_number':
+                    case 'push_auto':
+                    case 'reward_status':
+                    case 'score':
+                    case 'external_open_count':  // ✅ 外部按钮次数变化
+                    case 'external_wash_count':  // ✅ 外部按钮次数变化
+                        if (!empty($this->machine->gamingPlayer)) {
+                            $this->sendMachineRealTimeInformation($this->machine->gamingPlayer->department_id,
+                                'game_info_change', $info);
+                        }
+                        break;
+                }
+
+                $currentGamingUserId = $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0;
+                if (in_array($name, $this->machineInfo) && !empty($currentGamingUserId)) {
+                    $this->sendMachineNowInfoMessage($currentGamingUserId, $this->machine->id, $name, $info);
+                }
+            }
+        }
+    }
+
+    /**
+     * 获取所有属性
+     */
+    public function getAllData(): iterable
+    {
+        return Cache::getMultiple($this->cacheDataKeyArr, 0);
+    }
+
+    /**
+     * 线下钢珠消息处理（核心方法）
+     *
+     * 处理所有来自硬件的消息：
+     * - 36字节心跳（46C0/46C6）
+     * - 10/12/14/16字节指令回复
+     *
+     * @param string $msg 十六进制字符串（不含空格，如 "46C0051419D0030A0FDA000000DE0000AF12"）
+     * @return bool
+     */
+    public function jackPotCmd(string $msg): bool
+    {
+        $domain = $this->machine->domain;
+        $port = $this->machine->port;
+
+        try {
+            $len = mb_strlen($msg);
+
+            // 校验消息长度
+            // 10, 12, 14, 16 = 指令回复
+            // 36 = 标准心跳
+            // 46 = 心跳(36) + B5开分次数(10)
+            // 50 = 心跳(36) + B7洗分次数(14)
+            // 60 = 心跳(36) + B5(10) + B7(14)
+            // 实际中可能有其他组合，采用模糊匹配
+            $validLengths = [10, 12, 14, 16, 36, 46, 50, 58, 60];
+
+            // 如果长度不在标准列表中，检查是否是心跳+附加数据
+            if (!in_array($len, $validLengths)) {
+                // 允许36+的长度（心跳可能携带额外数据）
+                if ($len < 36) {
+                    throw new \Exception('指令长度错误: ' . $len);
+                }
+                $this->log->warning('收到非标准长度消息', [
+                    'machine_code' => $this->machine->code,
+                    'length' => $len,
+                    'msg_preview' => substr($msg, 0, 40) . '...'
+                ]);
+            }
+
+            // 校验 S1/S2
+            $s1 = substr($msg, -4, 2);
+            $s2 = substr($msg, -2, 2);
+            $data = substr($msg, 0, -4);
+
+            $calculatedS1 = self::calculateS1($data);
+            if ($s1 != $calculatedS1) {
+                throw new \Exception('指令S1校验失败');
+            }
+
+            $calculatedS2 = self::calculateS2($data, $calculatedS1);
+            if ($s2 != $calculatedS2) {
+                throw new \Exception('指令S2校验失败');
+            }
+
+            $fun = substr($msg, 0, 6);  // 前6位：功能码
+            $fun1 = substr($msg, 0, 4); // 前4位：分类码
+
+            // ✅ 验证分机号匹配
+            $receivedExtension = substr($msg, 0, 2);
+            if ($receivedExtension !== $this->extensionNumber) {
+                $this->log->warning('收到不匹配的分机号消息', [
+                    'machine_code' => $this->machine->code,
+                    'expected' => $this->extensionNumber,
+                    'received' => $receivedExtension,
+                    'msg' => substr($msg, 0, 20) . '...'
+                ]);
+                // 仍然处理（可能是配置错误），但记录日志
+            }
+
+            $gamingUserId = $this->gaming_user_id;
+            $orgRewardStatus = $this->reward_status;
+            $orgTurn = $this->turn;
+            $orgWinNumber = $this->win_number;
+
+            // ==================== 处理心跳（可能包含附加数据）====================
+            // 心跳特征：分机号 + C0/C6
+            $statusCode = substr($msg, 2, 2);
+            if ($len >= 36 && ($statusCode == 'c0' || $statusCode == 'c6')) {
+                // 提取心跳部分（前36字符）
+                $heartbeat = substr($msg, 0, 36);
+                $result = $this->handleHeartbeat($heartbeat, $gamingUserId, $orgRewardStatus, $orgWinNumber, $orgTurn);
+
+                // 处理附加数据（B5/B7外部按钮开洗分次数）
+                if ($len > 36) {
+                    $remaining = substr($msg, 36);
+                    $this->handleExternalButtonData($remaining);
+                }
+
+                return $result;
+            }
+
+            // ==================== 处理独立的外部按钮指令（如果有）====================
+            if (substr($msg, 0, 2) == 'b5' && $len >= 10) {
+                // B5 xx xx S1 S2: 外部按钮开分次数（⚠️ 次数，不是金额）
+                $count = hexdec(substr($msg, 2, 2)) * 100 + hexdec(substr($msg, 4, 2));
+                $this->external_open_count = $count;
+                $this->log->info('[B5协议-独立] 外部按钮开分次数更新', [
+                    'machine_code' => $this->machine->code,
+                    'count' => $count,
+                    'note' => '这是操作次数，不是金额'
+                ]);
+                return true;
+            }
+
+            if (substr($msg, 0, 2) == 'b7' && $len >= 12) {
+                // B7 xx xx xx S1 S2: 外部按钮洗分次数（⚠️ 次数，不是金额）
+                $count = hexdec(substr($msg, 2, 2)) * 10000 + hexdec(substr($msg, 4, 2)) * 100 + hexdec(substr($msg, 6, 2));
+                $this->external_wash_count = $count;
+                $this->log->info('[B7协议-独立] 外部按钮洗分次数更新', [
+                    'machine_code' => $this->machine->code,
+                    'count' => $count,
+                    'note' => '这是操作次数，不是金额'
+                ]);
+                return true;
+            }
+
+            // ==================== 处理指令回复 ====================
+            return $this->handleCommandReply($msg, $fun, $fun1, $gamingUserId);
+
+        } catch (\Exception $e) {
+            $this->log->error('消息处理错误', [
+                'error' => $e->getMessage(),
+                'msg' => $msg,
+                'machine_code' => $this->machine->code,
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * 处理外部按钮开洗分数据（B5/B7指令）
+     *
+     * ⚠️ 注意：B5/B7 是操作次数，不是金额！
+     *
+     * @param string $data 附加数据（可能包含B5和/或B7指令）
+     */
+    private function handleExternalButtonData(string $data): void
+    {
+        $offset = 0;
+        $len = strlen($data);
+        $now = time();
+
+        while ($offset < $len) {
+            $cmd = substr($data, $offset, 2);
+
+            if ($cmd == 'b5' && ($len - $offset) >= 10) {
+                // B5 xx xx S1 S2: 外部按钮开分次数（10字符）
+                // ⚠️ count 是次数，不是金额
+                $b5Data = substr($data, $offset, 10);
+                $newCount = hexdec(substr($b5Data, 2, 2)) * 100 + hexdec(substr($b5Data, 4, 2));
+                $oldCount = $this->external_open_count ?? 0;
+
+                // ✅ 处理计数器变化
+                $result = $this->processCounterChange('open', $oldCount, $newCount, $now);
+
+                if ($result['should_update']) {
+                    $this->external_open_count = $newCount;
+                }
+
+                $this->log->info('[B5协议] 外部按钮开分次数更新', [
+                    'machine_code' => $this->machine->code,
+                    'old_count' => $oldCount,
+                    'new_count' => $newCount,
+                    'increment' => $newCount - $oldCount,
+                    'recorded' => $result['recorded'],
+                    'reason' => $result['reason'] ?? '',
+                    'data' => $b5Data,
+                ]);
+
+                $offset += 10;
+            } elseif ($cmd == 'b7' && ($len - $offset) >= 12) {
+                // B7 xx xx xx S1 S2: 外部按钮洗分次数（实际可能是12或14字符）
+                // ⚠️ count 是次数，不是金额
+                $availableLen = min(14, $len - $offset);
+                $b7Data = substr($data, $offset, $availableLen);
+
+                if ($availableLen >= 12) {
+                    $newCount = hexdec(substr($b7Data, 2, 2)) * 10000
+                        + hexdec(substr($b7Data, 4, 2)) * 100
+                        + hexdec(substr($b7Data, 6, 2));
+                    $oldCount = $this->external_wash_count ?? 0;
+
+                    // ✅ 处理计数器变化
+                    $result = $this->processCounterChange('wash', $oldCount, $newCount, $now);
+
+                    if ($result['should_update']) {
+                        $this->external_wash_count = $newCount;
+                    }
+
+                    $this->log->info('[B7协议] 外部按钮洗分次数更新', [
+                        'machine_code' => $this->machine->code,
+                        'old_count' => $oldCount,
+                        'new_count' => $newCount,
+                        'increment' => $newCount - $oldCount,
+                        'recorded' => $result['recorded'],
+                        'reason' => $result['reason'] ?? '',
+                        'data' => $b7Data,
+                    ]);
+                }
+
+                $offset += $availableLen;
+            } else {
+                // 未知指令，跳过2字符
+                $this->log->warning('未知的附加指令', [
+                    'machine_code' => $this->machine->code,
+                    'cmd' => $cmd,
+                    'remaining_data' => substr($data, $offset)
+                ]);
+                break;
+            }
+        }
+    }
+
+    /**
+     * 处理计数器变化
+     *
+     * @param string $type 类型：open/wash
+     * @param int $oldCount 旧计数
+     * @param int $newCount 新计数
+     * @param int $now 当前时间戳
+     * @return array ['should_update' => bool, 'recorded' => bool, 'reason' => string]
+     */
+    private function processCounterChange(string $type, int $oldCount, int $newCount, int $now): array
+    {
+        // ========== 情况1：计数器减少 ==========
+        if ($newCount < $oldCount) {
+            // 检查是否刚执行过故排
+            $hasRecentCheck = Cache::get('check_flag_' . $this->machine->id);
+
+            if ($hasRecentCheck) {
+                // 故排后归零，正常
+                $this->log->info("[{$type}计数器] 故排后归零", [
+                    'machine_code' => $this->machine->code,
+                    'old' => $oldCount,
+                    'new' => $newCount,
+                ]);
+                return ['should_update' => true, 'recorded' => false, 'reason' => '故排归零'];
+            } else {
+                // 异常减少，告警
+                $this->log->error("[{$type}计数器] 异常减少", [
+                    'machine_code' => $this->machine->code,
+                    'old' => $oldCount,
+                    'new' => $newCount,
+                    'decrease' => $oldCount - $newCount,
+                ]);
+
+                // 发送机台异常通知
+                try {
+                    sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, 0);
+                } catch (\Exception $e) {
+                    $this->log->error('发送机台异常通知失败', ['error' => $e->getMessage()]);
+                }
+
+                return ['should_update' => true, 'recorded' => false, 'reason' => '异常减少'];
+            }
+        }
+
+        // ========== 情况2：计数器不变 ==========
+        if ($newCount == $oldCount) {
+            return ['should_update' => false, 'recorded' => false, 'reason' => '无变化'];
+        }
+
+        // ========== 情况3：计数器增加 ==========
+        $increment = $newCount - $oldCount;
+
+        // 去重检查（2秒内的重复心跳）
+        $lastUpdate = $this->lastCounterUpdateTime[$type] ?? 0;
+        if ($now - $lastUpdate < 2) {
+            $this->log->warning("[{$type}计数器] 短时间内重复心跳，跳过", [
+                'machine_code' => $this->machine->code,
+                'interval' => $now - $lastUpdate,
+                'increment' => $increment,
+            ]);
+            return ['should_update' => false, 'recorded' => false, 'reason' => '重复心跳'];
+        }
+
+        // 异常增量检查（单次心跳增量不应超过20）
+        if ($increment > 20) {
+            $this->log->warning("[{$type}计数器] 单次增量异常", [
+                'machine_code' => $this->machine->code,
+                'increment' => $increment,
+                'old' => $oldCount,
+                'new' => $newCount,
+            ]);
+            // 仍然记录，但记录警告
+        }
+
+        // 记录操作
+        $this->recordExternalButtonOperation($type, $increment);
+        $this->lastCounterUpdateTime[$type] = $now;
+
+        return ['should_update' => true, 'recorded' => true, 'reason' => '正常增量'];
+    }
+
+    /**
+     * 记录外部按钮开洗分操作（带分布式锁）
+     *
+     * @param string $type 类型：open=开分, wash=洗分
+     * @param int $times 次数（每次固定100分）
+     */
+    private function recordExternalButtonOperation(string $type, int $times): void
+    {
+        if ($times <= 0) {
+            return;
+        }
+
+        // ✅ 使用分布式锁防止并发重复记录
+        $lockKey = "external_button_lock_{$this->machine->id}_{$type}";
+        $lock = \support\Locker::lock($lockKey, 5);
+
+        try {
+            if (!$lock->acquire()) {
+                $this->log->warning('[外部按钮] 获取锁失败，跳过记录', [
+                    'machine_code' => $this->machine->code,
+                    'type' => $type,
+                    'times' => $times,
+                ]);
+                return;
+            }
+
+            // 每次固定100分（机台分数）
+            $machinePointPerTime = 100;
+            $totalMachinePoint = $machinePointPerTime * $times;
+
+            // 根据机台比值转换成玩家钱包分数
+            // 公式：walletAmount = machinePoint / odds_y * odds_x
+            if (!$this->machine->odds_y || $this->machine->odds_y <= 0) {
+                $this->log->error('[外部按钮] 机台odds_y无效，无法记录', [
+                    'machine_code' => $this->machine->code,
+                    'odds_y' => $this->machine->odds_y,
+                ]);
+                return;
+            }
+
+            $walletAmount = floor($totalMachinePoint / $this->machine->odds_y * $this->machine->odds_x);
+
+            // 获取当前游戏玩家（可能为空）
+            $gamingUserId = $this->gaming_user_id ?? 0;
+            $player = null;
+
+            if ($gamingUserId > 0) {
+                $player = \app\model\Player::with(['recommend_promoter', 'recommend_promoter.national_promoter'])
+                    ->find($gamingUserId);
+            }
+
+            // ✅ 创建 PlayerGameLog（带事务保护）
+            $this->createExternalButtonGameLog($type, $totalMachinePoint, $walletAmount, $player);
+
+            $this->log->info('[外部按钮] 记录开洗分操作', [
+                'machine_code' => $this->machine->code,
+                'type' => $type,
+                'times' => $times,
+                'machine_point' => $totalMachinePoint,
+                'wallet_amount' => $walletAmount,
+                'player_id' => $gamingUserId,
+                'has_player' => !empty($player),
+            ]);
+
+        } catch (\Exception $e) {
+            $this->log->error('[外部按钮] 记录操作失败', [
+                'machine_code' => $this->machine->code,
+                'type' => $type,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+        } finally {
+            // ✅ 确保锁被释放
+            $lock->release();
+        }
+    }
+
+    /**
+     * 创建外部按钮游戏日志（带事务保护）
+     *
+     * @param string $type 类型：open=开分, wash=洗分
+     * @param int $machinePoint 机台分数
+     * @param float $walletAmount 钱包金额
+     * @param \app\model\Player|null $player 玩家（可能为空）
+     * @throws \Exception
+     */
+    private function createExternalButtonGameLog(string $type, int $machinePoint, float $walletAmount, ?\app\model\Player $player): void
+    {
+        // ✅ 使用事务保护
+        \support\Db::beginTransaction();
+
+        try {
+            $playerGameLog = new \app\model\PlayerGameLog();
+
+            // 玩家信息（可能为0）
+            $playerGameLog->player_id = $player->id ?? 0;
+            $playerGameLog->department_id = $player->department_id ?? 0;
+            $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
+            $playerGameLog->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
+
+            // 机台信息
+            $playerGameLog->game_id = $this->machine->machineCategory?->game_id ?? 0;
+            $playerGameLog->machine_id = $this->machine->id;
+            $playerGameLog->type = $this->machine->type;
+            $playerGameLog->odds = $this->machine->odds_x . ':' . $this->machine->odds_y;
+            $playerGameLog->control_open_point = $this->machine->control_open_point ?? 0;
+
+            // 操作类型和分数
+            if ($type === 'open') {
+                $playerGameLog->action = \app\model\PlayerGameLog::ACTION_OPEN;
+                $playerGameLog->open_point = $machinePoint;
+                $playerGameLog->wash_point = 0;
+            } else {
+                $playerGameLog->action = \app\model\PlayerGameLog::ACTION_DOWN;
+                $playerGameLog->open_point = 0;
+                $playerGameLog->wash_point = $machinePoint;
+            }
+
+            // 金额信息（✅ 如果有玩家，读取实际余额）
+            $playerGameLog->gift_point = 0;
+            $playerGameLog->game_amount = $walletAmount;
+
+            if ($player) {
+                try {
+                    $currentBalance = \app\service\WalletService::getBalance($player->id);
+                    $playerGameLog->before_game_amount = $currentBalance;
+                    $playerGameLog->after_game_amount = $currentBalance; // 外部按钮不扣款，余额不变
+                } catch (\Exception $e) {
+                    $this->log->warning('[外部按钮] 获取玩家余额失败，使用0', [
+                        'player_id' => $player->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                    $playerGameLog->before_game_amount = 0;
+                    $playerGameLog->after_game_amount = 0;
+                }
+            } else {
+                $playerGameLog->before_game_amount = 0;
+                $playerGameLog->after_game_amount = 0;
+            }
+
+            $playerGameLog->machine_amount = 0;
+
+            // ⚠️ 关键：标记为外部按钮来源
+            $playerGameLog->source_type = \app\model\PlayerGameLog::SOURCE_TYPE_OFFLINE_BUTTON;
+
+            // 游戏记录ID（尝试关联，可能为null）
+            $gameRecordId = $this->getOrCreateGameRecordId($player);
+            $playerGameLog->game_record_id = $gameRecordId;
+
+            // 管理员信息（外部按钮无管理员）
+            $playerGameLog->user_id = 0;
+            $playerGameLog->user_name = '';
+            $playerGameLog->is_system = 0;
+            $playerGameLog->is_test = $player->is_test ?? 0;
+
+            $playerGameLog->save();
+
+            // ✅ 更新 PlayerGameRecord：累加金额并标记
+            if ($gameRecordId) {
+                $gameRecord = \app\model\PlayerGameRecord::find($gameRecordId);
+                if ($gameRecord) {
+                    // 累加机台分数和钱包金额
+                    if ($type === 'open') {
+                        $gameRecord->open_point = bcadd($gameRecord->open_point, $machinePoint, 2);
+                        $gameRecord->open_amount = bcadd($gameRecord->open_amount, $walletAmount, 2);
+                    } else {
+                        $gameRecord->wash_point = bcadd($gameRecord->wash_point, $machinePoint, 2);
+                        $gameRecord->wash_amount = bcadd($gameRecord->wash_amount, $walletAmount, 2);
+                    }
+
+                    // 标记包含实体按键操作
+                    $gameRecord->has_external_button = 1;
+
+                    // ⚠️ 注意：外部按钮不改变钱包余额，所以 after_game_amount 不更新
+                    // 实际钱包余额在玩家通过系统开洗分时才变化
+
+                    $gameRecord->save();
+
+                    $this->log->info('[外部按钮] 更新 PlayerGameRecord', [
+                        'game_record_id' => $gameRecordId,
+                        'type' => $type,
+                        'machine_point' => $machinePoint,
+                        'wallet_amount' => $walletAmount,
+                        'updated_open_point' => $gameRecord->open_point,
+                        'updated_wash_point' => $gameRecord->wash_point,
+                    ]);
+                }
+            }
+
+            \support\Db::commit();
+
+            $this->log->info('[外部按钮] 创建游戏日志', [
+                'player_game_log_id' => $playerGameLog->id,
+                'player_id' => $playerGameLog->player_id,
+                'machine_id' => $playerGameLog->machine_id,
+                'type' => $type,
+                'machine_point' => $machinePoint,
+                'wallet_amount' => $walletAmount,
+                'game_record_id' => $gameRecordId,
+            ]);
+
+        } catch (\Exception $e) {
+            \support\Db::rollBack();
+            $this->log->error('[外部按钮] 创建游戏日志失败', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw $e; // ✅ 抛出异常，让上层处理
+        }
+    }
+
+    /**
+     * 获取或创建游戏记录ID
+     *
+     * @param \app\model\Player|null $player
+     * @return int|null
+     */
+    private function getOrCreateGameRecordId(?\app\model\Player $player): ?int
+    {
+        if (!$player) {
+            return null; // 无玩家时返回null
+        }
+
+        try {
+            // 查找当前玩家在该机台的进行中游戏记录
+            $gameRecord = \app\model\PlayerGameRecord::query()
+                ->where('machine_id', $this->machine->id)
+                ->where('player_id', $player->id)
+                ->where('status', \app\model\PlayerGameRecord::STATUS_START)
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            if ($gameRecord) {
+                // ✅ 直接返回ID，更新操作在 createExternalButtonGameLog() 中统一处理
+                return $gameRecord->id;
+            }
+
+            // ⚠️ 没有进行中的记录，不自动创建（外部按钮操作不应该创建新游戏记录）
+            return null;
+
+        } catch (\Exception $e) {
+            $this->log->error('[外部按钮] 获取游戏记录失败', [
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * 处理心跳数据（36字节）
+     */
+    private function handleHeartbeat(string $msg, int $gamingUserId, int $orgRewardStatus, int $orgWinNumber, float $orgTurn): bool
+    {
+        // 检查机台状态（第18-19字节必须是 DA=正常）
+        if (substr($msg, 18, 2) != 'da') {
+            $this->has_lock = 1;
+            Log::channel('machine_operations')->error('[SongOfflineJackpot-MachineLock] 机台被锁', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'lock_reason' => '心跳数据异常',
+                'expected_byte_18' => 'da',
+                'actual_byte_18' => substr($msg, 18, 2),
+                'heartbeat_msg' => $msg,
+            ]);
+            sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
+            throw new \Exception('机台故障');
+        }
+
+        // 解析心跳数据
+        [$nowPoint, $nowRatio, $nowWinNumber, $nowScore, $nowTurn] = self::parseHeartbeat($msg);
+        $nowAuto = (substr($msg, 2, 2) == 'c6') ? 1 : 0;
+        $nowRewardStatus = (substr($msg, 10, 2) == 'd5') ? 1 : 0; // D5=开奖中
+
+        // 更新Redis状态
+        $this->point = $nowPoint;
+        $this->auto = $nowAuto;
+        $this->win_number = $nowWinNumber;
+        $this->score = $nowScore;
+        $this->turn = $nowTurn;
+        $this->reward_status = $nowRewardStatus;
+        $this->now_turn = $nowWinNumber;
+        $this->ratio = $nowRatio;
+
+        // ==================== 开奖开始 ====================
+        if ($nowRewardStatus == 1 && $orgRewardStatus == 0) {
+            $machineLotteryRecord = new MachineLotteryRecord();
+            $machineLotteryRecord->machine_id = $this->machine->id;
+            $machineLotteryRecord->player_id = $gamingUserId;
+            $machineLotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
+            $machineLotteryRecord->draw_bet = $this->win_number;
+            $machineLotteryRecord->use_turn = $this->now_turn;
+            $machineLotteryRecord->save();
+        }
+
+        // ==================== 开奖结束 ====================
+        if ($nowRewardStatus == 0 && $orgRewardStatus == 1) {
+            // 触发彩池抽奖
+            if (!empty($this->machine->gamingPlayer)) {
+                (new LotteryServices())
+                    ->setMachine($this->machine)
+                    ->setPlayer($this->machine->gamingPlayer)
+                    ->fixedPotCheckLottery($nowScore);
+            }
+
+            // 投递活动队列
+            if ($nowScore > 0 && !empty($gamingUserId)) {
+                Client::send('play-activity', [
+                    'machine_id' => $this->machine->id,
+                    'player_id' => $gamingUserId,
+                    'point' => $nowScore,
+                ]);
+
+                // 钢珠报喜：检测珠数是否达到阈值并广播
+                \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $nowScore);
+            }
+
+            // 通知前端开奖结束
+            sendSocketMessage('group-' . $this->machine->id, [
+                'msg_type' => 'machine_reward_end',
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'gaming_user_id' => $gamingUserId,
+            ]);
+
+            // 自动执行"得分→分数"转换
+            $this->sendCmd(self::SCORE_TO_POINT, 0, 'player', $gamingUserId);
+        }
+
+        // ==================== 转数变化处理（线下版简化逻辑）====================
+        // 线下版不需要复杂的保留机制，只累计消耗的转数用于打码量统计
+        if ($nowRewardStatus == 0 && !empty($gamingUserId)) {
+            $turnDelta = bcsub($nowTurn, $orgTurn, 2);
+
+            // 负增量说明玩家消耗了转数（正常游玩）
+            if (bccomp($turnDelta, '0', 2) < 0 && bccomp($turnDelta, '-10', 2) >= 0) {
+                $consumed = abs($turnDelta);
+
+                // 累加到打码量统计
+                $cateId = $this->machine->cate_id;
+                $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+                $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+
+                if ($turnUsedPoint === null) {
+                    $turnUsedPoint = \app\model\MachineCategory::query()
+                        ->where('id', $cateId)
+                        ->value('turn_used_point') ?? 0;
+                    \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+                }
+
+                $betAmount = bcmul($consumed, $turnUsedPoint, 2);
+
+                if (bccomp($betAmount, '0', 2) > 0) {
+                    Log::channel('bet_statistics')->info('[BetStats] SongOfflineJackpot 投递打码量', [
+                        'machine_id' => $this->machine->id,
+                        'player_id' => $gamingUserId,
+                        'consumed_turn' => $consumed,
+                        'turn_used_point' => $turnUsedPoint,
+                        'bet_amount' => floatval($betAmount),
+                    ]);
+
+                    Client::send('bet-statistics', [
+                        'player_id' => $gamingUserId,
+                        'stat_type' => 'machine',
+                        'bet_amount' => floatval($betAmount),
+                        'source' => 'song_offline_jackpot',
+                        'machine_id' => $this->machine->id,
+                        'created_at' => date('Y-m-d H:i:s'),
+                    ]);
+                }
+
+                // 更新最后游戏时间
+                $this->last_play_time = time();
+            }
+        }
+
+        // 推送机台状态到前端
+        $this->sendMachineNowStatusMessage($this->machine->id);
+        return true;
+    }
+
+    /**
+     * 处理指令回复
+     */
+    private function handleCommandReply(string $msg, string $fun, string $fun1, int $gamingUserId): bool
+    {
+        switch ($fun) {
+            // 确认类指令（只更新版本号）
+            case self::REWARD_SWITCH:
+            case self::MACHINE_OPEN:
+            case self::MACHINE_CLOSE:
+            case self::TURN_DOWN_ALL:
+            case self::TURN_UP_ALL:
+            case self::PUSH_THREE:
+            case self::PUSH_ONE:
+            case self::CLEAR_LOG:
+            case self::POINT_TO_TURN:
+            case self::TURN_TO_POINT:
+                $this->setActionVersion($fun);
+                break;
+
+            case self::CHECK:
+                // ✅ 设置故排标记（用于计数器归零检测）
+                Cache::set('check_flag_' . $this->machine->id, true, 10); // 10秒有效
+
+                // ✅ 故排指令：清除外部按钮开洗分次数（协议规定）
+                $oldOpenCount = $this->external_open_count ?? 0;
+                $oldWashCount = $this->external_wash_count ?? 0;
+
+                $this->external_open_count = 0;
+                $this->external_wash_count = 0;
+                $this->setActionVersion($fun);
+
+                $this->log->info('[故排] 清除外部按钮计数器', [
+                    'machine_code' => $this->machine->code,
+                    'old_open_count' => $oldOpenCount,
+                    'old_wash_count' => $oldWashCount,
+                    'note' => '故排指令会清除 B5/B7 计数器，已设置10秒标记'
+                ]);
+                break;
+
+            case self::AUTO_UP_TURN:
+                $this->auto = 1;
+                $this->setActionVersion($fun);
+                break;
+
+            case self::AUTO_STOP:
+                $this->auto = 0;
+                $this->setActionVersion($fun);
+                break;
+
+            default:
+                return $this->handleActionReply($msg, $fun1, $gamingUserId);
+        }
+
+        return true;
+    }
+
+    /**
+     * 处理动作回复（查询、上下分等）
+     */
+    private function handleActionReply(string $msg, string $action, int $gamingUserId): bool
+    {
+        switch ($action) {
+            // 上分回复
+            case self::OPEN_ANY_POINT:
+                Redis::publish($this->machine->domain . ':' . $this->machine->port, '设备返回的消息');
+                $this->setActionVersion(substr($msg, 0, 6));
+                break;
+
+            // 故障码
+            case self::FAULT1_MACHINE_SCORE:
+            case self::FAULT_MACHINE_SCORE:
+                $this->has_lock = 1;
+                $faultCode = ($action == self::FAULT1_MACHINE_SCORE) ? 'FAULT1' : 'FAULT2';
+                Log::channel('machine_operations')->error('[SongOfflineJackpot-MachineLock] 机台被锁', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'lock_reason' => '机台报告故障',
+                    'fault_code' => $faultCode,
+                    'msg' => $msg,
+                ]);
+                sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
+                throw new \Exception('机台故障');
+
+            // 下分回复（三次握手）
+            case self::WASH_ZERO:
+                Redis::publish($this->machine->domain . ':' . $this->machine->port, '设备返回的消息');
+                $cmd = substr($msg, 0, 6);
+                $this->setActionVersion($cmd);
+                $s1 = substr($msg, -4, 2);
+                $s2 = substr($msg, -2, 2);
+                $uid = $this->machine->domain . ':' . $this->machine->port;
+                Gateway::sendToUid($uid, hex2bin($cmd . $s1 . $s2));
+                break;
+
+            // 查询分数
+            case self::GET_MACHINE_POINT:
+            case self::AUTO_MACHINE_POINT:
+                $point = self::parseScore(substr($msg, 4, 6));
+                $this->point = $point;
+                $this->setActionVersion(self::MACHINE_POINT);
+                break;
+
+            // 查询得分
+            case self::GET_MACHINE_SCORE:
+                $score = self::parseScore(substr($msg, 4, 6));
+                $this->score = $score;
+                $this->setActionVersion(self::MACHINE_SCORE);
+                break;
+
+            // 查询转数
+            case self::GET_MACHINE_TURN:
+                $turn = self::parseScore('00' . substr($msg, 4, 4));
+                $this->turn = $turn;
+                $this->setActionVersion(self::MACHINE_TURN);
+                break;
+
+            // 查询累积转数
+            case self::GET_WIN_NUMBER:
+            case self::REWARD_WIN_NUMBER:
+                $winNumber = self::parseScore('00' . substr($msg, 6, 4));
+                $oldWinNumber = $this->win_number;
+                $delta = $winNumber - $oldWinNumber;
+
+                // 防止异常值
+                if (abs($delta) > 100) {
+                    $this->log->error('检测到异常的winNumber值，拒绝更新', [
+                        'machine_code' => $this->machine->code,
+                        'old_win_number' => $oldWinNumber,
+                        'new_win_number' => $winNumber,
+                        'delta' => $delta,
+                    ]);
+                } else {
+                    $this->win_number = $winNumber;
+                }
+                $this->setActionVersion(self::WIN_NUMBER);
+                break;
+
+            case self::SCORE_TO_POINT:
+                $this->setActionVersion(self::SCORE_TO_POINT);
+                break;
+
+            default:
+                throw new \Exception('不存在的指令: ' . $action);
+        }
+
+        return true;
+    }
+
+    /**
+     * 计算S1校验位 (XOR异或校验)
+     * @param string $data 指令数据（不含S1/S2）
+     * @return string 16进制的S1校验位
+     */
+    public static function calculateS1(string $data): string
+    {
+        $bytes = str_split($data, 2);
+        $xor = 0;
+        foreach ($bytes as $byte) {
+            $xor ^= hexdec($byte);
+        }
+        return str_pad(dechex($xor), 2, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * 计算S2校验位 (ADD累加校验)
+     * @param string $data 指令数据（不含S1/S2）
+     * @param string $s1 计算出的S1值
+     * @return string 16进制的S2校验位（取最后2位）
+     */
+    public static function calculateS2(string $data, string $s1): string
+    {
+        $bytes = str_split($data, 2);
+        $add = 0;
+        foreach ($bytes as $byte) {
+            $add += hexdec($byte);
+        }
+        $add += hexdec($s1);
+        $result = $add & 0xFF;
+        return str_pad(dechex($result), 2, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * 解析心跳指令中的数据
+     *
+     * 格式（36字节）：
+     * 46 C0 05 14 19 D0 03 0A 0F DA 00 00 00 DE 00 00 (S1) (S2)
+     * │  │  └─┴─┴── │  │  └─┴── │  └─┴─┴── │  └─┴──
+     * │  │  分数    │  扣 转数  │  得分    │  剩余转数
+     * │  │          │  趴      │          │
+     * │  └─ 状态    └─ 旗标    └─ 机台状态
+     * │     C0=停止
+     * │     C6=启动
+     * └─ 分机号
+     *
+     * @param string $command 心跳指令（36字节）
+     * @return array [分数, 扣趴, 累积转数, 得分, 剩余转数]
+     */
+    public static function parseHeartbeat(string $command): array
+    {
+        $cleanCommand = str_replace(' ', '', strtoupper(trim($command)));
+
+        $parts = [
+            'point_section' => substr($cleanCommand, 4, 6),    // 字节3-5: 当前分数
+            'ratio_section' => substr($cleanCommand, 12, 2),   // 字节6: 扣趴
+            'win_number_section' => substr($cleanCommand, 14, 4), // 字节7-8: 累积转数
+            'score_section' => substr($cleanCommand, 20, 6),   // 字节10-12: 得分
+            'turn_section' => substr($cleanCommand, 28, 4)     // 字节14-15: 剩余转数
+        ];
+
+        // 扣趴对照表（协议定义）
+        $ratioArr = [
+            '00' => '10', '01' => '11', '02' => '12',
+            '03' => '13', '04' => '14', '05' => '15',
+        ];
+
+        // ✅ 扣趴异常值处理（默认10%）
+        $ratioCode = $parts['ratio_section'];
+        $ratio = $ratioArr[$ratioCode] ?? null;
+
+        if ($ratio === null) {
+            // 记录异常扣趴码
+            Log::channel('machine_operations')->warning('[SongOfflineJackpot] 收到未定义的扣趴码', [
+                'ratio_code' => $ratioCode,
+                'default_to' => '10%'
+            ]);
+            $ratio = '10'; // 默认10%
+        }
+
+        return [
+            self::parseScore($parts['point_section']),
+            $ratio,
+            self::parseScore('00' . $parts['win_number_section']),
+            self::parseScore($parts['score_section']),
+            self::parseScore('00' . $parts['turn_section']),
+        ];
+    }
+
+    /**
+     * 解析BCD编码的分数
+     *
+     * 格式: xx yy zz
+     * 例: 01 05 1E → 10000 + 500 + 30 = 10530
+     */
+    private static function parseScore($scoreSection): float|int
+    {
+        $bytes = str_split($scoreSection, 2);
+        $bcd2 = $bytes[0]; // 万位
+        $bcd1 = $bytes[1]; // 千百位
+        $bcd0 = $bytes[2]; // 十个位
+        return (hexdec($bcd2) * 10000) + (hexdec($bcd1) * 100) + hexdec($bcd0);
+    }
+
+    /**
+     * 设置操作版本号（用于异步指令确认）
+     */
+    public function setActionVersion($name): float
+    {
+        $version = getMillisecond();
+        Cache::set($this->cacheDataKey . '_' . 'action_' . $name, $version, 60 * 60);
+        return $version;
+    }
+
+    /**
+     * 发送指令到硬件
+     *
+     * @param string $cmd 指令码
+     * @param int $data 数据（分数）
+     * @param string $source 来源（player/admin/system）
+     * @param int $source_id 来源ID
+     * @param int $isSystem 是否系统操作
+     * @return bool
+     * @throws Exception
+     * @throws PushException
+     */
+    public function sendCmd(
+        string $cmd,
+        int $data = 0,
+        string $source = 'player',
+        int $source_id = 0,
+        int $isSystem = 0
+    ): bool
+    {
+        $uid = $this->machine->domain . ':' . $this->machine->port;
+
+        try {
+            // 检查设备在线
+            if (!Gateway::isUidOnline($uid)) {
+                throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
+            }
+
+            // 检查机台锁定
+            if ($this->has_lock == 1 && $cmd != self::CHECK) {
+                throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
+            }
+
+            // ⚠️ 玩家操作时立即更新活动时间
+            if ($source == 'player') {
+                $currentGamingUserId = $this->gaming_user_id;
+                if (!empty($currentGamingUserId)) {
+                    $this->last_play_time = time();
+                }
+            }
+
+            switch ($cmd) {
+                case self::SCORE_TO_POINT:
+                    if ($this->reward_status == 1) {
+                        throw new Exception(trans('machine_reward_drawing', ['{code}' => $this->machine->code], 'message'));
+                    }
+                    $this->machineAction($uid, $cmd, $source, $source_id);
+                    break;
+
+                case self::TURN_UP_ALL:
+                    if ($this->point < 100) {
+                        throw new Exception(trans('machine_point_insufficient', ['{code}' => $this->machine->code], 'message'));
+                    }
+                    // ✅ 验证转数上限（协议限制：980转）
+                    $currentTurn = $this->turn ?? 0;
+                    if ($currentTurn >= self::MAX_TURN) {
+                        throw new Exception("转数已达上限({$currentTurn}/{self::MAX_TURN})，无法继续上转");
+                    }
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
+                    break;
+
+                case self::POINT_TO_TURN:
+                    // ✅ 单次上转也检查上限
+                    $currentTurn = $this->turn ?? 0;
+                    if ($currentTurn >= self::MAX_TURN) {
+                        throw new Exception("转数已达上限({$currentTurn}/{self::MAX_TURN})，无法继续上转");
+                    }
+                    $this->machineAction($uid, $cmd, $source, $source_id);
+                    break;
+
+                case self::TURN_DOWN_ALL:
+                case self::TURN_TO_POINT:
+                case self::MACHINE_SCORE:
+                case self::MACHINE_POINT:
+                case self::MACHINE_TURN:
+                case self::WIN_NUMBER:
+                    $this->machineAction($uid, $cmd, $source, $source_id);
+                    break;
+
+                case self::OPEN_ANY_POINT:
+                    $code = sprintf('%02x', rand(0, 0x63));
+                    $this->openPoint($uid, $cmd . $code, $data, $source, $source_id);
+                    break;
+
+                case self::WASH_ZERO:
+                    $code = sprintf('%02x', rand(0, 0x63));
+                    $this->washPoint($uid, $cmd . $code, $data, $source, $source_id);
+                    break;
+
+                case self::AUTO_UP_TURN:
+                    if ($this->reward_status == 1) {
+                        throw new Exception(trans('machine_reward_drawing', ['{code}' => $this->machine->code], 'message'));
+                    }
+                    if ($this->score > 0) {
+                        throw new Exception(trans('machine_sore_exist', ['{code}' => $this->machine->code, '{score}' => $this->score], 'message'));
+                    }
+                    $auto = $this->auto;
+                    if ($auto == 1) {
+                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::AUTO_STOP)));
+                    } else {
+                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::AUTO_UP_TURN)));
+                    }
+                    break;
+
+                default:
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
+                    break;
+            }
+        } catch (Exception $e) {
+            if (in_array($cmd, [self::OPEN_ANY_POINT, self::WASH_ZERO])) {
+                $this->has_lock = 1;
+                Log::channel('machine_operations')->error('[SongOfflineJackpot-MachineLock] 机台被锁', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'cmd' => $cmd,
+                    'lock_reason' => '指令执行异常',
+                    'exception_message' => $e->getMessage(),
+                ]);
+                sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+            }
+            throw new Exception($e->getMessage());
+        }
+
+        if ($source == 'admin') {
+            sendSocketMessage('private-admin-1-' . $source_id, [
+                'msg_type' => 'machine_action_result',
+                'id' => $this->machine->id,
+                'description' => $this->getDescription($cmd),
+            ]);
+        }
+
+        $this->log->info('[' . ($source === 'admin' ? '管理员操作' : '玩家操作') . '] 机台操作', [
+            'operator_type' => $source,
+            'operator_id' => $source_id,
+            'machine_code' => $this->machine->code,
+            'action' => $cmd,
+            'point' => $data,
+        ]);
+
+        return true;
+    }
+
+    /**
+     * 机台动作（带重试）
+     */
+    private function machineAction(
+        string $uid,
+        string $cmd,
+        string $source = 'player',
+        int $source_id = 0,
+        int $attempts = 0
+    ): void
+    {
+        $maxRetries = 8;
+        $expirationTime = 1000000; // 1秒
+
+        try {
+            $beforeActionTime = $this->setActionVersion($cmd);
+            Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd)));
+
+            $handleDuration = 0;
+            $sleep = 5000; // 5ms
+
+            while (true) {
+                $actionTime = $this->getActionVersion($cmd);
+                if ($actionTime > $beforeActionTime) {
+                    return;
+                }
+                if ($handleDuration >= $expirationTime) {
+                    throw new Exception(trans('machine_action_fail', [], 'message'));
+                }
+                usleep($sleep);
+                $handleDuration += $sleep;
+            }
+        } catch (Exception $e) {
+            $attempts++;
+            if ($attempts >= $maxRetries) {
+                throw new Exception(trans('machine_action_fail', [], 'message'));
+            }
+            usleep(50000);
+            $this->machineAction($uid, $cmd, $source, $source_id, $attempts);
+        }
+    }
+
+    /**
+     * 创建指令（添加S1/S2校验）
+     *
+     * ✅ 支持动态分机号：将指令常量中的前2位替换为实际分机号
+     */
+    private function createCmd(string $cmd, mixed $data = 0): string
+    {
+        // ✅ 替换分机号（指令常量硬编码为46，需要替换为实际分机号）
+        if (strlen($cmd) >= 2 && $this->extensionNumber !== '46') {
+            $cmd = $this->extensionNumber . substr($cmd, 2);
+        }
+
+        $hexString = '';
+        if (!empty($data)) {
+            $bytes = $this->scoreToBytes($data);
+            $hexString = $this->toHexString($bytes);
+        }
+        $cmd .= $hexString;
+        $s1 = self::calculateS1($cmd);
+        $s2 = self::calculateS2($cmd, $s1);
+        return $cmd . $s1 . $s2;
+    }
+
+    /**
+     * 将分数转换为3个BCD字节
+     */
+    public static function scoreToBytes(int $score): array
+    {
+        $score = max(0, min(99999, $score));
+        $tenThousands = intval($score / 10000);
+        $thousandsHundreds = intval(($score % 10000) / 100);
+        $tensOnes = $score % 100;
+        return [$tenThousands, $thousandsHundreds, $tensOnes];
+    }
+
+    /**
+     * 字节数组转十六进制字符串
+     */
+    public static function toHexString($bytes): string
+    {
+        return implode('', array_map(function ($b) {
+            return strtoupper(str_pad(dechex($b), 2, '0', STR_PAD_LEFT));
+        }, $bytes));
+    }
+
+    /**
+     * 获取操作版本号
+     */
+    public function getActionVersion($name): float
+    {
+        return (float)Cache::get($this->cacheDataKey . '_' . 'action_' . $name);
+    }
+
+    /**
+     * 获取机台描述
+     */
+    public function getDescription(string $fun = ''): string
+    {
+        locale(Str::replace('-', '_', $this->lang));
+        $autoStatus = $this->auto == 1 ? trans('machine_status_yes', [], 'machine_action') : trans('machine_status_no', [], 'machine_action');
+        $lotteryStatus = $this->reward_status == 1 ? trans('machine_status_yes', [], 'machine_action') : trans('machine_status_no', [], 'machine_action');
+
+        if (empty($fun)) {
+            $description = trans('machine_auto_status', [], 'machine_action') . $autoStatus . PHP_EOL;
+            $description .= trans('machine_lottery_status', [], 'machine_action') . $lotteryStatus . PHP_EOL;
+            $description .= trans('machine_point', [], 'machine_action') . ($this->point ?? 0) . PHP_EOL;
+            $description .= trans('machine_score', [], 'machine_action') . ($this->score ?? 0) . PHP_EOL;
+            $description .= trans('machine_turn', [], 'machine_action') . ($this->turn ?? 0) . PHP_EOL;
+            $description .= trans('now_turn', [], 'machine_action') . ($this->now_turn ?? 0) . PHP_EOL;
+        } else {
+            $description = trans('function.' . GameType::TYPE_STEEL_BALL . '_' . Machine::CONTROL_TYPE_SONG . '.' . $fun, [], 'machine_action');
+            switch ($fun) {
+                case self::MACHINE_POINT:
+                    $description .= ': ' . $this->point;
+                    break;
+                case self::MACHINE_SCORE:
+                    $description .= ': ' . $this->score;
+                    break;
+                case self::MACHINE_TURN:
+                    $description .= ': ' . $this->turn;
+                    break;
+                case self::WIN_NUMBER:
+                    $description .= ': ' . $this->win_number;
+                    break;
+            }
+        }
+
+        return $description;
+    }
+
+    /**
+     * 上分操作
+     */
+    private function openPoint(
+        string $uid,
+        string $cmd,
+        int $data,
+        string $source = 'player',
+        int $source_id = 0,
+    ): void
+    {
+        $expirationTime = 1000000;
+        try {
+            $beforeActionTime = $this->setActionVersion($cmd);
+            Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
+            $handleDuration = 0;
+            $sleep = 50000;
+
+            while (true) {
+                $actionTime = $this->getActionVersion($cmd);
+                if ($actionTime > $beforeActionTime) {
+                    return;
+                }
+                if ($handleDuration >= $expirationTime) {
+                    throw new Exception(trans('machine_action_fail', [], 'message'));
+                }
+                usleep($sleep);
+                $handleDuration += $sleep;
+            }
+        } catch (Exception) {
+            throw new Exception(trans('machine_action_fail', [], 'message'));
+        }
+    }
+
+    /**
+     * 洗分操作（三次握手）
+     */
+    private function washPoint(
+        string $uid,
+        string $cmd,
+        int $data,
+        string $source = 'player',
+        int $source_id = 0,
+        int $attempts = 0
+    ): void
+    {
+        $maxRetries = 8;
+        $expirationTime = 1000000;
+
+        try {
+            $beforeActionTime = $this->setActionVersion($cmd);
+            Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd . 'c1', 0)));
+            $handleDuration = 0;
+            $sleep = 50000;
+
+            while (true) {
+                $actionTime = $this->getActionVersion($cmd);
+                if ($actionTime > $beforeActionTime) {
+                    return;
+                }
+                if ($handleDuration >= $expirationTime) {
+                    throw new Exception(trans('machine_action_fail', [], 'message'));
+                }
+                usleep($sleep);
+                $handleDuration += $sleep;
+            }
+        } catch (Exception) {
+            $attempts++;
+            if ($attempts >= $maxRetries) {
+                throw new Exception(trans('machine_action_fail', [], 'message'));
+            }
+            usleep(50000);
+            $this->washPoint($uid, $cmd, $data, $source, $source_id, $attempts);
+        }
+    }
+}

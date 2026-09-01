@@ -40,6 +40,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int user_id 管理员id
  * @property string user_name 管理员名称
  * @property int is_system 系統踢除 0=否 1=是
+ * @property int source_type 来源类型 1=线上系统 2=线下实体按键
  * @property string deleted_at 删除时间
  * @property string created_at 创建时间
  * @property string updated_at 最后一次修改时间
@@ -60,6 +61,10 @@ class PlayerGameLog extends Model
     const ACTION_OPEN = 1; // 开分
     const ACTION_LEAVE = 2; // 弃台
     const ACTION_DOWN = 3; // 下分
+
+    // 来源类型常量
+    const SOURCE_TYPE_ONLINE = 1;  // 线上系统（通过界面操作）
+    const SOURCE_TYPE_OFFLINE_BUTTON = 2;  // 线下实体按键（B5/B7协议）
 
     /**
      * 时间转换

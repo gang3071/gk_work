@@ -68,6 +68,10 @@ use support\Cache;
  * @property int strategy_id 攻略id
  * @property int is_use 使用中
  * @property int control_type 工控类型
+ * @property int machine_source 机器来源 1=线上 2=线下
+ * @property string extension_number 分机号（十六进制，如46表示70号分机）
+ * @property int external_open_count 外部按钮开分次数（仅线下版，B5协议，次数非金额）
+ * @property int external_wash_count 外部按钮洗分次数（仅线下版，B7协议，次数非金额）
  * @property int correct_rate 确率
  * @property int is_special 是否特仕机
  * @property string last_game_at 最後遊戲時間
@@ -92,6 +96,9 @@ class Machine extends Model
 
     const CONTROL_TYPE_MEI = 1;
     const CONTROL_TYPE_SONG = 2;
+
+    const MACHINE_SOURCE_ONLINE = 1;   // 线上机器
+    const MACHINE_SOURCE_OFFLINE = 2;  // 线下机器
 
     protected $name;
     protected $correct_rate;
