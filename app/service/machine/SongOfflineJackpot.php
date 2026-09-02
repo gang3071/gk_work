@@ -1001,8 +1001,34 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // 玩家信息（可能为0）
             $playerGameLog->player_id = $player->id ?? 0;
-            $playerGameLog->department_id = $player->department_id ?? 0;
             $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
+
+            // ✅ 从机台获取渠道和门店信息（无论有无玩家都从机台获取）
+            // 优先从机台关联的ChannelMachine获取，确保记录准确的门店信息
+            $channelMachine = $this->machine->channelMachines()->first();
+            if ($channelMachine) {
+                // 渠道ID：从ChannelMachine获取
+                $playerGameLog->department_id = $channelMachine->department_id ?? 0;
+
+                // 门店ID：即store_admin_id（AdminUser的ID）
+                $playerGameLog->store_id = $channelMachine->store_admin_id ?? null;
+
+                // 门店代理ID：门店的上级管理员ID（AdminUser表的parent_admin_id）
+                // 用于门店代理分润统计，与StoreAgentProfitRecord保持一致
+                if ($channelMachine->store_admin_id && $channelMachine->storeAdmin) {
+                    // 从门店的AdminUser获取上级代理的ID
+                    $playerGameLog->store_agent_id = $channelMachine->storeAdmin->parent_admin_id ?? null;
+                } else {
+                    $playerGameLog->store_agent_id = null;
+                }
+            } else {
+                // 降级方案：从玩家获取（保持向后兼容）
+                $playerGameLog->department_id = $player->department_id ?? 0;
+                $playerGameLog->store_id = null;
+                $playerGameLog->store_agent_id = null;
+            }
+
+            // 玩家代理信息
             $playerGameLog->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
 
             // 机台信息
