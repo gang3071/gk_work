@@ -439,31 +439,44 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // ==================== 非心跳消息：分离主指令和B5/B7附加数据 ====================
             // ✅ P0-15修复：检查是否有B5/B7附加数据
+            // ✅ P0-16修复：只在标准指令长度后查找，避免误判数据中的"b5"/"b7"字节
             $mainCmd = $msg;
             $externalData = '';
 
-            // 查找B5/B7的位置
-            $b5Pos = stripos($msg, 'b5');
-            $b7Pos = stripos($msg, 'b7');
+            // 标准指令长度（可能后面跟B5/B7）
+            $stdLengths = [10, 12, 14, 16];
 
-            if ($b5Pos !== false || $b7Pos !== false) {
-                // 找到附加数据，分离主指令和附加部分
-                if ($b5Pos !== false && ($b7Pos === false || $b5Pos < $b7Pos)) {
-                    // B5在前或只有B5
-                    $mainCmd = substr($msg, 0, $b5Pos);
-                    $externalData = substr($msg, $b5Pos);
-                } else if ($b7Pos !== false) {
-                    // 只有B7或B7在前
-                    $mainCmd = substr($msg, 0, $b7Pos);
-                    $externalData = substr($msg, $b7Pos);
+            foreach ($stdLengths as $cmdLen) {
+                if ($len > $cmdLen) {
+                    $possibleMain = substr($msg, 0, $cmdLen);
+                    $possibleExt = substr($msg, $cmdLen);
+
+                    // 检查剩余部分是否以b5或b7开头（区分大小写）
+                    if (preg_match('/^b[57]/i', $possibleExt)) {
+                        // 验证主指令的S1/S2校验和
+                        $s1 = substr($possibleMain, -4, 2);
+                        $s2 = substr($possibleMain, -2, 2);
+                        $data = substr($possibleMain, 0, -4);
+
+                        $calculatedS1 = self::calculateS1($data);
+                        $calculatedS2 = self::calculateS2($data, $calculatedS1);
+
+                        // 只有S1/S2都正确，才认为是组合消息
+                        if ($s1 == $calculatedS1 && $s2 == $calculatedS2) {
+                            $mainCmd = $possibleMain;
+                            $externalData = $possibleExt;
+
+                            $this->log->info('[组合消息] 分离主指令和B5/B7附加数据', [
+                                'machine_code' => $this->machine->code,
+                                'total_length' => $len,
+                                'main_cmd_length' => $cmdLen,
+                                'main_cmd' => $mainCmd,
+                                'external_data' => $externalData,
+                            ]);
+                            break;
+                        }
+                    }
                 }
-
-                $this->log->info('[组合消息] 分离主指令和B5/B7附加数据', [
-                    'machine_code' => $this->machine->code,
-                    'total_length' => $len,
-                    'main_cmd' => $mainCmd,
-                    'external_data' => $externalData,
-                ]);
             }
 
             // 校验主指令的 S1/S2
