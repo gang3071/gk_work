@@ -2,6 +2,7 @@
 
 namespace app\service\machine;
 
+use app\model\AdminUser;
 use app\model\GameType;
 use app\model\Machine;
 use app\model\MachineLotteryRecord;
@@ -1003,28 +1004,35 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $playerGameLog->player_id = $player->id ?? 0;
             $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
 
-            // ✅ 从机台获取渠道和门店信息（无论有无玩家都从机台获取）
-            // 优先从机台关联的ChannelMachine获取，确保记录准确的门店信息
+            // ✅ 获取渠道和门店信息
+            // 策略：
+            // 1. 渠道ID：从ChannelMachine或player获取
+            // 2. 门店ID：优先从player获取，降级从ChannelMachine获取
+            // 3. 代理ID：优先从player获取，降级从门店的parent_admin_id获取
+
             $channelMachine = $this->machine->channelMachines()->first();
-            if ($channelMachine) {
-                // 渠道ID：从ChannelMachine获取
-                $playerGameLog->department_id = $channelMachine->department_id ?? 0;
 
-                // 门店ID：即store_admin_id（AdminUser的ID）
-                $playerGameLog->store_id = $channelMachine->store_admin_id ?? null;
+            // 渠道ID
+            $playerGameLog->department_id = $channelMachine->department_id ?? ($player->department_id ?? 0);
 
-                // 门店代理ID：门店的上级管理员ID（AdminUser表的parent_admin_id）
-                // 用于门店代理分润统计，与StoreAgentProfitRecord保持一致
-                if ($channelMachine->store_admin_id && $channelMachine->storeAdmin) {
-                    // 从门店的AdminUser获取上级代理的ID
-                    $playerGameLog->store_agent_id = $channelMachine->storeAdmin->parent_admin_id ?? null;
-                } else {
-                    $playerGameLog->store_agent_id = null;
-                }
+            // 门店ID：优先从玩家获取（有玩家时），降级从机台绑定获取（无玩家时）
+            if ($player && $player->store_admin_id) {
+                // 有玩家且玩家有门店绑定
+                $playerGameLog->store_id = $player->store_admin_id;
             } else {
-                // 降级方案：从玩家获取（保持向后兼容）
-                $playerGameLog->department_id = $player->department_id ?? 0;
-                $playerGameLog->store_id = null;
+                // 无玩家或玩家没有门店绑定，从机台获取
+                $playerGameLog->store_id = $channelMachine->store_admin_id ?? null;
+            }
+
+            // 门店代理ID：优先从玩家获取，降级从门店的parent_admin_id获取
+            if ($player && $player->agent_admin_id) {
+                // 有玩家且玩家有代理绑定
+                $playerGameLog->store_agent_id = $player->agent_admin_id;
+            } elseif ($playerGameLog->store_id) {
+                // 从门店的上级代理获取
+                $storeAdmin = AdminUser::find($playerGameLog->store_id);
+                $playerGameLog->store_agent_id = $storeAdmin->parent_admin_id ?? null;
+            } else {
                 $playerGameLog->store_agent_id = null;
             }
 
