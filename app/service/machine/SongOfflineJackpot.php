@@ -1686,15 +1686,43 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
         try {
+            // 🔍 DEBUG: sendCmd 调用诊断
+            $this->log->info('[sendCmd] 开始执行指令', [
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'data' => $data,
+                'source' => $source,
+                'source_id' => $source_id,
+                'uid' => $uid,
+            ]);
+
             // 检查设备在线
-            if (!Gateway::isUidOnline($uid)) {
+            $isOnline = Gateway::isUidOnline($uid);
+            if (!$isOnline) {
+                $this->log->error('[sendCmd] 设备离线', [
+                    'machine_code' => $this->machine->code,
+                    'uid' => $uid,
+                    'cmd' => $cmd,
+                ]);
                 throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
             }
 
             // 检查机台锁定
             if ($this->has_lock == 1 && $cmd != self::CHECK) {
+                $this->log->error('[sendCmd] 机台已锁定', [
+                    'machine_code' => $this->machine->code,
+                    'has_lock' => $this->has_lock,
+                    'cmd' => $cmd,
+                ]);
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
             }
+
+            $this->log->info('[sendCmd] 检查通过，准备发送指令', [
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'is_online' => true,
+                'is_locked' => false,
+            ]);
 
             // ⚠️ 玩家操作时立即更新活动时间
             if ($source == 'player') {
@@ -1783,7 +1811,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 ]);
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
             }
-            throw new Exception($e->getMessage());
+            throw new Exception($e->getMessage(). $cmd);
         }
 
         if ($source == 'admin') {
