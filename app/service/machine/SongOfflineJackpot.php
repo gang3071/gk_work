@@ -1004,22 +1004,25 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $playerGameLog->player_id = $player->id ?? 0;
             $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
 
-            // 渠道ID：有玩家时从player获取，无玩家时从ChannelMachine获取
+            // 渠道ID和门店ID：有玩家时从player获取，无玩家时从ChannelMachine获取
             if ($player) {
+                // 有玩家：从玩家获取
                 $playerGameLog->department_id = $player->department_id;
+                $playerGameLog->store_id = $player->store_admin_id;
+                $playerGameLog->store_agent_id = $player->agent_admin_id;
             } else {
-                // 无玩家时，从机台绑定的渠道获取
+                // 无玩家：从机台绑定获取
                 $channelMachine = \app\model\ChannelMachine::where('machine_id', $this->machine->id)->first();
                 if ($channelMachine) {
                     $playerGameLog->department_id = $channelMachine->department_id;
-                }
-                // 如果都没有，不设置department_id
-            }
+                    $playerGameLog->store_id = $channelMachine->store_admin_id;
 
-            // 门店ID和门店代理ID：有玩家时才设置，无玩家时不做处理
-            if ($player) {
-                $playerGameLog->store_id = $player->store_admin_id;
-                $playerGameLog->store_agent_id = $player->agent_admin_id;
+                    // 门店代理ID：从门店的上级获取
+                    if ($channelMachine->store_admin_id) {
+                        $storeAdmin = AdminUser::find($channelMachine->store_admin_id);
+                        $playerGameLog->store_agent_id = $storeAdmin->parent_admin_id ?? null;
+                    }
+                }
             }
 
             // 玩家代理信息
