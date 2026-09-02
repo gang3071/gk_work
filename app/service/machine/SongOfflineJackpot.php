@@ -404,34 +404,69 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // ==================== 处理心跳（可能包含附加数据）====================
             // ✅ P0-11修复：心跳+附加数据是组合消息，每部分有独立的S1/S2
+            // ✅ P0-17修复：心跳可能不是36字符，需要检测并分离B5/B7
             // 心跳特征：分机号 + C0/C6
             $statusCode = substr($msg, 2, 2);
-            if ($len >= 36 && ($statusCode == 'c0' || $statusCode == 'c6')) {
-                // 提取心跳部分（前36字符）
-                $heartbeat = substr($msg, 0, 36);
+            if ($statusCode == 'c0' || $statusCode == 'c6') {
+                $heartbeat = '';
+                $externalData = '';
 
-                // ✅ 只校验心跳部分的 S1/S2（附加数据有独立的S1/S2）
-                $s1 = substr($heartbeat, -4, 2);
-                $s2 = substr($heartbeat, -2, 2);
-                $data = substr($heartbeat, 0, -4);
+                // ✅ 尝试分离心跳和B5/B7附加数据
+                // 心跳可能的长度：36（标准）、14/12/10（短格式）
+                $possibleHeartbeatLengths = [36, 14, 12, 10];
 
-                $calculatedS1 = self::calculateS1($data);
-                if ($s1 != $calculatedS1) {
-                    throw new \Exception('心跳S1校验失败');
+                foreach ($possibleHeartbeatLengths as $hbLen) {
+                    if ($len >= $hbLen) {
+                        $possibleHb = substr($msg, 0, $hbLen);
+
+                        // 验证这段是否是有效的心跳（S1/S2校验）
+                        $s1 = substr($possibleHb, -4, 2);
+                        $s2 = substr($possibleHb, -2, 2);
+                        $data = substr($possibleHb, 0, -4);
+
+                        $calculatedS1 = self::calculateS1($data);
+                        $calculatedS2 = self::calculateS2($data, $calculatedS1);
+
+                        if ($s1 == $calculatedS1 && $s2 == $calculatedS2) {
+                            // S1/S2校验通过，确认为有效心跳
+                            $heartbeat = $possibleHb;
+
+                            // 检查剩余部分
+                            if ($len > $hbLen) {
+                                $remaining = substr($msg, $hbLen);
+
+                                // 剩余部分应该是空或以b5/b7开头
+                                if (empty($remaining) || preg_match('/^b[57]/i', $remaining)) {
+                                    $externalData = $remaining;
+
+                                    $this->log->info('[心跳+B5/B7组合] 分离心跳和外部按钮数据', [
+                                        'machine_code' => $this->machine->code,
+                                        'total_length' => $len,
+                                        'heartbeat_length' => $hbLen,
+                                        'heartbeat' => $heartbeat,
+                                        'external_data' => $externalData,
+                                    ]);
+
+                                    break;
+                                }
+                            } else {
+                                // 完整心跳，无附加数据
+                                break;
+                            }
+                        }
+                    }
                 }
 
-                $calculatedS2 = self::calculateS2($data, $calculatedS1);
-                if ($s2 != $calculatedS2) {
-                    throw new \Exception('心跳S2校验失败');
+                // 验证是否成功分离
+                if (empty($heartbeat)) {
+                    throw new \Exception('心跳S1/S2校验失败（尝试所有可能长度均失败）');
                 }
 
                 $result = $this->handleHeartbeat($heartbeat, $gamingUserId, $orgRewardStatus, $orgWinNumber, $orgTurn);
 
-                // 处理附加数据（B5/B7外部按钮开洗分次数）
-                // ⚠️ B5/B7 各有独立的S1/S2，在 handleExternalButtonData() 中校验
-                if ($len > 36) {
-                    $remaining = substr($msg, 36);
-                    $this->handleExternalButtonData($remaining);
+                // 处理B5/B7附加数据
+                if (!empty($externalData)) {
+                    $this->handleExternalButtonData($externalData);
                 }
 
                 return $result;
