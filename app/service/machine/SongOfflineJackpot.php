@@ -1086,6 +1086,32 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $nowAuto = (substr($msg, 2, 2) == 'c6') ? 1 : 0;
         $nowRewardStatus = (substr($msg, 10, 2) == 'd5') ? 1 : 0; // D5=开奖中
 
+        // ✅ 记录机台实时状态日志（用于监控和调试）
+        $this->log->info('[机台实时状态] 心跳数据解析', [
+            'machine_code' => $this->machine->code,
+            'player_id' => $gamingUserId,
+            'status' => [
+                '自动状态' => $nowAuto ? '启动中' : '停止中',
+                '开奖状态' => $nowRewardStatus ? '开奖中' : '未开奖',
+                '分数' => $nowPoint,
+                '得分(WIN)' => $nowScore,
+                '剩余转数' => $nowTurn,
+                '累积转数' => $nowWinNumber,
+                '扣趴比例' => $nowRatio . '%',
+            ],
+            'changes' => [
+                '分数变化' => ($nowPoint - ($this->point ?? 0)),
+                '得分变化' => ($nowScore - ($this->score ?? 0)),
+                '转数变化' => ($nowTurn - $orgTurn),
+                '累积转数变化' => ($nowWinNumber - $orgWinNumber),
+            ],
+            'external_buttons' => [
+                '开分次数' => $this->external_open_count ?? 0,
+                '洗分次数' => $this->external_wash_count ?? 0,
+            ],
+            'raw_data' => $msg,
+        ]);
+
         // 更新Redis状态
         $this->point = $nowPoint;
         $this->auto = $nowAuto;
