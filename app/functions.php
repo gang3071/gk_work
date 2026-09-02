@@ -1246,8 +1246,8 @@ function machineWash(
                 // 短暂延迟，确保 READ_BET 响应也稳定
                 usleep(100000);  // 100ms
 
-                $gamingPressure = bcsub($services->bet, $services->player_pressure);
-                $gamingScore = bcsub($services->win, $services->player_score);
+                $gamingPressure = bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
+                $gamingScore = bcsub($services->win ?? '0', $services->player_score ?? '0');
 
                 Log::channel('slot_machine')->info('slot -> wash', [
                     'point' => $money,
@@ -1691,7 +1691,7 @@ function machineWashZero(
             //保存下分時間
             $services->last_point_at = time();
             //累計該玩家洗分
-            $services->player_wash_point = bcadd($services->player_wash_point, $wash_point);
+            $services->player_wash_point = bcadd($services->player_wash_point ?? '0', $wash_point ?? '0');
 
             // ✅ 余额变化后更新爆机状态
             \app\service\WalletService::checkMachineCrashAfterTransaction($player->id, $afterGameAmount, $beforeGameAmount);
@@ -3143,7 +3143,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 //累計該玩家開分（包含赠分）
                 $services->gaming = 1;
                 $services->gaming_user_id = $player->id;
-                $services->player_open_point = bcadd($services->player_open_point, $totalOpenScore);
+                $services->player_open_point = bcadd($services->player_open_point ?? '0', $totalOpenScore ?? '0');
                 $services->last_point_at = time();
 
                 // ✅ 诊断日志：验证 Redis 更新成功
@@ -3331,8 +3331,8 @@ if (!function_exists('resetMachineTrans')) {
             }
             if ($machine->type == GameType::TYPE_SLOT) {
                 $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
-                $gamingScore = bcsub($services->win, $services->player_score);
-                $gamingPressure = bcsub($services->bet, $services->player_pressure);
+                $gamingScore = bcsub($services->win ?? '0', $services->player_score ?? '0');
+                $gamingPressure = bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
                 if (!Gateway::isUidOnline($autoUid)) {
                     $isOnLine = false;
                 }
