@@ -1650,7 +1650,21 @@ function machineWashZero(
             } elseif ($machine->type == GameType::TYPE_STEEL_BALL) {
                 $playerGameLog->chip_amount = bcmul($machine->machineCategory?->turn_used_point ?? 0, $gamingTurnPoint);
             }
-            Log::error('这里开始添加洗分记录');
+
+            // 🔍 DEBUG: 下分操作 - 保存前的完整字段值
+            Log::info('[machineWashZero-StoreFields] 准备保存下分记录', [
+                'function' => 'machineWashZero',
+                'machine_id' => $machine->id,
+                'player_id' => $player->id,
+                'action' => $action,
+                'wash_point' => $wash_point,
+                'game_amount' => $game_amount,
+                'department_id' => $playerGameLog->department_id ?? null,
+                'store_id' => $playerGameLog->store_id ?? null,
+                'store_agent_id' => $playerGameLog->store_agent_id ?? null,
+                'agent_player_id' => $playerGameLog->agent_player_id ?? null,
+            ]);
+
             extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint, $adminId, $adminUsername);
 
             //寫入金流明細
