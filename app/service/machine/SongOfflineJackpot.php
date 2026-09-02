@@ -1006,11 +1006,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // ✅ 获取渠道和门店信息
             // 策略：
-            // 1. 渠道ID：从ChannelMachine或player获取
+            // 1. 渠道ID：优先从player获取，降级从ChannelMachine获取
             // 2. 门店ID：优先从player获取，降级从ChannelMachine获取
             // 3. 代理ID：优先从player获取，降级从门店的parent_admin_id获取
 
-            $channelMachine = $this->machine->channelMachines()->first();
+            // 获取 ChannelMachine 记录（一个机台可能属于多个渠道，取第一个）
+            $channelMachine = \app\model\ChannelMachine::where('machine_id', $this->machine->id)
+                ->first();
 
             // 🔍 DEBUG: 实体按键操作 - 记录门店字段填充过程
             Log::info('[SongOfflineJackpot-ExternalButton] 开始填充门店字段', [
@@ -1019,21 +1021,20 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'type' => $type,
                 'has_channelMachine' => !empty($channelMachine),
                 'channelMachine_department_id' => $channelMachine->department_id ?? null,
-                'channelMachine_store_admin_id' => $channelMachine->store_admin_id ?? null,
                 'player_store_admin_id' => $player->store_admin_id ?? null,
                 'player_agent_admin_id' => $player->agent_admin_id ?? null,
             ]);
 
-            // 渠道ID
-            $playerGameLog->department_id = $channelMachine->department_id ?? ($player->department_id ?? 0);
+            // 渠道ID：优先从player获取，降级从ChannelMachine获取
+            $playerGameLog->department_id = $player->department_id ?? ($channelMachine->department_id ?? 0);
 
-            // 门店ID：优先从玩家获取（有玩家时），降级从机台绑定获取（无玩家时）
+            // 门店ID：只能从玩家获取（channel_machine表没有store_admin_id字段）
             if ($player && $player->store_admin_id) {
                 // 有玩家且玩家有门店绑定
                 $playerGameLog->store_id = $player->store_admin_id;
             } else {
-                // 无玩家或玩家没有门店绑定，从机台获取
-                $playerGameLog->store_id = $channelMachine->store_admin_id ?? null;
+                // 无玩家或玩家没有门店绑定：无法获取门店信息
+                $playerGameLog->store_id = null;
             }
 
             // 门店代理ID：优先从玩家获取，降级从门店的parent_admin_id获取
@@ -1041,10 +1042,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 // 有玩家且玩家有代理绑定
                 $playerGameLog->store_agent_id = $player->agent_admin_id;
             } elseif ($playerGameLog->store_id) {
-                // 从门店的上级代理获取
+                // 从门店的上级代理获取（查询admin_users表）
                 $storeAdmin = AdminUser::find($playerGameLog->store_id);
                 $playerGameLog->store_agent_id = $storeAdmin->parent_admin_id ?? null;
             } else {
+                // 无玩家或无门店：无法获取代理信息
                 $playerGameLog->store_agent_id = null;
             }
 
