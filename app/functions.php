@@ -1754,7 +1754,29 @@ function addPlayerGameLog(
     $playerGameLog->player_id = $player->id;
     $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
     $playerGameLog->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
-    $playerGameLog->department_id = $player->department_id;
+
+    // ✅ 获取渠道和门店信息
+    // 优先从 player 获取，降级从 channel_machine 获取
+    $channelMachine = $machine->channelMachines()->first();
+    $playerGameLog->department_id = $channelMachine->department_id ?? ($player->department_id ?? 0);
+
+    // 门店ID：优先从玩家获取
+    if ($player->store_admin_id) {
+        $playerGameLog->store_id = $player->store_admin_id;
+    } else {
+        $playerGameLog->store_id = $channelMachine->store_admin_id ?? null;
+    }
+
+    // 门店代理ID：优先从玩家获取
+    if ($player->agent_admin_id) {
+        $playerGameLog->store_agent_id = $player->agent_admin_id;
+    } elseif ($playerGameLog->store_id) {
+        $storeAdmin = \app\model\AdminUser::find($playerGameLog->store_id);
+        $playerGameLog->store_agent_id = $storeAdmin->parent_admin_id ?? null;
+    } else {
+        $playerGameLog->store_agent_id = null;
+    }
+
     $playerGameLog->machine_id = $machine->id;
     $playerGameLog->game_record_id = isset($gameRecord) && !empty($gameRecord->id) ? $gameRecord->id : 0;
     $playerGameLog->game_id = $machine->machineCategory?->game_id ?? 0;
@@ -2949,9 +2971,31 @@ if (!function_exists('machineOpenAnyFree')) {
             }
             $playerGameLog = new PlayerGameLog;
             $playerGameLog->player_id = $player->id;
-            $playerGameLog->department_id = $player->department_id;
             $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
             $playerGameLog->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
+
+            // ✅ 获取渠道和门店信息
+            // 优先从 player 获取，降级从 channel_machine 获取
+            $channelMachine = $machine->channelMachines()->first();
+            $playerGameLog->department_id = $channelMachine->department_id ?? ($player->department_id ?? 0);
+
+            // 门店ID：优先从玩家获取
+            if ($player->store_admin_id) {
+                $playerGameLog->store_id = $player->store_admin_id;
+            } else {
+                $playerGameLog->store_id = $channelMachine->store_admin_id ?? null;
+            }
+
+            // 门店代理ID：优先从玩家获取
+            if ($player->agent_admin_id) {
+                $playerGameLog->store_agent_id = $player->agent_admin_id;
+            } elseif ($playerGameLog->store_id) {
+                $storeAdmin = \app\model\AdminUser::find($playerGameLog->store_id);
+                $playerGameLog->store_agent_id = $storeAdmin->parent_admin_id ?? null;
+            } else {
+                $playerGameLog->store_agent_id = null;
+            }
+
             $playerGameLog->game_id = $machine->machineCategory?->game_id ?? 0;
             $playerGameLog->machine_id = $machine->id;
             $playerGameLog->type = $machine->type;
@@ -3404,7 +3448,29 @@ if (!function_exists('resetMachineTrans')) {
             $playerGameLog->player_id = $machine->gaming_user_id;
             $playerGameLog->parent_player_id = $player->recommend_id ?? 0;
             $playerGameLog->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
-            $playerGameLog->department_id = $player->department_id;
+
+            // ✅ 获取渠道和门店信息
+            // 优先从 player 获取，降级从 channel_machine 获取
+            $channelMachine = $machine->channelMachines()->first();
+            $playerGameLog->department_id = $channelMachine->department_id ?? ($player->department_id ?? 0);
+
+            // 门店ID：优先从玩家获取
+            if ($player->store_admin_id) {
+                $playerGameLog->store_id = $player->store_admin_id;
+            } else {
+                $playerGameLog->store_id = $channelMachine->store_admin_id ?? null;
+            }
+
+            // 门店代理ID：优先从玩家获取
+            if ($player->agent_admin_id) {
+                $playerGameLog->store_agent_id = $player->agent_admin_id;
+            } elseif ($playerGameLog->store_id) {
+                $storeAdmin = \app\model\AdminUser::find($playerGameLog->store_id);
+                $playerGameLog->store_agent_id = $storeAdmin->parent_admin_id ?? null;
+            } else {
+                $playerGameLog->store_agent_id = null;
+            }
+
             $playerGameLog->machine_id = $machine->id;
             $playerGameLog->game_id = $machine->machineCategory?->game_id ?? 0;
             $playerGameLog->game_record_id = $gameRecord->id ?? 0;
