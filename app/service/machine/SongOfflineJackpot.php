@@ -68,13 +68,15 @@ use yzh52521\WebmanLock\Locker;
  */
 class SongOfflineJackpot extends MachineServices implements BaseMachine
 {
-    // ==================== 查询指令（主动获取数据） ====================
-    const MACHINE_POINT = '46cea2';    // 读取机台当前分数
-    const MACHINE_SCORE = '46cea5';    // 读取机台当前得分（WIN）
-    const MACHINE_TURN = '46cea6';     // 读取机台当前剩余转数
-    const WIN_NUMBER = '46cea9';       // 读取中洞对奖次数（累积转数）
+    // ==================== 查询指令（主动获取数据）====================
+    // ⚠️ 修复：协议文档规定查询指令使用 15 前缀，不是 46
+    const MACHINE_POINT = '15cea2';    // 读取机台当前分数（文档：15 CE A2）
+    const MACHINE_SCORE = '15cea5';    // 读取机台当前得分WIN（文档：15 CE A5）
+    const MACHINE_TURN = '15cea6';     // 读取机台当前剩余转数（文档：15 CE A6）
+    const WIN_NUMBER = '15cea9';       // 读取中洞对奖次数-累积转数（文档：15 CE A9）
 
-    // ==================== 心跳状态码（被动接收） ====================
+    // ==================== 心跳状态码（被动接收）====================
+    // ✅ 心跳使用 46 前缀（分机编号）是正确的
     const GET_MACHINE_POINT = '46c0';  // 心跳-停止状态下的分数
     const AUTO_MACHINE_POINT = '46c6'; // 心跳-自动状态下的分数
     const GET_MACHINE_SCORE = '46da';  // 心跳-正常状态下的得分
@@ -85,30 +87,37 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     const REWARD_WIN_NUMBER = '46d5';  // 心跳-累积转数（开奖中）
 
     // ==================== 管理指令 ====================
-    const CHECK = '46ccb4';            // 故障排除（故排）
-    const CLEAR_LOG = '46ccba';        // 清除历史记录（开洗分次数）
-    const MACHINE_OPEN = '46cebe';     // 开机
-    const MACHINE_CLOSE = '46cebc';    // 关机
-    const REWARD_SWITCH = '46ceb8';    // 大賞燈切換
+    // ✅ 故排和清除使用 46ccb4/46ccba 是正确的（文档：46 CC B4 / 46 CC BA）
+    const CHECK = '46ccb4';            // 故障排除（文档：46 CC B4）
+    const CLEAR_LOG = '46ccba';        // 清除历史记录-开洗分次数（文档：46 CC BA）
+    // ⚠️ 修复：开关机指令使用 15 前缀
+    const MACHINE_OPEN = '15cebe';     // 开机（文档：15 CE BE）
+    const MACHINE_CLOSE = '15cebc';    // 关机（文档：15 CE BC）
+    const REWARD_SWITCH = '15ceb8';    // 大赏灯切换（文档：15 CE B8）
 
     // ==================== 游戏控制指令 ====================
-    const AUTO_UP_TURN = '46cecd';     // 自动上转（启动机台）
-    const AUTO_STOP = '46cece';        // 停止游戏
-    const PUSH_THREE = '46ceb6';       // 连发PUSH
-    const PUSH_ONE = '46ceb2';         // 单发PUSH
+    // ⚠️ 修复：游戏控制指令使用 15 前缀
+    const AUTO_UP_TURN = '15cecd';     // 自动上转-启动机台（文档：15 CE CD）
+    const AUTO_STOP = '15cece';        // 停止游戏（文档：15 CE CE）
+    const PUSH_THREE = '15ceb6';       // 连发PUSH（文档：15 CE B6）
+    const PUSH_ONE = '15ceb2';         // 单发PUSH（文档：15 CE B2）
 
     // ==================== 转数/分数转换指令 ====================
-    const POINT_TO_TURN = '46cec1';    // 分数→转数（上转一次）
-    const TURN_UP_ALL = '46cecb';      // 分数→转数（全部上转）
-    const TURN_TO_POINT = '46ceca';    // 转数→分数（下转一次）
-    const TURN_DOWN_ALL = '46cec9';    // 转数→分数（全部下转）
-    const SCORE_TO_POINT = '46cec8';   // 得分→分数（WIN按扣趴换算）
+    // ✅ POINT_TO_TURN 使用 46cec1 是正确的（文档明确：46 CE C1 分数变转数1次）
+    const POINT_TO_TURN = '46cec1';    // 分数→转数-上转一次（文档：46 CE C1）
+    // ⚠️ 修复：其他转换指令使用 15 前缀
+    const TURN_UP_ALL = '15cecb';      // 分数→转数-全部上转（文档：15 CE CB）
+    const TURN_TO_POINT = '15ceca';    // 转数→分数-下转一次（文档未明确，推测15）
+    const TURN_DOWN_ALL = '15cec9';    // 转数→分数-全部下转（文档：15 CE C9）
+    const SCORE_TO_POINT = '15cec8';   // 得分→分数-WIN按扣趴换算（文档：15 CE C8）
 
     // ==================== 资金操作指令 ====================
-    const OPEN_ANY_POINT = '46ca';     // 开任意分数（上分）
-    const WASH_ZERO = '46cc';          // 洗分清零（下分）
+    // ✅ 上分和下分使用 46 前缀是正确的（文档：46 CA / 46 CC）
+    const OPEN_ANY_POINT = '46ca';     // 开任意分数-上分（文档：46 CA）
+    const WASH_ZERO = '46cc';          // 洗分清零-下分（文档：46 CC）
 
     // ==================== 心跳指令 ====================
+    // ✅ 心跳使用 46 前缀是正确的
     const TESTING = '46c0';            // 心跳（停止状态）
     const TESTING2 = '46c6';           // 心跳（自动状态）
 
