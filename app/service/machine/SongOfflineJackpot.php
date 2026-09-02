@@ -1152,10 +1152,30 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     }
 
     /**
-     * 处理心跳数据（36字节）
+     * 处理心跳数据（支持36字符标准心跳和14字符短心跳）
+     *
+     * ✅ P0-18修复：支持14字符短心跳（仅在线检测，不解析详细数据）
      */
     private function handleHeartbeat(string $msg, int $gamingUserId, int $orgRewardStatus, int $orgWinNumber, float $orgTurn): bool
     {
+        $len = strlen($msg);
+
+        // ========== 短心跳（14字符）：仅在线检测 ==========
+        if ($len < 36) {
+            $this->log->info('[心跳] 收到短心跳，跳过详细解析', [
+                'machine_code' => $this->machine->code,
+                'heartbeat_length' => $len,
+                'heartbeat' => $msg,
+                'player_id' => $gamingUserId,
+            ]);
+
+            // 短心跳只维持在线状态，不更新详细数据
+            // 详细数据从Redis缓存读取（保持上次标准心跳的状态）
+            return true;
+        }
+
+        // ========== 标准心跳（36字符）：完整解析 ==========
+
         // 检查机台状态（第18-19字节必须是 DA=正常）
         if (substr($msg, 18, 2) != 'da') {
             $this->has_lock = 1;
