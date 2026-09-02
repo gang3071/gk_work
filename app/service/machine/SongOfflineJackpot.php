@@ -69,11 +69,11 @@ use yzh52521\WebmanLock\Locker;
 class SongOfflineJackpot extends MachineServices implements BaseMachine
 {
     // ==================== 查询指令（主动获取数据）====================
-    // ⚠️ 实测：实际使用46前缀（文档写15但不通）
-    const MACHINE_POINT = '46cea2';    // 读取机台当前分数
-    const MACHINE_SCORE = '46cea5';    // 读取机台当前得分WIN
-    const MACHINE_TURN = '46cea6';     // 读取机台当前剩余转数
-    const WIN_NUMBER = '46cea9';       // 读取中洞对奖次数-累积转数
+    // ✅ 使用15前缀（按文档，46不通）
+    const MACHINE_POINT = '15cea2';    // 读取机台当前分数
+    const MACHINE_SCORE = '15cea5';    // 读取机台当前得分WIN
+    const MACHINE_TURN = '15cea6';     // 读取机台当前剩余转数
+    const WIN_NUMBER = '15cea9';       // 读取中洞对奖次数-累积转数
 
     // ==================== 心跳状态码（被动接收）====================
     const GET_MACHINE_POINT = '46c0';  // 心跳-停止状态下的分数
@@ -88,25 +88,25 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     // ==================== 管理指令 ====================
     const CHECK = '46ccb4';            // 故障排除
     const CLEAR_LOG = '46ccba';        // 清除历史记录-开洗分次数
-    // ⚠️ 实测：实际使用46前缀（文档写15但不通）
-    const MACHINE_OPEN = '46cebe';     // 开机
-    const MACHINE_CLOSE = '46cebc';    // 关机
-    const REWARD_SWITCH = '46ceb8';    // 大赏灯切换
+    // ✅ 使用15前缀（按文档，46不通）
+    const MACHINE_OPEN = '15cebe';     // 开机
+    const MACHINE_CLOSE = '15cebc';    // 关机
+    const REWARD_SWITCH = '15ceb8';    // 大赏灯切换
 
     // ==================== 游戏控制指令 ====================
-    // ⚠️ 实测：实际使用46前缀（文档写15但不通）
-    const AUTO_UP_TURN = '46cecd';     // 自动上转-启动机台
-    const AUTO_STOP = '46cece';        // 停止游戏
-    const PUSH_THREE = '46ceb6';       // 连发PUSH
-    const PUSH_ONE = '46ceb2';         // 单发PUSH
+    // ✅ 使用15前缀（按文档，46不通）
+    const AUTO_UP_TURN = '15cecd';     // 自动上转-启动机台
+    const AUTO_STOP = '15cece';        // 停止游戏
+    const PUSH_THREE = '15ceb6';       // 连发PUSH
+    const PUSH_ONE = '15ceb2';         // 单发PUSH
 
     // ==================== 转数/分数转换指令 ====================
     const POINT_TO_TURN = '46cec1';    // 分数→转数-上转一次
-    // ⚠️ 实测：实际使用46前缀（文档写15但不通）
-    const TURN_UP_ALL = '46cecb';      // 分数→转数-全部上转
-    const TURN_TO_POINT = '46ceca';    // 转数→分数-下转一次
-    const TURN_DOWN_ALL = '46cec9';    // 转数→分数-全部下转
-    const SCORE_TO_POINT = '46cec8';   // 得分→分数-WIN按扣趴换算
+    // ✅ 使用15前缀（按文档，46不通）
+    const TURN_UP_ALL = '15cecb';      // 分数→转数-全部上转
+    const TURN_TO_POINT = '15ceca';    // 转数→分数-下转一次
+    const TURN_DOWN_ALL = '15cec9';    // 转数→分数-全部下转
+    const SCORE_TO_POINT = '15cec8';   // 得分→分数-WIN按扣趴换算
 
     // ==================== 资金操作指令 ====================
     // ✅ 上分和下分使用 46 前缀是正确的（文档：46 CA / 46 CC）
@@ -561,9 +561,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $fun = substr($mainCmd, 0, 6);  // 前6位：功能码
             $fun1 = substr($mainCmd, 0, 4); // 前4位：分类码
 
-            // ✅ 验证分机号匹配
+            // ✅ 验证分机号匹配（15是查询响应前缀，允许通过）
             $receivedExtension = substr($mainCmd, 0, 2);
-            if ($receivedExtension !== $this->extensionNumber) {
+            if ($receivedExtension !== $this->extensionNumber && $receivedExtension !== '15') {
                 $this->log->warning('收到不匹配的分机号消息', [
                     'machine_code' => $this->machine->code,
                     'expected' => $this->extensionNumber,
@@ -1509,31 +1509,35 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 ]);
                 break;
 
-            // 查询分数响应
-            case self::GET_MACHINE_POINT:   // 46c0
-            case self::AUTO_MACHINE_POINT:  // 46c6
+            // 查询分数响应（支持心跳46和查询响应15）
+            case self::GET_MACHINE_POINT:   // 46c0 (心跳)
+            case self::AUTO_MACHINE_POINT:  // 46c6 (心跳)
+            case '15c0':  // 15c0 (查询响应)
                 $point = self::parseScore(substr($msg, 4, 6));
                 $this->point = $point;
                 $this->setActionVersion(self::MACHINE_POINT);
                 break;
 
-            // 查询得分响应
-            case self::GET_MACHINE_SCORE:  // 46da
+            // 查询得分响应（支持心跳46和查询响应15）
+            case self::GET_MACHINE_SCORE:  // 46da (心跳)
+            case '15da':  // 15da (查询响应)
                 $score = self::parseScore(substr($msg, 4, 6));
                 $this->score = $score;
                 $this->setActionVersion(self::MACHINE_SCORE);
                 break;
 
-            // 查询转数响应
-            case self::GET_MACHINE_TURN:  // 46de
+            // 查询转数响应（支持心跳46和查询响应15）
+            case self::GET_MACHINE_TURN:  // 46de (心跳)
+            case '15de':  // 15de (查询响应)
                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                 $this->turn = $turn;
                 $this->setActionVersion(self::MACHINE_TURN);
                 break;
 
-            // 查询累积转数响应
-            case self::GET_WIN_NUMBER:     // 46d0
-            case self::REWARD_WIN_NUMBER:  // 46d5
+            // 查询累积转数响应（支持心跳46和查询响应15）
+            case self::GET_WIN_NUMBER:     // 46d0 (心跳)
+            case self::REWARD_WIN_NUMBER:  // 46d5 (心跳-开奖中)
+            case '15d0':  // 15d0 (查询响应)
                 $winNumber = self::parseScore('00' . substr($msg, 6, 4));
                 $oldWinNumber = $this->win_number;
                 $delta = $winNumber - $oldWinNumber;
