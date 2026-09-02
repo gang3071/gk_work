@@ -431,9 +431,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // ==================== 处理心跳（可能包含附加数据）====================
             // ✅ P0-11修复：心跳+附加数据是组合消息，每部分有独立的S1/S2
             // ✅ P0-17修复：心跳可能不是36字符，需要检测并分离B5/B7
-            // 心跳特征：分机号 + C0/C6
+            // ⚠️ 修复：心跳特征：46前缀 + C0/C6（查询响应是15前缀，需要区分）
+            $prefix = substr($msg, 0, 2);
             $statusCode = substr($msg, 2, 2);
-            if ($statusCode == 'c0' || $statusCode == 'c6') {
+            if ($prefix == '46' && ($statusCode == 'c0' || $statusCode == 'c6')) {
                 $heartbeat = '';
                 $externalData = '';
 
@@ -558,9 +559,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $fun = substr($mainCmd, 0, 6);  // 前6位：功能码
             $fun1 = substr($mainCmd, 0, 4); // 前4位：分类码
 
-            // ✅ 验证分机号匹配
+            // ✅ 验证分机号匹配（查询响应使用15前缀，不是分机号）
             $receivedExtension = substr($mainCmd, 0, 2);
-            if ($receivedExtension !== $this->extensionNumber) {
+            if ($receivedExtension !== $this->extensionNumber && $receivedExtension !== '15') {
+                // 15 是查询响应的操作前缀，不是分机号，允许通过
                 $this->log->warning('收到不匹配的分机号消息', [
                     'machine_code' => $this->machine->code,
                     'expected' => $this->extensionNumber,
@@ -1506,31 +1508,35 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 ]);
                 break;
 
-            // 查询分数
-            case self::GET_MACHINE_POINT:
-            case self::AUTO_MACHINE_POINT:
+            // 查询分数响应（支持两种格式：46 C0 心跳 / 15 C0 查询响应）
+            case self::GET_MACHINE_POINT:   // 46c0 (心跳)
+            case self::AUTO_MACHINE_POINT:  // 46c6 (心跳)
+            case '15c0':  // 15 C0 (查询响应，文档规定)
                 $point = self::parseScore(substr($msg, 4, 6));
                 $this->point = $point;
                 $this->setActionVersion(self::MACHINE_POINT);
                 break;
 
-            // 查询得分
-            case self::GET_MACHINE_SCORE:
+            // 查询得分响应（支持两种格式：46 DA 心跳 / 15 DA 查询响应）
+            case self::GET_MACHINE_SCORE:  // 46da (心跳)
+            case '15da':  // 15 DA (查询响应，文档规定)
                 $score = self::parseScore(substr($msg, 4, 6));
                 $this->score = $score;
                 $this->setActionVersion(self::MACHINE_SCORE);
                 break;
 
-            // 查询转数
-            case self::GET_MACHINE_TURN:
+            // 查询转数响应（支持两种格式：46 DE 心跳 / 15 DE 查询响应）
+            case self::GET_MACHINE_TURN:  // 46de (心跳)
+            case '15de':  // 15 DE (查询响应，文档规定)
                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                 $this->turn = $turn;
                 $this->setActionVersion(self::MACHINE_TURN);
                 break;
 
-            // 查询累积转数
-            case self::GET_WIN_NUMBER:
-            case self::REWARD_WIN_NUMBER:
+            // 查询累积转数响应（支持两种格式：46 D0 心跳 / 15 D0 查询响应）
+            case self::GET_WIN_NUMBER:     // 46d0 (心跳)
+            case self::REWARD_WIN_NUMBER:  // 46d5 (心跳-开奖中)
+            case '15d0':  // 15 D0 (查询响应，文档规定)
                 $winNumber = self::parseScore('00' . substr($msg, 6, 4));
                 $oldWinNumber = $this->win_number;
                 $delta = $winNumber - $oldWinNumber;
