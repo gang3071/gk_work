@@ -1012,6 +1012,18 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             $channelMachine = $this->machine->channelMachines()->first();
 
+            // 🔍 DEBUG: 实体按键操作 - 记录门店字段填充过程
+            Log::info('[SongOfflineJackpot-ExternalButton] 开始填充门店字段', [
+                'machine_id' => $this->machine->id,
+                'player_id' => $player->id ?? 0,
+                'type' => $type,
+                'has_channelMachine' => !empty($channelMachine),
+                'channelMachine_department_id' => $channelMachine->department_id ?? null,
+                'channelMachine_store_admin_id' => $channelMachine->store_admin_id ?? null,
+                'player_store_admin_id' => $player->store_admin_id ?? null,
+                'player_agent_admin_id' => $player->agent_admin_id ?? null,
+            ]);
+
             // 渠道ID
             $playerGameLog->department_id = $channelMachine->department_id ?? ($player->department_id ?? 0);
 
