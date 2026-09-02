@@ -1052,7 +1052,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // 游戏记录ID（尝试关联，可能为null）
             $gameRecordId = $this->getOrCreateGameRecordId($player);
-            $playerGameLog->game_record_id = $gameRecordId;
+
+            // ✅ P0-20修复：game_record_id 可能为 null（无玩家时），设置为 0
+            // 数据库 game_record_id 字段不允许 NULL，0 表示无关联游戏记录
+            $playerGameLog->game_record_id = ($gameRecordId !== null) ? $gameRecordId : 0;
 
             // 管理员信息（外部按钮无管理员）
             $playerGameLog->user_id = 0;
@@ -1063,7 +1066,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $playerGameLog->save();
 
             // ✅ 更新 PlayerGameRecord：累加金额并标记（使用行锁防止并发丢失数据）
-            if ($gameRecordId) {
+            if ($gameRecordId > 0) {
                 // ⚠️ P0-8修复：使用 lockForUpdate 并检查 status，防止更新到已结束的游戏记录
                 $gameRecord = \app\model\PlayerGameRecord::query()
                     ->where('id', $gameRecordId)
