@@ -375,19 +375,25 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // 46 = 心跳(36) + B5开分次数(10)
             // 50 = 心跳(36) + B7洗分次数(14)
             // 60 = 心跳(36) + B5(10) + B7(14)
+            // ✅ P0-15修复：还可能是"指令回复+B5/B7"组合（如34=12+10+12）
             // 实际中可能有其他组合，采用模糊匹配
             $validLengths = [10, 12, 14, 16, 36, 46, 50, 58, 60];
 
-            // 如果长度不在标准列表中，检查是否是心跳+附加数据
+            // 如果长度不在标准列表中，检查是否是合法的组合消息
             if (!in_array($len, $validLengths)) {
-                // 允许36+的长度（心跳可能携带额外数据）
-                if ($len < 36) {
+                // ✅ P0-15修复：只要 >= 10 就允许，可能是"回复+B5/B7"组合
+                if ($len < 10) {
                     throw new \Exception('指令长度错误: ' . $len);
                 }
-                $this->log->warning('收到非标准长度消息', [
+
+                // 检查是否包含B5/B7附加数据
+                $hasB5B7 = (stripos($msg, 'b5') !== false || stripos($msg, 'b7') !== false);
+
+                $this->log->info('收到非标准长度消息，尝试解析', [
                     'machine_code' => $this->machine->code,
                     'length' => $len,
-                    'msg_preview' => substr($msg, 0, 40) . '...'
+                    'has_b5_b7' => $hasB5B7,
+                    'msg_preview' => substr($msg, 0, min(60, $len)),
                 ]);
             }
 
@@ -431,10 +437,39 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 return $result;
             }
 
-            // ==================== 非心跳消息：校验整个消息的 S1/S2 ====================
-            $s1 = substr($msg, -4, 2);
-            $s2 = substr($msg, -2, 2);
-            $data = substr($msg, 0, -4);
+            // ==================== 非心跳消息：分离主指令和B5/B7附加数据 ====================
+            // ✅ P0-15修复：检查是否有B5/B7附加数据
+            $mainCmd = $msg;
+            $externalData = '';
+
+            // 查找B5/B7的位置
+            $b5Pos = stripos($msg, 'b5');
+            $b7Pos = stripos($msg, 'b7');
+
+            if ($b5Pos !== false || $b7Pos !== false) {
+                // 找到附加数据，分离主指令和附加部分
+                if ($b5Pos !== false && ($b7Pos === false || $b5Pos < $b7Pos)) {
+                    // B5在前或只有B5
+                    $mainCmd = substr($msg, 0, $b5Pos);
+                    $externalData = substr($msg, $b5Pos);
+                } else if ($b7Pos !== false) {
+                    // 只有B7或B7在前
+                    $mainCmd = substr($msg, 0, $b7Pos);
+                    $externalData = substr($msg, $b7Pos);
+                }
+
+                $this->log->info('[组合消息] 分离主指令和B5/B7附加数据', [
+                    'machine_code' => $this->machine->code,
+                    'total_length' => $len,
+                    'main_cmd' => $mainCmd,
+                    'external_data' => $externalData,
+                ]);
+            }
+
+            // 校验主指令的 S1/S2
+            $s1 = substr($mainCmd, -4, 2);
+            $s2 = substr($mainCmd, -2, 2);
+            $data = substr($mainCmd, 0, -4);
 
             $calculatedS1 = self::calculateS1($data);
             if ($s1 != $calculatedS1) {
@@ -446,17 +481,17 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 throw new \Exception('指令S2校验失败');
             }
 
-            $fun = substr($msg, 0, 6);  // 前6位：功能码
-            $fun1 = substr($msg, 0, 4); // 前4位：分类码
+            $fun = substr($mainCmd, 0, 6);  // 前6位：功能码
+            $fun1 = substr($mainCmd, 0, 4); // 前4位：分类码
 
             // ✅ 验证分机号匹配
-            $receivedExtension = substr($msg, 0, 2);
+            $receivedExtension = substr($mainCmd, 0, 2);
             if ($receivedExtension !== $this->extensionNumber) {
                 $this->log->warning('收到不匹配的分机号消息', [
                     'machine_code' => $this->machine->code,
                     'expected' => $this->extensionNumber,
                     'received' => $receivedExtension,
-                    'msg' => substr($msg, 0, 20) . '...'
+                    'msg' => substr($mainCmd, 0, 20) . '...'
                 ]);
                 // 仍然处理（可能是配置错误），但记录日志
             }
@@ -520,7 +555,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
 
             // ==================== 处理指令回复 ====================
-            return $this->handleCommandReply($msg, $fun, $fun1, $gamingUserId);
+            $result = $this->handleCommandReply($mainCmd, $fun, $fun1, $gamingUserId);
+
+            // ✅ P0-15修复：处理B5/B7附加数据
+            if (!empty($externalData)) {
+                $this->handleExternalButtonData($externalData);
+            }
+
+            return $result;
 
         } catch (\Exception $e) {
             $this->log->error('消息处理错误', [
