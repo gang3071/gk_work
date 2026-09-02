@@ -1016,9 +1016,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 // 如果都没有，不设置department_id
             }
 
-            // 门店ID和门店代理ID：只从玩家获取，没有就为NULL
-            $playerGameLog->store_id = $player->store_admin_id ?? null;
-            $playerGameLog->store_agent_id = $player->agent_admin_id ?? null;
+            // 门店ID和门店代理ID：有玩家时才设置，无玩家时不做处理
+            if ($player) {
+                $playerGameLog->store_id = $player->store_admin_id;
+                $playerGameLog->store_agent_id = $player->agent_admin_id;
+            }
 
             // 玩家代理信息
             $playerGameLog->agent_player_id = $player->recommend_promoter?->recommend_id ?? 0;
