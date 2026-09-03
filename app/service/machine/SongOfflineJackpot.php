@@ -1445,10 +1445,12 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $this->setActionVersion(self::MACHINE_TURN);
                 break;
 
-            // 查询累积转数响应
+            // 查询累积转数响应（文档：46 D0 XX xx xx，3字节数据）
             case self::GET_WIN_NUMBER:     // 46d0
             case self::REWARD_WIN_NUMBER:  // 46d5
-                $winNumber = self::parseScore('00' . substr($msg, 6, 4));
+                // ✅ 修复：查询响应是3字节（位置4-9），不是2字节
+                // 文档：46 D0 XX xx xx S1 S2，数据从位置4开始，共6个字符（3字节）
+                $winNumber = self::parseScore(substr($msg, 4, 6));
                 $oldWinNumber = $this->win_number;
                 $delta = $winNumber - $oldWinNumber;
 
