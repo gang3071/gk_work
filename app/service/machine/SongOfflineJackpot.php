@@ -156,6 +156,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_now_turn',       // 当前累积转数
             $this->cacheDataKey . '_has_lock',       // 机台锁定状态
             $this->cacheDataKey . '_ratio',          // 扣趴比例（10-15%）
+            $this->cacheDataKey . '_player_win_number',    // 玩家使用转数（累积消耗的转数）
             // ✅ 外部按钮计数器（B5/B7协议，仅线下版）
             $this->cacheDataKey . '_external_open_count',  // 外部按钮开分次数（B5）
             $this->cacheDataKey . '_external_wash_count',  // 外部按钮洗分次数（B7）
@@ -314,9 +315,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     'now_turn' => $machineCacheInfo[$this->cacheDataKey . '_now_turn'] ?? 0,
                     'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'] ?? 0,
                     'keep_seconds' => $this->machine->keep_seconds ?? 0, // ✅ 从数据库读取保留时间配置
-                    // ✅ 玩家使用转数（线下版简化处理，设为win_number使计算结果为0）
-                    // 父类会计算：win_number - player_win_number = 0（表示玩家未消耗转数）
-                    'player_win_number' => $machineCacheInfo[$this->cacheDataKey . '_win_number'] ?? 0,
+                    // ✅ 玩家使用转数（从Redis缓存读取，由心跳累加）
+                    'player_win_number' => $machineCacheInfo[$this->cacheDataKey . '_player_win_number'] ?? 0,
                     // ✅ 外部按钮计数器（仅线下版）
                     'external_open_count' => $machineCacheInfo[$this->cacheDataKey . '_external_open_count'] ?? 0,
                     'external_wash_count' => $machineCacheInfo[$this->cacheDataKey . '_external_wash_count'] ?? 0,
@@ -1204,6 +1204,21 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $machineLotteryRecord->save();
         }
 
+        // ==================== win_number 异常检测 ====================
+        // 累积转数不应该减少（除非机台重启）
+        if ($orgWinNumber > 0 && $orgWinNumber > $nowWinNumber &&
+            $nowRewardStatus == 0 && $orgRewardStatus == 0) {
+            $this->log->error('[win_number异常] 累积转数异常减少', [
+                'machine_code' => $this->machine->code,
+                'old_win_number' => $orgWinNumber,
+                'new_win_number' => $nowWinNumber,
+                'delta' => $nowWinNumber - $orgWinNumber,
+            ]);
+            sendMachineException($this->machine, Notice::TYPE_MACHINE_WIN_NUMBER);
+            $this->win_number = $nowWinNumber;
+            return true;
+        }
+
         // ==================== 开奖结束 ====================
         if ($nowRewardStatus == 0 && $orgRewardStatus == 1) {
             // 触发彩池抽奖
@@ -1238,14 +1253,32 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $this->sendCmd(self::SCORE_TO_POINT, 0, 'player', $gamingUserId);
         }
 
-        // ==================== 转数变化处理（线下版简化逻辑）====================
-        // 线下版不需要复杂的保留机制，只累计消耗的转数用于打码量统计
-        if ($nowRewardStatus == 0 && !empty($gamingUserId)) {
-            $turnDelta = bcsub($nowTurn, $orgTurn, 2);
+        // ==================== 转数变化处理 ====================
+        if ($nowRewardStatus == 0) {
+            if (!empty($gamingUserId)) {
+                $turnDelta = bcsub($nowTurn, $orgTurn, 2);
 
-            // 负增量说明玩家消耗了转数（正常游玩）
-            if (bccomp($turnDelta, '0', 2) < 0 && bccomp($turnDelta, '-10', 2) >= 0) {
+                // 检查是否刚执行过上转下转操作（检查缓存标记）
+                $isTurnAction = Cache::get('turn_action_flag_' . $this->machine->id);
+
+                // 如果检测到上转下转标记，跳过本次累加
+                if ($isTurnAction) {
+                    $this->log->info('[转数累加] 检测到上转/下转操作标记，跳过本次累加', [
+                        'machine_code' => $this->machine->code,
+                        'turn_delta' => $turnDelta
+                    ]);
+                }
+                // 负增量说明玩家消耗了转数（正常游玩）
+                // 过滤大幅减少（可能是下转操作）
+                else if (bccomp($turnDelta, '0', 2) < 0 && bccomp($turnDelta, '-10', 2) >= 0) {
                 $consumed = abs($turnDelta);
+
+                // ✅ 累加到 player_win_number（玩家使用的转数）
+                $playerNumber = $this->player_win_number ?? 0;
+                $this->player_win_number = bcadd($playerNumber, $consumed, 2);
+
+                // 更新最后游玩时间
+                $this->last_play_time = time();
 
                 // 累加到打码量统计
                 $cateId = $this->machine->cate_id;
@@ -1282,7 +1315,40 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 // 更新最后游戏时间
                 $this->last_play_time = time();
+                } else if (bccomp($turnDelta, '-10', 2) < 0) {
+                    $this->log->info('[转数累加] turn大幅减少，可能是下转操作，不累加', [
+                        'machine_code' => $this->machine->code,
+                        'turn_delta' => $turnDelta
+                    ]);
+                } else if (bccomp($turnDelta, '0', 2) > 0) {
+                    $this->log->info('[转数累加] turn增加，可能是上转操作，不累加', [
+                        'machine_code' => $this->machine->code,
+                        'turn_delta' => $turnDelta
+                    ]);
+                }
+            } else {
+                $this->log->info('[转数累加] 没有游戏中的玩家，跳过turn累加', [
+                    'machine_code' => $this->machine->code,
+                    'gaming_user_id' => $gamingUserId
+                ]);
             }
+        } else {
+            if (!empty($gamingUserId)) {
+                $this->log->info('[转数累加] 开奖状态中，跳过turn累加', [
+                    'machine_code' => $this->machine->code,
+                    'reward_status' => $nowRewardStatus
+                ]);
+            }
+        }
+
+        // ==================== 转数为0时清理礼物缓存 ====================
+        if ($nowTurn <= 0 && !empty($gamingUserId)) {
+            Cache::delete('gift_cache_' . $this->machine->id . '_' . $gamingUserId);
+            $this->log->info('[礼物缓存] 转数为0，清理礼物缓存', [
+                'machine_code' => $this->machine->code,
+                'player_id' => $gamingUserId,
+                'turn' => $nowTurn
+            ]);
         }
 
         // 推送机台状态到前端
@@ -1434,6 +1500,18 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             case self::GET_MACHINE_TURN:  // 46de
                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                 $this->turn = $turn;
+
+                // ✅ 检查是否是上转/下转后的主动获取（检查标记）
+                $isTurnAction = Cache::get('turn_action_flag_' . $this->machine->id);
+                if ($isTurnAction) {
+                    // 清除标记
+                    Cache::delete('turn_action_flag_' . $this->machine->id);
+                    $this->log->info('[查询转数] 清除上转/下转操作标记', [
+                        'machine_code' => $this->machine->code,
+                        'turn' => $turn
+                    ]);
+                }
+
                 $this->setActionVersion(self::MACHINE_TURN);
                 break;
 
@@ -1670,6 +1748,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         throw new Exception("转数已达上限({$currentTurn}/{self::MAX_TURN})，无法继续上转");
                     }
                     Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
+
+                    // ✅ 设置上转操作标记，防止turn变化被误判为消耗
+                    usleep(100000); // 等待100ms让机台处理命令
+                    Cache::set('turn_action_flag_' . $this->machine->id, true, 5);
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_TURN)));
                     break;
 
                 case self::POINT_TO_TURN:
@@ -1679,9 +1762,22 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         throw new Exception("转数已达上限({$currentTurn}/{self::MAX_TURN})，无法继续上转");
                     }
                     $this->machineAction($uid, $cmd, $source, $source_id);
+
+                    // ✅ 设置上转操作标记
+                    usleep(100000);
+                    Cache::set('turn_action_flag_' . $this->machine->id, true, 5);
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_TURN)));
                     break;
 
                 case self::TURN_DOWN_ALL:
+                    $this->machineAction($uid, $cmd, $source, $source_id);
+
+                    // ✅ 设置下转操作标记
+                    usleep(100000);
+                    Cache::set('turn_action_flag_' . $this->machine->id, true, 5);
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_TURN)));
+                    break;
+
                 case self::TURN_TO_POINT:
                 case self::MACHINE_SCORE:
                 case self::MACHINE_POINT:
