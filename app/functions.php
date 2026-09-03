@@ -1212,8 +1212,8 @@ function machineWash(
                 }
                 $services->sendCmd($services::MACHINE_POINT, 0, 'player', $player->id, $is_system);
                 $services->sendCmd($services::WIN_NUMBER, 0, 'player', $player->id, $is_system);
-                $gamingTurnPoint = $services->player_win_number;
-                $money = $services->point;
+                $gamingTurnPoint = $services->player_win_number ?? 0;
+                $money = $services->point ?? 0;
                 if (!empty($giftPoint) && $path == 'leave') {
                     $money = max($money - $giftPoint['gift_point'], 0);
                 }
@@ -1246,8 +1246,8 @@ function machineWash(
                 // 短暂延迟，确保 READ_BET 响应也稳定
                 usleep(100000);  // 100ms
 
-                $gamingPressure = bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
-                $gamingScore = bcsub($services->win ?? '0', $services->player_score ?? '0');
+                $gamingPressure = (int)bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
+                $gamingScore = (int)bcsub($services->win ?? '0', $services->player_score ?? '0');
 
                 Log::channel('slot_machine')->info('slot -> wash', [
                     'point' => $money,
@@ -1306,8 +1306,8 @@ function machineWash(
             // ⚠️ CRITICAL：只有 money > 0 时才创建洗分记录
             // 防止竞态条件导致创建 0 分记录但硬件有分的情况
             if ($money >= 0) {
-                $washResult = machineWashZero($player, $machine, $money, $is_system, max($gamingPressure, 0),
-                    max($gamingScore, 0), max($gamingTurnPoint, 0), $path, $adminId, $adminUsername);
+                $washResult = machineWashZero($player, $machine, $money, $is_system, (int)max($gamingPressure, 0),
+                    (int)max($gamingScore, 0), (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername);
                 $machine = $washResult['machine'];
             } elseif ($money == 0 && $path == 'leave') {
                 // 0 分弃台，只清理状态，不创建记录
@@ -3331,8 +3331,8 @@ if (!function_exists('resetMachineTrans')) {
             }
             if ($machine->type == GameType::TYPE_SLOT) {
                 $autoUid = $machine->auto_card_domain . ':' . $machine->auto_card_port;
-                $gamingScore = bcsub($services->win ?? '0', $services->player_score ?? '0');
-                $gamingPressure = bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
+                $gamingScore = (int)bcsub($services->win ?? '0', $services->player_score ?? '0');
+                $gamingPressure = (int)bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
                 if (!Gateway::isUidOnline($autoUid)) {
                     $isOnLine = false;
                 }
