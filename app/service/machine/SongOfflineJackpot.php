@@ -370,220 +370,37 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      * @param string $msg 十六进制字符串（不含空格，如 "46C0051419D0030A0FDA000000DE0000AF12"）
      * @return bool
      */
+    /**
+     * 处理来自机台的消息（主入口，消息路由）
+     */
     public function jackPotCmd(string $msg): bool
     {
         try {
             $len = mb_strlen($msg);
 
-            // 校验消息长度
-            // 10, 12, 14, 16 = 指令回复
-            // 36 = 标准心跳
-            // 46 = 心跳(36) + B5开分次数(10)
-            // 50 = 心跳(36) + B7洗分次数(14)
-            // 60 = 心跳(36) + B5(10) + B7(14)
-            // ✅ P0-15修复：还可能是"指令回复+B5/B7"组合（如34=12+10+12）
-            // 实际中可能有其他组合，采用模糊匹配
-            $validLengths = [10, 12, 14, 16, 36, 46, 50, 58, 60];
+            // 验证消息长度
+            $this->validateMessageLength($len, $msg);
 
-            // 如果长度不在标准列表中，检查是否是合法的组合消息
-            if (!in_array($len, $validLengths)) {
-                // ✅ P0-15修复：只要 >= 10 就允许，可能是"回复+B5/B7"组合
-                if ($len < 10) {
-                    throw new Exception('指令长度错误: ' . $len);
-                }
+            // 保存当前机台状态（用于后续对比变化）
+            $originalState = [
+                'gamingUserId' => $this->gaming_user_id,
+                'rewardStatus' => $this->reward_status,
+                'turn' => $this->turn,
+                'winNumber' => $this->win_number,
+            ];
 
-                // 检查是否包含B5/B7附加数据
-                $hasB5B7 = (stripos($msg, 'b5') !== false || stripos($msg, 'b7') !== false);
-
-                $this->log->info('收到非标准长度消息，尝试解析', [
-                    'machine_code' => $this->machine->code,
-                    'length' => $len,
-                    'has_b5_b7' => $hasB5B7,
-                    'msg_preview' => substr($msg, 0, min(60, $len)),
-                ]);
+            // 判断并处理心跳消息
+            if ($this->isHeartbeatMessage($msg, $len)) {
+                return $this->processHeartbeatMessage($msg, $len, $originalState);
             }
 
-            $gamingUserId = $this->gaming_user_id;
-            $orgRewardStatus = $this->reward_status;
-            $orgTurn = $this->turn;
-            $orgWinNumber = $this->win_number;
-
-            // ==================== 处理心跳（可能包含附加数据）====================
-            // ✅ P0-11修复：心跳+附加数据是组合消息，每部分有独立的S1/S2
-            // ✅ P0-17修复：心跳可能不是36字符，需要检测并分离B5/B7
-            // ⚠️ 区分查询响应和心跳：
-            //    - 查询响应：46 C0 XX xx xx S1 S2（10字符）
-            //    - 心跳：46 C0 ... （≥14字符，通常36字符）
-            $prefix = substr($msg, 0, 2);
-            $statusCode = substr($msg, 2, 2);
-            $isHeartbeat = $prefix == '46' && ($statusCode == 'c0' || $statusCode == 'c6') && $len > 10;
-
-            if ($isHeartbeat) {
-                $heartbeat = '';
-                $externalData = '';
-
-                // ✅ 尝试分离心跳和B5/B7附加数据
-                // 心跳可能的长度：36（标准）、14/12/10（短格式）
-                $possibleHeartbeatLengths = [36, 14, 12, 10];
-
-                foreach ($possibleHeartbeatLengths as $hbLen) {
-                    if ($len >= $hbLen) {
-                        $possibleHb = substr($msg, 0, $hbLen);
-
-                        // 验证这段是否是有效的心跳（S1/S2校验）
-                        $s1 = substr($possibleHb, -4, 2);
-                        $s2 = substr($possibleHb, -2, 2);
-                        $data = substr($possibleHb, 0, -4);
-
-                        $calculatedS1 = self::calculateS1($data);
-                        $calculatedS2 = self::calculateS2($data, $calculatedS1);
-
-                        if ($s1 == $calculatedS1 && $s2 == $calculatedS2) {
-                            // S1/S2校验通过，确认为有效心跳
-                            $heartbeat = $possibleHb;
-
-                            // 检查剩余部分
-                            if ($len > $hbLen) {
-                                $remaining = substr($msg, $hbLen);
-
-                                // 剩余部分应该是空或以b5/b7开头
-                                if (empty($remaining) || preg_match('/^b[57]/i', $remaining)) {
-                                    $externalData = $remaining;
-                                    break;
-                                }
-                            } else {
-                                // 完整心跳，无附加数据
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // 验证是否成功分离
-                if (empty($heartbeat)) {
-                    throw new Exception('心跳S1/S2校验失败（尝试所有可能长度均失败）');
-                }
-
-                $result = $this->handleHeartbeat($heartbeat, $gamingUserId, $orgRewardStatus, $orgWinNumber, $orgTurn);
-
-                // 处理B5/B7附加数据
-                if (!empty($externalData)) {
-                    $this->handleExternalButtonData($externalData);
-                }
-
-                return $result;
+            // 处理独立的外部按钮指令（B5/B7）
+            if ($this->processIndependentExternalButton($msg, $len)) {
+                return true;
             }
 
-            // ==================== 非心跳消息：分离主指令和B5/B7附加数据 ====================
-            // ✅ P0-15修复：检查是否有B5/B7附加数据
-            // ✅ P0-16修复：只在标准指令长度后查找，避免误判数据中的"b5"/"b7"字节
-            $mainCmd = $msg;
-            $externalData = '';
-
-            // 标准指令长度（可能后面跟B5/B7）
-            $stdLengths = [10, 12, 14, 16];
-
-            foreach ($stdLengths as $cmdLen) {
-                if ($len > $cmdLen) {
-                    $possibleMain = substr($msg, 0, $cmdLen);
-                    $possibleExt = substr($msg, $cmdLen);
-
-                    // 检查剩余部分是否以b5或b7开头（区分大小写）
-                    if (preg_match('/^b[57]/i', $possibleExt)) {
-                        // 验证主指令的S1/S2校验和
-                        $s1 = substr($possibleMain, -4, 2);
-                        $s2 = substr($possibleMain, -2, 2);
-                        $data = substr($possibleMain, 0, -4);
-
-                        $calculatedS1 = self::calculateS1($data);
-                        $calculatedS2 = self::calculateS2($data, $calculatedS1);
-
-                        // 只有S1/S2都正确，才认为是组合消息
-                        if ($s1 == $calculatedS1 && $s2 == $calculatedS2) {
-                            $mainCmd = $possibleMain;
-                            $externalData = $possibleExt;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // 校验主指令的 S1/S2
-            $s1 = substr($mainCmd, -4, 2);
-            $s2 = substr($mainCmd, -2, 2);
-            $data = substr($mainCmd, 0, -4);
-
-            $calculatedS1 = self::calculateS1($data);
-            if ($s1 != $calculatedS1) {
-                throw new Exception('指令S1校验失败');
-            }
-
-            $calculatedS2 = self::calculateS2($data, $calculatedS1);
-            if ($s2 != $calculatedS2) {
-                throw new Exception('指令S2校验失败');
-            }
-
-            $fun = substr($mainCmd, 0, 6);  // 前6位：功能码
-            $fun1 = substr($mainCmd, 0, 4); // 前4位：分类码
-
-            // ✅ 验证分机号匹配
-            $receivedExtension = substr($mainCmd, 0, 2);
-            if ($receivedExtension !== $this->extensionNumber) {
-                $this->log->warning('收到不匹配的分机号消息', [
-                    'machine_code' => $this->machine->code,
-                    'expected' => $this->extensionNumber,
-                    'received' => $receivedExtension,
-                    'msg' => substr($mainCmd, 0, 20) . '...'
-                ]);
-                // 仍然处理（可能是配置错误），但记录日志
-            }
-
-            // ==================== 处理独立的外部按钮指令（如果有）====================
-            // ✅ P1-3修复：独立B5/B7指令也需要记录到数据库，调用统一处理逻辑
-            // ✅ P0-10修复：支持两种格式（防御性）：无前缀 "b5..." 或有前缀 "46b5..."
-
-            // 检查独立B5指令
-            if ($len >= 10) {
-                // 格式1：无分机号前缀 "b5..."
-                if (substr($msg, 0, 2) == 'b5') {
-                    // 调用统一处理逻辑（会检测增量并记录到数据库）
-                    $this->handleExternalButtonData(substr($msg, 0, 10));
-                    return true;
-                }
-
-                // 格式2：有分机号前缀 "46b5..." 或 "{分机号}b5..."
-                if ($len >= 12 && substr($msg, 2, 2) == 'b5') {
-                    $this->handleExternalButtonData(substr($msg, 2, 10));
-                    return true;
-                }
-            }
-
-            // 检查独立B7指令
-            if ($len >= 12) {
-                // 格式1：无分机号前缀 "b7..."
-                if (substr($msg, 0, 2) == 'b7') {
-                    $availableLen = min(14, $len);
-                    $this->handleExternalButtonData(substr($msg, 0, $availableLen));
-                    return true;
-                }
-
-                // 格式2：有分机号前缀 "46b7..." 或 "{分机号}b7..."
-                if ($len >= 14 && substr($msg, 2, 2) == 'b7') {
-                    $availableLen = min(14, $len - 2);
-                    $this->handleExternalButtonData(substr($msg, 2, $availableLen));
-                    return true;
-                }
-            }
-
-            // ==================== 处理指令回复 ====================
-            $result = $this->handleCommandReply($mainCmd, $fun, $fun1, $gamingUserId);
-
-            // ✅ P0-15修复：处理B5/B7附加数据
-            if (!empty($externalData)) {
-                $this->handleExternalButtonData($externalData);
-            }
-
-            return $result;
+            // 处理指令回复消息
+            return $this->processCommandMessage($msg, $len, $originalState['gamingUserId']);
 
         } catch (Exception $e) {
             $this->log->error('消息处理错误', [
@@ -592,6 +409,213 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'machine_code' => $this->machine->code,
             ]);
             return false;
+        }
+    }
+
+    /**
+     * 验证消息长度
+     */
+    private function validateMessageLength(int $len, string $msg): void
+    {
+        $validLengths = [10, 12, 14, 16, 36, 46, 50, 58, 60];
+
+        if (!in_array($len, $validLengths)) {
+            if ($len < 10) {
+                throw new Exception('指令长度错误: ' . $len);
+            }
+
+            $hasB5B7 = (stripos($msg, 'b5') !== false || stripos($msg, 'b7') !== false);
+            $this->log->info('收到非标准长度消息，尝试解析', [
+                'machine_code' => $this->machine->code,
+                'length' => $len,
+                'has_b5_b7' => $hasB5B7,
+                'msg_preview' => substr($msg, 0, min(60, $len)),
+            ]);
+        }
+    }
+
+    /**
+     * 判断是否是心跳消息
+     */
+    private function isHeartbeatMessage(string $msg, int $len): bool
+    {
+        $prefix = substr($msg, 0, 2);
+        $statusCode = substr($msg, 2, 2);
+        return $prefix == '46' && ($statusCode == 'c0' || $statusCode == 'c6') && $len > 10;
+    }
+
+    /**
+     * 处理心跳消息（包含分离外部按钮数据）
+     */
+    private function processHeartbeatMessage(string $msg, int $len, array $originalState): bool
+    {
+        [$heartbeat, $externalData] = $this->separateHeartbeatWithExternal($msg, $len);
+
+        $result = $this->handleHeartbeat(
+            $heartbeat,
+            $originalState['gamingUserId'],
+            $originalState['rewardStatus'],
+            $originalState['winNumber'],
+            $originalState['turn']
+        );
+
+        if (!empty($externalData)) {
+            $this->handleExternalButtonData($externalData);
+        }
+
+        return $result;
+    }
+
+    /**
+     * 分离心跳和外部按钮数据
+     *
+     * @return array [heartbeat, externalData]
+     */
+    private function separateHeartbeatWithExternal(string $msg, int $len): array
+    {
+        $possibleHeartbeatLengths = [36, 14, 12, 10];
+
+        foreach ($possibleHeartbeatLengths as $hbLen) {
+            if ($len >= $hbLen) {
+                $possibleHb = substr($msg, 0, $hbLen);
+
+                if ($this->validateChecksumS1S2($possibleHb)) {
+                    $heartbeat = $possibleHb;
+                    $externalData = '';
+
+                    if ($len > $hbLen) {
+                        $remaining = substr($msg, $hbLen);
+                        if (empty($remaining) || preg_match('/^b[57]/i', $remaining)) {
+                            $externalData = $remaining;
+                        }
+                    }
+
+                    return [$heartbeat, $externalData];
+                }
+            }
+        }
+
+        throw new Exception('心跳S1/S2校验失败（尝试所有可能长度均失败）');
+    }
+
+    /**
+     * 验证S1/S2校验和
+     */
+    private function validateChecksumS1S2(string $data): bool
+    {
+        $s1 = substr($data, -4, 2);
+        $s2 = substr($data, -2, 2);
+        $payload = substr($data, 0, -4);
+
+        $calculatedS1 = self::calculateS1($payload);
+        $calculatedS2 = self::calculateS2($payload, $calculatedS1);
+
+        return $s1 == $calculatedS1 && $s2 == $calculatedS2;
+    }
+
+    /**
+     * 处理独立的外部按钮指令
+     *
+     * @return bool true表示已处理，false表示不是外部按钮指令
+     */
+    private function processIndependentExternalButton(string $msg, int $len): bool
+    {
+        // 检查B5指令
+        if ($len >= 10) {
+            if (substr($msg, 0, 2) == 'b5') {
+                $this->handleExternalButtonData(substr($msg, 0, 10));
+                return true;
+            }
+            if ($len >= 12 && substr($msg, 2, 2) == 'b5') {
+                $this->handleExternalButtonData(substr($msg, 2, 10));
+                return true;
+            }
+        }
+
+        // 检查B7指令
+        if ($len >= 12) {
+            if (substr($msg, 0, 2) == 'b7') {
+                $availableLen = min(14, $len);
+                $this->handleExternalButtonData(substr($msg, 0, $availableLen));
+                return true;
+            }
+            if ($len >= 14 && substr($msg, 2, 2) == 'b7') {
+                $availableLen = min(14, $len - 2);
+                $this->handleExternalButtonData(substr($msg, 2, $availableLen));
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * 处理指令回复消息
+     */
+    private function processCommandMessage(string $msg, int $len, int $gamingUserId): bool
+    {
+        // 分离主指令和外部按钮数据
+        [$mainCmd, $externalData] = $this->separateCommandWithExternal($msg, $len);
+
+        // 校验主指令的S1/S2
+        if (!$this->validateChecksumS1S2($mainCmd)) {
+            throw new Exception('指令S1/S2校验失败');
+        }
+
+        // 验证分机号
+        $this->validateExtensionNumber($mainCmd);
+
+        // 提取功能码
+        $fun = substr($mainCmd, 0, 6);
+        $fun1 = substr($mainCmd, 0, 4);
+
+        // 处理指令回复
+        $result = $this->handleCommandReply($mainCmd, $fun, $fun1, $gamingUserId);
+
+        // 处理附加的外部按钮数据
+        if (!empty($externalData)) {
+            $this->handleExternalButtonData($externalData);
+        }
+
+        return $result;
+    }
+
+    /**
+     * 分离主指令和外部按钮数据
+     *
+     * @return array [mainCmd, externalData]
+     */
+    private function separateCommandWithExternal(string $msg, int $len): array
+    {
+        $stdLengths = [10, 12, 14, 16];
+
+        foreach ($stdLengths as $cmdLen) {
+            if ($len > $cmdLen) {
+                $possibleMain = substr($msg, 0, $cmdLen);
+                $possibleExt = substr($msg, $cmdLen);
+
+                if (preg_match('/^b[57]/i', $possibleExt) && $this->validateChecksumS1S2($possibleMain)) {
+                    return [$possibleMain, $possibleExt];
+                }
+            }
+        }
+
+        return [$msg, ''];
+    }
+
+    /**
+     * 验证分机号匹配
+     */
+    private function validateExtensionNumber(string $mainCmd): void
+    {
+        $receivedExtension = substr($mainCmd, 0, 2);
+        if ($receivedExtension !== $this->extensionNumber) {
+            $this->log->warning('收到不匹配的分机号消息', [
+                'machine_code' => $this->machine->code,
+                'expected' => $this->extensionNumber,
+                'received' => $receivedExtension,
+                'msg' => substr($mainCmd, 0, 20) . '...'
+            ]);
         }
     }
 
@@ -1118,39 +1142,114 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      * ✅ P0-18修复：支持14字符短心跳（仅在线检测，不解析详细数据）
      * @throws Exception
      */
+    /**
+     * 处理心跳消息（主方法，协调各子流程）
+     */
     private function handleHeartbeat(string $msg, int $gamingUserId, int $orgRewardStatus, int $orgWinNumber, float $orgTurn): bool
     {
         $len = strlen($msg);
 
-        // ========== 短心跳（14字符）：仅在线检测 ==========
+        // 短心跳处理
         if ($len < 36) {
-            $this->log->info('[心跳] 收到短心跳，跳过详细解析', [
-                'machine_code' => $this->machine->code,
-                'heartbeat_length' => $len,
-                'heartbeat' => $msg,
-                'player_id' => $gamingUserId,
-            ]);
+            return $this->handleShortHeartbeat($msg, $len, $gamingUserId);
+        }
 
-            // 短心跳只维持在线状态，不更新详细数据
-            // 详细数据从Redis缓存读取（保持上次标准心跳的状态）
+        // 验证机台健康状态
+        $this->validateMachineHealthStatus($msg, $gamingUserId);
+
+        // 解析心跳并更新机台状态
+        $state = $this->parseAndUpdateMachineState($msg, $gamingUserId, $orgTurn, $orgWinNumber);
+
+        // 处理开奖开始
+        $this->handleLotteryStart($state['nowRewardStatus'], $orgRewardStatus, $gamingUserId);
+
+        // win_number异常检测
+        if ($this->checkWinNumberAnomaly($orgWinNumber, $state['nowWinNumber'], $state['nowRewardStatus'], $orgRewardStatus)) {
             return true;
         }
 
-        // ========== 标准心跳（36字符）：完整解析 ==========
+        // 处理开奖结束
+        $this->handleLotteryEnd($state['nowRewardStatus'], $orgRewardStatus, $state['nowScore'], $gamingUserId);
 
-        // 检查机台状态（第18-19字节必须是 DA=正常）
+        // 处理转数变化（累加player_win_number、投递打码量）
+        $this->processTurnChange($state['nowRewardStatus'], $gamingUserId, $state['nowTurn'], $orgTurn);
+
+        // 转数为0时清理礼物缓存
+        $this->cleanupGiftCacheIfNeeded($state['nowTurn'], $gamingUserId);
+
+        // 推送机台状态到前端
+        $this->sendMachineNowStatusMessage($this->machine->id);
+        return true;
+    }
+
+    /**
+     * 处理短心跳（14字符）：仅维持在线状态
+     */
+    private function handleShortHeartbeat(string $msg, int $len, int $gamingUserId): bool
+    {
+        $this->log->info('[心跳] 收到短心跳，跳过详细解析', [
+            'machine_code' => $this->machine->code,
+            'heartbeat_length' => $len,
+            'heartbeat' => $msg,
+            'player_id' => $gamingUserId,
+        ]);
+
+        // 短心跳只维持在线状态，不更新详细数据
+        // 详细数据从Redis缓存读取（保持上次标准心跳的状态）
+        return true;
+    }
+
+    /**
+     * 验证机台健康状态（检查第18-19字节）
+     */
+    private function validateMachineHealthStatus(string $msg, int $gamingUserId): void
+    {
         if (substr($msg, 18, 2) != 'da') {
             $this->has_lock = 1;
             sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
             throw new Exception('机台故障');
         }
+    }
 
+    /**
+     * 解析心跳数据并更新机台状态
+     *
+     * @return array 包含nowPoint, nowRatio, nowWinNumber, nowScore, nowTurn, nowAuto, nowRewardStatus
+     */
+    private function parseAndUpdateMachineState(string $msg, int $gamingUserId, float $orgTurn, int $orgWinNumber): array
+    {
         // 解析心跳数据
         [$nowPoint, $nowRatio, $nowWinNumber, $nowScore, $nowTurn] = self::parseHeartbeat($msg);
         $nowAuto = (substr($msg, 2, 2) == 'c6') ? 1 : 0;
         $nowRewardStatus = (substr($msg, 10, 2) == 'd5') ? 1 : 0; // D5=开奖中
 
-        // ✅ 记录机台实时状态日志（用于监控和调试）
+        // 记录机台实时状态日志
+        $this->logMachineStatus($gamingUserId, $nowAuto, $nowRewardStatus, $nowPoint, $nowScore, $nowTurn, $nowWinNumber, $nowRatio, $orgTurn, $orgWinNumber, $msg);
+
+        // 更新Redis状态
+        $this->point = $nowPoint;
+        $this->auto = $nowAuto;
+        $this->win_number = $nowWinNumber;
+        $this->score = $nowScore;
+        $this->turn = $nowTurn;
+        $this->reward_status = $nowRewardStatus;
+        $this->now_turn = $nowWinNumber;
+        $this->ratio = $nowRatio;
+
+        // 设置查询指令的actionVersion（心跳包含所有查询数据）
+        $this->setActionVersion(self::MACHINE_POINT);
+        $this->setActionVersion(self::MACHINE_SCORE);
+        $this->setActionVersion(self::MACHINE_TURN);
+        $this->setActionVersion(self::WIN_NUMBER);
+
+        return compact('nowPoint', 'nowRatio', 'nowWinNumber', 'nowScore', 'nowTurn', 'nowAuto', 'nowRewardStatus');
+    }
+
+    /**
+     * 记录机台实时状态日志
+     */
+    private function logMachineStatus(int $gamingUserId, int $nowAuto, int $nowRewardStatus, $nowPoint, $nowScore, $nowTurn, $nowWinNumber, $nowRatio, float $orgTurn, int $orgWinNumber, string $msg): void
+    {
         $this->log->info('[机台实时状态] 心跳数据解析', [
             'machine_code' => $this->machine->code,
             'player_id' => $gamingUserId,
@@ -1175,25 +1274,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             ],
             'raw_data' => $msg,
         ]);
+    }
 
-        // 更新Redis状态
-        $this->point = $nowPoint;
-        $this->auto = $nowAuto;
-        $this->win_number = $nowWinNumber;
-        $this->score = $nowScore;
-        $this->turn = $nowTurn;
-        $this->reward_status = $nowRewardStatus;
-        $this->now_turn = $nowWinNumber;
-        $this->ratio = $nowRatio;
-
-        // ✅ 设置查询指令的actionVersion（心跳包含所有查询数据，可作为查询响应）
-        // 这样发送查询指令后，收到心跳也能被识别为有效响应
-        $this->setActionVersion(self::MACHINE_POINT);   // 分数查询
-        $this->setActionVersion(self::MACHINE_SCORE);   // 得分查询
-        $this->setActionVersion(self::MACHINE_TURN);    // 转数查询
-        $this->setActionVersion(self::WIN_NUMBER);      // 累积转数查询
-
-        // ==================== 开奖开始 ====================
+    /**
+     * 处理开奖开始
+     */
+    private function handleLotteryStart(int $nowRewardStatus, int $orgRewardStatus, int $gamingUserId): void
+    {
         if ($nowRewardStatus == 1 && $orgRewardStatus == 0) {
             $machineLotteryRecord = new MachineLotteryRecord();
             $machineLotteryRecord->machine_id = $this->machine->id;
@@ -1203,9 +1290,15 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $machineLotteryRecord->use_turn = $this->now_turn;
             $machineLotteryRecord->save();
         }
+    }
 
-        // ==================== win_number 异常检测 ====================
-        // 累积转数不应该减少（除非机台重启）
+    /**
+     * 检测win_number异常（累积转数不应该减少）
+     *
+     * @return bool true表示检测到异常，已处理完毕，终止后续流程
+     */
+    private function checkWinNumberAnomaly(int $orgWinNumber, int $nowWinNumber, int $nowRewardStatus, int $orgRewardStatus): bool
+    {
         if ($orgWinNumber > 0 && $orgWinNumber > $nowWinNumber &&
             $nowRewardStatus == 0 && $orgRewardStatus == 0) {
             $this->log->error('[win_number异常] 累积转数异常减少', [
@@ -1218,8 +1311,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $this->win_number = $nowWinNumber;
             return true;
         }
+        return false;
+    }
 
-        // ==================== 开奖结束 ====================
+    /**
+     * 处理开奖结束
+     */
+    private function handleLotteryEnd(int $nowRewardStatus, int $orgRewardStatus, $nowScore, int $gamingUserId): void
+    {
         if ($nowRewardStatus == 0 && $orgRewardStatus == 1) {
             // 触发彩池抽奖
             if (!empty($this->machine->gamingPlayer)) {
@@ -1252,96 +1351,130 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // 自动执行"得分→分数"转换
             $this->sendCmd(self::SCORE_TO_POINT, 0, 'player', $gamingUserId);
         }
+    }
 
-        // ==================== 转数变化处理 ====================
-        if ($nowRewardStatus == 0) {
-            if (!empty($gamingUserId)) {
-                $turnDelta = bcsub($nowTurn, $orgTurn, 2);
-
-                // 检查是否刚执行过上转下转操作（检查缓存标记）
-                $isTurnAction = Cache::get('turn_action_flag_' . $this->machine->id);
-
-                // 如果检测到上转下转标记，跳过本次累加
-                if ($isTurnAction) {
-                    $this->log->info('[转数累加] 检测到上转/下转操作标记，跳过本次累加', [
-                        'machine_code' => $this->machine->code,
-                        'turn_delta' => $turnDelta
-                    ]);
-                }
-                // 负增量说明玩家消耗了转数（正常游玩）
-                // 过滤大幅减少（可能是下转操作）
-                else if (bccomp($turnDelta, '0', 2) < 0 && bccomp($turnDelta, '-10', 2) >= 0) {
-                $consumed = abs($turnDelta);
-
-                // ✅ 累加到 player_win_number（玩家使用的转数）
-                $playerNumber = $this->player_win_number ?? 0;
-                $this->player_win_number = bcadd($playerNumber, $consumed, 2);
-
-                // 更新最后游玩时间
-                $this->last_play_time = time();
-
-                // 累加到打码量统计
-                $cateId = $this->machine->cate_id;
-                $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
-                $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
-
-                if ($turnUsedPoint === null) {
-                    $turnUsedPoint = \app\model\MachineCategory::query()
-                        ->where('id', $cateId)
-                        ->value('turn_used_point') ?? 0;
-                    \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
-                }
-
-                $betAmount = bcmul($consumed, $turnUsedPoint, 2);
-
-                if (bccomp($betAmount, '0', 2) > 0) {
-                    Log::channel('bet_statistics')->info('[BetStats] SongOfflineJackpot 投递打码量', [
-                        'machine_id' => $this->machine->id,
-                        'player_id' => $gamingUserId,
-                        'consumed_turn' => $consumed,
-                        'turn_used_point' => $turnUsedPoint,
-                        'bet_amount' => floatval($betAmount),
-                    ]);
-
-                    Client::send('bet-statistics', [
-                        'player_id' => $gamingUserId,
-                        'stat_type' => 'machine',
-                        'bet_amount' => floatval($betAmount),
-                        'source' => 'song_offline_jackpot',
-                        'machine_id' => $this->machine->id,
-                        'created_at' => date('Y-m-d H:i:s'),
-                    ]);
-                }
-
-                // 更新最后游戏时间
-                $this->last_play_time = time();
-                } else if (bccomp($turnDelta, '-10', 2) < 0) {
-                    $this->log->info('[转数累加] turn大幅减少，可能是下转操作，不累加', [
-                        'machine_code' => $this->machine->code,
-                        'turn_delta' => $turnDelta
-                    ]);
-                } else if (bccomp($turnDelta, '0', 2) > 0) {
-                    $this->log->info('[转数累加] turn增加，可能是上转操作，不累加', [
-                        'machine_code' => $this->machine->code,
-                        'turn_delta' => $turnDelta
-                    ]);
-                }
-            } else {
-                $this->log->info('[转数累加] 没有游戏中的玩家，跳过turn累加', [
-                    'machine_code' => $this->machine->code,
-                    'gaming_user_id' => $gamingUserId
-                ]);
-            }
-        } else {
+    /**
+     * 处理转数变化（累加player_win_number、投递打码量统计）
+     */
+    private function processTurnChange(int $nowRewardStatus, int $gamingUserId, $nowTurn, float $orgTurn): void
+    {
+        // 开奖状态中不处理转数累加
+        if ($nowRewardStatus != 0) {
             if (!empty($gamingUserId)) {
                 $this->log->info('[转数累加] 开奖状态中，跳过turn累加', [
                     'machine_code' => $this->machine->code,
                     'reward_status' => $nowRewardStatus
                 ]);
             }
+            return;
         }
 
-        // ==================== 转数为0时清理礼物缓存 ====================
+        // 没有玩家时不处理
+        if (empty($gamingUserId)) {
+            $this->log->info('[转数累加] 没有游戏中的玩家，跳过turn累加', [
+                'machine_code' => $this->machine->code,
+                'gaming_user_id' => $gamingUserId
+            ]);
+            return;
+        }
+
+        $turnDelta = bcsub($nowTurn, $orgTurn, 2);
+
+        // 检查是否刚执行过上转下转操作
+        if ($this->isTurnActionFlagSet()) {
+            $this->log->info('[转数累加] 检测到上转/下转操作标记，跳过本次累加', [
+                'machine_code' => $this->machine->code,
+                'turn_delta' => $turnDelta
+            ]);
+            return;
+        }
+
+        // 判断转数变化类型并处理
+        if (bccomp($turnDelta, '0', 2) < 0 && bccomp($turnDelta, '-10', 2) >= 0) {
+            // 负增量在 -10 到 0 之间：正常游玩消耗
+            $this->handleTurnConsumption(abs($turnDelta), $gamingUserId);
+        } else if (bccomp($turnDelta, '-10', 2) < 0) {
+            // 大幅减少：可能是下转操作
+            $this->log->info('[转数累加] turn大幅减少，可能是下转操作，不累加', [
+                'machine_code' => $this->machine->code,
+                'turn_delta' => $turnDelta
+            ]);
+        } else if (bccomp($turnDelta, '0', 2) > 0) {
+            // 增加：可能是上转操作
+            $this->log->info('[转数累加] turn增加，可能是上转操作，不累加', [
+                'machine_code' => $this->machine->code,
+                'turn_delta' => $turnDelta
+            ]);
+        }
+    }
+
+    /**
+     * 检查是否设置了上转/下转操作标记
+     */
+    private function isTurnActionFlagSet(): bool
+    {
+        return (bool)Cache::get('turn_action_flag_' . $this->machine->id);
+    }
+
+    /**
+     * 处理转数消耗（累加player_win_number、投递打码量）
+     */
+    private function handleTurnConsumption(float $consumed, int $gamingUserId): void
+    {
+        // 累加到 player_win_number
+        $playerNumber = $this->player_win_number ?? 0;
+        $this->player_win_number = bcadd($playerNumber, $consumed, 2);
+
+        // 更新最后游玩时间
+        $this->last_play_time = time();
+
+        // 投递打码量统计
+        $this->sendBetStatistics($consumed, $gamingUserId);
+    }
+
+    /**
+     * 投递打码量统计
+     */
+    private function sendBetStatistics(float $consumed, int $gamingUserId): void
+    {
+        $cateId = $this->machine->cate_id;
+        $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+        $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+
+        if ($turnUsedPoint === null) {
+            $turnUsedPoint = \app\model\MachineCategory::query()
+                ->where('id', $cateId)
+                ->value('turn_used_point') ?? 0;
+            \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+        }
+
+        $betAmount = bcmul($consumed, $turnUsedPoint, 2);
+
+        if (bccomp($betAmount, '0', 2) > 0) {
+            Log::channel('bet_statistics')->info('[BetStats] SongOfflineJackpot 投递打码量', [
+                'machine_id' => $this->machine->id,
+                'player_id' => $gamingUserId,
+                'consumed_turn' => $consumed,
+                'turn_used_point' => $turnUsedPoint,
+                'bet_amount' => floatval($betAmount),
+            ]);
+
+            Client::send('bet-statistics', [
+                'player_id' => $gamingUserId,
+                'stat_type' => 'machine',
+                'bet_amount' => floatval($betAmount),
+                'source' => 'song_offline_jackpot',
+                'machine_id' => $this->machine->id,
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
+        }
+    }
+
+    /**
+     * 转数为0时清理礼物缓存
+     */
+    private function cleanupGiftCacheIfNeeded($nowTurn, int $gamingUserId): void
+    {
         if ($nowTurn <= 0 && !empty($gamingUserId)) {
             Cache::delete('gift_cache_' . $this->machine->id . '_' . $gamingUserId);
             $this->log->info('[礼物缓存] 转数为0，清理礼物缓存', [
@@ -1350,10 +1483,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'turn' => $nowTurn
             ]);
         }
-
-        // 推送机台状态到前端
-        $this->sendMachineNowStatusMessage($this->machine->id);
-        return true;
     }
 
     /**
