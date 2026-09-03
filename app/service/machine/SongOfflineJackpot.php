@@ -69,11 +69,11 @@ use yzh52521\WebmanLock\Locker;
 class SongOfflineJackpot extends MachineServices implements BaseMachine
 {
     // ==================== 查询指令（主动获取数据）====================
-    // ✅ 使用15前缀（按文档，46不通）
-    const MACHINE_POINT = '15cea2';    // 读取机台当前分数
-    const MACHINE_SCORE = '15cea5';    // 读取机台当前得分WIN
-    const MACHINE_TURN = '15cea6';     // 读取机台当前剩余转数
-    const WIN_NUMBER = '15cea9';       // 读取中洞对奖次数-累积转数
+    // ✅ 新文档2024线上85x：全部使用46前缀
+    const MACHINE_POINT = '46cea2';    // 查询机台目前分数（46 CE A2）→ 回复 46 C0 xx xx xx
+    const MACHINE_SCORE = '46cea5';    // 查询机台目前得分WIN（46 CE A5）→ 回复 46 DA xx xx xx
+    const MACHINE_TURN = '46cea6';     // 查询机台目前剩余转数（46 CE A6）→ 回复 46 DE xx xx
+    const WIN_NUMBER = '46cea9';       // 查询机台累积转数（46 CE A9）→ 回复 46 D0 xx xx xx
 
     // ==================== 心跳状态码（被动接收）====================
     const GET_MACHINE_POINT = '46c0';  // 心跳-停止状态下的分数
@@ -86,27 +86,27 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     const REWARD_WIN_NUMBER = '46d5';  // 心跳-累积转数（开奖中）
 
     // ==================== 管理指令 ====================
-    const CHECK = '46ccb4';            // 故障排除
-    const CLEAR_LOG = '46ccba';        // 清除历史记录-开洗分次数
-    // ✅ 使用15前缀（按文档，46不通）
-    const MACHINE_OPEN = '15cebe';     // 开机
-    const MACHINE_CLOSE = '15cebc';    // 关机
-    const REWARD_SWITCH = '15ceb8';    // 大赏灯切换
+    // ✅ 新文档2024线上85x：全部使用46前缀
+    const CHECK = '46ccb4';            // 故障排除（46 CC B4）
+    const CLEAR_LOG = '46ccba';        // 清除押得数值（46 CC BA）
+    const MACHINE_OPEN = '46cebe';     // 开机（46 CE BE）
+    const MACHINE_CLOSE = '46cebc';    // 关机（46 CE BC）
+    const REWARD_SWITCH = '46ceb8';    // 查询大赏灯（46 CE B8）
 
     // ==================== 游戏控制指令 ====================
-    // ✅ 使用15前缀（按文档，46不通）
-    const AUTO_UP_TURN = '15cecd';     // 自动上转-启动机台
-    const AUTO_STOP = '15cece';        // 停止游戏
-    const PUSH_THREE = '15ceb6';       // 连发PUSH
-    const PUSH_ONE = '15ceb2';         // 单发PUSH
+    // ✅ 新文档2024线上85x：全部使用46前缀
+    const AUTO_UP_TURN = '46cecd';     // 启动机台（46 CE CD）
+    const AUTO_STOP = '46cece';        // 停止机台（46 CE CE）
+    const PUSH_THREE = '46ceb6';       // 连发PUSH（46 CE B6）
+    const PUSH_ONE = '46ceb2';         // 单发PUSH（46 CE B2）
 
     // ==================== 转数/分数转换指令 ====================
-    const POINT_TO_TURN = '46cec1';    // 分数→转数-上转一次
-    // ✅ 使用15前缀（按文档，46不通）
-    const TURN_UP_ALL = '15cecb';      // 分数→转数-全部上转
-    const TURN_TO_POINT = '15ceca';    // 转数→分数-下转一次
-    const TURN_DOWN_ALL = '15cec9';    // 转数→分数-全部下转
-    const SCORE_TO_POINT = '15cec8';   // 得分→分数-WIN按扣趴换算
+    // ✅ 新文档2024线上85x：全部使用46前缀
+    const POINT_TO_TURN = '46cec1';    // 分数变转数1次（46 CE C1）
+    const TURN_UP_ALL = '46cecb';      // 分数全变转数（46 CE CB）
+    const TURN_TO_POINT = '46ceca';    // 转数→分数-下转一次（推测46 CE CA）
+    const TURN_DOWN_ALL = '46cec9';    // 转数换回分数（46 CE C9）
+    const SCORE_TO_POINT = '46cec8';   // win换回分数（46 CE C8）
 
     // ==================== 资金操作指令 ====================
     // ✅ 上分和下分使用 46 前缀是正确的（文档：46 CA / 46 CC）
@@ -385,17 +385,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'is_wash' => $msgPrefix == '46cc',
                 'is_open' => $msgPrefix == '46ca',
             ]);
-            if ($msgPrefix == '46cc' || $msgPrefix == '46ca') {
-                // 下分或上分回复，详细记录
-                $this->log->info('[消息接收] 收到开分/下分回复', [
-                    'machine_code' => $this->machine->code,
-                    'msg' => $msg,
-                    'msg_length' => $len,
-                    'msg_prefix' => $msgPrefix,
-                    'is_wash' => $msgPrefix == '46cc',
-                    'is_open' => $msgPrefix == '46ca',
-                ]);
-            }
 
             // 校验消息长度
             // 10, 12, 14, 16 = 指令回复
@@ -467,15 +456,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                                 // 剩余部分应该是空或以b5/b7开头
                                 if (empty($remaining) || preg_match('/^b[57]/i', $remaining)) {
                                     $externalData = $remaining;
-
-                                    $this->log->info('[心跳+B5/B7组合] 分离心跳和外部按钮数据', [
-                                        'machine_code' => $this->machine->code,
-                                        'total_length' => $len,
-                                        'heartbeat_length' => $hbLen,
-                                        'heartbeat' => $heartbeat,
-                                        'external_data' => $externalData,
-                                    ]);
-
                                     break;
                                 }
                             } else {
@@ -529,14 +509,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         if ($s1 == $calculatedS1 && $s2 == $calculatedS2) {
                             $mainCmd = $possibleMain;
                             $externalData = $possibleExt;
-
-                            $this->log->info('[组合消息] 分离主指令和B5/B7附加数据', [
-                                'machine_code' => $this->machine->code,
-                                'total_length' => $len,
-                                'main_cmd_length' => $cmdLen,
-                                'main_cmd' => $mainCmd,
-                                'external_data' => $externalData,
-                            ]);
                             break;
                         }
                     }
@@ -561,9 +533,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $fun = substr($mainCmd, 0, 6);  // 前6位：功能码
             $fun1 = substr($mainCmd, 0, 4); // 前4位：分类码
 
-            // ✅ 验证分机号匹配（15是查询响应前缀，允许通过）
+            // ✅ 验证分机号匹配
             $receivedExtension = substr($mainCmd, 0, 2);
-            if ($receivedExtension !== $this->extensionNumber && $receivedExtension !== '15') {
+            if ($receivedExtension !== $this->extensionNumber) {
                 $this->log->warning('收到不匹配的分机号消息', [
                     'machine_code' => $this->machine->code,
                     'expected' => $this->extensionNumber,
@@ -581,10 +553,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             if ($len >= 10) {
                 // 格式1：无分机号前缀 "b5..."
                 if (substr($msg, 0, 2) == 'b5') {
-                    $this->log->info('[B5协议-独立-无前缀] 收到独立外部按钮开分指令', [
-                        'machine_code' => $this->machine->code,
-                        'data_length' => $len,
-                    ]);
                     // 调用统一处理逻辑（会检测增量并记录到数据库）
                     $this->handleExternalButtonData(substr($msg, 0, 10));
                     return true;
@@ -592,12 +560,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 // 格式2：有分机号前缀 "46b5..." 或 "{分机号}b5..."
                 if ($len >= 12 && substr($msg, 2, 2) == 'b5') {
-                    $this->log->info('[B5协议-独立-有前缀] 收到独立外部按钮开分指令', [
-                        'machine_code' => $this->machine->code,
-                        'extension' => substr($msg, 0, 2),
-                        'data_length' => $len,
-                    ]);
-                    // 跳过分机号，传递 b5... 部分（10字符）
                     $this->handleExternalButtonData(substr($msg, 2, 10));
                     return true;
                 }
@@ -608,11 +570,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 // 格式1：无分机号前缀 "b7..."
                 if (substr($msg, 0, 2) == 'b7') {
                     $availableLen = min(14, $len);
-                    $this->log->info('[B7协议-独立-无前缀] 收到独立外部按钮洗分指令', [
-                        'machine_code' => $this->machine->code,
-                        'data_length' => $availableLen,
-                    ]);
-                    // 调用统一处理逻辑（会检测增量并记录到数据库）
                     $this->handleExternalButtonData(substr($msg, 0, $availableLen));
                     return true;
                 }
@@ -620,12 +577,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 // 格式2：有分机号前缀 "46b7..." 或 "{分机号}b7..."
                 if ($len >= 14 && substr($msg, 2, 2) == 'b7') {
                     $availableLen = min(14, $len - 2);
-                    $this->log->info('[B7协议-独立-有前缀] 收到独立外部按钮洗分指令', [
-                        'machine_code' => $this->machine->code,
-                        'extension' => substr($msg, 0, 2),
-                        'data_length' => $availableLen,
-                    ]);
-                    // 跳过分机号，传递 b7... 部分（12-14字符）
                     $this->handleExternalButtonData(substr($msg, 2, $availableLen));
                     return true;
                 }
@@ -738,16 +689,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         $this->external_open_count = $newCount;
                     }
 
-                    $this->log->info('[B5协议] 外部按钮开分次数更新', [
-                        'machine_code' => $this->machine->code,
-                        'old_count' => $oldCount,
-                        'new_count' => $newCount,
-                        'increment' => $newCount - $oldCount,
-                        'recorded' => $result['recorded'],
-                        'reason' => $result['reason'] ?? '',
-                        'data' => $b5Data,
-                    ]);
-
                     $offset += 10;
                 } elseif ($cmd == 'b7' && ($len - $offset) >= 12) {
                     // B7 xx xx xx S1 S2: 外部按钮洗分次数（实际可能是12或14字符）
@@ -763,24 +704,12 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                         $calculatedS1 = self::calculateS1($b7Content);
                         if ($s1 != $calculatedS1) {
-                            $this->log->error('[B7协议] S1校验失败', [
-                                'machine_code' => $this->machine->code,
-                                'data' => $b7Data,
-                                'expected_s1' => $calculatedS1,
-                                'actual_s1' => $s1,
-                            ]);
                             $offset += $availableLen;
                             continue;
                         }
 
                         $calculatedS2 = self::calculateS2($b7Content, $calculatedS1);
                         if ($s2 != $calculatedS2) {
-                            $this->log->error('[B7协议] S2校验失败', [
-                                'machine_code' => $this->machine->code,
-                                'data' => $b7Data,
-                                'expected_s2' => $calculatedS2,
-                                'actual_s2' => $s2,
-                            ]);
                             $offset += $availableLen;
                             continue;
                         }
@@ -791,11 +720,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                         // ✅ P2-5修复：检测计数器溢出（B7最大999999）
                         if ($newCount > 999999) {
-                            $this->log->error('[B7协议] 计数器溢出，数据异常', [
-                                'machine_code' => $this->machine->code,
-                                'new_count' => $newCount,
-                                'data' => $b7Data,
-                            ]);
                             $offset += $availableLen;
                             continue;
                         }
@@ -808,16 +732,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         if ($result['should_update']) {
                             $this->external_wash_count = $newCount;
                         }
-
-                        $this->log->info('[B7协议] 外部按钮洗分次数更新', [
-                            'machine_code' => $this->machine->code,
-                            'old_count' => $oldCount,
-                            'new_count' => $newCount,
-                            'increment' => $newCount - $oldCount,
-                            'recorded' => $result['recorded'],
-                            'reason' => $result['reason'] ?? '',
-                            'data' => $b7Data,
-                        ]);
                     }
 
                     $offset += $availableLen;
@@ -1509,35 +1423,31 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 ]);
                 break;
 
-            // 查询分数响应（支持心跳46和查询响应15）
-            case self::GET_MACHINE_POINT:   // 46c0 (心跳)
-            case self::AUTO_MACHINE_POINT:  // 46c6 (心跳)
-            case '15c0':  // 15c0 (查询响应)
+            // 查询分数响应
+            case self::GET_MACHINE_POINT:   // 46c0
+            case self::AUTO_MACHINE_POINT:  // 46c6
                 $point = self::parseScore(substr($msg, 4, 6));
                 $this->point = $point;
                 $this->setActionVersion(self::MACHINE_POINT);
                 break;
 
-            // 查询得分响应（支持心跳46和查询响应15）
-            case self::GET_MACHINE_SCORE:  // 46da (心跳)
-            case '15da':  // 15da (查询响应)
+            // 查询得分响应
+            case self::GET_MACHINE_SCORE:  // 46da
                 $score = self::parseScore(substr($msg, 4, 6));
                 $this->score = $score;
                 $this->setActionVersion(self::MACHINE_SCORE);
                 break;
 
-            // 查询转数响应（支持心跳46和查询响应15）
-            case self::GET_MACHINE_TURN:  // 46de (心跳)
-            case '15de':  // 15de (查询响应)
+            // 查询转数响应
+            case self::GET_MACHINE_TURN:  // 46de
                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                 $this->turn = $turn;
                 $this->setActionVersion(self::MACHINE_TURN);
                 break;
 
-            // 查询累积转数响应（支持心跳46和查询响应15）
-            case self::GET_WIN_NUMBER:     // 46d0 (心跳)
-            case self::REWARD_WIN_NUMBER:  // 46d5 (心跳-开奖中)
-            case '15d0':  // 15d0 (查询响应)
+            // 查询累积转数响应
+            case self::GET_WIN_NUMBER:     // 46d0
+            case self::REWARD_WIN_NUMBER:  // 46d5
                 $winNumber = self::parseScore('00' . substr($msg, 6, 4));
                 $oldWinNumber = $this->win_number;
                 $delta = $winNumber - $oldWinNumber;
