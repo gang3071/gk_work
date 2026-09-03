@@ -15,6 +15,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int agent_player_id 代理玩家id
  * @property int parent_player_id 上级玩家id
  * @property int department_id 部门/渠道id
+ * @property int|null store_id 门店ID（关联admin_users.id，仅门店机台）
+ * @property int|null store_agent_id 门店代理ID（关联admin_users.id）
  * @property int game_id 游戏id
  * @property int machine_id 机台id
  * @property int game_record_id 游戏记录id
@@ -49,6 +51,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property Player player 玩家信息
  * @property MachineRecording machine_recording 录制记录
  * @property Machine machine 机台信息
+ * @property AdminUser storeAdmin 门店信息
+ * @property AdminUser storeAgent 门店代理信息
  * @package app\model
  */
 class PlayerGameLog extends Model
@@ -104,6 +108,24 @@ class PlayerGameLog extends Model
     public function machine(): BelongsTo
     {
         return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
+    }
+
+    /**
+     * 门店信息（仅线下机台记录）
+     * @return BelongsTo
+     */
+    public function storeAdmin(): BelongsTo
+    {
+        return $this->belongsTo(\app\model\AdminUser::class, 'store_id')->withTrashed();
+    }
+
+    /**
+     * 门店代理信息（仅线下机台记录）
+     * @return BelongsTo
+     */
+    public function storeAgent(): BelongsTo
+    {
+        return $this->belongsTo(\app\model\AdminUser::class, 'store_agent_id')->withTrashed();
     }
 
     /**
