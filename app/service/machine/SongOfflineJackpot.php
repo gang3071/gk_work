@@ -375,17 +375,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         try {
             $len = mb_strlen($msg);
 
-            // ✅ P0-19修复：记录所有接收到的消息（用于诊断下分超时）
-            $msgPrefix = substr($msg, 0, min(6, $len));
-            $this->log->info('[消息接收] 收到开分/下分回复', [
-                'machine_code' => $this->machine->code,
-                'msg' => $msg,
-                'msg_length' => $len,
-                'msg_prefix' => $msgPrefix,
-                'is_wash' => $msgPrefix == '46cc',
-                'is_open' => $msgPrefix == '46ca',
-            ]);
-
             // 校验消息长度
             // 10, 12, 14, 16 = 指令回复
             // 36 = 标准心跳
@@ -422,10 +411,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // ==================== 处理心跳（可能包含附加数据）====================
             // ✅ P0-11修复：心跳+附加数据是组合消息，每部分有独立的S1/S2
             // ✅ P0-17修复：心跳可能不是36字符，需要检测并分离B5/B7
-            // ⚠️ 修复：心跳特征：46前缀 + C0/C6（查询响应是15前缀，需要区分）
+            // ⚠️ 区分查询响应和心跳：
+            //    - 查询响应：46 C0 XX xx xx S1 S2（10字符）
+            //    - 心跳：46 C0 ... （≥14字符，通常36字符）
             $prefix = substr($msg, 0, 2);
             $statusCode = substr($msg, 2, 2);
-            if ($prefix == '46' && ($statusCode == 'c0' || $statusCode == 'c6')) {
+            $isHeartbeat = $prefix == '46' && ($statusCode == 'c0' || $statusCode == 'c6') && $len > 10;
+
+            if ($isHeartbeat) {
                 $heartbeat = '';
                 $externalData = '';
 
@@ -1148,14 +1141,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // 检查机台状态（第18-19字节必须是 DA=正常）
         if (substr($msg, 18, 2) != 'da') {
             $this->has_lock = 1;
-            Log::channel('machine_operations')->error('[SongOfflineJackpot-MachineLock] 机台被锁', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'lock_reason' => '心跳数据异常',
-                'expected_byte_18' => 'da',
-                'actual_byte_18' => substr($msg, 18, 2),
-                'heartbeat_msg' => $msg,
-            ]);
             sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
             throw new Exception('机台故障');
         }
@@ -1200,6 +1185,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $this->reward_status = $nowRewardStatus;
         $this->now_turn = $nowWinNumber;
         $this->ratio = $nowRatio;
+
+        // ✅ 设置查询指令的actionVersion（心跳包含所有查询数据，可作为查询响应）
+        // 这样发送查询指令后，收到心跳也能被识别为有效响应
+        $this->setActionVersion(self::MACHINE_POINT);   // 分数查询
+        $this->setActionVersion(self::MACHINE_SCORE);   // 得分查询
+        $this->setActionVersion(self::MACHINE_TURN);    // 转数查询
+        $this->setActionVersion(self::WIN_NUMBER);      // 累积转数查询
 
         // ==================== 开奖开始 ====================
         if ($nowRewardStatus == 1 && $orgRewardStatus == 0) {
