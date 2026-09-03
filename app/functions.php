@@ -1340,16 +1340,21 @@ function machineWash(
             $machine->save();
 
             if ($machine->type == GameType::TYPE_STEEL_BALL) {
-                $activityServices = new ActivityServices($machine, $player);
-                $activityServices->playerFinishActivity(true);
+                // 只有线上机台参与活动
+                if ($machine->machine_source == Machine::MACHINE_SOURCE_ONLINE) {
+                    $activityServices = new ActivityServices($machine, $player);
+                    $activityServices->playerFinishActivity(true);
+                }
             }
             /** TODO 计算打码量 */
         }
         // 斯洛离开机台或弃台下分重置活动 检查彩金中奖情况
         if ($machine->type == GameType::TYPE_SLOT) {
-            // 离开机台参与活动结束
-            $activityServices = new ActivityServices($machine, $player);
-            $activityServices->playerFinishActivity(true);
+            // 离开机台参与活动结束（只有线上机台）
+            if ($machine->machine_source == Machine::MACHINE_SOURCE_ONLINE) {
+                $activityServices = new ActivityServices($machine, $player);
+                $activityServices->playerFinishActivity(true);
+            }
 
             // ✅ 清除累计打码量（2026-07-30）
             // 玩家离开机台时，清除所有彩金的累计打码量
@@ -3037,7 +3042,8 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerDeliveryRecord->save();
 
             // ========== Phase 6: 活动记录 ==========
-            if ($player->channel && $player->channel->activity_status == 1) {
+            // 只有线上机台参与活动
+            if ($machine->machine_source == Machine::MACHINE_SOURCE_ONLINE && $player->channel && $player->channel->activity_status == 1) {
                 $ActivityServices = new \app\service\ActivityServices($machine, $player);
                 $ActivityServices->addPlayerActivityRecord();
             }
@@ -3487,9 +3493,11 @@ if (!function_exists('resetMachineTrans')) {
             }
             $services->player_open_point = 0;
             $services->player_wash_point = 0;
-            // 下分参与活动结束
-            $activityServices = new ActivityServices($machine, $player);
-            $activityServices->playerFinishActivity(true);
+            // 下分参与活动结束（只有线上机台）
+            if ($machine->machine_source == Machine::MACHINE_SOURCE_ONLINE) {
+                $activityServices = new ActivityServices($machine, $player);
+                $activityServices->playerFinishActivity(true);
+            }
             DB::commit();
         } catch (\Exception $e) {
             DB::rollback();
