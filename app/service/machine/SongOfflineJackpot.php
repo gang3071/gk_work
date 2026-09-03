@@ -1328,14 +1328,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     ->fixedPotCheckLottery($nowScore);
             }
 
-            // 投递活动队列
-            if ($nowScore > 0 && !empty($gamingUserId)) {
-                Client::send('play-activity', [
-                    'machine_id' => $this->machine->id,
-                    'player_id' => $gamingUserId,
-                    'point' => $nowScore,
-                ]);
-
+            // 线下版钢珠机不参与机台活动，不发送 play-activity 队列
+            // 但保留钢珠报喜功能（广播功能，非活动）
+            if ($nowScore > 0) {
                 // 钢珠报喜：检测珠数是否达到阈值并广播
                 \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $nowScore);
             }
