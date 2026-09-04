@@ -22,7 +22,7 @@ use yzh52521\WebmanLock\Locker;
 /**
  * 线下版钢珠机（小淞工控）
  *
- * 基于 2024线上85x 协议（小淞线下版钢珠工控协议）
+ * 基于 2024线上85x 协议（小淞线下版钢珠工控协议 - 更新版）
  *
  * 协议要点：
  * - 波特率: 9600，停止位: 1
@@ -32,17 +32,23 @@ use yzh52521\WebmanLock\Locker;
  * - 校验算法: S1=XOR, S2=ADD取后2位
  *
  * 主要指令：
- * - 心跳: 46C0/46C6 (36字节)
+ * - 心跳: 46C0/46C6 (36字节) + B5/B7（心跳固定附带外部按钮数据）
  * - 上分: 46CA + 上分码 + 金额
  * - 下分: 46CC + 下分码 (三次握手)
  * - 故障排除: 46CCB4（会清除外部按钮计数器）
- * - 查询: 46CEA2(分数) / 46CEA5(得分) / 46CEA6(转数) / 46CEA9(累积转数)
+ * - 查询: 46CEA2(分数) / 46CEA5(得分) / 46CEA6(转数) / 46CEA9(累积转数) / 46CEAC(外部码表)
  * - 操作: 46CEC1(上转) / 46CEC9(下转) / 46CECD(启动) / 46CECE(停止)
  *
  * 线下版特有功能：
  * - B5指令: 外部按钮开分次数（⚠️ 次数，不是金额）
  * - B7指令: 外部按钮洗分次数（⚠️ 次数，不是金额）
  * - 可配置分机号（默认46H）
+ *
+ * 新版工控调整（2024-09-04）：
+ * - 查询回复改用专用格式：
+ *   · 46CEA2 → 46EA (分数) / 46CEA5 → 46EB (得分) / 46CEA6 → 46EC (转数) / 46CEA9 → 46ED (累积转数)
+ * - 新增查询外部码表：46CEAC → 46EE(开分) + 46EF(洗分)
+ * - 心跳固定带上B5和B7外部按钮数据
  *
  * @property int $auto 自动状态（0=停止 1=启动）
  * @property int $reward_status 开奖状态（0=未开奖 1=开奖中）
@@ -70,10 +76,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 {
     // ==================== 查询指令（主动获取数据）====================
     // ✅ 新文档2024线上85x：全部使用46前缀
-    const MACHINE_POINT = '46cea2';    // 查询机台目前分数（46 CE A2）→ 回复 46 C0 xx xx xx
-    const MACHINE_SCORE = '46cea5';    // 查询机台目前得分WIN（46 CE A5）→ 回复 46 DA xx xx xx
-    const MACHINE_TURN = '46cea6';     // 查询机台目前剩余转数（46 CE A6）→ 回复 46 DE xx xx
-    const WIN_NUMBER = '46cea9';       // 查询机台累积转数（46 CE A9）→ 回复 46 D0 xx xx xx
+    const MACHINE_POINT = '46cea2';    // 查询机台目前分数（46 CE A2）→ 回复 46 EA xx xx xx S1 S2（新）或 46 C0 xx xx xx（旧）
+    const MACHINE_SCORE = '46cea5';    // 查询机台目前得分WIN（46 CE A5）→ 回复 46 EB xx xx xx S1 S2（新）或 46 DA xx xx xx（旧）
+    const MACHINE_TURN = '46cea6';     // 查询机台目前剩余转数（46 CE A6）→ 回复 46 EC xx xx S1 S2（新）或 46 DE xx xx（旧）
+    const WIN_NUMBER = '46cea9';       // 查询机台累积转数（46 CE A9）→ 回复 46 ED xx xx xx S1 S2（新）或 46 D0 xx xx xx（旧）
+    const EXTERNAL_BUTTON_QUERY = '46ceac'; // 查询外部开洗分码表（46 CE AC）→ 回复 46 EE xx xx EF xx xx xx S1 S2
 
     // ==================== 心跳状态码（被动接收）====================
     const GET_MACHINE_POINT = '46c0';  // 心跳-停止状态下的分数
@@ -84,6 +91,15 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     const GET_MACHINE_TURN = '46de';   // 心跳-剩余转数
     const GET_WIN_NUMBER = '46d0';     // 心跳-累积转数（未开奖）
     const REWARD_WIN_NUMBER = '46d5';  // 心跳-累积转数（开奖中）
+
+    // ==================== 查询回复（新版工控）====================
+    // ✅ 小淞线下版工控调整：查询指令使用专用回复格式
+    const QUERY_REPLY_POINT = '46ea';      // 查询分数回复（新版）
+    const QUERY_REPLY_SCORE = '46eb';      // 查询得分回复（新版）
+    const QUERY_REPLY_TURN = '46ec';       // 查询转数回复（新版）
+    const QUERY_REPLY_WIN_NUMBER = '46ed'; // 查询累积转数回复（新版）
+    const QUERY_REPLY_EXTERNAL = '46ee';   // 查询外部码表回复-开分部分
+    const QUERY_REPLY_EXTERNAL_WASH = '46ef'; // 查询外部码表回复-洗分部分
 
     // ==================== 管理指令 ====================
     // ✅ 新文档2024线上85x：全部使用46前缀
@@ -417,7 +433,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function validateMessageLength(int $len, string $msg): void
     {
-        $validLengths = [10, 12, 14, 16, 36, 46, 50, 58, 60];
+        // ✅ 新版工控新增：20（查询外部码表回复：46 EE xx xx EF xx xx xx S1 S2）
+        $validLengths = [10, 12, 14, 16, 20, 36, 46, 50, 58, 60];
 
         if (!in_array($len, $validLengths)) {
             if ($len < 10) {
@@ -587,7 +604,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function separateCommandWithExternal(string $msg, int $len): array
     {
-        $stdLengths = [10, 12, 14, 16];
+        // ✅ 新版工控新增：20（查询外部码表回复）
+        $stdLengths = [10, 12, 14, 16, 20];
 
         foreach ($stdLengths as $cmdLen) {
             if ($len > $cmdLen) {
@@ -1662,6 +1680,105 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $this->setActionVersion(self::WIN_NUMBER);
                 break;
 
+            // ==================== 新版查询回复格式 ====================
+            // ✅ 小淞线下版工控调整：查询指令回复改用专用格式
+
+            // 查询分数响应（新版）：46 EA xx xx xx S1 S2
+            case self::QUERY_REPLY_POINT:  // 46ea
+                $point = self::parseScore(substr($msg, 4, 6));
+                $this->point = $point;
+                $this->setActionVersion(self::MACHINE_POINT);
+                $this->log->info('[新版查询] 收到分数查询回复', [
+                    'machine_code' => $this->machine->code,
+                    'point' => $point,
+                    'msg' => $msg
+                ]);
+                break;
+
+            // 查询得分响应（新版）：46 EB xx xx xx S1 S2
+            case self::QUERY_REPLY_SCORE:  // 46eb
+                $score = self::parseScore(substr($msg, 4, 6));
+                $this->score = $score;
+                $this->setActionVersion(self::MACHINE_SCORE);
+                $this->log->info('[新版查询] 收到得分查询回复', [
+                    'machine_code' => $this->machine->code,
+                    'score' => $score,
+                    'msg' => $msg
+                ]);
+                break;
+
+            // 查询转数响应（新版）：46 EC xx xx S1 S2
+            case self::QUERY_REPLY_TURN:  // 46ec
+                $turn = self::parseScore('00' . substr($msg, 4, 4));
+                $this->turn = $turn;
+                $this->setActionVersion(self::MACHINE_TURN);
+                $this->log->info('[新版查询] 收到转数查询回复', [
+                    'machine_code' => $this->machine->code,
+                    'turn' => $turn,
+                    'msg' => $msg
+                ]);
+                break;
+
+            // 查询累积转数响应（新版）：46 ED xx xx xx S1 S2
+            case self::QUERY_REPLY_WIN_NUMBER:  // 46ed
+                $winNumber = self::parseScore(substr($msg, 4, 6));
+                $oldWinNumber = $this->win_number;
+                $delta = $winNumber - $oldWinNumber;
+
+                // 防止异常值
+                if (abs($delta) > 100) {
+                    $this->log->error('[新版查询] 检测到异常的winNumber值，拒绝更新', [
+                        'machine_code' => $this->machine->code,
+                        'old_win_number' => $oldWinNumber,
+                        'new_win_number' => $winNumber,
+                        'delta' => $delta,
+                    ]);
+                } else {
+                    $this->win_number = $winNumber;
+                    $this->log->info('[新版查询] 收到累积转数查询回复', [
+                        'machine_code' => $this->machine->code,
+                        'win_number' => $winNumber,
+                        'msg' => $msg
+                    ]);
+                }
+                $this->setActionVersion(self::WIN_NUMBER);
+                break;
+
+            // 查询外部开洗分码表响应（新版）：46 EE xx xx EF xx xx xx S1 S2
+            case self::QUERY_REPLY_EXTERNAL:  // 46ee
+                // 格式：46 EE xx xx（开分次数） EF xx xx xx（洗分次数） S1 S2
+                // EE后2字节是开分次数（千位+百位，十位+个位）
+                // EF后3字节是洗分次数（十万+万位，千+百位，十+个位）
+                if (strlen($msg) >= 20) {  // 46EExxxxEFxxxxxxS1S2 = 20字符
+                    $openCountHex = substr($msg, 4, 4);  // xx xx
+                    $washCountHex = substr($msg, 10, 6); // xx xx xx
+
+                    // 解析开分次数（2字节BCD）
+                    $openCount = self::parseScore('00' . $openCountHex);
+
+                    // 解析洗分次数（3字节BCD）
+                    $washCount = self::parseScore($washCountHex);
+
+                    $this->external_open_count = $openCount;
+                    $this->external_wash_count = $washCount;
+                    $this->setActionVersion(self::EXTERNAL_BUTTON_QUERY);
+
+                    $this->log->info('[新版查询] 收到外部开洗分码表查询回复', [
+                        'machine_code' => $this->machine->code,
+                        'external_open_count' => $openCount,
+                        'external_wash_count' => $washCount,
+                        'msg' => $msg
+                    ]);
+                } else {
+                    $this->log->error('[新版查询] 外部码表回复格式错误', [
+                        'machine_code' => $this->machine->code,
+                        'expected_length' => 20,
+                        'actual_length' => strlen($msg),
+                        'msg' => $msg
+                    ]);
+                }
+                break;
+
             // ✅ P0-14修复：SCORE_TO_POINT 已移至 handleCommandReply()（6位指令用$fun匹配）
 
             default:
@@ -1907,6 +2024,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 case self::MACHINE_POINT:
                 case self::MACHINE_TURN:
                 case self::WIN_NUMBER:
+                case self::EXTERNAL_BUTTON_QUERY:  // ✅ 新版工控：查询外部开洗分码表
                     $this->machineAction($uid, $cmd, $source, $source_id);
                     break;
 
