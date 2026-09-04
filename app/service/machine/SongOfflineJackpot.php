@@ -1791,14 +1791,57 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         break;
                     }
 
-                    $this->external_open_count = $openCount;
-                    $this->external_wash_count = $washCount;
+                    // ✅ 获取旧计数器值
+                    $oldOpenCount = $this->external_open_count ?? 0;
+                    $oldWashCount = $this->external_wash_count ?? 0;
+                    $now = time();
+
+                    // ✅ 处理开分计数器变化（与B5逻辑一致）
+                    if ($openCount != $oldOpenCount) {
+                        $result = $this->processCounterChange('open', $oldOpenCount, $openCount, $now);
+                        if ($result['should_update']) {
+                            $this->external_open_count = $openCount;
+                        }
+
+                        $this->log->info('[新版查询] 开分计数器变化', [
+                            'machine_code' => $this->machine->code,
+                            'old' => $oldOpenCount,
+                            'new' => $openCount,
+                            'increment' => $openCount - $oldOpenCount,
+                            'recorded' => $result['recorded'],
+                            'reason' => $result['reason'],
+                        ]);
+                    } else {
+                        $this->external_open_count = $openCount;
+                    }
+
+                    // ✅ 处理洗分计数器变化（与B7逻辑一致）
+                    if ($washCount != $oldWashCount) {
+                        $result = $this->processCounterChange('wash', $oldWashCount, $washCount, $now);
+                        if ($result['should_update']) {
+                            $this->external_wash_count = $washCount;
+                        }
+
+                        $this->log->info('[新版查询] 洗分计数器变化', [
+                            'machine_code' => $this->machine->code,
+                            'old' => $oldWashCount,
+                            'new' => $washCount,
+                            'increment' => $washCount - $oldWashCount,
+                            'recorded' => $result['recorded'],
+                            'reason' => $result['reason'],
+                        ]);
+                    } else {
+                        $this->external_wash_count = $washCount;
+                    }
+
                     $this->setActionVersion(self::EXTERNAL_BUTTON_QUERY);
 
                     $this->log->info('[新版查询] 收到外部开洗分码表查询回复', [
                         'machine_code' => $this->machine->code,
                         'external_open_count' => $openCount,
                         'external_wash_count' => $washCount,
+                        'old_open_count' => $oldOpenCount,
+                        'old_wash_count' => $oldWashCount,
                         'msg' => $msg
                     ]);
                 } else {
