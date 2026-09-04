@@ -1749,7 +1749,20 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 // 格式：46 EE xx xx（开分次数） EF xx xx xx（洗分次数） S1 S2
                 // EE后2字节是开分次数（千位+百位，十位+个位）
                 // EF后3字节是洗分次数（十万+万位，千+百位，十+个位）
+                // ⚠️ S1/S2校验已在 processCommandMessage 中完成，此处无需再验证
                 if (strlen($msg) >= 20) {  // 46EExxxxEFxxxxxxS1S2 = 20字符
+                    // 验证中间的EF标识
+                    $efMarker = substr($msg, 8, 2);
+                    if ($efMarker !== 'ef') {
+                        $this->log->error('[新版查询] 外部码表回复格式错误，缺少EF标识', [
+                            'machine_code' => $this->machine->code,
+                            'expected_ef' => 'ef',
+                            'actual' => $efMarker,
+                            'msg' => $msg
+                        ]);
+                        break;
+                    }
+
                     $openCountHex = substr($msg, 4, 4);  // xx xx
                     $washCountHex = substr($msg, 10, 6); // xx xx xx
 
@@ -1758,6 +1771,25 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                     // 解析洗分次数（3字节BCD）
                     $washCount = self::parseScore($washCountHex);
+
+                    // ✅ 校验数据合理性
+                    if ($openCount > 9999) {
+                        $this->log->error('[新版查询] 外部开分次数超出范围', [
+                            'machine_code' => $this->machine->code,
+                            'open_count' => $openCount,
+                            'max' => 9999,
+                        ]);
+                        break;
+                    }
+
+                    if ($washCount > 999999) {
+                        $this->log->error('[新版查询] 外部洗分次数超出范围', [
+                            'machine_code' => $this->machine->code,
+                            'wash_count' => $washCount,
+                            'max' => 999999,
+                        ]);
+                        break;
+                    }
 
                     $this->external_open_count = $openCount;
                     $this->external_wash_count = $washCount;
