@@ -801,35 +801,22 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     {
         // ========== 情况1：计数器减少 ==========
         if ($newCount < $oldCount) {
-            // 检查是否刚执行过故排
-            $hasRecentCheck = Cache::get('check_flag_' . $this->machine->id);
+            // ⚠️ 计数器减少通常意味着：
+            // 1. 换卡导致硬件计数器归零
+            // 2. 机台断电重启
+            // 3. 数据异常
 
-            if ($hasRecentCheck) {
-                // 故排后归零，正常
-                $this->log->info("[{$type}计数器] 故排后归零", [
-                    'machine_code' => $this->machine->code,
-                    'old' => $oldCount,
-                    'new' => $newCount,
-                ]);
-                return ['should_update' => true, 'recorded' => false, 'reason' => '故排归零'];
-            } else {
-                // 异常减少，告警
-                $this->log->error("[{$type}计数器] 异常减少", [
-                    'machine_code' => $this->machine->code,
-                    'old' => $oldCount,
-                    'new' => $newCount,
-                    'decrease' => $oldCount - $newCount,
-                ]);
+            // ✅ 如果是换卡，管理员应该先点"更换开分卡"保存数据
+            // 这里仍然更新Redis值，但记录警告日志
+            $this->log->warning("[{$type}计数器] 计数器减少（可能是换卡或重启）", [
+                'machine_code' => $this->machine->code,
+                'old' => $oldCount,
+                'new' => $newCount,
+                'decrease' => $oldCount - $newCount,
+                'note' => '如果是换卡，应先点击"更换开分卡"保存数据'
+            ]);
 
-                // 发送机台异常通知
-                try {
-                    sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, 0);
-                } catch (Exception $e) {
-                    $this->log->error('发送机台异常通知失败', ['error' => $e->getMessage()]);
-                }
-
-                return ['should_update' => true, 'recorded' => false, 'reason' => '异常减少'];
-            }
+            return ['should_update' => true, 'recorded' => false, 'reason' => '计数器减少'];
         }
 
         // ========== 情况2：计数器不变 ==========
@@ -1519,22 +1506,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 break;
 
             case self::CHECK:
-                // ✅ 设置故排标记（用于计数器归零检测）
-                Cache::set('check_flag_' . $this->machine->id, true, 10); // 10秒有效
-
-                // ✅ 故排指令：清除外部按钮开洗分次数（协议规定）
-                $oldOpenCount = $this->external_open_count ?? 0;
-                $oldWashCount = $this->external_wash_count ?? 0;
-
-                $this->external_open_count = 0;
-                $this->external_wash_count = 0;
+                // ✅ 故障排除：仅清除机台故障标记，不影响任何数据
+                // ⚠️ 不清除B5/B7计数器，不清除服务端数据
                 $this->setActionVersion($fun);
 
-                $this->log->info('[故排] 清除外部按钮计数器', [
+                $this->log->info('[故障排除] 发送CHECK指令（仅清除故障标记）', [
                     'machine_code' => $this->machine->code,
-                    'old_open_count' => $oldOpenCount,
-                    'old_wash_count' => $oldWashCount,
-                    'note' => '故排指令会清除 B5/B7 计数器，已设置10秒标记'
+                    'note' => '故障排除不清除B5/B7计数器，仅清除机台故障灯/标记'
                 ]);
                 break;
 
