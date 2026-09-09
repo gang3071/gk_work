@@ -104,6 +104,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     // ==================== 管理指令 ====================
     // ✅ 新文档2024线上85x：全部使用46前缀
     const CHECK = '46ccb4';            // 故障排除（46 CC B4）
+    const CLEAR_EXTERNAL_BUTTON = '46ccb3'; // 清除外部按钮码表（46 CC B3）- ⚠️ 新文档新增
     const CLEAR_LOG = '46ccba';        // 清除押得数值（46 CC BA）
     const MACHINE_OPEN = '46cebe';     // 开机（46 CE BE）
     const MACHINE_CLOSE = '46cebc';    // 关机（46 CE BC）
@@ -1536,6 +1537,27 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     'old_open_count' => $oldOpenCount,
                     'old_wash_count' => $oldWashCount,
                     'note' => '故障排除会清除 B5/B7 计数器，已设置10秒标记'
+                ]);
+                break;
+
+            case self::CLEAR_EXTERNAL_BUTTON:
+                // ✅ 新文档新增：清除外部按钮码表专用指令（46 CC B3 39 FE）
+                // ⚠️ 与故排(46CCB4)的区别：只清除B5/B7计数器，不执行故障排除
+                Cache::set('check_flag_' . $this->machine->id, true, 10); // 10秒有效
+
+                $oldOpenCount = $this->external_open_count ?? 0;
+                $oldWashCount = $this->external_wash_count ?? 0;
+
+                $this->external_open_count = 0;
+                $this->external_wash_count = 0;
+                $this->setActionVersion($fun);
+
+                $this->log->info('[清除外部按钮码表] 专用指令清除计数器', [
+                    'machine_code' => $this->machine->code,
+                    'cmd' => self::CLEAR_EXTERNAL_BUTTON,
+                    'old_open_count' => $oldOpenCount,
+                    'old_wash_count' => $oldWashCount,
+                    'note' => '专用清除指令（46CCB3），仅清除B5/B7，不执行故排'
                 ]);
                 break;
 
