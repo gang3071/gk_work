@@ -652,6 +652,7 @@ class GameRecordSyncWorker
                     substr(md5(implode(',', $groupData['record_ids'])), 0, 8)
                 );
 
+                // 发送打码量统计队列
                 \Webman\RedisQueue\Client::send('bet-statistics', [
                     'player_id' => $groupData['player_id'],
                     'stat_type' => 'game',
@@ -661,12 +662,24 @@ class GameRecordSyncWorker
                     'batch_count' => $groupData['count'],  // 记录合并的记录数
                     'batch_id' => $batchId,  // ✅ 批次唯一标识（用于去重）
                 ]);
+
+                // ✅ 新增：同时发送积分队列（跨项目投递到 gk_api）
+                // 注意：gk_api 和 gk_work 共用同一个 Redis，队列可以跨项目
+                \Webman\RedisQueue\Client::send('player-points', [
+                    'player_id' => $groupData['player_id'],
+                    'bet_amount' => $groupData['bet_amount'],
+                    'source' => 'betting',
+                    'created_at' => $groupData['created_at'],
+                    'batch_id' => $batchId,  // ✅ 使用相同的批次ID（方便关联和去重）
+                    'record_ids' => $groupData['record_ids'],  // ✅ 记录IDs（用于查询平台信息）
+                ]);
             }
 
             if (!empty($grouped)) {
-                $this->log->info('[BetStats] 批量投递打码量统计（分组优化）', [
+                $this->log->info('[BetStats] 批量投递打码量统计+积分队列（分组优化）', [
                     'total_records' => count($insertedRecords),
                     'grouped_messages' => count($grouped),
+                    'queues_sent' => ['bet-statistics', 'player-points'],
                     'reduction' => count($insertedRecords) > 0
                         ? round((1 - count($grouped) / count($insertedRecords)) * 100, 1) . '%'
                         : '0%',
