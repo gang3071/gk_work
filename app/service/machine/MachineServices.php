@@ -26,7 +26,7 @@ class MachineServices
      * 创建机台服务
      * @param Machine $machine 机台
      * @param string $lang 语言
-     * @return Jackpot|Slot|SongSlot|SongJackpot|SongOfflineJackpot
+     * @return Jackpot|Slot|SongSlot|SongJackpot|SongOfflineJackpot|SongOfflineSlot
      * @throws Exception
      */
     public static function createServices(Machine $machine, string $lang = 'zh_CN')
@@ -37,7 +37,12 @@ class MachineServices
                     case Machine::CONTROL_TYPE_MEI:
                         return new Slot($machine, $lang);
                     case Machine::CONTROL_TYPE_SONG:
-                        return new SongSlot($machine, $lang);
+                        // 小淞工控：区分线上/线下
+                        if ($machine->machine_source === Machine::MACHINE_SOURCE_OFFLINE) {
+                            return new SongOfflineSlot($machine, $lang);
+                        } else {
+                            return new SongSlot($machine, $lang);
+                        }
                     default:
                         throw new Exception('Invalid product type');
                 }

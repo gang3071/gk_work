@@ -545,6 +545,24 @@ $handlers = [
             ]
         ],
     ],
+    // ✅ 线下版Slot机日志通道（2026-09-09）
+    // 用于记录外部按钮操作、心跳协议解析、开洗分操作等详细信息
+    'song_offline_slot_machine' => [
+        'handlers' => [
+            [
+                'class' => Monolog\Handler\RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/song_offline_slot_machine.log',
+                    3, //$maxFiles（保留3天，便于追踪外部按钮操作历史）
+                    Monolog\Logger::INFO, // INFO 级别，记录关键操作和异常
+                ],
+                'formatter' => [
+                    'class' => Monolog\Formatter\LineFormatter::class,
+                    'constructor' => [null, 'Y-m-d H:i:s', true],
+                ],
+            ]
+        ],
+    ],
     'game_lottery' => [
         'handlers' => [
             [
