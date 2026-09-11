@@ -84,6 +84,11 @@ class Events
         if (!in_array($domain, config('gateway_worker.whitelist'))) {
             return Gateway::closeClient($client_id);
         }
+        $log->warning('机台上线', [
+            'remote_addr' => $domain,
+            'remote_port' => $port,
+            'gateway_port' => $_SERVER['GATEWAY_PORT'],
+        ]);
         $machine = self::getMachine($_SERVER['GATEWAY_PORT'], $domain, $port, $client_id);
         if (!empty($machine) && $machine->status == 1 && $machine->deleted_at == null) {
             Gateway::bindUid($client_id, $domain . ':' . $port);
@@ -130,7 +135,9 @@ class Events
             case config('gateway_worker.slot_port'):
                 switch ($machine->control_type) {
                     case Machine::CONTROL_TYPE_MEI:
+                        // ✅ 双美机台消息处理（二进制转十六进制）
                         $msg = strtoupper(bin2hex($message));
+                        // 按32字符分块处理（双美Slot消息固定32字符）
                         $chunkSize = 32;
                         for ($i = 0; $i < strlen($msg); $i += $chunkSize) {
                             $chunk = substr($msg, $i, $chunkSize);

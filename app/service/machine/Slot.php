@@ -535,6 +535,7 @@ class Slot extends MachineServices implements BaseMachine
                     break;
                 case self::OPEN_ONE:
                 case self::OPEN_TEN:
+                case self::OPEN_FIVE:
                 case self::OPEN_ANY_POINT:
                     $this->openPoint($uid, $cmd, $data, $source, $source_id);
                     break;
@@ -1103,8 +1104,8 @@ class Slot extends MachineServices implements BaseMachine
             $data = decodeData($msg); // 解码数据位
             checkSlotXor55($msg, $data);
 
-            // 🔍 调试日志：记录硬件回复的指令码
-            $this->log->debug('[Slot-slotCmd] 收到硬件回复', [
+            // 🔍 调试日志：记录硬件回复的指令码（使用 info 级别便于查看）
+            $this->log->info('[Slot-slotCmd] 收到硬件回复', [
                 'machine_code' => $this->machine->code,
                 'msg' => $msg,
                 'fun' => $fun,
