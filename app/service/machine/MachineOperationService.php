@@ -655,6 +655,7 @@ class MachineOperationService
     {
         // 通过服务类对象直接读取属性值（服务类会自动处理 Redis key）
         $service = $this->services;
+        $machineType = $this->machine->type;  // ✅ 获取机台类型用于区分
 
         // 根据不同的指令读取不同的数据
         switch ($actionKey) {
@@ -712,51 +713,196 @@ class MachineOperationService
                     'credit2' => (int)($service->score ?? 0), // 别名
                 ];
 
-            case '23': // A2 23 - 读取 BET（押分）
+            case '23': // A2 23
+                if ($machineType == GameType::TYPE_SLOT) {
+                    // Slot: 读取 BET（押分）
+                    return [
+                        'bet' => (int)($service->bet ?? 0),
+                        'pressure' => (int)($service->bet ?? 0), // 别名
+                    ];
+                } else {
+                    // Jackpot: 读取机台当前转数
+                    return [
+                        'turn' => (int)($service->turn ?? 0),
+                    ];
+                }
+
+            case '24': // A2 24
+                if ($machineType == GameType::TYPE_SLOT) {
+                    // Slot: 读取 WIN
+                    return [
+                        'win' => (int)($service->win ?? 0),
+                    ];
+                } else {
+                    // Jackpot: 读取中洞对奖次数
+                    return [
+                        'win_number' => (int)($service->win_number ?? 0),
+                    ];
+                }
+
+            case '25': // A2 25
+                if ($machineType == GameType::TYPE_SLOT) {
+                    // Slot: 读取 BB
+                    return [
+                        'bb' => (int)($service->bb ?? 0),
+                    ];
+                } else {
+                    // Jackpot: 读取总开分
+                    return [
+                        'open_point' => (int)($service->open_point ?? 0),
+                        'total_open' => (int)($service->open_point ?? 0), // 别名
+                    ];
+                }
+
+            case '26': // A2 26
+                if ($machineType == GameType::TYPE_SLOT) {
+                    // Slot: 读取 RB
+                    return [
+                        'rb' => (int)($service->rb ?? 0),
+                    ];
+                } else {
+                    // Jackpot: 读取总下分
+                    return [
+                        'wash_point' => (int)($service->wash_point ?? 0),
+                        'total_wash' => (int)($service->wash_point ?? 0), // 别名
+                    ];
+                }
+
+            case '20': // A2 20 - 测试连接
                 return [
-                    'bet' => (int)($service->bet ?? 0),
-                    'pressure' => (int)($service->bet ?? 0), // 别名
+                    'connection' => 'ok',
+                    'message' => '连接测试成功',
                 ];
 
-            case '24': // A2 24 - 读取 WIN
-                return [
-                    'win' => (int)($service->win ?? 0),
-                ];
-
-            case '25': // A2 25 - 读取 BB
-                return [
-                    'bb' => (int)($service->bb ?? 0),
-                ];
-
-            case '26': // A2 26 - 读取 RB
-                return [
-                    'rb' => (int)($service->rb ?? 0),
-                ];
-
-            case '27': // A2 27 - 读取开分表
+            case '27': // A2 27 - 读取开分表（仅Slot）
                 return [
                     'open_table' => (int)($service->open_point ?? 0),
                 ];
 
-            case '28': // A2 28 - 读取洗分表
+            case '28': // A2 28 - 读取洗分表（仅Slot）
                 return [
                     'wash_table' => (int)($service->wash_point ?? 0),
                 ];
 
+            case '2B': // A2 2B - 读取BB Rush（仅Jackpot）
+                return [
+                    'bb_status' => (int)($service->bb_status ?? 0),
+                    'rush_status' => (int)($service->rush_status ?? 0),
+                ];
+
+            case '2D': // A2 2D - 大赏灯切换（仅Jackpot）
+                return [
+                    'reward_status' => (int)($service->reward_status ?? 0),
+                ];
+
+            case '2E00': // A2 2E 00 - PUSH停止
+            case '2E01': // A2 2E 01 - PUSH 1下
+            case '2E02': // A2 2E 02 - PUSH 2Hz
+            case '2E03': // A2 2E 03 - PUSH 5Hz
+                return [
+                    'push_auto' => (int)($service->push_auto ?? 0),
+                ];
+
             case '41': // A2 41 - 开分一次
             case '42': // A2 42 - 开分10次
-            case '49': // A2 49 - 开分5次
-            case '4a': // A2 4A - 开任意数
+            case '4A': // A2 4A - 开任意数
                 return [
                     'point' => (int)($service->point ?? 0),
                     'card_score' => (int)($service->score ?? 0),
                 ];
 
             case '43': // A2 43 - 洗分&清零
-            case '44': // A2 44 - 洗分
+            case '44': // A2 44 - 洗分（Slot）/ 洗分留余数（Jackpot）
                 return [
                     'point' => (int)($service->point ?? 0),
-                    'wash_table' => (int)($service->wash_point ?? 0),
+                    'wash_point' => (int)($service->wash_point ?? 0),
+                ];
+
+            case '45': // A2 45 - 移分ON（Slot）/ 自动上转（Jackpot）
+                if ($machineType == GameType::TYPE_SLOT) {
+                    return [
+                        'move_point' => (int)($service->move_point ?? 0),
+                    ];
+                } else {
+                    return [
+                        'auto' => (int)($service->auto ?? 0),
+                        'turn' => (int)($service->turn ?? 0),
+                    ];
+                }
+
+            case '46': // A2 46 - 移分OFF（Slot）/ 重置预备转数（Jackpot）
+                if ($machineType == GameType::TYPE_SLOT) {
+                    return [
+                        'move_point' => (int)($service->move_point ?? 0),
+                    ];
+                } else {
+                    return [
+                        'turn' => (int)($service->turn ?? 0),
+                        'message' => '预备转数已重置',
+                    ];
+                }
+
+            case '47': // A2 47 - 清除统计（Slot）/ 全部下转（Jackpot）
+                if ($machineType == GameType::TYPE_SLOT) {
+                    return [
+                        'bet' => (int)($service->bet ?? 0),
+                        'win' => (int)($service->win ?? 0),
+                        'bb' => (int)($service->bb ?? 0),
+                        'rb' => (int)($service->rb ?? 0),
+                    ];
+                } else {
+                    return [
+                        'turn' => (int)($service->turn ?? 0),
+                        'point' => (int)($service->point ?? 0),
+                    ];
+                }
+
+            case '48': // A2 48 - 转数转分数（下转一次，仅Jackpot）
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                ];
+
+            case '49': // A2 49
+                if ($machineType == GameType::TYPE_SLOT) {
+                    // Slot: 开分5次
+                    return [
+                        'point' => (int)($service->point ?? 0),
+                    ];
+                } else {
+                    // Jackpot: 分数转转数（上转一次）
+                    return [
+                        'turn' => (int)($service->turn ?? 0),
+                        'point' => (int)($service->point ?? 0),
+                    ];
+                }
+
+            case '4B': // A2 4B - 得分转分数（仅Jackpot）
+                return [
+                    'score' => (int)($service->score ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                ];
+
+            case '4C': // A2 4C - 全部上转（仅Jackpot）
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                ];
+
+            case '4D': // A2 4D - 开保转（仅Jackpot）
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'message' => 'OP_3保转已开启',
+                ];
+
+            case '4E': // A2 4E - 清除开赠要求（仅Jackpot）
+                return [
+                    'message' => '开赠要求已清除',
+                ];
+
+            case '4F': // A2 4F - 清除历史记录（仅Jackpot）
+                return [
+                    'message' => '历史记录已清除',
                 ];
 
             default:
