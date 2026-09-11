@@ -85,6 +85,17 @@ class MachineOperationService
      */
     private function initServices(): void
     {
+        // 🔍 调试日志：记录机台配置
+        Log::channel('machine_operations')->debug('[MachineOperationService] 初始化服务', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'type' => $this->machine->type,
+            'control_type' => $this->machine->control_type,
+            'machine_source' => $this->machine->machine_source,
+            'CONTROL_TYPE_MEI' => Machine::CONTROL_TYPE_MEI,
+            'CONTROL_TYPE_SONG' => Machine::CONTROL_TYPE_SONG,
+        ]);
+
         if ($this->machine->type == GameType::TYPE_SLOT) {
             // ✅ Bug #17修复：Slot机也需要区分线上/线下
             if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
@@ -108,6 +119,12 @@ class MachineOperationService
                     : \app\service\machine\SongJackpot::class;
             }
         }
+
+        // 🔍 调试日志：记录选择的服务类
+        Log::channel('machine_operations')->debug('[MachineOperationService] 服务类选择', [
+            'machine_id' => $this->machine->id,
+            'service_class' => $serviceClass,
+        ]);
 
         $this->services = new $serviceClass($this->machine, $this->lang);
     }
