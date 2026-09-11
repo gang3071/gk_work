@@ -94,7 +94,7 @@ class Jackpot extends MachineServices implements BaseMachine
 
     public $cacheData = [];
 
-    public $expirationTime = 5000000; // 3秒内返回
+    public $expirationTime = 8000000; // 8秒内返回
 
     public $log = null;
 
@@ -905,9 +905,29 @@ class Jackpot extends MachineServices implements BaseMachine
             $beforeActionTime = $this->action_time;
             $handleDuration = 0;
             $sleep = 50000; // 5毫秒取一次值
+
+            // ✅ 主动查询分数的时间节点（微秒）：1秒、2秒、3秒、5秒、7秒（间隔：1+1+1+2+2）
+            $queryIntervals = [1000000, 2000000, 3000000, 5000000, 7000000];
+            $queryIndex = 0;
+
             while (true) {
                 $point = $this->point;
                 $actionTime = $this->action_time;
+
+                // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
+                if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
+                    try {
+                        // 发送查询分数指令（MACHINE_POINT = '21'）
+                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::MACHINE_POINT)));
+                        $queryIndex++;
+                    } catch (\Exception $queryError) {
+                        Log::channel('jackpot_machine')->warning('[Jackpot-OpenPoint] 查询分数失败', [
+                            'machine_code' => $this->machine->code,
+                            'error' => $queryError->getMessage(),
+                        ]);
+                    }
+                }
+
                 if ($actionTime > $beforeActionTime && $beforePoint < $point) {
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
@@ -918,7 +938,7 @@ class Jackpot extends MachineServices implements BaseMachine
                     }
                     return;
                 }
-                if ($handleDuration >= $this->expirationTime) { // 只跑1.5秒钟
+                if ($handleDuration >= $this->expirationTime) {
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
                 usleep($sleep);
