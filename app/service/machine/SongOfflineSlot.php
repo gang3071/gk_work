@@ -90,29 +90,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
     // ==================== 管理指令 ====================
     const CLEAR_ACCOUNT = 'eade';      // 清除开洗分账+回补数
-    const RESET_MEMORY = 'eae7';       // 清除账目（需指拨1=ON）
     const RESET_BOARD = 'a37005e0f8ce'; // 归0机板（固定指令，不可修改）⚠️ 新增
-    const CHECK = 'eae7';              // 故障排除（同RESET_MEMORY）
 
     // ==================== 心跳 ====================
     const HEARTBEAT = 'b7';            // 心跳标识 ⚠️ 新增
-
-    // ==================== 回复标识（已在后面定义，这里注释掉避免重复）====================
-    // const REPLY_DETAIL = 'a6';      // 详细账目回复（见后面REPLY_ACCOUNT）
-    // const REPLY_BET_WIN = 'a7';     // 总押总赢回复（见后面REPLY_TOTAL）
-    // const REPLY_STATUS = 'a7';      // 机台情况回复（见后面）
-    // const REPLY_UP_DOWN = 'a5';     // 上下分回复（见后面REPLY_OPEN/WASH_SUCCESS）
-    // const REPLY_LOGIN = 'a7';       // 登入回复（见后面）
-    // const REPLY_RESET = 'a3';       // 归0回复（见后面REPLY_RESET_COMPLETE）
-
-    // ==================== 状态标识 ====================
-    const STATUS_NORMAL = 'c9';        // 正常开分 ⚠️ 新增
-    const STATUS_DRAWING = 'cb';       // 开奖中 ⚠️ 新增
-    const STATUS_CARD_OK = 'e9';       // 开分卡正常 ⚠️ 新增
-    const STATUS_CARD_ERROR = 'ee';    // Smart卡故障 ⚠️ 新增
-    const STATUS_UP_OK = 'ca';         // 上分成功 ⚠️ 新增
-    const STATUS_UP_FAIL = 'c5';       // 上分失败（未登入）⚠️ 新增
-    const STATUS_RESET_OK = 'f8';      // 归0完成 ⚠️ 新增
 
     // ==================== 开机标识 ====================
     const BOOT_FLAG = 'fa';            // 机板开机标识（FAH）⚠️ 新增
@@ -128,41 +109,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
     // ==================== 心跳/回复状态码 ====================
     const HEARTBEAT_POWER_ON = 'fah';  // 开机信号（机版主动发送）
-    const ERROR_E1 = 'e1';             // 需要归0
 
-    // ==================== 查询回复状态码 ====================
-    const REPLY_ACCOUNT = 'a6';        // 查询账目回复
-    const REPLY_TOTAL = 'a7';          // 查询总玩+总赢回复
-    const REPLY_STATUS = 'a7';         // 查询机台情况回复
-    const REPLY_LOGIN_SUCCESS = 'a7c3';   // ⚠️ 修复：登入成功回复（EA C3 → A7 C3）
-    const REPLY_LOGIN_QUERY = 'a7c5';     // ⚠️ 修复：查询登入状态回复（EA C5 → A7 C5）
-    // 注意：协议没有登出指令，登出状态通过心跳状态字节bit7检测
-
-    // ==================== 操作回复状态码 ====================
-    const REPLY_OPEN_SUCCESS = 'a5ca'; // 开分成功
-    const REPLY_OPEN_FAIL = 'a5c5';    // 开分失败（未登入）
-    const REPLY_WASH_SUCCESS = 'a5ca'; // 洗分成功
-    const REPLY_WASH_FAIL = 'a5c5';    // 洗分失败（未登入）
     const REPLY_RESET_COMPLETE = 'ef'; // 完整归0完成
     const REPLY_RESET_CLEAR = 'ee';    // 清除账目完成
 
     // ==================== 账目状态标志 ====================
-    const FLAG_OPEN_NORMAL = 'c9';     // 开分码表（正常）
     const FLAG_OPEN_REWARD = 'cb';     // 开分码表（开奖中）
-    const FLAG_WASH = 'ca';            // 洗分码表
-    const FLAG_CARD_NORMAL = 'e9';     // 开分卡分数（正常）
     const FLAG_CARD_FAULT = 'ee';      // 开分卡分数（故障）
-
-    const FLAG_OPEN_DONE = 'd2';       // 开分完成
-    const FLAG_OPEN_DOING = 'd3';      // 开分中
-    const FLAG_WASH_DONE = 'd6';       // 洗分完成
-    const FLAG_WASH_DOING = 'd7';      // 洗分中
-
-    const FLAG_BET_NORMAL = 'd8';      // 总押分（正常）
-    const FLAG_BET_REWARD = 'd7';      // 总押分（开奖中）
-    const FLAG_WIN = 'd9';             // 总赢分数
-
-    const FLAG_TURN = 'dc';            // 转数标志
 
     public $cacheData = [];
     public $expirationTime = 5000000;  // 5秒超时
@@ -1085,9 +1038,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
             }
 
-            if ($this->has_lock == 1 && $cmd != self::CHECK) {
+            // ✅ 修复：归0指令允许在机台锁定时执行（其他指令需要检查锁定状态）
+            if ($this->has_lock == 1 && $cmd !== self::RESET_BOARD) {
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
             }
+
             // 玩家操作时更新活动时间
             if ($source == 'player') {
                 $currentGamingUserId = $this->gaming_user_id;
@@ -1108,19 +1063,24 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 case self::READ_WIN:       // 别名：读取得分
                 case self::WIN_NUMBER:     // 别名：查询累积转数
                 // ✅ 修复：使用 createCmd 添加校验和
-                $fullCmd = $this->createCmd($cmd);
-                $this->log->info('[收账小卡] 发送简单指令', [
-                    'machine_code' => $this->machine->code,
-                    'cmd' => strtoupper($cmd),
-                    'full_cmd' => strtoupper($fullCmd),
-                ]);
-                Gateway::sendToUid($uid, hex2bin($fullCmd));
+                    $fullCmd = $this->createCmd($cmd);
+                    $this->log->info('[收账小卡] 发送简单指令', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => strtoupper($cmd),
+                        'full_cmd' => strtoupper($fullCmd),
+                    ]);
+                    Gateway::sendToUid($uid, hex2bin($fullCmd));
                     break;
 
-                case self::CHECK:
-                case self::RESET_MEMORY:  // ⚠️ 修复：清除账目（同CHECK）
                 case self::RESET_BOARD:   // ⚠️ 修复：归0机板（RESET_ZERO已废弃）
                     // 归0指令
+                    $this->log->info('[收账小卡-归0] 收到归0指令', [
+                        'machine_code' => $this->machine->code,
+                        'machine_id' => $this->machine->id,
+                        'source' => $source,
+                        'source_id' => $source_id,
+                        'has_lock' => $this->has_lock,
+                    ]);
                     $this->handleCheckCommand($uid, $source, $source_id);
                     break;
 
@@ -1165,9 +1125,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $oldWashCount = $this->external_wash_count ?? 0;
 
         // ✅ Bug #12修复：同步清除新旧字段，确保一致性
-        $this->open_table = 0;           // 新字段
         $this->external_open_count = 0;  // 旧字段（兼容性）
-        $this->wash_table = 0;           // 新字段
         $this->external_wash_count = 0;  // 旧字段（兼容性）
 
         $this->log->info('[收账小卡-故障排除] 清除外部码表', [
@@ -1324,9 +1282,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     break;
                 case self::CHECK_LOGIN:
                     $description = '查询登入状态';
-                    break;
-                case self::CHECK:
-                    $description = '故障排除';
                     break;
                 case self::OPEN_POINT:
                     $description = "上分（{$data}次）";

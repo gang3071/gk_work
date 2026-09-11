@@ -412,8 +412,9 @@ class MachineOperationService
         $result = $this->services->sendCmd(
             $cmd,
             $data,
-            $isSystem,
-            $this->operatorId
+            $this->operatorType,  // source: 'player' | 'admin' | 'system'
+            $this->operatorId,
+            $isSystem
         );
 
         return [
@@ -802,9 +803,8 @@ class MachineOperationService
         // 更新Redis缓存
         $this->services->has_lock = 0;
 
-        // 更新数据库
-        $this->machine->has_lock = 0;
-        $this->machine->save();
+        // 更新数据库（只更新单个字段，减少锁竞争）
+        Machine::where('id', $this->machine->id)->update(['has_lock' => 0]);
 
         Log::channel('machine_operations')->info('[AdvancedOperation] 机台解锁成功', [
             'machine_id' => $this->machine->id,
@@ -844,6 +844,15 @@ class MachineOperationService
         }
 
         // 发送归0指令（通过sendCmd调用handleCheckCommand）
+        Log::channel('machine_operations')->info('[AdvancedOperation] 准备发送归0指令', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'operator_type' => $this->operatorType,
+            'operator_id' => $this->operatorId,
+            'cmd' => $this->services::RESET_BOARD,
+            'has_lock' => $this->machine->has_lock,
+        ]);
+
         $this->services->sendCmd(
             $this->services::RESET_BOARD,
             0,
