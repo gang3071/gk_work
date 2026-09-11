@@ -183,6 +183,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_action_time',
             $this->cacheDataKey . '_has_lock',
 
+            // ✅ Bug #15修复：添加推送机制需要的关键字段
+            $this->cacheDataKey . '_auto',                 // 自动状态（必须，推送需要）
+            $this->cacheDataKey . '_reward_status',        // 开奖状态（必须，推送需要）
+            $this->cacheDataKey . '_bet',                  // 当前押分（必须，推送需要）
+            $this->cacheDataKey . '_win',                  // 总赢分数（必须，推送需要）
+
             // ⚠️ 新协议字段（GD 2026 07/30）
             $this->cacheDataKey . '_login_status',         // 登入状态（新命名）
             $this->cacheDataKey . '_card_score',           // 开分卡分数（新命名）
@@ -306,19 +312,20 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 自动推送机制
             $machineCacheInfo = $this->getAllData() ?? [];
             if (!empty($machineCacheInfo)) {
+                // ✅ Bug #15修复：所有字段添加默认值，防止Undefined array key错误
                 $info = [
                     'id' => $this->machine->id,
                     'last_game_at' => $this->machine->last_game_at,
                     'type' => $this->machine->type,
                     'gaming_user_id' => $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0,
                     'gaming' => $machineCacheInfo[$this->cacheDataKey . '_gaming'] ?? 0,
-                    'auto' => $machineCacheInfo[$this->cacheDataKey . '_auto'],
-                    'reward_status' => $machineCacheInfo[$this->cacheDataKey . '_reward_status'],
-                    'point' => $machineCacheInfo[$this->cacheDataKey . '_point'],
-                    'bet' => $machineCacheInfo[$this->cacheDataKey . '_bet'],
-                    'win' => $machineCacheInfo[$this->cacheDataKey . '_win'],
-                    'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'],
-                    'is_login' => $machineCacheInfo[$this->cacheDataKey . '_is_login'],
+                    'auto' => $machineCacheInfo[$this->cacheDataKey . '_auto'] ?? 0,
+                    'reward_status' => $machineCacheInfo[$this->cacheDataKey . '_reward_status'] ?? 0,
+                    'point' => $machineCacheInfo[$this->cacheDataKey . '_point'] ?? 0,
+                    'bet' => $machineCacheInfo[$this->cacheDataKey . '_bet'] ?? 0,
+                    'win' => $machineCacheInfo[$this->cacheDataKey . '_win'] ?? 0,
+                    'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'] ?? 0,
+                    'is_login' => $machineCacheInfo[$this->cacheDataKey . '_is_login'] ?? 0,
                 ];
 
                 $currentGamingUserId = $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0;
@@ -354,13 +361,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     public function handleMsg(string $msg): bool
     {
-        $domain = $this->machine->domain;
-        $port = $this->machine->port;
 
         try {
             $msg = strtolower(trim($msg));
-            $len = strlen($msg);
-
             // ⚠️ 第一步：检查机板开机标识（FAH）
             // ⚠️ 修复：直接检查，不调用不存在的checkBootFlag方法
             if (substr($msg, 0, 2) === self::BOOT_FLAG || $msg === self::HEARTBEAT_POWER_ON) {
