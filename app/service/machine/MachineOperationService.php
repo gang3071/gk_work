@@ -551,18 +551,30 @@ class MachineOperationService
         Log::channel('machine_operations')->info('[sendRawCmdWithReply] 准备发送指令', [
             'machine_id' => $machineId,
             'cmd' => $cmd,
+            'cmd_normalized' => $cmdNormalized,
             'action_key' => $actionKey,
             'before_version' => $beforeVersion,
+            'machine_type' => $this->machine->type,
+            'control_type' => $this->machine->control_type,
         ]);
 
-        // 发送指令
+        // ✅ 重要：发送指令时使用处理后的指令码（去掉前缀、统一大小写）
+        // 这样 Slot::sendCmd() 中的 $cmd 参数才能正确匹配常量定义
         $sendResult = $this->services->sendCmd(
-            $cmd,
+            $actionKey,  // ✅ 使用 actionKey 而不是原始 $cmd
             $data,
             $this->operatorType,
             $this->operatorId,
             $isSystem
         );
+
+        Log::channel('machine_operations')->info('[sendRawCmdWithReply] 指令已发送', [
+            'machine_id' => $machineId,
+            'original_cmd' => $cmd,
+            'send_cmd' => $actionKey,
+            'action_key' => $actionKey,
+            'send_result' => $sendResult,
+        ]);
 
         if (!$sendResult) {
             throw new Exception(trans('send_cmd_failed', [], 'message', $this->lang));
