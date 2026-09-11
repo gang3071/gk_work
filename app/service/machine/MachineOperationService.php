@@ -474,12 +474,14 @@ class MachineOperationService
             return [
                 'login_status' => (int)($service->login_status ?? 0),
                 'machine_score' => (int)($service->machine_score ?? 0),
-                'card_score' => (int)($service->card_score ?? $service->score ?? 0),
+                'point' => (int)($service->point ?? 0),              // ✅ 开分卡分数（A2 21 READ_SCORE）
+                'card_score' => (int)($service->point ?? 0),         // 别名：开分卡分数
+                'score' => (int)($service->score ?? 0),              // ✅ CREDIT2（A2 22 READ_CREDIT2）
+                'credit2' => (int)($service->score ?? 0),            // 别名：CREDIT2
                 'open_table' => (int)($service->open_table ?? $service->open_point ?? 0),
                 'wash_table' => (int)($service->wash_table ?? $service->wash_point ?? 0),
                 'total_bet' => (int)($service->total_bet ?? 0),
                 'total_win' => (int)($service->total_win ?? 0),
-                'point' => (int)($service->point ?? 0),
                 'bet' => (int)($service->bet ?? 0),
                 'win' => (int)($service->win ?? 0),
                 'bb' => (int)($service->bb ?? 0),
@@ -686,14 +688,16 @@ class MachineOperationService
                 ];
 
             // ========== 双美机台指令（去掉A2前缀后的指令码）==========
-            case '21': // A2 21 - 读取开分卡分数
+            case '21': // A2 21 - 读取开分卡分数（READ_SCORE）
                 return [
-                    'card_score' => (int)($service->score ?? 0),
+                    'point' => (int)($service->point ?? 0), // ✅ 开分卡分数存储在 point 字段
+                    'card_score' => (int)($service->point ?? 0), // 别名
                 ];
 
             case '22': // A2 22 - 读取 CREDIT2
                 return [
-                    'credit2' => (int)($service->score ?? 0), // CREDIT2 对应 score
+                    'score' => (int)($service->score ?? 0), // CREDIT2 存储在 score 字段
+                    'credit2' => (int)($service->score ?? 0), // 别名
                 ];
 
             case '23': // A2 23 - 读取 BET（押分）
