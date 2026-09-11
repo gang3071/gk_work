@@ -558,6 +558,8 @@ class Slot extends MachineServices implements BaseMachine
                 case Slot::READ_BB:
                 case Slot::READ_RB:
                 case Slot::ALL_DOWN:
+                case Slot::OPEN_TABLE:
+                case Slot::WASH_TABLE:
                     $this->machineAction($uid, $cmd, $source, $source_id);
                     break;
                 default:
@@ -1084,11 +1086,6 @@ class Slot extends MachineServices implements BaseMachine
         try {
             // ✅ 消息长度校验（开分卡消息必须是 32 字符）
             $msgLen = strlen($msg);
-            $this->log->warning('[Slot-slotCmd] 开分卡消息长度异常，收到消息', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'msg' => $msg,
-            ]);
             if ($msgLen != 32) {
                 $this->log->warning('[Slot-slotCmd] 开分卡消息长度异常，已忽略', [
                     'machine_id' => $this->machine->id,
@@ -1102,9 +1099,17 @@ class Slot extends MachineServices implements BaseMachine
             }
 
             checkCRC8($msg);
-            $fun = substr($msg, 2, 2);
+            $fun = strtoupper(substr($msg, 2, 2));  // ✅ 统一转换为大写，确保与常量定义一致
             $data = decodeData($msg); // 解码数据位
             checkSlotXor55($msg, $data);
+
+            // 🔍 调试日志：记录硬件回复的指令码
+            $this->log->debug('[Slot-slotCmd] 收到硬件回复', [
+                'machine_code' => $this->machine->code,
+                'msg' => $msg,
+                'fun' => $fun,
+                'data' => $data,
+            ]);
             $orgBbStatus = $this->bb_status;
             $orgRbStatus = $this->rb_status;
             $status1 = decodeStatus(substr($msg, 4, 2));
@@ -1301,9 +1306,25 @@ class Slot extends MachineServices implements BaseMachine
                     break;
                 case Slot::OPEN_TABLE:
                     $this->open_point = $data;
+                    $version = $this->setActionVersion($fun);
+                    $this->log->info('[Slot-slotCmd] OPEN_TABLE 更新版本号', [
+                        'machine_code' => $this->machine->code,
+                        'fun' => $fun,
+                        'data' => $data,
+                        'version' => $version,
+                        'open_point' => $this->open_point,
+                    ]);
                     break;
                 case Slot::WASH_TABLE:
                     $this->wash_point = $data;
+                    $version = $this->setActionVersion($fun);
+                    $this->log->info('[Slot-slotCmd] WASH_TABLE 更新版本号', [
+                        'machine_code' => $this->machine->code,
+                        'fun' => $fun,
+                        'data' => $data,
+                        'version' => $version,
+                        'wash_point' => $this->wash_point,
+                    ]);
                     break;
                 case Slot::OPEN_TESTING:
                     $this->sendMachineNowStatusMessage($this->machine->id);
