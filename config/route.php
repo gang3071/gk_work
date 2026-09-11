@@ -28,12 +28,6 @@ Route::group('/api', function () {
         // 获取游戏列表（保留兼容性，建议使用 admin 接口）
         Route::post('/get-game-list', [\app\api\v1\GamePlatformProxyController::class, 'getGameList']);
 
-        // 推送测试接口
-        Route::post('/push-test', [\app\api\v1\PushTestController::class, 'test']);
-        Route::post('/push-broadcast', [\app\api\v1\PushTestController::class, 'broadcast']);
-        Route::get('/push-config', [\app\api\v1\PushTestController::class, 'checkConfig']);
-        Route::post('/push-test-player', [\app\api\v1\PushTestController::class, 'testPlayerPush']);
-
         // 玩家机台操作 API（来自 gk_api，使用 JWT Token 或 X-Player-Id）
         Route::group('/machine', function () {
             // ✅ 统一操作入口

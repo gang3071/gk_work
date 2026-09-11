@@ -641,6 +641,10 @@ class Slot extends MachineServices implements BaseMachine
             default:
                 throw new Exception('命令错误');
         }
+        Log::channel('slot_machine')->info('[Slot-sendCmd] 组装指令', [
+            'machine_code' => $this->machine->code,
+            'cmd' => $cmd,
+        ]);
         return $cmd;
     }
 
@@ -1080,6 +1084,11 @@ class Slot extends MachineServices implements BaseMachine
         try {
             // ✅ 消息长度校验（开分卡消息必须是 32 字符）
             $msgLen = strlen($msg);
+            $this->log->warning('[Slot-slotCmd] 开分卡消息长度异常，收到消息', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'msg' => $msg,
+            ]);
             if ($msgLen != 32) {
                 $this->log->warning('[Slot-slotCmd] 开分卡消息长度异常，已忽略', [
                     'machine_id' => $this->machine->id,
