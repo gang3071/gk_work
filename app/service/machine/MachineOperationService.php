@@ -488,13 +488,15 @@ class MachineOperationService
                 'rb' => (int)($service->rb ?? 0),
             ];
         } else {
-            // 钢珠机数据
+            // 钢珠机数据（Jackpot）
             return [
-                'point' => (int)($service->point ?? 0),
-                'turn' => (int)($service->turn ?? 0),
-                'pressure' => (int)($service->pressure ?? 0),
-                'total_bet' => (int)($service->total_bet ?? 0),
-                'total_win' => (int)($service->total_win ?? 0),
+                'point' => (int)($service->point ?? 0),          // 当前分数
+                'turn' => (int)($service->turn ?? 0),            // 当前转数
+                'score' => (int)($service->score ?? 0),          // 当前珠数
+                'win_number' => (int)($service->win_number ?? 0),// 中洞对奖次数
+                'open_point' => (int)($service->open_point ?? 0),// 开分次数
+                'wash_point' => (int)($service->wash_point ?? 0),// 洗分次数
+                'push_auto' => (int)($service->push_auto ?? 0),  // PUSH auto状态
             ];
         }
     }
