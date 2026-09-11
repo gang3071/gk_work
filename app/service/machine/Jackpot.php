@@ -247,34 +247,6 @@ class Jackpot extends MachineServices implements BaseMachine
                         'field' => $name,
                         'value' => $value
                     ]);
-
-                    // ✅ 发送 Telegram CRITICAL 告警
-                    try {
-                        $token = env('TELEGRAM_BOT_TOKEN');
-                        $chatId = env('TELEGRAM_CHAT_ID');
-
-                        if (!empty($token) && !empty($chatId)) {
-                            $telegram = new \app\service\TelegramService($token, $chatId, \Monolog\Logger::ERROR);
-                            $telegram->sendAlert([
-                                'datetime' => new \DateTime(),
-                                'level_name' => 'CRITICAL',
-                                'message' => '[MachineServices:Jackpot] Redis 关键字段保存失败',
-                                'context' => [
-                                    'machine_id' => $this->machine->id ?? null,
-                                    'machine_code' => $this->machine->code ?? '',
-                                    'field' => $name,
-                                    'value' => $value,
-                                    'error' => 'Redis关键字段保存失败，可能导致DB/Redis数据不一致',
-                                ],
-                            ]);
-                        }
-                    } catch (\Throwable $telegramEx) {
-                        // Telegram 发送失败不影响主流程
-                        \support\Log::warning('[MachineServices:Jackpot] Telegram 告警发送失败', [
-                            'error' => $telegramEx->getMessage(),
-                        ]);
-                    }
-
                     throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
                 }
 
@@ -747,61 +719,9 @@ class Jackpot extends MachineServices implements BaseMachine
                 ]);
 
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
-
-                // ✅ 发送 Telegram 告警：硬件指令失败
-                try {
-                    $telegramConfig = config('telegram');
-                    if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
-                        $telegram = new \app\service\TelegramService(
-                            $telegramConfig['bot_token'],
-                            $telegramConfig['chat_id']
-                        );
-                        $cmdDesc = match($cmd) {
-                            self::OPEN_ANY_POINT => '开任意分',
-                            self::OPEN_ONE => '开分一次',
-                            self::OPEN_TEN => '开分10次',
-                            self::WASH_ZERO => '洗分清零',
-                            default => $cmd,
-                        };
-                        $telegram->sendAlert([
-                            'datetime' => new \DateTime(),
-                            'level_name' => 'ERROR',
-                            'message' => "钢珠机硬件指令失败（{$cmdDesc}）",
-                            'context' => [
-                                'machine_id' => $this->machine->id,
-                                'machine_code' => $this->machine->code,
-                                'machine_name' => $this->machine->name,
-                                'machine_type' => 'Jackpot',
-                                'cmd' => $cmd,
-                                'cmd_desc' => $cmdDesc,
-                                'error' => $e->getMessage(),
-                                'action' => '机台已自动锁定，请检查硬件状态',
-                            ],
-                        ]);
-                    }
-                } catch (\Exception $telegramError) {
-                    Log::error('[TelegramAlert] 发送告警失败', [
-                        'error' => $telegramError->getMessage(),
-                    ]);
-                }
             }
             throw new Exception($e->getMessage());
         }
-        // ✅ 优化：精简日志，只记录关键信息，移除冗余的 machine_data
-        $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
-        $this->log->info($operatorType . '机台操作', [
-            'operator_type' => $source,
-            'operator_id' => $source_id,
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'player_id' => $this->machine->gamingPlayer->id ?? 0,
-            'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',
-            'action' => $cmd,
-            'action_desc' => $this->getDescription($cmd),
-            'point' => $data,
-            // 移除 machine_data（几千字节的冗余数据）
-        ]);
-
         return true;
     }
 

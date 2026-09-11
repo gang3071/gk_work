@@ -84,11 +84,6 @@ class Events
         if (!in_array($domain, config('gateway_worker.whitelist'))) {
             return Gateway::closeClient($client_id);
         }
-        $log->warning('机台上线', [
-            'remote_addr' => $domain,
-            'remote_port' => $port,
-            'gateway_port' => $_SERVER['GATEWAY_PORT'],
-        ]);
         $machine = self::getMachine($_SERVER['GATEWAY_PORT'], $domain, $port, $client_id);
         if (!empty($machine) && $machine->status == 1 && $machine->deleted_at == null) {
             Gateway::bindUid($client_id, $domain . ':' . $port);
@@ -123,11 +118,6 @@ class Events
         }
         $machine = self::getMachine($gatewayPort, $domain, $port, $client_id);
         if (empty($machine) || $machine->status == 0 || $machine->deleted_at != null) {
-            $log->warning('机台不存在', [
-                'remote_addr' => $domain,
-                'remote_port' => $port,
-                'gateway_port' => $_SERVER['GATEWAY_PORT'],
-            ]);
             return Gateway::closeClient($client_id);
         }
         $service = MachineServices::createServices($machine);

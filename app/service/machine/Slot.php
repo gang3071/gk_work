@@ -276,33 +276,6 @@ class Slot extends MachineServices implements BaseMachine
                         'value' => $value
                     ]);
 
-                    // ✅ 发送 Telegram CRITICAL 告警
-                    try {
-                        $token = env('TELEGRAM_BOT_TOKEN');
-                        $chatId = env('TELEGRAM_CHAT_ID');
-
-                        if (!empty($token) && !empty($chatId)) {
-                            $telegram = new \app\service\TelegramService($token, $chatId, \Monolog\Logger::ERROR);
-                            $telegram->sendAlert([
-                                'datetime' => new \DateTime(),
-                                'level_name' => 'CRITICAL',
-                                'message' => '[MachineServices:Slot] Redis 关键字段保存失败',
-                                'context' => [
-                                    'machine_id' => $this->machine->id ?? null,
-                                    'machine_code' => $this->machine->code ?? '',
-                                    'field' => $name,
-                                    'value' => $value,
-                                    'error' => 'Redis关键字段保存失败，可能导致DB/Redis数据不一致',
-                                ],
-                            ]);
-                        }
-                    } catch (\Throwable $telegramEx) {
-                        // Telegram 发送失败不影响主流程
-                        \support\Log::warning('[MachineServices:Slot] Telegram 告警发送失败', [
-                            'error' => $telegramEx->getMessage(),
-                        ]);
-                    }
-
                     throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
                 }
 
@@ -406,14 +379,6 @@ class Slot extends MachineServices implements BaseMachine
             // ✅ 消息长度校验（自动卡消息必须是 16 字符）
             $msgLen = strlen($msg);
             if ($msgLen != 16) {
-                $this->log->warning('[Slot-slotAutoCmd] 自动卡消息长度异常，已忽略', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'msg' => $msg,
-                    'msg_length' => $msgLen,
-                    'expected_length' => 16,
-                    'reason' => '可能是硬件故障或通信干扰',
-                ]);
                 return false;  // 忽略异常消息，不抛异常
             }
 
@@ -1064,7 +1029,6 @@ class Slot extends MachineServices implements BaseMachine
         } catch (Exception) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code]]);
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
             usleep(50000);
@@ -1109,14 +1073,6 @@ class Slot extends MachineServices implements BaseMachine
             // ✅ 消息长度校验（开分卡消息必须是 32 字符）
             $msgLen = strlen($msg);
             if ($msgLen != 32) {
-                $this->log->warning('[Slot-slotCmd] 开分卡消息长度异常，已忽略', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'msg' => $msg,
-                    'msg_length' => $msgLen,
-                    'expected_length' => 32,
-                    'reason' => '可能是硬件故障或通信干扰',
-                ]);
                 return false;  // 忽略异常消息，不抛异常
             }
 
@@ -1124,14 +1080,6 @@ class Slot extends MachineServices implements BaseMachine
             $fun = strtoupper(substr($msg, 2, 2));  // ✅ 统一转换为大写，确保与常量定义一致
             $data = decodeData($msg); // 解码数据位
             checkSlotXor55($msg, $data);
-
-            // 🔍 调试日志：记录硬件回复的指令码（使用 info 级别便于查看）
-            $this->log->info('[Slot-slotCmd] 收到硬件回复', [
-                'machine_code' => $this->machine->code,
-                'msg' => $msg,
-                'fun' => $fun,
-                'data' => $data,
-            ]);
             $orgBbStatus = $this->bb_status;
             $orgRbStatus = $this->rb_status;
             $status1 = decodeStatus(substr($msg, 4, 2));
@@ -1333,25 +1281,11 @@ class Slot extends MachineServices implements BaseMachine
                     break;
                 case Slot::OPEN_TABLE:
                     $this->open_point = $data;
-                    $version = $this->setActionVersion($fun);
-                    $this->log->info('[Slot-slotCmd] OPEN_TABLE 更新版本号', [
-                        'machine_code' => $this->machine->code,
-                        'fun' => $fun,
-                        'data' => $data,
-                        'version' => $version,
-                        'open_point' => $this->open_point,
-                    ]);
+                    $this->setActionVersion($fun);
                     break;
                 case Slot::WASH_TABLE:
                     $this->wash_point = $data;
                     $version = $this->setActionVersion($fun);
-                    $this->log->info('[Slot-slotCmd] WASH_TABLE 更新版本号', [
-                        'machine_code' => $this->machine->code,
-                        'fun' => $fun,
-                        'data' => $data,
-                        'version' => $version,
-                        'wash_point' => $this->wash_point,
-                    ]);
                     break;
                 case Slot::OPEN_TESTING:
                     $this->sendMachineNowStatusMessage($this->machine->id);
