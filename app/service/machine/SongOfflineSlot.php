@@ -385,10 +385,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 识别消息类型
             $header = substr($msg, 0, 2);
 
-            // 错误状态
-            if ($msg === self::ERROR_E1) {
+            // ✅ Bug #16修复：E1错误识别（可能是连续的E1，如e1e1e1e1e1e1）
+            if (preg_match('/^(e1)+$/i', $msg)) {
                 $this->log->warning('[收账小卡-错误] 记忆体异常需归0', [
                     'machine_code' => $this->machine->code,
+                    'msg' => strtoupper($msg),
+                    'e1_count' => strlen($msg) / 2,
                 ]);
                 $this->has_lock = 1;
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);

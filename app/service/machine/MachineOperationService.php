@@ -86,10 +86,16 @@ class MachineOperationService
     private function initServices(): void
     {
         if ($this->machine->type == GameType::TYPE_SLOT) {
-            // 斯洛机
-            $serviceClass = ($this->machine->control_type === Machine::CONTROL_TYPE_MEI)
-                ? \app\service\machine\Slot::class
-                : \app\service\machine\SongSlot::class;
+            // ✅ Bug #17修复：Slot机也需要区分线上/线下
+            if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
+                // 双美工控
+                $serviceClass = \app\service\machine\Slot::class;
+            } else {
+                // 小淞工控：区分线上/线下
+                $serviceClass = ($this->machine->machine_source === Machine::MACHINE_SOURCE_OFFLINE)
+                    ? \app\service\machine\SongOfflineSlot::class  // ✅ 新增：线下版Slot
+                    : \app\service\machine\SongSlot::class;         // 线上版Slot
+            }
         } else {
             // 钢珠机 (TYPE_STEEL_BALL) 或其他类型
             if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
@@ -705,6 +711,8 @@ class MachineOperationService
             'kick_player',        // 踢出玩家（洗分）
             'force_kick_player',  // 强制踢出（不返还分数）
             'custom_open_score',  // 自定义开分
+            'unlock',             // ✅ 新增：解锁机台
+            'reset',              // ✅ 新增：归0机板（小淞线下专用）
         ]);
     }
 
@@ -727,6 +735,10 @@ class MachineOperationService
                 return $this->forceKickPlayer($params);
             case 'custom_open_score':
                 return $this->customOpenScore($params);
+            case 'unlock':  // ✅ 新增：解锁机台
+                return $this->unlockMachine($params);
+            case 'reset':   // ✅ 新增：归0机板
+                return $this->resetMachine($params);
             default:
                 throw new Exception(trans('unknown_advanced_operation', ['{action}' => $action], 'message', $this->lang));
         }
@@ -778,6 +790,87 @@ class MachineOperationService
         ]);
 
         throw new Exception(trans('custom_open_score_not_migrated', [], 'message', $this->lang));
+    }
+
+    /**
+     * ✅ 新增：解锁机台
+     *
+     * 清除锁定状态，允许玩家继续使用机台
+     */
+    private function unlockMachine(array $params): array
+    {
+        // 更新Redis缓存
+        $this->services->has_lock = 0;
+
+        // 更新数据库
+        $this->machine->has_lock = 0;
+        $this->machine->save();
+
+        Log::channel('machine_operations')->info('[AdvancedOperation] 机台解锁成功', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'operator_type' => $this->operatorType,
+            'operator_id' => $this->operatorId,
+        ]);
+
+        return [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'has_lock' => 0,
+            'message' => '机台已解锁',
+        ];
+    }
+
+    /**
+     * ✅ 新增：归0机板（故障排除）
+     *
+     * 发送归0指令（A3 70 05 E0 F8 CE），清除机台内存错误
+     *
+     * ⚠️ 注意：
+     * - 仅支持小淞线下版（SongOfflineSlot/SongOfflineJackpot）
+     * - 会清除开分码表和洗分码表
+     * - 自动解除锁定状态
+     */
+    private function resetMachine(array $params): array
+    {
+        // 检查是否支持reset操作
+        $supportedClasses = [
+            \app\service\machine\SongOfflineSlot::class,
+            \app\service\machine\SongOfflineJackpot::class,
+        ];
+
+        if (!in_array(get_class($this->services), $supportedClasses)) {
+            throw new Exception('归0操作仅支持小淞线下版机台（收账小卡协议）');
+        }
+
+        // 发送归0指令（通过sendCmd调用handleCheckCommand）
+        $this->services->sendCmd(
+            $this->services::RESET_BOARD,
+            0,
+            $this->operatorType,
+            $this->operatorId
+        );
+
+        // 自动解锁机台
+        $this->services->has_lock = 0;
+        $this->machine->has_lock = 0;
+        $this->machine->save();
+
+        Log::channel('machine_operations')->info('[AdvancedOperation] 机台归0成功', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'operator_type' => $this->operatorType,
+            'operator_id' => $this->operatorId,
+            'note' => '已发送归0指令并解锁机台',
+        ]);
+
+        return [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'has_lock' => 0,
+            'message' => '归0指令已发送，机台已解锁',
+            'command' => 'RESET_BOARD (A3 70 05 E0 F8 CE)',
+        ];
     }
 
     // ==================== 辅助方法 ====================
