@@ -465,34 +465,34 @@ class MachineOperationService
      */
     private function getMachineCurrentData(): array
     {
+        // 通过服务类对象直接读取属性值
+        $service = $this->services;
         $machineType = $this->machine->type;
-        $machineId = $this->machine->id;
 
-        // 根据机台类型读取不同的Redis键
         if ($machineType == GameType::TYPE_SLOT) {
-            // 斯洛机数据
-            $prefix = "machine_data_slot_{$machineId}_";
-
+            // 斯洛机数据（双美/小淞）
             return [
-                'login_status' => \support\Redis::get($prefix . 'login_status') ?: 0,
-                'machine_score' => \support\Redis::get($prefix . 'machine_score') ?: 0,
-                'card_score' => \support\Redis::get($prefix . 'card_score') ?: 0,
-                'open_table' => \support\Redis::get($prefix . 'open_table') ?: 0,
-                'wash_table' => \support\Redis::get($prefix . 'wash_table') ?: 0,
-                'total_bet' => \support\Redis::get($prefix . 'total_bet') ?: 0,
-                'total_win' => \support\Redis::get($prefix . 'total_win') ?: 0,
-                'point' => \support\Redis::get($prefix . 'point') ?: 0,
+                'login_status' => (int)($service->login_status ?? 0),
+                'machine_score' => (int)($service->machine_score ?? 0),
+                'card_score' => (int)($service->card_score ?? $service->score ?? 0),
+                'open_table' => (int)($service->open_table ?? $service->open_point ?? 0),
+                'wash_table' => (int)($service->wash_table ?? $service->wash_point ?? 0),
+                'total_bet' => (int)($service->total_bet ?? 0),
+                'total_win' => (int)($service->total_win ?? 0),
+                'point' => (int)($service->point ?? 0),
+                'bet' => (int)($service->bet ?? 0),
+                'win' => (int)($service->win ?? 0),
+                'bb' => (int)($service->bb ?? 0),
+                'rb' => (int)($service->rb ?? 0),
             ];
         } else {
             // 钢珠机数据
-            $prefix = "machine_data_{$machineId}_";
-
             return [
-                'point' => \support\Redis::get($prefix . 'point') ?: 0,
-                'turn' => \support\Redis::get($prefix . 'turn') ?: 0,
-                'pressure' => \support\Redis::get($prefix . 'pressure') ?: 0,
-                'total_bet' => \support\Redis::get($prefix . 'total_bet') ?: 0,
-                'total_win' => \support\Redis::get($prefix . 'total_win') ?: 0,
+                'point' => (int)($service->point ?? 0),
+                'turn' => (int)($service->turn ?? 0),
+                'pressure' => (int)($service->pressure ?? 0),
+                'total_bet' => (int)($service->total_bet ?? 0),
+                'total_win' => (int)($service->total_win ?? 0),
             ];
         }
     }
@@ -523,30 +523,33 @@ class MachineOperationService
             throw new Exception(trans('missing_required_parameter', ['{param}' => 'cmd'], 'message', $this->lang));
         }
 
-        // 提取 actionKey（指令的前两个字节，去空格转小写）
-        // 例如："EA C3" -> "eac3", "A5 00 C0" -> "a5"
-        $actionKey = strtolower(str_replace(' ', '', substr($cmd, 0, 5)));
-        if (strlen($actionKey) > 4) {
-            $actionKey = substr($actionKey, 0, 4);
+        // ✅ 统一去除空格并转大写
+        $cmdNormalized = strtoupper(str_replace(' ', '', $cmd));
+
+        // ✅ 处理双美机台（Slot/Jackpot）的A2前缀
+        // 双美机台的sendCmd会自动添加A2前缀，但Redis存储的actionKey不包含A2
+        // 如果$cmd已经包含A2前缀（例如 "A221" 或 "a2 21"），需要去掉
+        if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
+            // 检查是否以A2开头
+            if (substr($cmdNormalized, 0, 2) === 'A2') {
+                // 去掉A2前缀
+                $cmdNormalized = substr($cmdNormalized, 2);
+            }
         }
 
+        // 提取 actionKey（指令的前两个字节，最多4个字符）
+        // 例如："EAC3" -> "EAC3", "A500C0" -> "A500", "21" -> "21"
+        $actionKey = substr($cmdNormalized, 0, min(4, strlen($cmdNormalized)));
+
         $machineId = $this->machine->id;
-        $machineType = $this->machine->type;
 
-        // 确定 Redis 键前缀
-        $redisPrefix = ($machineType == GameType::TYPE_SLOT)
-            ? "machine_data_slot_{$machineId}_"
-            : "machine_data_{$machineId}_";
-
-        // 获取发送前的版本号
-        $versionKey = $redisPrefix . "action_{$actionKey}";
-        $beforeVersion = (int)(\support\Redis::get($versionKey) ?: 0);
+        // ✅ 使用服务类的方法获取发送前的版本号（而不是直接访问Redis）
+        $beforeVersion = (int)($this->services->getActionVersion($actionKey) ?: 0);
 
         Log::channel('machine_operations')->info('[sendRawCmdWithReply] 准备发送指令', [
             'machine_id' => $machineId,
             'cmd' => $cmd,
             'action_key' => $actionKey,
-            'version_key' => $versionKey,
             'before_version' => $beforeVersion,
         ]);
 
@@ -563,12 +566,13 @@ class MachineOperationService
             throw new Exception(trans('send_cmd_failed', [], 'message', $this->lang));
         }
 
-        // 等待回复（监听版本变化）
+        // ✅ 等待回复（监听版本变化）- 使用服务类方法而不是直接访问Redis
         $startTime = time();
         $replied = false;
 
         while (time() - $startTime < $timeout) {
-            $currentVersion = (int)(\support\Redis::get($versionKey) ?: 0);
+            // 使用服务类的 getActionVersion 方法获取当前版本号
+            $currentVersion = (int)($this->services->getActionVersion($actionKey) ?: 0);
 
             if ($currentVersion > $beforeVersion) {
                 $replied = true;
@@ -635,107 +639,92 @@ class MachineOperationService
      */
     private function getReplyData(string $actionKey): array
     {
-        $machineId = $this->machine->id;
-        $machineType = $this->machine->type;
-
-        $redisPrefix = ($machineType == GameType::TYPE_SLOT)
-            ? "machine_data_slot_{$machineId}_"
-            : "machine_data_{$machineId}_";
+        // 通过服务类对象直接读取属性值（服务类会自动处理 Redis key）
+        $service = $this->services;
 
         // 根据不同的指令读取不同的数据
         switch ($actionKey) {
+            // ========== 小淞线下机台指令 ==========
             case 'eac3': // 登入指令
-                return [
-                    'login_status' => (int)(\support\Redis::get($redisPrefix . 'login_status') ?: 0),
-                    'login_status_text' => ((int)(\support\Redis::get($redisPrefix . 'login_status') ?: 0)) == 1 ? '已登入' : '未登入',
-                ];
-
             case 'eac5': // 查询登入状态
+                $loginStatus = (int)($service->login_status ?? 0);
                 return [
-                    'login_status' => (int)(\support\Redis::get($redisPrefix . 'login_status') ?: 0),
-                    'login_status_text' => ((int)(\support\Redis::get($redisPrefix . 'login_status') ?: 0)) == 1 ? '已登入' : '未登入',
+                    'login_status' => $loginStatus,
+                    'login_status_text' => $loginStatus == 1 ? '已登入' : '未登入',
                 ];
 
             case 'eac4': // 查询详细账目
                 return [
-                    'open_table' => (int)(\support\Redis::get($redisPrefix . 'open_table') ?: 0),
-                    'wash_table' => (int)(\support\Redis::get($redisPrefix . 'wash_table') ?: 0),
-                    'card_score' => (int)(\support\Redis::get($redisPrefix . 'card_score') ?: 0),
-                    'machine_score' => (int)(\support\Redis::get($redisPrefix . 'machine_score') ?: 0),
+                    'open_table' => (int)($service->open_table ?? 0),
+                    'wash_table' => (int)($service->wash_table ?? 0),
+                    'card_score' => (int)($service->card_score ?? 0),
+                    'machine_score' => (int)($service->machine_score ?? 0),
                 ];
 
             case 'ead8': // 查询总押总赢
                 return [
-                    'total_bet' => (int)(\support\Redis::get($redisPrefix . 'total_bet') ?: 0),
-                    'total_win' => (int)(\support\Redis::get($redisPrefix . 'total_win') ?: 0),
+                    'total_bet' => (int)($service->total_bet ?? 0),
+                    'total_win' => (int)($service->total_win ?? 0),
                 ];
 
-            case 'a5': // 上分/下分指令
-                if ($machineType == GameType::TYPE_SLOT) {
-                    return [
-                        'machine_score' => (int)(\support\Redis::get($redisPrefix . 'machine_score') ?: 0),
-                        'card_score' => (int)(\support\Redis::get($redisPrefix . 'card_score') ?: 0),
-                        'open_table' => (int)(\support\Redis::get($redisPrefix . 'open_table') ?: 0),
-                        'wash_table' => (int)(\support\Redis::get($redisPrefix . 'wash_table') ?: 0),
-                    ];
-                } else {
-                    return [
-                        'point' => (int)(\support\Redis::get($redisPrefix . 'point') ?: 0),
-                        'turn' => (int)(\support\Redis::get($redisPrefix . 'turn') ?: 0),
-                    ];
-                }
+            case 'a5': // 小淞上分/下分指令
+                return [
+                    'machine_score' => (int)($service->machine_score ?? 0),
+                    'card_score' => (int)($service->card_score ?? 0),
+                    'open_table' => (int)($service->open_table ?? 0),
+                    'wash_table' => (int)($service->wash_table ?? 0),
+                ];
 
             case 'ead4': // 查询机台情况
-                // 这个指令的回复格式较复杂，暂时返回基础数据
                 return $this->getMachineCurrentData();
 
             case 'eade': // 清除账目
                 return [
-                    'open_table' => (int)(\support\Redis::get($redisPrefix . 'open_table') ?: 0),
-                    'wash_table' => (int)(\support\Redis::get($redisPrefix . 'wash_table') ?: 0),
+                    'open_table' => (int)($service->open_table ?? 0),
+                    'wash_table' => (int)($service->wash_table ?? 0),
                     'message' => '账目已清除',
                 ];
 
             // ========== 双美机台指令（去掉A2前缀后的指令码）==========
             case '21': // A2 21 - 读取开分卡分数
                 return [
-                    'card_score' => (int)(\support\Redis::get($redisPrefix . 'card_score') ?: 0),
+                    'card_score' => (int)($service->score ?? 0),
                 ];
 
             case '22': // A2 22 - 读取 CREDIT2
                 return [
-                    'credit2' => (int)(\support\Redis::get($redisPrefix . 'credit2') ?: 0),
+                    'credit2' => (int)($service->score ?? 0), // CREDIT2 对应 score
                 ];
 
             case '23': // A2 23 - 读取 BET（押分）
                 return [
-                    'bet' => (int)(\support\Redis::get($redisPrefix . 'bet') ?: 0),
-                    'pressure' => (int)(\support\Redis::get($redisPrefix . 'bet') ?: 0), // 别名
+                    'bet' => (int)($service->bet ?? 0),
+                    'pressure' => (int)($service->bet ?? 0), // 别名
                 ];
 
             case '24': // A2 24 - 读取 WIN
                 return [
-                    'win' => (int)(\support\Redis::get($redisPrefix . 'win') ?: 0),
+                    'win' => (int)($service->win ?? 0),
                 ];
 
             case '25': // A2 25 - 读取 BB
                 return [
-                    'bb' => (int)(\support\Redis::get($redisPrefix . 'bb') ?: 0),
+                    'bb' => (int)($service->bb ?? 0),
                 ];
 
             case '26': // A2 26 - 读取 RB
                 return [
-                    'rb' => (int)(\support\Redis::get($redisPrefix . 'rb') ?: 0),
+                    'rb' => (int)($service->rb ?? 0),
                 ];
 
             case '27': // A2 27 - 读取开分表
                 return [
-                    'open_table' => (int)(\support\Redis::get($redisPrefix . 'open_table') ?: 0),
+                    'open_table' => (int)($service->open_point ?? 0),
                 ];
 
             case '28': // A2 28 - 读取洗分表
                 return [
-                    'wash_table' => (int)(\support\Redis::get($redisPrefix . 'wash_table') ?: 0),
+                    'wash_table' => (int)($service->wash_point ?? 0),
                 ];
 
             case '41': // A2 41 - 开分一次
@@ -743,15 +732,15 @@ class MachineOperationService
             case '49': // A2 49 - 开分5次
             case '4a': // A2 4A - 开任意数
                 return [
-                    'point' => (int)(\support\Redis::get($redisPrefix . 'point') ?: 0),
-                    'card_score' => (int)(\support\Redis::get($redisPrefix . 'card_score') ?: 0),
+                    'point' => (int)($service->point ?? 0),
+                    'card_score' => (int)($service->score ?? 0),
                 ];
 
             case '43': // A2 43 - 洗分&清零
             case '44': // A2 44 - 洗分
                 return [
-                    'point' => (int)(\support\Redis::get($redisPrefix . 'point') ?: 0),
-                    'wash_table' => (int)(\support\Redis::get($redisPrefix . 'wash_table') ?: 0),
+                    'point' => (int)($service->point ?? 0),
+                    'wash_table' => (int)($service->wash_point ?? 0),
                 ];
 
             default:
