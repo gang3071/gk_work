@@ -5,11 +5,11 @@ namespace app\api\v1;
 use app\model\GameType;
 use app\model\Machine;
 use app\model\Player;
+use app\service\machine\MachineOperationService;
+use Exception;
+use support\Log;
 use support\Request;
 use support\Response;
-use app\service\machine\MachineOperationService;
-use support\Log;
-use Exception;
 
 /**
  * 机台操作统一控制器
@@ -123,6 +123,75 @@ class MachineOperationController
     }
 
     /**
+     * 执行机台操作（后台专用，返回标准 HTTP 状态码）
+     *
+     * POST /api/admin/machine/execute-admin
+     *
+     * 此方法返回 code: 200 表示成功，供 gk_admin 后台调用
+     * 与 execute() 方法的区别仅在于返回的状态码不同
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function executeAdmin(Request $request): Response
+    {
+        $machineId = null;
+        $action = null;
+
+        try {
+            // 1. 验证基础参数
+            $machineId = $request->post('machine_id');
+            $action = $request->post('action');
+            $params = $request->post('params', []);
+
+            if (!$machineId || !$action) {
+                return json(['code' => 400, 'msg' => trans('missing_required_params_machine_action', [], 'machine_operation', $this->setLanguage($request)), 'data' => []]);
+            }
+
+            // 2. 获取机台
+            $machine = Machine::find($machineId);
+            if (!$machine) {
+                return json(['code' => 404, 'msg' => trans('machine_not_found', [], 'machine_operation', $this->setLanguage($request)), 'data' => []]);
+            }
+
+            // 3. 确定操作者类型和 ID（后台专用，固定为 admin）
+            $operatorType = MachineOperationService::OPERATOR_ADMIN;
+            $operatorId = (int)$request->header('X-Admin-Id', 0);
+
+            // 4. 获取语言
+            $lang = $this->setLanguage($request);
+
+            // 6. 创建服务实例
+            $service = new MachineOperationService(
+                $machine,
+                $operatorType,
+                $operatorId,
+                $lang
+            );
+
+            // 7. 执行操作
+            $result = $service->execute($action, $params);
+
+            // 8. 返回结果（使用标准 HTTP 状态码）
+            if ($result['success']) {
+                return json(['code' => 200, 'msg' => $result['message'], 'data' => $result['data']]);
+            } else {
+                return json(['code' => 400, 'msg' => $result['message'], 'data' => []]);
+            }
+
+        } catch (Exception $e) {
+            Log::channel('machine_operations')->error('[MachineOperationController::executeAdmin] 机台操作失败', [
+                'machine_id' => $machineId,
+                'action' => $action,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return json(['code' => 500, 'msg' => trans('machine_operation_failed', [], 'machine_operation', $this->setLanguage($request)) . ': ' . $e->getMessage(), 'data' => []]);
+        }
+    }
+
+    /**
      * 获取操作者信息
      *
      * 返回 [operatorType, operatorId]
@@ -186,11 +255,11 @@ class MachineOperationController
             $params = $request->post('params', []);
 
             if (empty($machineIds) || !$action) {
-                return json(['code' => 0, 'msg' => trans('missing_required_params_machine_ids_action', [], 'machine_operation', $this->setLanguage($request)), 'data' => []]);
+                return json(['code' => 400, 'msg' => trans('missing_required_params_machine_ids_action', [], 'machine_operation', $this->setLanguage($request)), 'data' => []]);
             }
 
             if (!is_array($machineIds)) {
-                return json(['code' => 0, 'msg' => trans('machine_ids_must_array', [], 'machine_operation', $this->setLanguage($request)), 'data' => []]);
+                return json(['code' => 400, 'msg' => trans('machine_ids_must_array', [], 'machine_operation', $this->setLanguage($request)), 'data' => []]);
             }
 
             // 2. 确定操作者信息
@@ -198,7 +267,7 @@ class MachineOperationController
 
             // 3. 只允许后台管理员批量操作
             if ($operatorType !== MachineOperationService::OPERATOR_ADMIN) {
-                return json(['code' => 0, 'msg' => trans('batch_operation_admin_only', [], 'machine_operation', $this->setLanguage($request)), 'data' => []]);
+                return json(['code' => 403, 'msg' => trans('batch_operation_admin_only', [], 'machine_operation', $this->setLanguage($request)), 'data' => []]);
             }
 
             // 4. 获取语言
@@ -256,7 +325,7 @@ class MachineOperationController
 
             // 6. 返回汇总结果
             return json([
-                'code' => 1,
+                'code' => 200,
                 'msg' => trans('batch_operation_complete', ['{success}' => $successCount, '{fail}' => $failCount], 'machine_operation', $lang),
                 'data' => [
                     'total' => count($machineIds),
@@ -274,7 +343,7 @@ class MachineOperationController
             ]);
 
             $lang = $this->setLanguage($request);
-            return json(['code' => 0, 'msg' => trans('batch_operation_failed', [], 'machine_operation', $lang) . ': ' . $e->getMessage(), 'data' => []]);
+            return json(['code' => 500, 'msg' => trans('batch_operation_failed', [], 'machine_operation', $lang) . ': ' . $e->getMessage(), 'data' => []]);
         }
     }
 
@@ -294,12 +363,12 @@ class MachineOperationController
 
             if (!$machineId) {
                 $lang = $this->setLanguage($request);
-                return json(['code' => 0, 'msg' => trans('missing_parameter', ['{param}' => 'machine_id'], 'machine_operation', $lang), 'data' => []]);
+                return json(['code' => 400, 'msg' => trans('missing_parameter', ['{param}' => 'machine_id'], 'machine_operation', $lang), 'data' => []]);
             }
 
             $machine = Machine::find($machineId);
             if (!$machine) {
-                return json(['code' => 0, 'msg' => trans('machine_not_found', [], 'machine_operation', $this->setLanguage($request)), 'data' => []]);
+                return json(['code' => 404, 'msg' => trans('machine_not_found', [], 'machine_operation', $this->setLanguage($request)), 'data' => []]);
             }
 
             // 根据机台类型返回支持的操作
@@ -353,7 +422,7 @@ class MachineOperationController
             }
 
             return json([
-                'code' => 1,
+                'code' => 200,
                 'msg' => 'success',
                 'data' => [
                     'machine_id' => $machine->id,
@@ -370,7 +439,7 @@ class MachineOperationController
             ]);
 
             $lang = $this->setLanguage($request);
-            return json(['code' => 0, 'msg' => trans('get_operations_failed', [], 'machine_operation', $lang) . ': ' . $e->getMessage(), 'data' => []]);
+            return json(['code' => 500, 'msg' => trans('get_operations_failed', [], 'machine_operation', $lang) . ': ' . $e->getMessage(), 'data' => []]);
         }
     }
 
