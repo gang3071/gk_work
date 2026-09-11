@@ -189,6 +189,7 @@ class MachineOperationService
             'check_online',      // 检查在线状态
             'get_description',   // 获取操作描述
             'send_raw_cmd',      // 发送原始硬件指令
+            'send_raw_cmd_with_reply', // 发送原始硬件指令并等待解析回复
         ]);
     }
 
@@ -217,6 +218,8 @@ class MachineOperationService
                 return $this->getDescription();
             case 'send_raw_cmd':
                 return $this->sendRawCmd($params);
+            case 'send_raw_cmd_with_reply':
+                return $this->sendRawCmdWithReply($params);
             default:
                 throw new Exception(trans('unknown_basic_operation', ['{action}' => $action], 'message', $this->lang));
         }
@@ -393,6 +396,7 @@ class MachineOperationService
      * 发送原始硬件指令（底层接口）
      *
      * 用于直接发送 TCP 指令码，不经过业务逻辑封装
+     * 发送后会读取机台的最新状态数据并返回
      *
      * @param array $params ['cmd' => string, 'data' => int, 'is_system' => int]
      * @return array
@@ -417,12 +421,268 @@ class MachineOperationService
             $isSystem
         );
 
+        // 等待机台响应（给机台和Redis一点处理时间）
+        usleep(800000); // 0.8秒
+
+        // 读取机台当前状态数据（从Redis缓存中获取）
+        $machineData = $this->getMachineCurrentData();
+
         return [
             'success' => $result,
             'cmd' => $cmd,
-            'data' => $data,
+            'cmd_data' => $data,
             'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'timestamp' => date('Y-m-d H:i:s'),
+            // 机台实时数据
+            'machine_status' => $machineData,
         ];
+    }
+
+    /**
+     * 获取机台当前状态数据
+     *
+     * 从Redis缓存中读取机台的实时状态
+     *
+     * @return array
+     */
+    private function getMachineCurrentData(): array
+    {
+        $machineType = $this->machine->type;
+        $machineId = $this->machine->id;
+
+        // 根据机台类型读取不同的Redis键
+        if ($machineType == GameType::TYPE_SLOT) {
+            // 斯洛机数据
+            $prefix = "machine_data_slot_{$machineId}_";
+
+            return [
+                'login_status' => \support\Redis::get($prefix . 'login_status') ?: 0,
+                'machine_score' => \support\Redis::get($prefix . 'machine_score') ?: 0,
+                'card_score' => \support\Redis::get($prefix . 'card_score') ?: 0,
+                'open_table' => \support\Redis::get($prefix . 'open_table') ?: 0,
+                'wash_table' => \support\Redis::get($prefix . 'wash_table') ?: 0,
+                'total_bet' => \support\Redis::get($prefix . 'total_bet') ?: 0,
+                'total_win' => \support\Redis::get($prefix . 'total_win') ?: 0,
+                'point' => \support\Redis::get($prefix . 'point') ?: 0,
+            ];
+        } else {
+            // 钢珠机数据
+            $prefix = "machine_data_{$machineId}_";
+
+            return [
+                'point' => \support\Redis::get($prefix . 'point') ?: 0,
+                'turn' => \support\Redis::get($prefix . 'turn') ?: 0,
+                'pressure' => \support\Redis::get($prefix . 'pressure') ?: 0,
+                'total_bet' => \support\Redis::get($prefix . 'total_bet') ?: 0,
+                'total_win' => \support\Redis::get($prefix . 'total_win') ?: 0,
+            ];
+        }
+    }
+
+    /**
+     * 发送原始硬件指令并等待解析回复（新增方法）
+     *
+     * 此方法会：
+     * 1. 发送指令到机台
+     * 2. 等待机台回复（监听Redis版本变化）
+     * 3. 读取Events.php解析后的数据
+     * 4. 返回解析结果
+     *
+     * 参考：support/test_song_offline_slot_machine.php
+     *
+     * @param array $params ['cmd' => string, 'data' => int, 'is_system' => int, 'timeout' => int]
+     * @return array
+     * @throws Exception
+     */
+    private function sendRawCmdWithReply(array $params): array
+    {
+        $cmd = $params['cmd'] ?? '';
+        $data = (int)($params['data'] ?? 0);
+        $isSystem = (int)($params['is_system'] ?? 0);
+        $timeout = (int)($params['timeout'] ?? 5); // 默认超时5秒
+
+        if (empty($cmd)) {
+            throw new Exception(trans('missing_required_parameter', ['{param}' => 'cmd'], 'message', $this->lang));
+        }
+
+        // 提取 actionKey（指令的前两个字节，去空格转小写）
+        // 例如："EA C3" -> "eac3", "A5 00 C0" -> "a5"
+        $actionKey = strtolower(str_replace(' ', '', substr($cmd, 0, 5)));
+        if (strlen($actionKey) > 4) {
+            $actionKey = substr($actionKey, 0, 4);
+        }
+
+        $machineId = $this->machine->id;
+        $machineType = $this->machine->type;
+
+        // 确定 Redis 键前缀
+        $redisPrefix = ($machineType == GameType::TYPE_SLOT)
+            ? "machine_data_slot_{$machineId}_"
+            : "machine_data_{$machineId}_";
+
+        // 获取发送前的版本号
+        $versionKey = $redisPrefix . "action_{$actionKey}";
+        $beforeVersion = (int)(\support\Redis::get($versionKey) ?: 0);
+
+        Log::channel('machine_operations')->info('[sendRawCmdWithReply] 准备发送指令', [
+            'machine_id' => $machineId,
+            'cmd' => $cmd,
+            'action_key' => $actionKey,
+            'version_key' => $versionKey,
+            'before_version' => $beforeVersion,
+        ]);
+
+        // 发送指令
+        $sendResult = $this->services->sendCmd(
+            $cmd,
+            $data,
+            $this->operatorType,
+            $this->operatorId,
+            $isSystem
+        );
+
+        if (!$sendResult) {
+            throw new Exception(trans('send_cmd_failed', [], 'message', $this->lang));
+        }
+
+        // 等待回复（监听版本变化）
+        $startTime = time();
+        $replied = false;
+
+        while (time() - $startTime < $timeout) {
+            $currentVersion = (int)(\support\Redis::get($versionKey) ?: 0);
+
+            if ($currentVersion > $beforeVersion) {
+                $replied = true;
+                Log::channel('machine_operations')->info('[sendRawCmdWithReply] 收到回复', [
+                    'machine_id' => $machineId,
+                    'cmd' => $cmd,
+                    'action_key' => $actionKey,
+                    'before_version' => $beforeVersion,
+                    'current_version' => $currentVersion,
+                    'elapsed_time' => time() - $startTime,
+                ]);
+                break;
+            }
+
+            usleep(200000); // 等待 200ms
+        }
+
+        if (!$replied) {
+            Log::channel('machine_operations')->warning('[sendRawCmdWithReply] 等待回复超时', [
+                'machine_id' => $machineId,
+                'cmd' => $cmd,
+                'action_key' => $actionKey,
+                'timeout' => $timeout,
+            ]);
+
+            return [
+                'success' => false,
+                'replied' => false,
+                'timeout' => true,
+                'cmd' => $cmd,
+                'action_key' => $actionKey,
+                'machine_id' => $machineId,
+                'machine_code' => $this->machine->code,
+                'message' => '等待机台回复超时',
+            ];
+        }
+
+        // 读取解析后的数据
+        $parsedData = $this->getReplyData($actionKey);
+
+        return [
+            'success' => true,
+            'replied' => true,
+            'timeout' => false,
+            'cmd' => $cmd,
+            'cmd_data' => $data,
+            'action_key' => $actionKey,
+            'machine_id' => $machineId,
+            'machine_code' => $this->machine->code,
+            'timestamp' => date('Y-m-d H:i:s'),
+            'elapsed_time' => time() - $startTime,
+            // 解析后的回复数据
+            'reply_data' => $parsedData,
+        ];
+    }
+
+    /**
+     * 根据 actionKey 读取解析后的回复数据
+     *
+     * 不同的指令会解析出不同的数据字段
+     *
+     * @param string $actionKey 指令键（如 eac3, eac5, a5 等）
+     * @return array
+     */
+    private function getReplyData(string $actionKey): array
+    {
+        $machineId = $this->machine->id;
+        $machineType = $this->machine->type;
+
+        $redisPrefix = ($machineType == GameType::TYPE_SLOT)
+            ? "machine_data_slot_{$machineId}_"
+            : "machine_data_{$machineId}_";
+
+        // 根据不同的指令读取不同的数据
+        switch ($actionKey) {
+            case 'eac3': // 登入指令
+                return [
+                    'login_status' => (int)(\support\Redis::get($redisPrefix . 'login_status') ?: 0),
+                    'login_status_text' => ((int)(\support\Redis::get($redisPrefix . 'login_status') ?: 0)) == 1 ? '已登入' : '未登入',
+                ];
+
+            case 'eac5': // 查询登入状态
+                return [
+                    'login_status' => (int)(\support\Redis::get($redisPrefix . 'login_status') ?: 0),
+                    'login_status_text' => ((int)(\support\Redis::get($redisPrefix . 'login_status') ?: 0)) == 1 ? '已登入' : '未登入',
+                ];
+
+            case 'eac4': // 查询详细账目
+                return [
+                    'open_table' => (int)(\support\Redis::get($redisPrefix . 'open_table') ?: 0),
+                    'wash_table' => (int)(\support\Redis::get($redisPrefix . 'wash_table') ?: 0),
+                    'card_score' => (int)(\support\Redis::get($redisPrefix . 'card_score') ?: 0),
+                    'machine_score' => (int)(\support\Redis::get($redisPrefix . 'machine_score') ?: 0),
+                ];
+
+            case 'ead8': // 查询总押总赢
+                return [
+                    'total_bet' => (int)(\support\Redis::get($redisPrefix . 'total_bet') ?: 0),
+                    'total_win' => (int)(\support\Redis::get($redisPrefix . 'total_win') ?: 0),
+                ];
+
+            case 'a5': // 上分/下分指令
+                if ($machineType == GameType::TYPE_SLOT) {
+                    return [
+                        'machine_score' => (int)(\support\Redis::get($redisPrefix . 'machine_score') ?: 0),
+                        'card_score' => (int)(\support\Redis::get($redisPrefix . 'card_score') ?: 0),
+                        'open_table' => (int)(\support\Redis::get($redisPrefix . 'open_table') ?: 0),
+                        'wash_table' => (int)(\support\Redis::get($redisPrefix . 'wash_table') ?: 0),
+                    ];
+                } else {
+                    return [
+                        'point' => (int)(\support\Redis::get($redisPrefix . 'point') ?: 0),
+                        'turn' => (int)(\support\Redis::get($redisPrefix . 'turn') ?: 0),
+                    ];
+                }
+
+            case 'ead4': // 查询机台情况
+                // 这个指令的回复格式较复杂，暂时返回基础数据
+                return $this->getMachineCurrentData();
+
+            case 'eade': // 清除账目
+                return [
+                    'open_table' => (int)(\support\Redis::get($redisPrefix . 'open_table') ?: 0),
+                    'wash_table' => (int)(\support\Redis::get($redisPrefix . 'wash_table') ?: 0),
+                    'message' => '账目已清除',
+                ];
+
+            default:
+                // 未知指令，返回所有状态数据
+                return $this->getMachineCurrentData();
+        }
     }
 
     // ==================== 控制指令 ====================
