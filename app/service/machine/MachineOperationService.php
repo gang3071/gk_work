@@ -696,45 +696,61 @@ class MachineOperationService
                     'message' => '账目已清除',
                 ];
 
-            // ========== 双美机台指令（A2 开头）==========
-            case 'a221': // A2 21 - 读取开分卡分数
+            // ========== 双美机台指令（去掉A2前缀后的指令码）==========
+            case '21': // A2 21 - 读取开分卡分数
                 return [
                     'card_score' => (int)(\support\Redis::get($redisPrefix . 'card_score') ?: 0),
                 ];
 
-            case 'a222': // A2 22 - 读取 CREDIT2
+            case '22': // A2 22 - 读取 CREDIT2
                 return [
                     'credit2' => (int)(\support\Redis::get($redisPrefix . 'credit2') ?: 0),
                 ];
 
-            case 'a223': // A2 23 - 读取 BET（押分）
+            case '23': // A2 23 - 读取 BET（押分）
                 return [
                     'bet' => (int)(\support\Redis::get($redisPrefix . 'bet') ?: 0),
                     'pressure' => (int)(\support\Redis::get($redisPrefix . 'bet') ?: 0), // 别名
                 ];
 
-            case 'a224': // A2 24 - 读取 WIN
+            case '24': // A2 24 - 读取 WIN
                 return [
                     'win' => (int)(\support\Redis::get($redisPrefix . 'win') ?: 0),
                 ];
 
-            case 'a225': // A2 25 - 读取 BB
+            case '25': // A2 25 - 读取 BB
                 return [
                     'bb' => (int)(\support\Redis::get($redisPrefix . 'bb') ?: 0),
                 ];
 
-            case 'a226': // A2 26 - 读取 RB
+            case '26': // A2 26 - 读取 RB
                 return [
                     'rb' => (int)(\support\Redis::get($redisPrefix . 'rb') ?: 0),
                 ];
 
-            case 'a227': // A2 27 - 读取开分表
+            case '27': // A2 27 - 读取开分表
                 return [
                     'open_table' => (int)(\support\Redis::get($redisPrefix . 'open_table') ?: 0),
                 ];
 
-            case 'a228': // A2 28 - 读取洗分表
+            case '28': // A2 28 - 读取洗分表
                 return [
+                    'wash_table' => (int)(\support\Redis::get($redisPrefix . 'wash_table') ?: 0),
+                ];
+
+            case '41': // A2 41 - 开分一次
+            case '42': // A2 42 - 开分10次
+            case '49': // A2 49 - 开分5次
+            case '4a': // A2 4A - 开任意数
+                return [
+                    'point' => (int)(\support\Redis::get($redisPrefix . 'point') ?: 0),
+                    'card_score' => (int)(\support\Redis::get($redisPrefix . 'card_score') ?: 0),
+                ];
+
+            case '43': // A2 43 - 洗分&清零
+            case '44': // A2 44 - 洗分
+                return [
+                    'point' => (int)(\support\Redis::get($redisPrefix . 'point') ?: 0),
                     'wash_table' => (int)(\support\Redis::get($redisPrefix . 'wash_table') ?: 0),
                 ];
 
