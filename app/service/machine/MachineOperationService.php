@@ -530,6 +530,38 @@ class MachineOperationService
         // ✅ 统一去除空格并转大写
         $cmdNormalized = strtoupper(str_replace(' ', '', $cmd));
 
+        // ⚠️ 小淞钢珠单向指令列表（机台不回复，直接发送即可）
+        $oneWayCommands = ['46CCB3', '46CCB4', '46CCBA']; // 清除外部按钮、故障排除、清除押得数值
+
+        if (in_array($cmdNormalized, $oneWayCommands)) {
+            Log::channel('machine_operations')->info('[sendRawCmdWithReply] 单向指令，不等待回复', [
+                'machine_id' => $this->machine->id,
+                'cmd' => $cmd,
+                'cmd_normalized' => $cmdNormalized,
+            ]);
+
+            // 直接发送指令，不等待回复
+            $actionKey = strtolower($cmdNormalized);
+            $sendResult = $this->services->sendCmd(
+                $actionKey,
+                $data,
+                $this->operatorType,
+                $this->operatorId,
+                $isSystem
+            );
+
+            if (!$sendResult) {
+                throw new Exception(trans('send_cmd_failed', [], 'message', $this->lang));
+            }
+
+            return [
+                'success' => true,
+                'is_one_way' => true,
+                'cmd' => $cmdNormalized,
+                'message' => '单向指令发送成功（机台不回复）',
+            ];
+        }
+
         // ✅ 处理双美机台（Slot/Jackpot）的A2前缀
         // 双美机台的sendCmd会自动添加A2前缀，但Redis存储的actionKey不包含A2
         // 如果$cmd已经包含A2前缀（例如 "A221" 或 "a2 21"），需要去掉
