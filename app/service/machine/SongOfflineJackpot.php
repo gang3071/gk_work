@@ -491,7 +491,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function separateHeartbeatWithExternal(string $msg, int $len): array
     {
-        $possibleHeartbeatLengths = [36, 14, 12, 10];
+        // ✅ 添加25字节心跳长度（C004机台实际返回的心跳长度）
+        $possibleHeartbeatLengths = [36, 25, 14, 12, 10];
 
         foreach ($possibleHeartbeatLengths as $hbLen) {
             if ($len >= $hbLen) {
