@@ -2338,32 +2338,52 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         int $source_id = 0,
     ): void
     {
-        $expirationTime = 1000000;
+        $expirationTime = 10000000; // 10秒超时
         try {
             $beforeActionTime = $this->setActionVersion($cmd);
             Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
             $handleDuration = 0;
-            $sleep = 50000;
+            $sleep = 50000; // 50ms检查一次
+
+            // ✅ 主动查询分数的时间节点（微秒）：1秒、2秒、3秒、5秒、7秒（间隔：1+1+1+2+2）
+            $queryIntervals = [1000000, 2000000, 3000000, 5000000, 7000000];
+            $queryIndex = 0;
 
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
-                if ($actionTime > $beforeActionTime) {
-                    // ✅ 开分成功，主动查询分数确认
-                    usleep(100000); // 等待100ms让机台处理
-                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_POINT)));
 
-                    // ✅ 设置外层版本号（用于 sendRawCmdWithReply）
-                    // 提取基础指令码（去掉随机码）
+                // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
+                if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
+                    try {
+                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_POINT)));
+                        $this->log->info('[开分查询] 主动查询分数', [
+                            'machine_code' => $this->machine->code,
+                            'query_time' => $handleDuration / 1000 . 'ms',
+                            'query_index' => $queryIndex + 1,
+                        ]);
+                        $queryIndex++;
+                    } catch (\Exception $queryError) {
+                        $this->log->warning('[开分查询] 查询分数失败', [
+                            'machine_code' => $this->machine->code,
+                            'error' => $queryError->getMessage(),
+                        ]);
+                    }
+                }
+
+                if ($actionTime > $beforeActionTime) {
+                    // ✅ 开分成功，设置外层版本号（用于 sendRawCmdWithReply）
                     $baseCmd = substr($cmd, 0, 4); // '46ca3f' → '46ca'
                     $this->setActionVersion($baseCmd);
 
-                    $this->log->info('[开分成功] 已查询分数并设置版本号', [
+                    $this->log->info('[开分成功] 收到机台回复', [
                         'machine_code' => $this->machine->code,
                         'full_cmd' => $cmd,
                         'base_cmd' => $baseCmd,
+                        'wait_time_ms' => $handleDuration / 1000,
                     ]);
                     return;
                 }
+
                 if ($handleDuration >= $expirationTime) {
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
@@ -2413,21 +2433,39 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $sleep = 50000; // 50ms检查一次
             $checkCount = 0;
 
+            // ✅ 主动查询分数的时间节点（微秒）：1秒、2秒、3秒、5秒、7秒（间隔：1+1+1+2+2）
+            $queryIntervals = [1000000, 2000000, 3000000, 5000000, 7000000];
+            $queryIndex = 0;
+
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 $checkCount++;
 
-                if ($actionTime > $beforeActionTime) {
-                    // ✅ 成功收到回复，主动查询分数确认
-                    usleep(100000); // 等待100ms让机台处理
-                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_POINT)));
+                // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
+                if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
+                    try {
+                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_POINT)));
+                        $this->log->info('[下分查询] 主动查询分数', [
+                            'machine_code' => $this->machine->code,
+                            'query_time' => $handleDuration / 1000 . 'ms',
+                            'query_index' => $queryIndex + 1,
+                            'attempts' => $attempts,
+                        ]);
+                        $queryIndex++;
+                    } catch (\Exception $queryError) {
+                        $this->log->warning('[下分查询] 查询分数失败', [
+                            'machine_code' => $this->machine->code,
+                            'error' => $queryError->getMessage(),
+                        ]);
+                    }
+                }
 
-                    // ✅ 设置外层版本号（用于 sendRawCmdWithReply）
-                    // 提取基础指令码（去掉随机码）
+                if ($actionTime > $beforeActionTime) {
+                    // ✅ 下分成功，设置外层版本号（用于 sendRawCmdWithReply）
                     $baseCmd = substr($cmd, 0, 4); // '46cb3f' → '46cb'
                     $this->setActionVersion($baseCmd);
 
-                    $this->log->info('[下分成功] 收到机台回复，已查询分数', [
+                    $this->log->info('[下分成功] 收到机台回复', [
                         'machine_code' => $this->machine->code,
                         'full_cmd' => $cmd,
                         'base_cmd' => $baseCmd,
