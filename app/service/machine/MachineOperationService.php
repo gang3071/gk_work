@@ -547,7 +547,8 @@ class MachineOperationService
         // - 双美机台: 2-4字符（21, 23, 2E00）
         // - 小淞钢珠: 4-6字符（46cc, 46cea2, 46cebe）
         // ✅ 使用完整指令码，不截断
-        $actionKey = $cmdNormalized;
+        // ⚠️ 注意：必须转为小写，因为服务类常量定义都是小写
+        $actionKey = strtolower($cmdNormalized);
 
         $machineId = $this->machine->id;
 
