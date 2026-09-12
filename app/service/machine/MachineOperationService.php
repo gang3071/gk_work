@@ -541,9 +541,13 @@ class MachineOperationService
             }
         }
 
-        // 提取 actionKey（指令的前两个字节，最多4个字符）
-        // 例如："EAC3" -> "EAC3", "A500C0" -> "A500", "21" -> "21"
-        $actionKey = substr($cmdNormalized, 0, min(4, strlen($cmdNormalized)));
+        // 提取 actionKey（指令码，用于版本控制和数据映射）
+        // 不同机台的指令长度不同：
+        // - 小淞Slot: 4字符（eac4, ead8）
+        // - 双美机台: 2-4字符（21, 23, 2E00）
+        // - 小淞钢珠: 4-6字符（46cc, 46cea2, 46cebe）
+        // ✅ 使用完整指令码，不截断
+        $actionKey = $cmdNormalized;
 
         $machineId = $this->machine->id;
 
