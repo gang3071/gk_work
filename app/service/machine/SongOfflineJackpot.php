@@ -1224,13 +1224,47 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
     /**
      * 验证机台健康状态（检查第18-19字节）
+     *
+     * 心跳格式：46 C0 ... DA 00 00 00 ...
+     *          （字节18-19）
+     * DA = 正常
+     * DB = 故障1
+     * DC = 故障2/机台故障
      */
     private function validateMachineHealthStatus(string $msg, int $gamingUserId): void
     {
-        if (substr($msg, 18, 2) != 'da') {
+        $healthCode = strtolower(substr($msg, 18, 2));
+
+        if ($healthCode == 'da') {
+            // ✅ 正常状态：清除故障锁定
+            if ($this->has_lock == 1) {
+                $this->log->info('[机台健康] 故障已恢复', [
+                    'machine_code' => $this->machine->code,
+                    'health_code' => $healthCode,
+                ]);
+            }
+            $this->has_lock = 0;
+        } elseif ($healthCode == 'db' || $healthCode == 'dc') {
+            // ⚠️ 故障状态：设置故障锁定
+            $faultType = $healthCode == 'db' ? '故障1' : '机台故障';
+
+            if ($this->has_lock != 1) {
+                $this->log->error('[机台健康] 检测到故障', [
+                    'machine_code' => $this->machine->code,
+                    'health_code' => $healthCode,
+                    'fault_type' => $faultType,
+                ]);
+            }
+
             $this->has_lock = 1;
             sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
-            throw new Exception('机台故障');
+            throw new Exception('机台故障: ' . $faultType);
+        } else {
+            // ⚠️ 未知状态码
+            $this->log->warning('[机台健康] 未知健康状态码', [
+                'machine_code' => $this->machine->code,
+                'health_code' => $healthCode,
+            ]);
         }
     }
 
