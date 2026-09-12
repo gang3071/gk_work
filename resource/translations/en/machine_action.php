@@ -5,6 +5,7 @@ use app\model\Machine;
 use app\service\machine\Jackpot;
 use app\service\machine\Slot;
 use app\service\machine\SongJackpot;
+use app\service\machine\SongOfflineSlot;
 use app\service\machine\SongSlot;
 
 return [
@@ -180,15 +181,15 @@ return [
             SongSlot::ALL_DOWN => 'Clean up historical data',
 
             // ✅ SongOfflineSlot-specific commands - Accounting Card Protocol
-            'eac4' => 'Query Account',           // SongOfflineSlot::QUERY_ACCOUNT
-            'ead8' => 'Query Total Bet/Win',     // SongOfflineSlot::QUERY_TOTAL
-            'ead4' => 'Query Machine Status',    // SongOfflineSlot::QUERY_STATUS
-            'eac3' => 'Login',                   // SongOfflineSlot::LOGIN
-            'eac5' => 'Check Login Status',      // SongOfflineSlot::CHECK_LOGIN
-            'a5xxc0' => 'Add Credit',            // SongOfflineSlot::OPEN_POINT (for testing)
-            'a500c1' => 'Cash Out',              // SongOfflineSlot::WASH_POINT (for testing)
-            'eade' => 'Clear Account',           // SongOfflineSlot::CLEAR_ACCOUNT
-            'a37005e0f8ce' => 'Reset Board',     // SongOfflineSlot::RESET_BOARD
+            SongOfflineSlot::QUERY_ACCOUNT => 'Query Account',
+            SongOfflineSlot::QUERY_TOTAL => 'Query Total Bet/Win',
+            SongOfflineSlot::QUERY_STATUS => 'Query Machine Status',
+            SongOfflineSlot::LOGIN => 'Login',
+            SongOfflineSlot::CHECK_LOGIN => 'Check Login Status',
+            'a5xxc0' => 'Add Credit',            // For testing (special format, no constant)
+            'a500c1' => 'Cash Out',              // For testing (special format, no constant)
+            SongOfflineSlot::CLEAR_ACCOUNT => 'Clear Account',
+            SongOfflineSlot::RESET_BOARD => 'Reset Board',
         ],
     ]
 ];

@@ -5,6 +5,7 @@ use app\model\Machine;
 use app\service\machine\Jackpot;
 use app\service\machine\Slot;
 use app\service\machine\SongJackpot;
+use app\service\machine\SongOfflineSlot;
 use app\service\machine\SongSlot;
 
 return [
@@ -181,15 +182,15 @@ return [
             SongSlot::ALL_DOWN => '履歴データのクリーンアップ',
 
             // ✅ 小淞オフラインSlot（SongOfflineSlot）専用コマンド - 収支カードプロトコル
-            'eac4' => 'アカウント照会',           // SongOfflineSlot::QUERY_ACCOUNT
-            'ead8' => '総ベット/総勝利照会',      // SongOfflineSlot::QUERY_TOTAL
-            'ead4' => '機台状況照会',             // SongOfflineSlot::QUERY_STATUS
-            'eac3' => 'ログイン',                 // SongOfflineSlot::LOGIN
-            'eac5' => 'ログイン状態確認',         // SongOfflineSlot::CHECK_LOGIN
-            'a5xxc0' => 'クレジット追加',         // SongOfflineSlot::OPEN_POINT（テスト用）
-            'a500c1' => 'キャッシュアウト',       // SongOfflineSlot::WASH_POINT（テスト用）
-            'eade' => 'アカウントクリア',         // SongOfflineSlot::CLEAR_ACCOUNT
-            'a37005e0f8ce' => 'ボードリセット',   // SongOfflineSlot::RESET_BOARD
+            SongOfflineSlot::QUERY_ACCOUNT => 'アカウント照会',
+            SongOfflineSlot::QUERY_TOTAL => '総ベット/総勝利照会',
+            SongOfflineSlot::QUERY_STATUS => '機台状況照会',
+            SongOfflineSlot::LOGIN => 'ログイン',
+            SongOfflineSlot::CHECK_LOGIN => 'ログイン状態確認',
+            'a5xxc0' => 'クレジット追加',         // テスト用（特殊形式、定数なし）
+            'a500c1' => 'キャッシュアウト',       // テスト用（特殊形式、定数なし）
+            SongOfflineSlot::CLEAR_ACCOUNT => 'アカウントクリア',
+            SongOfflineSlot::RESET_BOARD => 'ボードリセット',
         ],
     ]
 ];

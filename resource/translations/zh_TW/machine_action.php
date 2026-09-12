@@ -5,6 +5,7 @@ use app\model\Machine;
 use app\service\machine\Jackpot;
 use app\service\machine\Slot;
 use app\service\machine\SongJackpot;
+use app\service\machine\SongOfflineSlot;
 use app\service\machine\SongSlot;
 
 return [
@@ -182,15 +183,15 @@ return [
             SongSlot::ALL_DOWN => '清理歷史數據',
 
             // ✅ 小淞線下Slot（SongOfflineSlot）專用指令 - 收賬小卡協議
-            'eac4' => '查詢賬目',           // SongOfflineSlot::QUERY_ACCOUNT
-            'ead8' => '查詢總玩總贏',       // SongOfflineSlot::QUERY_TOTAL
-            'ead4' => '查詢機台情況',       // SongOfflineSlot::QUERY_STATUS
-            'eac3' => '登入',               // SongOfflineSlot::LOGIN
-            'eac5' => '查詢登入狀態',       // SongOfflineSlot::CHECK_LOGIN
-            'a5xxc0' => '上分',             // SongOfflineSlot::OPEN_POINT（指令測試用）
-            'a500c1' => '下分',             // SongOfflineSlot::WASH_POINT（指令測試用）
-            'eade' => '清除賬目',           // SongOfflineSlot::CLEAR_ACCOUNT
-            'a37005e0f8ce' => '歸0機板',   // SongOfflineSlot::RESET_BOARD
+            SongOfflineSlot::QUERY_ACCOUNT => '查詢賬目',
+            SongOfflineSlot::QUERY_TOTAL => '查詢總玩總贏',
+            SongOfflineSlot::QUERY_STATUS => '查詢機台情況',
+            SongOfflineSlot::LOGIN => '登入',
+            SongOfflineSlot::CHECK_LOGIN => '查詢登入狀態',
+            'a5xxc0' => '上分',             // 指令測試用（特殊格式，無常量）
+            'a500c1' => '下分',             // 指令測試用（特殊格式，無常量）
+            SongOfflineSlot::CLEAR_ACCOUNT => '清除賬目',
+            SongOfflineSlot::RESET_BOARD => '歸0機板',
         ],
     ]
 ];
