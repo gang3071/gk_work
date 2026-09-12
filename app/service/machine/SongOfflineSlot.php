@@ -1362,8 +1362,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function handleHeartbeat(string $msg): bool
     {
         try {
-            // 验证校验和
-            if (!$this->validateChecksum($msg)) {
+            // ✅ B7心跳使用85x协议校验算法（S1=XOR, S2=ADD+S1），不是收账小卡算法
+            if (!$this->validateHeartbeatChecksum($msg)) {
                 $this->log->error('[心跳] 校验失败', [
                     'machine_code' => $this->machine->code,
                     'msg' => strtoupper($msg),
@@ -1645,6 +1645,43 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         return strtolower($sum1) == strtolower($calculatedSUM1)
             && strtolower($sum2) == strtolower($calculatedSUM2);
+    }
+
+    /**
+     * 验证B7心跳校验和（使用85x协议算法）
+     *
+     * ⚠️ B7心跳使用85x协议的校验算法，不是收账小卡的算法：
+     * - S1 = XOR（异或）
+     * - S2 = ADD + S1（累加）
+     */
+    private function validateHeartbeatChecksum(string $data): bool
+    {
+        if (strlen($data) < 4) {
+            return false;
+        }
+
+        $s1 = substr($data, -4, 2);
+        $s2 = substr($data, -2, 2);
+        $payload = substr($data, 0, -4);
+
+        // S1 = XOR异或
+        $bytes = str_split($payload, 2);
+        $xor = 0;
+        foreach ($bytes as $byte) {
+            $xor ^= hexdec($byte);
+        }
+        $calculatedS1 = str_pad(dechex($xor), 2, '0', STR_PAD_LEFT);
+
+        // S2 = ADD累加 + S1
+        $add = 0;
+        foreach ($bytes as $byte) {
+            $add += hexdec($byte);
+        }
+        $add += hexdec($calculatedS1);
+        $calculatedS2 = str_pad(dechex($add & 0xFF), 2, '0', STR_PAD_LEFT);
+
+        return strtolower($s1) == strtolower($calculatedS1)
+            && strtolower($s2) == strtolower($calculatedS2);
     }
 
     /**
