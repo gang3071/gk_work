@@ -2224,9 +2224,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // 记录发送前的心跳版本号和状态
             $beforeHeartbeatVersion = $this->getActionVersion(self::GET_MACHINE_POINT);
             $beforeState = [
-                'external_open_count' => $this->external_open_count ?? null,
-                'external_wash_count' => $this->external_wash_count ?? null,
-                'score' => $this->score ?? null,
+                'has_lock' => $this->has_lock ?? null,                     // 故障锁定状态
+                'external_open_count' => $this->external_open_count ?? null, // B5外部按钮开分次数
+                'external_wash_count' => $this->external_wash_count ?? null, // B7外部按钮洗分次数
+                'score' => $this->score ?? null,                           // 得分（押得数值）
             ];
 
             $this->log->info('[单向指令] 发送指令', [
@@ -2252,26 +2253,30 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 if ($currentHeartbeatVersion > $beforeHeartbeatVersion) {
                     // 收到心跳，获取当前状态
                     $afterState = [
+                        'has_lock' => $this->has_lock ?? null,
                         'external_open_count' => $this->external_open_count ?? null,
                         'external_wash_count' => $this->external_wash_count ?? null,
                         'score' => $this->score ?? null,
                     ];
 
                     // 验证结果
-                    $verified = $this->verifyOneWayCommandResult($cmd, $beforeState, $afterState);
+                    $verification = $this->verifyOneWayCommandResult($cmd, $beforeState, $afterState);
 
                     $this->log->info('[单向指令] 收到心跳确认', [
                         'machine_code' => $this->machine->code,
                         'cmd' => $cmd,
                         'wait_time_ms' => $handleDuration / 1000,
-                        'verified' => $verified,
+                        'verified' => $verification['verified'],
+                        'verification_details' => $verification['details'],
+                        'before_state' => $beforeState,
                         'after_state' => $afterState,
                     ]);
 
-                    if (!$verified) {
+                    if (!$verification['verified']) {
                         $this->log->warning('[单向指令] 验证失败', [
                             'machine_code' => $this->machine->code,
                             'cmd' => $cmd,
+                            'reason' => $verification['reason'],
                             'before_state' => $beforeState,
                             'after_state' => $afterState,
                         ]);
@@ -2328,24 +2333,74 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
     /**
      * 验证单向指令执行结果
+     *
+     * @return array ['verified' => bool, 'reason' => string, 'details' => array]
      */
-    private function verifyOneWayCommandResult(string $cmd, array $beforeState, array $afterState): bool
+    private function verifyOneWayCommandResult(string $cmd, array $beforeState, array $afterState): array
     {
         switch ($cmd) {
-            case self::CLEAR_EXTERNAL_BUTTON: // 46ccb3
-            case self::CHECK:                 // 46ccb4
-                // 验证：external_open_count 和 external_wash_count 应该为 0
+            case self::CHECK: // 46ccb4 - 故障排除
+                // 1. 验证故障码是否清除（has_lock应该为0）
+                $faultCleared = ($afterState['has_lock'] ?? 1) === 0;
+
+                // 2. 验证外部按钮计数器是否清除（故障排除会清除B5/B7）
                 $openCleared = ($afterState['external_open_count'] ?? null) === 0;
                 $washCleared = ($afterState['external_wash_count'] ?? null) === 0;
-                return $openCleared && $washCleared;
 
-            case self::CLEAR_LOG: // 46ccba
-                // 验证：score (押得/得分) 应该为 0
+                $allCleared = $faultCleared && $openCleared && $washCleared;
+
+                return [
+                    'verified' => $allCleared,
+                    'reason' => $allCleared ? '故障已清除，外部按钮计数器已归0' :
+                        (!$faultCleared ? '故障未清除(has_lock=' . ($afterState['has_lock'] ?? 'null') . ')' :
+                        (!$openCleared ? '开分计数未归0(' . ($afterState['external_open_count'] ?? 'null') . ')' :
+                        '洗分计数未归0(' . ($afterState['external_wash_count'] ?? 'null') . ')')),
+                    'details' => [
+                        'fault_cleared' => $faultCleared,
+                        'open_cleared' => $openCleared,
+                        'wash_cleared' => $washCleared,
+                    ],
+                ];
+
+            case self::CLEAR_EXTERNAL_BUTTON: // 46ccb3 - 清除外部按钮码表
+                // 验证：B5/B7外部按钮计数器应该为0
+                $openCleared = ($afterState['external_open_count'] ?? null) === 0;
+                $washCleared = ($afterState['external_wash_count'] ?? null) === 0;
+
+                $allCleared = $openCleared && $washCleared;
+
+                return [
+                    'verified' => $allCleared,
+                    'reason' => $allCleared ? '外部按钮计数器已归0' :
+                        (!$openCleared ? 'B5开分计数未归0(' . ($afterState['external_open_count'] ?? 'null') . ')' :
+                        'B7洗分计数未归0(' . ($afterState['external_wash_count'] ?? 'null') . ')'),
+                    'details' => [
+                        'open_cleared' => $openCleared,
+                        'wash_cleared' => $washCleared,
+                    ],
+                ];
+
+            case self::CLEAR_LOG: // 46ccba - 清除押得数值
+                // 验证：score(押得/得分)应该为0
                 $scoreCleared = ($afterState['score'] ?? null) === 0;
-                return $scoreCleared;
+
+                return [
+                    'verified' => $scoreCleared,
+                    'reason' => $scoreCleared ? '押得数值已归0' :
+                        '押得数值未归0(score=' . ($afterState['score'] ?? 'null') . ')',
+                    'details' => [
+                        'score_cleared' => $scoreCleared,
+                        'before_score' => $beforeState['score'] ?? null,
+                        'after_score' => $afterState['score'] ?? null,
+                    ],
+                ];
 
             default:
-                return false;
+                return [
+                    'verified' => false,
+                    'reason' => '未知指令',
+                    'details' => [],
+                ];
         }
     }
 
