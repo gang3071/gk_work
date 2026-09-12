@@ -2410,7 +2410,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     ): void
     {
         $maxRetries = 8;
-        $expirationTime = 2000000; // ✅ 增加到2秒（机台可能响应较慢）
+        $expirationTime = 10000000; // ✅ 10秒超时，匹配查询策略（最后一次查询在7秒）
 
         try {
             $beforeActionTime = $this->setActionVersion($cmd);
