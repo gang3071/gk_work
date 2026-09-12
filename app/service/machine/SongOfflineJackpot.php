@@ -65,6 +65,7 @@ use yzh52521\WebmanLock\Locker;
  * @property int $now_turn 当前累积转数
  * @property int $has_lock 机台锁定状态
  * @property int $ratio 扣趴比例（10-15%）
+ * @property float $player_win_number 玩家使用转数（累积消耗的转数，用于打码量统计）
  * @property int $external_open_count 外部按钮开分次数（B5协议，次数非金额）
  * @property int $external_wash_count 外部按钮洗分次数（B7协议，次数非金额）
  *
@@ -1195,7 +1196,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $this->handleLotteryEnd($state['nowRewardStatus'], $orgRewardStatus, $state['nowScore'], $gamingUserId);
 
         // 处理转数变化（累加player_win_number、投递打码量）
-        $this->processTurnChange($state['nowRewardStatus'], $gamingUserId, $state['nowTurn'], $orgTurn);
+        $this->processTurnChange($state['nowRewardStatus'], $gamingUserId, $state['nowTurn'], $orgTurn, $state['nowWinNumber'], $orgWinNumber);
 
         // 转数为0时清理礼物缓存
         $this->cleanupGiftCacheIfNeeded($state['nowTurn'], $gamingUserId);
@@ -1407,13 +1408,16 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
     /**
      * 处理转数变化（累加player_win_number、投递打码量统计）
+     *
+     * ⚠️ 重要：基于 turn（剩余转数）的减少来累加，与线上版逻辑一致
+     * turn 的减少直接反映玩家实际消耗的转数，比 win_number（中洞对奖次数）更准确
      */
-    private function processTurnChange(int $nowRewardStatus, int $gamingUserId, $nowTurn, float $orgTurn): void
+    private function processTurnChange(int $nowRewardStatus, int $gamingUserId, $nowTurn, float $orgTurn, int $nowWinNumber, int $orgWinNumber): void
     {
         // 开奖状态中不处理转数累加
         if ($nowRewardStatus != 0) {
             if (!empty($gamingUserId)) {
-                $this->log->info('[转数累加] 开奖状态中，跳过turn累加', [
+                $this->log->info('[转数累加] 开奖状态中，跳过累加', [
                     'machine_code' => $this->machine->code,
                     'reward_status' => $nowRewardStatus
                 ]);
@@ -1423,13 +1427,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
         // 没有玩家时不处理
         if (empty($gamingUserId)) {
-            $this->log->info('[转数累加] 没有游戏中的玩家，跳过turn累加', [
-                'machine_code' => $this->machine->code,
-                'gaming_user_id' => $gamingUserId
-            ]);
             return;
         }
 
+        // ✅ 监测 turn（剩余转数）的减少
+        // turn 是剩余转数，玩家每次游玩都会减少，直接反映实际消耗
         $turnDelta = bcsub($nowTurn, $orgTurn, 2);
 
         // 检查是否刚执行过上转下转操作
@@ -1441,23 +1443,35 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             return;
         }
 
-        // 判断转数变化类型并处理
+        // turn 是剩余转数，负增量说明玩家消耗了转数（正常游玩）
+        // 但需要过滤大幅减少（可能是下转操作）
         if (bccomp($turnDelta, '0', 2) < 0 && bccomp($turnDelta, '-10', 2) >= 0) {
-            // 负增量在 -10 到 0 之间：正常游玩消耗
-            $this->handleTurnConsumption(abs($turnDelta), $gamingUserId);
+            // 负增量在 -10 到 0 之间，且无上转下转标记，说明是正常游玩消耗
+            $consumed = abs($turnDelta);  // 消耗的转数（绝对值）
+            $this->handleTurnConsumption($consumed, $gamingUserId);
+
+            $this->log->info('[转数累加] turn 减少，累加打码量', [
+                'machine_code' => $this->machine->code,
+                'turn_delta' => $turnDelta,
+                'consumed' => $consumed,
+                'old_turn' => $orgTurn,
+                'new_turn' => $nowTurn,
+                'player_win_number' => $this->player_win_number,
+            ]);
         } else if (bccomp($turnDelta, '-10', 2) < 0) {
-            // 大幅减少：可能是下转操作
+            // turn 大幅减少：可能是下转操作
             $this->log->info('[转数累加] turn大幅减少，可能是下转操作，不累加', [
                 'machine_code' => $this->machine->code,
                 'turn_delta' => $turnDelta
             ]);
         } else if (bccomp($turnDelta, '0', 2) > 0) {
-            // 增加：可能是上转操作
+            // turn 增加：可能是上转操作
             $this->log->info('[转数累加] turn增加，可能是上转操作，不累加', [
                 'machine_code' => $this->machine->code,
                 'turn_delta' => $turnDelta
             ]);
         }
+        // turnDelta == 0：没有变化，不累加
     }
 
     /**
@@ -1925,10 +1939,15 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      * │  │  └─┴─┴── │  │  └─┴── │  └─┴─┴── │  └─┴──
      * │  │  分数    │  扣 转数  │  得分    │  剩余转数
      * │  │          │  趴      │          │
-     * │  └─ 状态    └─ 旗标    └─ 机台状态
+     * │  │          └─ 开奖旗标 └─ 机台状态
+     * │  │             D0=未开奖    DA=正常
+     * │  │             D5=开奖中    DB/DC=故障
+     * │  └─ 自动状态
      * │     C0=停止
      * │     C6=启动
      * └─ 分机号
+     *
+     * 扣趴对照：00=10%, 01=11%, 02=12%, 03=13%, 04=14%, 05=15%
      *
      * @param string $command 心跳指令（36字节）
      * @return array [分数, 扣趴, 累积转数, 得分, 剩余转数]
