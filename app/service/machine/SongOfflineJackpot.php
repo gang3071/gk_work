@@ -2348,6 +2348,20 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 if ($actionTime > $beforeActionTime) {
+                    // ✅ 开分成功，主动查询分数确认
+                    usleep(100000); // 等待100ms让机台处理
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_POINT)));
+
+                    // ✅ 设置外层版本号（用于 sendRawCmdWithReply）
+                    // 提取基础指令码（去掉随机码）
+                    $baseCmd = substr($cmd, 0, 4); // '46ca3f' → '46ca'
+                    $this->setActionVersion($baseCmd);
+
+                    $this->log->info('[开分成功] 已查询分数并设置版本号', [
+                        'machine_code' => $this->machine->code,
+                        'full_cmd' => $cmd,
+                        'base_cmd' => $baseCmd,
+                    ]);
                     return;
                 }
                 if ($handleDuration >= $expirationTime) {
@@ -2404,10 +2418,19 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $checkCount++;
 
                 if ($actionTime > $beforeActionTime) {
-                    // ✅ 成功收到回复
-                    $this->log->info('[下分成功] 收到机台回复', [
+                    // ✅ 成功收到回复，主动查询分数确认
+                    usleep(100000); // 等待100ms让机台处理
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_POINT)));
+
+                    // ✅ 设置外层版本号（用于 sendRawCmdWithReply）
+                    // 提取基础指令码（去掉随机码）
+                    $baseCmd = substr($cmd, 0, 4); // '46cb3f' → '46cb'
+                    $this->setActionVersion($baseCmd);
+
+                    $this->log->info('[下分成功] 收到机台回复，已查询分数', [
                         'machine_code' => $this->machine->code,
-                        'cmd' => $cmd,
+                        'full_cmd' => $cmd,
+                        'base_cmd' => $baseCmd,
                         'wait_time_ms' => $handleDuration / 1000,
                         'check_count' => $checkCount,
                         'attempts' => $attempts,
