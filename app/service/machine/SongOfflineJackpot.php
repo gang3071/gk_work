@@ -1300,6 +1300,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $this->setActionVersion(self::MACHINE_TURN);
         $this->setActionVersion(self::WIN_NUMBER);
 
+        // ✅ 同时设置心跳版本号（单向指令需要检测心跳更新）
+        $this->setActionVersion(self::GET_MACHINE_POINT);
+        $this->setActionVersion(self::AUTO_MACHINE_POINT);
+
         return compact('nowPoint', 'nowRatio', 'nowWinNumber', 'nowScore', 'nowTurn', 'nowAuto', 'nowRewardStatus');
     }
 
@@ -2335,6 +2339,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                             'before_state' => $beforeState,
                             'after_state' => $afterState,
                         ]);
+                        throw new Exception('指令执行失败: ' . $verification['reason']);
                     }
 
                     return;
@@ -2380,12 +2385,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 break;
 
             case self::CLEAR_LOG: // 46ccba - 清除押得数值
-                // ⚠️ 这个指令会清除机台端的押得数值（score）和累积转数（win_number）
-                // win_number 非常关键：
-                // - 等同于小淞线上版的"中洞对奖次数"
-                // - 用于判断玩家游戏中使用了多少转（打码量计算）
-                // - 影响彩金、礼物等一系列逻辑
-                // - 玩家下分时会自动清理（和小淞线上版一样）
+                // ⚠️ 这个指令只清除机台端的押得数值（score/得分）
+                // 不清除 win_number（累积转数），win_number 只在特定情况下清零
                 // 本地不需要特殊处理，等待心跳更新即可
                 break;
         }
@@ -2434,24 +2435,20 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 ];
 
             case self::CLEAR_LOG: // 46ccba - 清除押得数值
-                // 验证：score(押得/得分)和 win_number(累积转数)应该都为0
+                // 验证：只验证 score(押得/得分) 是否归0
+                // 协议文档："归0目前'押得'"，不包括 win_number
                 // score: DA 00 00 00 (得分为0)
-                // win_number: D0 00 00 (累积转数为0，等同于小淞线上版的"中洞对奖次数"）
                 $scoreCleared = ($afterState['score'] ?? null) === 0;
-                $winNumberCleared = ($afterState['win_number'] ?? null) === 0;
-
-                $allCleared = $scoreCleared && $winNumberCleared;
 
                 return [
-                    'verified' => $allCleared,
-                    'reason' => $allCleared ? '押得数值和累积转数已归0' :
-                        (!$scoreCleared ? '得分未归0(score=' . ($afterState['score'] ?? 'null') . ')' :
-                        '累积转数未归0(win_number=' . ($afterState['win_number'] ?? 'null') . ')'),
+                    'verified' => $scoreCleared,
+                    'reason' => $scoreCleared ? '押得数值已归0' :
+                        '得分未归0(score=' . ($afterState['score'] ?? 'null') . ')',
                     'details' => [
                         'score_cleared' => $scoreCleared,
-                        'win_number_cleared' => $winNumberCleared,
                         'before_score' => $beforeState['score'] ?? null,
                         'after_score' => $afterState['score'] ?? null,
+                        // win_number 不参与验证，仅记录
                         'before_win_number' => $beforeState['win_number'] ?? null,
                         'after_win_number' => $afterState['win_number'] ?? null,
                     ],
