@@ -1668,6 +1668,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $point = self::parseScore(substr($msg, 4, 6));
                 $this->point = $point;
                 $this->setActionVersion(self::MACHINE_POINT);
+                // ✅ 同时设置心跳版本号（单向指令需要检测）
+                $this->setActionVersion($fun);  // GET_MACHINE_POINT 或 AUTO_MACHINE_POINT
                 break;
 
             // 查询得分响应
@@ -2278,8 +2280,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $expirationTime = 3000000; // 3秒超时（心跳应该立即到来）
 
         try {
-            // 记录发送前的心跳版本号和状态
-            $beforeHeartbeatVersion = $this->getActionVersion(self::GET_MACHINE_POINT);
+            // 记录发送前的心跳版本号和状态（检查两种心跳：46c0停止状态、46c6自动状态）
+            $beforeHeartbeatVersionC0 = $this->getActionVersion(self::GET_MACHINE_POINT);
+            $beforeHeartbeatVersionC6 = $this->getActionVersion(self::AUTO_MACHINE_POINT);
+            $beforeHeartbeatVersion = max($beforeHeartbeatVersionC0, $beforeHeartbeatVersionC6);
+
             $beforeState = [
                 'has_lock' => $this->has_lock ?? null,                     // 故障锁定状态
                 'external_open_count' => $this->external_open_count ?? null, // B5外部按钮开分次数
@@ -2291,6 +2296,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $this->log->info('[单向指令] 发送指令', [
                 'machine_code' => $this->machine->code,
                 'cmd' => $cmd,
+                'before_heartbeat_c0' => $beforeHeartbeatVersionC0,
+                'before_heartbeat_c6' => $beforeHeartbeatVersionC6,
                 'before_heartbeat_version' => $beforeHeartbeatVersion,
                 'before_state' => $beforeState,
             ]);
@@ -2304,9 +2311,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $handleDuration = 0;
             $sleep = 100000; // 100ms检查一次
 
-            // 等待心跳更新
+            // 等待心跳更新（检查两种心跳类型）
             while (true) {
-                $currentHeartbeatVersion = $this->getActionVersion(self::GET_MACHINE_POINT);
+                $currentHeartbeatVersionC0 = $this->getActionVersion(self::GET_MACHINE_POINT);
+                $currentHeartbeatVersionC6 = $this->getActionVersion(self::AUTO_MACHINE_POINT);
+                $currentHeartbeatVersion = max($currentHeartbeatVersionC0, $currentHeartbeatVersionC6);
 
                 if ($currentHeartbeatVersion > $beforeHeartbeatVersion) {
                     // 收到心跳，获取当前状态
