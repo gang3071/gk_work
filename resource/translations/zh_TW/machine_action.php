@@ -178,8 +178,19 @@ return [
             SongSlot::STOP_TWO => '中停',
             SongSlot::STOP_THREE => '右停',
             SongSlot::MACHINE_OPEN => '開機',
-            SongSlot::MACHINE_CLOSE => '关机',
-            SongSlot::ALL_DOWN => '清理历史数据',
+            SongSlot::MACHINE_CLOSE => '關機',
+            SongSlot::ALL_DOWN => '清理歷史數據',
+
+            // ✅ 小淞線下Slot（SongOfflineSlot）專用指令 - 收賬小卡協議
+            'eac4' => '查詢賬目',           // SongOfflineSlot::QUERY_ACCOUNT
+            'ead8' => '查詢總玩總贏',       // SongOfflineSlot::QUERY_TOTAL
+            'ead4' => '查詢機台情況',       // SongOfflineSlot::QUERY_STATUS
+            'eac3' => '登入',               // SongOfflineSlot::LOGIN
+            'eac5' => '查詢登入狀態',       // SongOfflineSlot::CHECK_LOGIN
+            'a5xxc0' => '上分',             // SongOfflineSlot::OPEN_POINT（指令測試用）
+            'a500c1' => '下分',             // SongOfflineSlot::WASH_POINT（指令測試用）
+            'eade' => '清除賬目',           // SongOfflineSlot::CLEAR_ACCOUNT
+            'a37005e0f8ce' => '歸0機板',   // SongOfflineSlot::RESET_BOARD
         ],
     ]
 ];

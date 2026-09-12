@@ -121,6 +121,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     public $expirationTime = 5000000;  // 5秒超时
     public $log = null;
 
+    // ✅ 指令测试支持：记录原始指令码（用于设置正确的 actionVersion）
+    private $originalCmd = null;
+
     public function __construct(Machine $machine, $lang = 'zh_CN')
     {
         $this->machine = $machine;
@@ -698,6 +701,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // ✅ 更新版本号，表示收到回复（A5用于上分和下分）
         $this->setActionVersion('a5');
 
+        // ✅ 指令测试支持：如果有原始指令码，也为其设置版本号
+        // 这样前端发送 'a500c0' 时，等待的 actionKey 也能收到版本更新
+        if ($this->originalCmd) {
+            $this->setActionVersion($this->originalCmd);
+            $this->log->info('[收账小卡-操作] 同时更新原始指令版本号', [
+                'machine_code' => $this->machine->code,
+                'original_cmd' => $this->originalCmd,
+            ]);
+        }
+
         return true;
     }
 
@@ -1049,6 +1062,19 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if (!empty($currentGamingUserId)) {
                     $this->last_play_time = time();
                 }
+            }
+
+            // ✅ 指令测试支持：识别特殊格式的上分/下分指令
+            // 前端可能发送 'a5xxc0'（上分）或 'a500c1'（下分）
+            $this->originalCmd = null;  // 重置
+            if (preg_match('/^a5[0-9a-f]{2}c0$/i', $cmd)) {
+                // 上分指令格式：a5xxc0
+                $this->originalCmd = strtolower($cmd);  // 保存原始指令（小写）
+                $cmd = self::OPEN_POINT;
+            } elseif (preg_match('/^a5[0-9a-f]{2}c1$/i', $cmd)) {
+                // 下分指令格式：a500c1
+                $this->originalCmd = strtolower($cmd);  // 保存原始指令（小写）
+                $cmd = self::WASH_POINT;
             }
 
             switch ($cmd) {

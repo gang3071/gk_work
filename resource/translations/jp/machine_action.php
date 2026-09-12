@@ -179,6 +179,17 @@ return [
             SongSlot::MACHINE_OPEN => '電源投入',
             SongSlot::MACHINE_CLOSE => 'シャットダウン',
             SongSlot::ALL_DOWN => '履歴データのクリーンアップ',
+
+            // ✅ 小淞オフラインSlot（SongOfflineSlot）専用コマンド - 収支カードプロトコル
+            'eac4' => 'アカウント照会',           // SongOfflineSlot::QUERY_ACCOUNT
+            'ead8' => '総ベット/総勝利照会',      // SongOfflineSlot::QUERY_TOTAL
+            'ead4' => '機台状況照会',             // SongOfflineSlot::QUERY_STATUS
+            'eac3' => 'ログイン',                 // SongOfflineSlot::LOGIN
+            'eac5' => 'ログイン状態確認',         // SongOfflineSlot::CHECK_LOGIN
+            'a5xxc0' => 'クレジット追加',         // SongOfflineSlot::OPEN_POINT（テスト用）
+            'a500c1' => 'キャッシュアウト',       // SongOfflineSlot::WASH_POINT（テスト用）
+            'eade' => 'アカウントクリア',         // SongOfflineSlot::CLEAR_ACCOUNT
+            'a37005e0f8ce' => 'ボードリセット',   // SongOfflineSlot::RESET_BOARD
         ],
     ]
 ];
