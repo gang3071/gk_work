@@ -586,9 +586,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // 验证分机号
         $this->validateExtensionNumber($mainCmd);
 
-        // 提取功能码
-        $fun = substr($mainCmd, 0, 6);
-        $fun1 = substr($mainCmd, 0, 4);
+        // 提取功能码（转小写以匹配常量定义）
+        $fun = strtolower(substr($mainCmd, 0, 6));
+        $fun1 = strtolower(substr($mainCmd, 0, 4));
 
         // 处理指令回复
         $result = $this->handleCommandReply($mainCmd, $fun, $fun1, $gamingUserId);
