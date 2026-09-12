@@ -1522,31 +1522,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $this->setActionVersion($fun);
                 break;
 
-            case self::CLEAR_LOG:
-                // ⚠️ 注意：这是单向指令，机台不回复，此分支不会被执行
-                // 实际使用中通过 sendRawCmdWithReply 的单向指令处理
-                $this->setActionVersion($fun);
-                break;
-
-            case self::CHECK:
-                // ⚠️ 注意：这是单向指令，机台不回复，此分支不会被执行
-                // 实际使用中通过 sendRawCmdWithReply 的单向指令处理
-                // 如果机台意外回复，也处理一下
-                Cache::set('check_flag_' . $this->machine->id, true, 10);
-                $this->external_open_count = 0;
-                $this->external_wash_count = 0;
-                $this->setActionVersion($fun);
-                break;
-
-            case self::CLEAR_EXTERNAL_BUTTON:
-                // ⚠️ 注意：这是单向指令，机台不回复，此分支不会被执行
-                // 实际使用中通过 sendRawCmdWithReply 的单向指令处理
-                // ✅ 与故排(46CCB4)的区别：只清除B5/B7计数器，不执行故障排除
-                Cache::set('check_flag_' . $this->machine->id, true, 10);
-                $this->external_open_count = 0;
-                $this->external_wash_count = 0;
-                $this->setActionVersion($fun);
-                break;
+            // ⚠️ 单向指令不会回复专用消息，不会进入这些 case
+            // 实际处理在 sendCmd 的 executeOneWayCommand 方法中
 
             case self::AUTO_UP_TURN:
                 $this->auto = 1;
@@ -2138,6 +2115,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     }
                     break;
 
+                case self::CHECK:
+                case self::CLEAR_EXTERNAL_BUTTON:
+                case self::CLEAR_LOG:
+                    // ⚠️ 单向指令：不回复专用消息，但会立即触发心跳
+                    $this->executeOneWayCommand($uid, $cmd, $source, $source_id);
+                    break;
+
                 default:
                     Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
                     break;
@@ -2215,6 +2199,153 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
             usleep(50000);
             $this->machineAction($uid, $cmd, $source, $source_id, $attempts);
+        }
+    }
+
+    /**
+     * 执行单向指令（通过心跳确认）
+     *
+     * 单向指令不回复专用确认消息，但会立即触发心跳
+     * 根据协议文档：
+     * - 46CCB3: 归0机台"外部按钮跳表"，马上给心跳
+     * - 46CCB4: 故障排除，会触发心跳
+     * - 46CCBA: 归0目前"押得"，清除后机板会马上回复心跳
+     */
+    private function executeOneWayCommand(
+        string $uid,
+        string $cmd,
+        string $source = 'player',
+        int $source_id = 0
+    ): void
+    {
+        $expirationTime = 3000000; // 3秒超时（心跳应该立即到来）
+
+        try {
+            // 记录发送前的心跳版本号和状态
+            $beforeHeartbeatVersion = $this->getActionVersion(self::GET_MACHINE_POINT);
+            $beforeState = [
+                'external_open_count' => $this->external_open_count ?? null,
+                'external_wash_count' => $this->external_wash_count ?? null,
+                'score' => $this->score ?? null,
+            ];
+
+            $this->log->info('[单向指令] 发送指令', [
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'before_heartbeat_version' => $beforeHeartbeatVersion,
+                'before_state' => $beforeState,
+            ]);
+
+            // 发送指令
+            Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd)));
+
+            // 执行指令特定的本地状态更新
+            $this->executeOneWayCommandLocalUpdate($cmd);
+
+            $handleDuration = 0;
+            $sleep = 100000; // 100ms检查一次
+
+            // 等待心跳更新
+            while (true) {
+                $currentHeartbeatVersion = $this->getActionVersion(self::GET_MACHINE_POINT);
+
+                if ($currentHeartbeatVersion > $beforeHeartbeatVersion) {
+                    // 收到心跳，获取当前状态
+                    $afterState = [
+                        'external_open_count' => $this->external_open_count ?? null,
+                        'external_wash_count' => $this->external_wash_count ?? null,
+                        'score' => $this->score ?? null,
+                    ];
+
+                    // 验证结果
+                    $verified = $this->verifyOneWayCommandResult($cmd, $beforeState, $afterState);
+
+                    $this->log->info('[单向指令] 收到心跳确认', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'wait_time_ms' => $handleDuration / 1000,
+                        'verified' => $verified,
+                        'after_state' => $afterState,
+                    ]);
+
+                    if (!$verified) {
+                        $this->log->warning('[单向指令] 验证失败', [
+                            'machine_code' => $this->machine->code,
+                            'cmd' => $cmd,
+                            'before_state' => $beforeState,
+                            'after_state' => $afterState,
+                        ]);
+                    }
+
+                    return;
+                }
+
+                if ($handleDuration >= $expirationTime) {
+                    throw new Exception(trans('machine_action_fail', [], 'message'));
+                }
+
+                usleep($sleep);
+                $handleDuration += $sleep;
+            }
+        } catch (Exception $e) {
+            $this->log->error('[单向指令] 执行失败', [
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'error' => $e->getMessage(),
+            ]);
+            throw new Exception(trans('machine_action_fail', [], 'message'));
+        }
+    }
+
+    /**
+     * 执行单向指令的本地状态更新
+     */
+    private function executeOneWayCommandLocalUpdate(string $cmd): void
+    {
+        switch ($cmd) {
+            case self::CHECK: // 46ccb4 - 故障排除
+                // 设置故排标记（用于计数器归零检测）
+                Cache::set('check_flag_' . $this->machine->id, true, 10);
+                // 清除外部按钮计数器（协议规定）
+                $this->external_open_count = 0;
+                $this->external_wash_count = 0;
+                break;
+
+            case self::CLEAR_EXTERNAL_BUTTON: // 46ccb3 - 清除外部按钮码表
+                // 设置清除标记
+                Cache::set('check_flag_' . $this->machine->id, true, 10);
+                // 清除外部按钮计数器
+                $this->external_open_count = 0;
+                $this->external_wash_count = 0;
+                break;
+
+            case self::CLEAR_LOG: // 46ccba - 清除押得数值
+                // 这个指令只清除机台端的押得数值
+                // 本地不需要特殊处理，等待心跳更新即可
+                break;
+        }
+    }
+
+    /**
+     * 验证单向指令执行结果
+     */
+    private function verifyOneWayCommandResult(string $cmd, array $beforeState, array $afterState): bool
+    {
+        switch ($cmd) {
+            case self::CLEAR_EXTERNAL_BUTTON: // 46ccb3
+            case self::CHECK:                 // 46ccb4
+                // 验证：external_open_count 和 external_wash_count 应该为 0
+                $openCleared = ($afterState['external_open_count'] ?? null) === 0;
+                $washCleared = ($afterState['external_wash_count'] ?? null) === 0;
+                return $openCleared && $washCleared;
+
+            case self::CLEAR_LOG: // 46ccba
+                // 验证：score (押得/得分) 应该为 0
+                $scoreCleared = ($afterState['score'] ?? null) === 0;
+                return $scoreCleared;
+
+            default:
+                return false;
         }
     }
 
