@@ -2421,32 +2421,63 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             case self::CHECK: // 46ccb4 - 故障排除
                 // 验证：心跳中的健康状态码 DA（正常）
                 // 心跳字节18-19: DA=正常, DB=故障1, DC=故障2
-                $faultCleared = ($afterState['has_lock'] ?? 1) === 0;
+                $beforeHasLock = ($beforeState['has_lock'] ?? 0);
+                $afterHasLock = ($afterState['has_lock'] ?? 1);
+                $faultCleared = ($afterHasLock === 0);
+
+                // 根据执行前后状态生成准确的提示信息
+                if ($beforeHasLock === 0 && $afterHasLock === 0) {
+                    $reason = trans('one_way_verify_fault_normal', [], 'machine_operation', $this->lang);
+                } elseif ($beforeHasLock === 1 && $afterHasLock === 0) {
+                    $reason = trans('one_way_verify_fault_cleared', [], 'machine_operation', $this->lang);
+                } elseif ($beforeHasLock === 1 && $afterHasLock === 1) {
+                    $reason = trans('one_way_verify_fault_not_cleared', [], 'machine_operation', $this->lang);
+                } else {
+                    $reason = trans('one_way_verify_fault_abnormal', [], 'machine_operation', $this->lang);
+                }
 
                 return [
                     'verified' => $faultCleared,
-                    'reason' => $faultCleared ? '故障已清除（DA正常状态）' :
-                        '故障未清除(has_lock=' . ($afterState['has_lock'] ?? 'null') . ')',
+                    'reason' => $reason,
                     'details' => [
+                        'before_has_lock' => $beforeHasLock,
+                        'after_has_lock' => $afterHasLock,
                         'fault_cleared' => $faultCleared,
-                        'before_has_lock' => $beforeState['has_lock'] ?? null,
-                        'after_has_lock' => $afterState['has_lock'] ?? null,
                     ],
                 ];
 
             case self::CLEAR_EXTERNAL_BUTTON: // 46ccb3 - 清除外部按钮码表
                 // 验证：B5/B7外部按钮计数器应该为0
-                $openCleared = ($afterState['external_open_count'] ?? null) === 0;
-                $washCleared = ($afterState['external_wash_count'] ?? null) === 0;
+                $beforeOpen = $beforeState['external_open_count'] ?? 0;
+                $beforeWash = $beforeState['external_wash_count'] ?? 0;
+                $afterOpen = $afterState['external_open_count'] ?? null;
+                $afterWash = $afterState['external_wash_count'] ?? null;
 
+                $openCleared = ($afterOpen === 0);
+                $washCleared = ($afterWash === 0);
                 $allCleared = $openCleared && $washCleared;
+
+                // 根据执行前后状态生成准确的提示信息
+                if ($beforeOpen === 0 && $beforeWash === 0 && $allCleared) {
+                    $reason = trans('one_way_verify_external_already_zero', [], 'machine_operation', $this->lang);
+                } elseif ($allCleared) {
+                    $reason = trans('one_way_verify_external_cleared', ['{open}' => $afterOpen, '{wash}' => $afterWash], 'machine_operation', $this->lang);
+                } elseif (!$openCleared && !$washCleared) {
+                    $reason = trans('one_way_verify_external_both_not_cleared', ['{open}' => $afterOpen, '{wash}' => $afterWash], 'machine_operation', $this->lang);
+                } elseif (!$openCleared) {
+                    $reason = trans('one_way_verify_external_open_not_cleared', ['{count}' => $afterOpen], 'machine_operation', $this->lang);
+                } else {
+                    $reason = trans('one_way_verify_external_wash_not_cleared', ['{count}' => $afterWash], 'machine_operation', $this->lang);
+                }
 
                 return [
                     'verified' => $allCleared,
-                    'reason' => $allCleared ? '外部按钮计数器已归0' :
-                        (!$openCleared ? 'B5开分计数未归0(' . ($afterState['external_open_count'] ?? 'null') . ')' :
-                        'B7洗分计数未归0(' . ($afterState['external_wash_count'] ?? 'null') . ')'),
+                    'reason' => $reason,
                     'details' => [
+                        'before_open_count' => $beforeOpen,
+                        'before_wash_count' => $beforeWash,
+                        'after_open_count' => $afterOpen,
+                        'after_wash_count' => $afterWash,
                         'open_cleared' => $openCleared,
                         'wash_cleared' => $washCleared,
                     ],
@@ -2456,16 +2487,26 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 // 验证：只验证 score(押得/得分) 是否归0
                 // 协议文档："归0目前'押得'"，不包括 win_number
                 // score: DA 00 00 00 (得分为0)
-                $scoreCleared = ($afterState['score'] ?? null) === 0;
+                $beforeScore = $beforeState['score'] ?? 0;
+                $afterScore = $afterState['score'] ?? null;
+                $scoreCleared = ($afterScore === 0);
+
+                // 根据执行前后状态生成准确的提示信息
+                if ($beforeScore === 0 && $scoreCleared) {
+                    $reason = trans('one_way_verify_score_already_zero', [], 'machine_operation', $this->lang);
+                } elseif ($scoreCleared) {
+                    $reason = trans('one_way_verify_score_cleared', [], 'machine_operation', $this->lang);
+                } else {
+                    $reason = trans('one_way_verify_score_not_cleared', ['{score}' => $afterScore], 'machine_operation', $this->lang);
+                }
 
                 return [
                     'verified' => $scoreCleared,
-                    'reason' => $scoreCleared ? '押得数值已归0' :
-                        '得分未归0(score=' . ($afterState['score'] ?? 'null') . ')',
+                    'reason' => $reason,
                     'details' => [
+                        'before_score' => $beforeScore,
+                        'after_score' => $afterScore,
                         'score_cleared' => $scoreCleared,
-                        'before_score' => $beforeState['score'] ?? null,
-                        'after_score' => $afterState['score'] ?? null,
                         // win_number 不参与验证，仅记录
                         'before_win_number' => $beforeState['win_number'] ?? null,
                         'after_win_number' => $afterState['win_number'] ?? null,
@@ -2475,7 +2516,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             default:
                 return [
                     'verified' => false,
-                    'reason' => '未知指令',
+                    'reason' => trans('unknown_command', [], 'machine_operation', $this->lang),
                     'details' => [],
                 ];
         }
