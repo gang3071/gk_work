@@ -1366,9 +1366,21 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *       - 00050B0C: 总押分 = 51112分
      *       - BB: 总得分旗标
      *       - 00033305: 总得分 = 35105分
-     *       - BD: 状态字节
+     *       - BD: 状态字节（详见下方）
      *       - S1: XOR异或校验
      *       - S2: ADD累加校验（包含S1）
+     *
+     * BD状态字节（1字节，8位）：
+     *   b7 = 0: 登入中      | b7 = 1: 登出中（无法开洗分）
+     *   b6: 预留
+     *   b5 = 1: 现场跳开分表（未透过后台开分）
+     *   b4 = 1: 现场跳洗分表（未透过后台洗分）
+     *   b3: 空置预留
+     *   b2 = 1: 小当
+     *   b1 = 1: 高确
+     *   b0 = 1: 大当
+     *
+     * 示例：BD80 = 10000000（二进制）= 登出中
      *
      * ⚠️ 校验算法：S1 = XOR, S2 = ADD + S1（与收账小卡其他指令的SUM1/SUM2顺序相反）
      * ⚠️ 注意：心跳中开分卡和机台分数是3字节，总押分和总得分是4字节！
@@ -1498,25 +1510,50 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     }
 
     /**
-     * 解析状态字节
-     * bit7: 登出（1=登出，0=登入）
-     * bit5: 现场跳开分表
-     * bit4: 现场跳洗分表
-     * bit2: 小当
-     * bit1: 高确
-     * bit0: 大当
+     * 解析BD状态字节
+     *
+     * BD状态字节（1字节8位）各位含义：
+     *   b7: 登入状态
+     *       - 0 = 登入中（可以开洗分）
+     *       - 1 = 登出中（无法开洗分）
+     *   b6: 预留
+     *   b5: 现场跳开分表（外部按钮开分，未透过后台）
+     *       - 0 = 正常
+     *       - 1 = 检测到现场跳开分表
+     *   b4: 现场跳洗分表（外部按钮洗分，未透过后台）
+     *       - 0 = 正常
+     *       - 1 = 检测到现场跳洗分表
+     *   b3: 空置预留
+     *   b2: 小当状态
+     *       - 0 = 无小当
+     *       - 1 = 小当中
+     *   b1: 高确状态
+     *       - 0 = 无高确
+     *       - 1 = 高确中
+     *   b0: 大当状态
+     *       - 0 = 无大当
+     *       - 1 = 大当中
+     *
+     * 示例：
+     *   BD80 = 10000000（二进制）= 登出中，其他状态正常
+     *   BD00 = 00000000（二进制）= 登入中，所有状态正常
+     *   BD01 = 00000001（二进制）= 登入中，大当中
+     *   BD07 = 00000111（二进制）= 登入中，大当+高确+小当
+     *
+     * @param string $byte 状态字节（2个hex字符）
+     * @return array 解析后的状态数组
      */
     private function parseStatusByte(string $byte): array
     {
         $val = hexdec($byte);
 
         return [
-            'logged_out' => ($val & 0x80) > 0,      // bit7
-            'external_open' => ($val & 0x20) > 0,   // bit5
-            'external_wash' => ($val & 0x10) > 0,   // bit4
-            'small_win' => ($val & 0x04) > 0,       // bit2
-            'high_prob' => ($val & 0x02) > 0,       // bit1
-            'big_win' => ($val & 0x01) > 0,         // bit0
+            'logged_out' => ($val & 0x80) > 0,      // bit7: 登出状态
+            'external_open' => ($val & 0x20) > 0,   // bit5: 现场跳开分表
+            'external_wash' => ($val & 0x10) > 0,   // bit4: 现场跳洗分表
+            'small_win' => ($val & 0x04) > 0,       // bit2: 小当
+            'high_prob' => ($val & 0x02) > 0,       // bit1: 高确
+            'big_win' => ($val & 0x01) > 0,         // bit0: 大当
         ];
     }
 
