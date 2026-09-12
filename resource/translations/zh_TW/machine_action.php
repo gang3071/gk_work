@@ -105,6 +105,7 @@ return [
             SongJackpot::TURN_UP_ALL => '全部上轉',
             SongJackpot::TURN_DOWN_ALL => '全部下轉',
             SongJackpot::AUTO_UP_TURN => '自動上轉（開始遊戲）',
+            SongJackpot::AUTO_STOP => '停止機台',
             SongJackpot::TURN_TO_POINT => '轉數>>分數',
             SongJackpot::POINT_TO_TURN => '分數>>轉數',
             SongJackpot::SCORE_TO_POINT => '得分>>分數',
@@ -113,12 +114,19 @@ return [
             SongJackpot::MACHINE_SCORE => '當前得分',
             SongJackpot::MACHINE_TURN => '當前轉數',
             SongJackpot::WIN_NUMBER => '讀取中洞兌獎次數',
-            SongJackpot::CLEAR_LOG => '清除日誌',
-            SongJackpot::CHECK => '故排',
+            SongJackpot::CLEAR_LOG => '清除押得數值',
+            SongJackpot::CLEAR_EXTERNAL_BUTTON => '清除外部按鈕碼表',
+            SongJackpot::CHECK => '故障排除',
             SongJackpot::MACHINE_OPEN => '開機',
             SongJackpot::MACHINE_CLOSE => '關機',
             SongJackpot::PUSH_THREE => '連發PUSH',
             SongJackpot::PUSH_ONE => '單發PUSH',
+
+            // ✅ 小淞線下鋼珠（SongOfflineJackpot）專用指令 - 協議不同
+            '46ceac' => '查詢外部碼表',      // SongOfflineJackpot::EXTERNAL_BUTTON_QUERY
+            '46ccb3' => '清除外部按鈕碼表',  // SongOfflineJackpot::CLEAR_EXTERNAL_BUTTON
+            '46ccb4' => '故障排除',          // SongOfflineJackpot::CHECK
+            '46ccba' => '清除押得數值',      // SongOfflineJackpot::CLEAR_LOG
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_MEI => [
             Slot::ALL => '機台狀態',

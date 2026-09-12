@@ -11,6 +11,7 @@ return [
     'batch_operation_failed' => 'Batch operation failed',
     'missing_parameter' => 'Missing parameter: {param}',
     'get_operations_failed' => 'Get operations list failed',
+    'command_failed' => 'Command execution failed',
 
     // One-way command verification messages
     'one_way_verify_fault_normal' => 'Machine status is normal, no fault',

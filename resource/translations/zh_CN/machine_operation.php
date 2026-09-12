@@ -11,6 +11,7 @@ return [
     'batch_operation_failed' => '批量操作失败',
     'missing_parameter' => '缺少参数: {param}',
     'get_operations_failed' => '获取操作列表失败',
+    'command_failed' => '指令执行失败',
 
     // 单向指令验证信息
     'one_way_verify_fault_normal' => '机台状态正常，无故障',

@@ -11,6 +11,7 @@ return [
     'batch_operation_failed' => '批量操作失敗',
     'missing_parameter' => '缺少參數: {param}',
     'get_operations_failed' => '獲取操作列表失敗',
+    'command_failed' => 'コマンド実行失敗',
 
     // 単方向コマンド検証メッセージ
     'one_way_verify_fault_normal' => '機台は正常、故障なし',

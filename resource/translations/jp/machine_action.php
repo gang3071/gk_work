@@ -106,6 +106,7 @@ return [
             SongJackpot::TURN_UP_ALL => 'すべて上昇',
             SongJackpot::TURN_DOWN_ALL => 'すべて下降',
             SongJackpot::AUTO_UP_TURN => '自動上昇（ゲーム開始）',
+            SongJackpot::AUTO_STOP => '機台停止',
             SongJackpot::TURN_TO_POINT => '回転数>>スコア',
             SongJackpot::POINT_TO_TURN => 'スコア>>回転数',
             SongJackpot::SCORE_TO_POINT => '得点>>スコア',
@@ -120,6 +121,11 @@ return [
             SongJackpot::MACHINE_CLOSE => '電源オフ',
             SongJackpot::PUSH_THREE => '連発PUSH',
             SongJackpot::PUSH_ONE => '単発PUSH',
+            // ✅ 小淞線下鋼珠（SongOfflineJackpot）專用指令 - 協議不同
+            '46ceac' => '外部カウンタ照会',      // SongOfflineJackpot::EXTERNAL_BUTTON_QUERY
+            '46ccb3' => '外部ボタンカウンタクリア',  // SongOfflineJackpot::CLEAR_EXTERNAL_BUTTON
+            '46ccb4' => '故障排除',  // SongOfflineJackpot::CHECK
+            '46ccba' => 'ベット値クリア',  // SongOfflineJackpot::CLEAR_LOG
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_MEI => [
             Slot::ALL => 'テーブル状態',

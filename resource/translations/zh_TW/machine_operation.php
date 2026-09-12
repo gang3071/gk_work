@@ -28,4 +28,6 @@ return [
     'one_way_verify_score_already_zero' => '押得數值本來就是0，無需清除',
     'one_way_verify_score_cleared' => '押得數值已歸0',
     'one_way_verify_score_not_cleared' => '押得數值未歸0（當前得分={score}）',
+
+    'command_failed' => '指令執行失敗',
 ];

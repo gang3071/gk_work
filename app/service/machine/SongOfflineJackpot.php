@@ -2360,6 +2360,15 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     // ✅ 设置指令版本号，让前端的 sendRawCmdWithReply 能检测到完成
                     $this->setActionVersion($cmd);
 
+                    // ✅ 发送 WebSocket 消息给管理员（包含翻译后的验证结果）
+                    if ($source == 'admin') {
+                        sendSocketMessage('private-admin-1-' . $source_id, [
+                            'msg_type' => 'machine_action_result',
+                            'id' => $this->machine->id,
+                            'description' => $verification['reason'],
+                        ]);
+                    }
+
                     return;
                 }
 

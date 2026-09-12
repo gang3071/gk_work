@@ -105,6 +105,7 @@ return [
             SongJackpot::TURN_UP_ALL => 'All Upward',
             SongJackpot::TURN_DOWN_ALL => 'All Down',
             SongJackpot::AUTO_UP_TURN => 'Auto Up (Start Game)',
+            SongJackpot::AUTO_STOP => 'Stop Machine',
             SongJackpot::TURN_TO_POINT => 'Spins>>Score',
             SongJackpot::POINT_TO_TURN => 'Score>>Spins',
             SongJackpot::SCORE_TO_POINT => 'Win Score>>Score',
@@ -119,6 +120,11 @@ return [
             SongJackpot::MACHINE_CLOSE => 'Power Off',
             SongJackpot::PUSH_THREE => 'Continuous PUSH',
             SongJackpot::PUSH_ONE => 'Single PUSH',
+            // ✅ SongOfflineJackpot-specific commands - different protocol
+            '46ceac' => 'Query External Button Counter',  // SongOfflineJackpot::EXTERNAL_BUTTON_QUERY
+            '46ccb3' => 'Clear External Button Counter',  // SongOfflineJackpot::CLEAR_EXTERNAL_BUTTON
+            '46ccb4' => 'Fault Troubleshooting',  // SongOfflineJackpot::CHECK
+            '46ccba' => 'Clear Bet Value',  // SongOfflineJackpot::CLEAR_LOG
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_MEI => [
             Slot::ALL => 'Machine Status',
