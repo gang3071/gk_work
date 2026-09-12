@@ -907,6 +907,143 @@ class MachineOperationService
                     'message' => '历史记录已清除',
                 ];
 
+            // ========== 小淞线下钢珠指令（46协议）==========
+            case '46cea2': // 46 CE A2 - 查询机台目前分数
+                return [
+                    'point' => (int)($service->point ?? 0),
+                    'current_point' => (int)($service->point ?? 0), // 别名
+                ];
+
+            case '46cea5': // 46 CE A5 - 查询机台目前得分WIN
+                return [
+                    'score' => (int)($service->score ?? 0),
+                    'win' => (int)($service->score ?? 0), // 别名
+                ];
+
+            case '46cea6': // 46 CE A6 - 查询机台目前剩余转数
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'remaining_turn' => (int)($service->turn ?? 0), // 别名
+                ];
+
+            case '46cea9': // 46 CE A9 - 查询机台累积转数
+                return [
+                    'win_number' => (int)($service->win_number ?? 0),
+                    'accumulated_turn' => (int)($service->win_number ?? 0), // 别名
+                ];
+
+            case '46ceac': // 46 CE AC - 查询外部开洗分码表
+                return [
+                    'open_table' => (int)($service->open_table ?? 0),
+                    'wash_table' => (int)($service->wash_table ?? 0),
+                    'external_button' => [
+                        'open' => (int)($service->open_table ?? 0),
+                        'wash' => (int)($service->wash_table ?? 0),
+                    ],
+                ];
+
+            case '46ceb8': // 46 CE B8 - 查询大赏灯状态
+                return [
+                    'reward_light' => (int)($service->reward_status ?? 0),
+                    'reward_status' => (int)($service->reward_status ?? 0), // 别名
+                ];
+
+            case '46ca': // 46 CA - 开任意分
+                return [
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '开分成功',
+                ];
+
+            case '46cc': // 46 CC - 洗分清零
+                return [
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '洗分清零成功',
+                ];
+
+            case '46cec1': // 46 CE C1 - 分数变转数1次（上转）
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '上转成功',
+                ];
+
+            case '46cecb': // 46 CE CB - 分数全变转数
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '全部上转成功',
+                ];
+
+            case '46ceca': // 46 CE CA - 转数转分1次（下转）
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '下转成功',
+                ];
+
+            case '46cec9': // 46 CE C9 - 转数全换分数
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '全部下转成功',
+                ];
+
+            case '46cec8': // 46 CE C8 - WIN换回分数
+                return [
+                    'score' => (int)($service->score ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                    'message' => 'WIN转分成功',
+                ];
+
+            case '46cecd': // 46 CE CD - 启动机台
+                return [
+                    'auto' => (int)($service->auto ?? 0),
+                    'message' => '机台已启动',
+                ];
+
+            case '46cece': // 46 CE CE - 停止机台
+                return [
+                    'auto' => (int)($service->auto ?? 0),
+                    'message' => '机台已停止',
+                ];
+
+            case '46ceb6': // 46 CE B6 - 连发PUSH
+                return [
+                    'message' => '连发PUSH成功',
+                ];
+
+            case '46ceb2': // 46 CE B2 - 单发PUSH
+                return [
+                    'message' => '单发PUSH成功',
+                ];
+
+            case '46cebe': // 46 CE BE - 开机
+                return [
+                    'message' => '开机成功',
+                ];
+
+            case '46cebc': // 46 CE BC - 关机
+                return [
+                    'message' => '关机成功',
+                ];
+
+            case '46ccb4': // 46 CC B4 - 故障排除
+                return [
+                    'message' => '故障排除成功',
+                ];
+
+            case '46ccb3': // 46 CC B3 - 清除外部按钮码表
+                return [
+                    'open_table' => (int)($service->open_table ?? 0),
+                    'wash_table' => (int)($service->wash_table ?? 0),
+                    'message' => '外部码表已清除',
+                ];
+
+            case '46ccba': // 46 CC BA - 清除押得数值
+                return [
+                    'message' => '押得数值已清除',
+                ];
+
             default:
                 // 未知指令，返回所有状态数据
                 return $this->getMachineCurrentData();
