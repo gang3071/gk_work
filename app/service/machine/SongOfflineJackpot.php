@@ -590,14 +590,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $fun = strtolower(substr($mainCmd, 0, 6));
         $fun1 = strtolower(substr($mainCmd, 0, 4));
 
-        $this->log->info('[processCommandMessage] 收到指令回复', [
-            'machine_code' => $this->machine->code,
-            'msg' => $msg,
-            'mainCmd' => $mainCmd,
-            'fun' => $fun,
-            'fun1' => $fun1,
-        ]);
-
         // 处理指令回复
         $result = $this->handleCommandReply($mainCmd, $fun, $fun1, $gamingUserId);
 
@@ -1531,72 +1523,29 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 break;
 
             case self::CLEAR_LOG:
-                $beforeSet = $this->getActionVersion($fun);
+                // ⚠️ 注意：这是单向指令，机台不回复，此分支不会被执行
+                // 实际使用中通过 sendRawCmdWithReply 的单向指令处理
                 $this->setActionVersion($fun);
-                $afterSet = $this->getActionVersion($fun);
-
-                $this->log->info('[清除押得数值] 收到回复并设置版本号', [
-                    'machine_code' => $this->machine->code,
-                    'fun' => $fun,
-                    'msg' => $msg,
-                    'before_version' => $beforeSet,
-                    'after_version' => $afterSet,
-                    'cache_key' => $this->cacheDataKey . '_action_' . $fun,
-                ]);
                 break;
 
             case self::CHECK:
-                // ✅ 设置故排标记（用于计数器归零检测）
-                Cache::set('check_flag_' . $this->machine->id, true, 10); // 10秒有效
-
-                // ✅ 故排指令：清除外部按钮开洗分次数（协议规定）
-                $oldOpenCount = $this->external_open_count ?? 0;
-                $oldWashCount = $this->external_wash_count ?? 0;
-
+                // ⚠️ 注意：这是单向指令，机台不回复，此分支不会被执行
+                // 实际使用中通过 sendRawCmdWithReply 的单向指令处理
+                // 如果机台意外回复，也处理一下
+                Cache::set('check_flag_' . $this->machine->id, true, 10);
                 $this->external_open_count = 0;
                 $this->external_wash_count = 0;
-
-                $beforeSet = $this->getActionVersion($fun);
                 $this->setActionVersion($fun);
-                $afterSet = $this->getActionVersion($fun);
-
-                $this->log->info('[故障排除] 收到回复并设置版本号', [
-                    'machine_code' => $this->machine->code,
-                    'fun' => $fun,
-                    'msg' => $msg,
-                    'before_version' => $beforeSet,
-                    'after_version' => $afterSet,
-                    'old_open_count' => $oldOpenCount,
-                    'old_wash_count' => $oldWashCount,
-                    'cache_key' => $this->cacheDataKey . '_action_' . $fun,
-                ]);
                 break;
 
             case self::CLEAR_EXTERNAL_BUTTON:
-                // ✅ 新文档新增：清除外部按钮码表专用指令（46 CC B3 39 FE）
-                // ⚠️ 与故排(46CCB4)的区别：只清除B5/B7计数器，不执行故障排除
-                Cache::set('check_flag_' . $this->machine->id, true, 10); // 10秒有效
-
-                $oldOpenCount = $this->external_open_count ?? 0;
-                $oldWashCount = $this->external_wash_count ?? 0;
-
+                // ⚠️ 注意：这是单向指令，机台不回复，此分支不会被执行
+                // 实际使用中通过 sendRawCmdWithReply 的单向指令处理
+                // ✅ 与故排(46CCB4)的区别：只清除B5/B7计数器，不执行故障排除
+                Cache::set('check_flag_' . $this->machine->id, true, 10);
                 $this->external_open_count = 0;
                 $this->external_wash_count = 0;
-
-                $beforeSet = $this->getActionVersion($fun);
                 $this->setActionVersion($fun);
-                $afterSet = $this->getActionVersion($fun);
-
-                $this->log->info('[清除外部按钮码表] 收到回复并设置版本号', [
-                    'machine_code' => $this->machine->code,
-                    'fun' => $fun,
-                    'msg' => $msg,
-                    'before_version' => $beforeSet,
-                    'after_version' => $afterSet,
-                    'old_open_count' => $oldOpenCount,
-                    'old_wash_count' => $oldWashCount,
-                    'cache_key' => $this->cacheDataKey . '_action_' . $fun,
-                ]);
                 break;
 
             case self::AUTO_UP_TURN:
@@ -2190,15 +2139,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     break;
 
                 default:
-                    $hexCmd = $this->createCmd($cmd, $data);
-                    $this->log->info('[sendCmd-default] 发送指令', [
-                        'machine_code' => $this->machine->code,
-                        'cmd' => $cmd,
-                        'data' => $data,
-                        'hex_cmd' => $hexCmd,
-                        'uid' => $uid,
-                    ]);
-                    Gateway::sendToUid($uid, hex2bin($hexCmd));
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
                     break;
             }
         } catch (Exception $e) {
