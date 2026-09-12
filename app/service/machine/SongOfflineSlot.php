@@ -49,25 +49,43 @@ use yzh52521\WebmanLock\Locker;
  * - D9: 总赢分数
  * - DC: 转数标志
  *
+ * ========== 基础字段（与线上版一致） ==========
  * @property int $auto 自动状态（0=停止 1=启动）
  * @property int $reward_status 开奖状态（0=未开奖 1=开奖中）
  * @property int $play_start_time 开始游戏时间
  * @property int $gaming_user_id 游戏中玩家ID
  * @property int $gaming 是否游戏中
- * @property int $point 当前分数（金额）
- * @property int $score 当前得分（WIN）
+ * @property int $point 当前分数（= machine_score，机台上面的分数）
+ * @property int $score 当前得分（= card_score，开分卡上的分数）
  * @property int $bet 当前押分
- * @property int $win 总赢分数
+ * @property int $win 总赢分数（= total_win）
  * @property int $last_play_time 最后游戏时间
  * @property int $action_time 操作时间
  * @property int $now_turn 当前累积转数
  * @property int $has_lock 机台锁定状态
- * @property int $is_login 登入状态（0=未登入 1=已登入）
- * @property int $external_open_count 外部开分码表（金额，非次数）
- * @property int $external_wash_count 外部洗分码表（金额，非次数）
- * @property int $open_card_point 开分卡分数
- * @property int $total_bet 总押分数
- * @property int $total_win 总赢分数
+ *
+ * ========== 线下版特有字段（GD收账小卡协议） ==========
+ * @property int $login_status 登入状态（0=未登入 1=已登入，心跳BD.b7取反）
+ * @property int $card_score 开分卡分数（心跳B1字段，3字节BCD）
+ * @property int $machine_score 机台分数（心跳B2字段，3字节BCD）
+ * @property int $total_bet 总押分数（心跳BA字段，4字节BCD）
+ * @property int $total_win 总得分数（心跳BB字段，4字节BCD）
+ * @property int $open_table 开分码表（外部开分累计金额，查询账目EA C4回复）
+ * @property int $wash_table 洗分码表（外部洗分累计金额，查询账目EA C4回复）
+ * @property int $big_win 大当状态（心跳BD.b0）
+ * @property int $high_prob 高确状态（心跳BD.b1）
+ * @property int $small_win 小当状态（心跳BD.b2）
+ * @property int $external_open 现场跳开分表（心跳BD.b5）
+ * @property int $external_wash 现场跳洗分表（心跳BD.b4）
+ * @property int $turn 当前转数（查询机台情况EA D4回复）
+ * @property int $return_count 回补次数（查询机台情况EA D4回复）
+ * @property int $table_miss 码表少跳数（查询机台情况EA D4回复）
+ *
+ * ========== 兼容性字段（已废弃，保留映射） ==========
+ * @property int $is_login （废弃→login_status）
+ * @property int $external_open_count （废弃→open_table）
+ * @property int $external_wash_count （废弃→wash_table）
+ * @property int $open_card_point （废弃→card_score）
  *
  * @package app\service\machine
  * @author Claude Code
@@ -132,59 +150,58 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // Redis缓存字段列表
         $this->cacheDataKeyArr = [
-            // 基础字段
-            $this->cacheDataKey . '_gaming_user_id',
-            $this->cacheDataKey . '_gaming',
-            $this->cacheDataKey . '_last_play_time',
-            $this->cacheDataKey . '_action_time',
-            $this->cacheDataKey . '_has_lock',
+            // ========== 基础字段（与线上版一致） ==========
+            $this->cacheDataKey . '_auto',                 // 自动状态
+            $this->cacheDataKey . '_reward_status',        // 开奖状态
+            $this->cacheDataKey . '_play_start_time',      // 开始游戏时间
+            $this->cacheDataKey . '_gaming_user_id',       // 游戏中玩家ID
+            $this->cacheDataKey . '_gaming',               // 是否游戏中
+            $this->cacheDataKey . '_point',                // 当前分数（= machine_score）
+            $this->cacheDataKey . '_score',                // 当前得分（= card_score）
+            $this->cacheDataKey . '_bet',                  // 当前押分
+            $this->cacheDataKey . '_win',                  // 总赢分数（= total_win）
+            $this->cacheDataKey . '_last_play_time',       // 最后游戏时间
+            $this->cacheDataKey . '_action_time',          // 操作时间
+            $this->cacheDataKey . '_now_turn',             // 当前累积转数（= turn）
+            $this->cacheDataKey . '_has_lock',             // 机台锁定状态
 
-            // ✅ Bug #15修复：添加推送机制需要的关键字段
-            $this->cacheDataKey . '_auto',                 // 自动状态（必须，推送需要）
-            $this->cacheDataKey . '_reward_status',        // 开奖状态（必须，推送需要）
-            $this->cacheDataKey . '_bet',                  // 当前押分（必须，推送需要）
-            $this->cacheDataKey . '_win',                  // 总赢分数（必须，推送需要）
+            // ========== 线下版特有字段（GD收账小卡协议） ==========
+            $this->cacheDataKey . '_login_status',         // 登入状态（心跳BD.b7取反）
+            $this->cacheDataKey . '_card_score',           // 开分卡分数（心跳B1字段）
+            $this->cacheDataKey . '_machine_score',        // 机台分数（心跳B2字段）
+            $this->cacheDataKey . '_total_bet',            // 总押分数（心跳BA字段）
+            $this->cacheDataKey . '_total_win',            // 总得分数（心跳BB字段）
+            $this->cacheDataKey . '_open_table',           // 开分码表（查询账目回复）
+            $this->cacheDataKey . '_wash_table',           // 洗分码表（查询账目回复）
+            $this->cacheDataKey . '_big_win',              // 大当状态（心跳BD.b0）
+            $this->cacheDataKey . '_high_prob',            // 高确状态（心跳BD.b1）
+            $this->cacheDataKey . '_small_win',            // 小当状态（心跳BD.b2）
+            $this->cacheDataKey . '_external_open',        // 现场跳开分表（心跳BD.b5）
+            $this->cacheDataKey . '_external_wash',        // 现场跳洗分表（心跳BD.b4）
+            $this->cacheDataKey . '_turn',                 // 转数（查询机台情况回复）
+            $this->cacheDataKey . '_return_count',         // 回补次数（查询机台情况回复）
+            $this->cacheDataKey . '_table_miss',           // 码表少跳数（查询机台情况回复）
 
-            // ⚠️ 新协议字段（GD 2026 07/30）
-            $this->cacheDataKey . '_login_status',         // 登入状态（新命名）
-            $this->cacheDataKey . '_card_score',           // 开分卡分数（新命名）
-            $this->cacheDataKey . '_machine_score',        // 机台分数（新增）⚠️
-            $this->cacheDataKey . '_total_bet',            // 总押分
-            $this->cacheDataKey . '_total_win',            // 总得分
-            $this->cacheDataKey . '_open_table',           // 开分码表（新命名）
-            $this->cacheDataKey . '_wash_table',           // 洗分码表（新命名）
-
-            // ⚠️ 新增：大当/高确/小当状态（心跳状态字节）
-            $this->cacheDataKey . '_big_win',              // 大当状态
-            $this->cacheDataKey . '_high_prob',            // 高确状态
-            $this->cacheDataKey . '_small_win',            // 小当状态
-
-            // ⚠️ 新增：现场跳码表检测（心跳状态字节）
-            $this->cacheDataKey . '_external_open',        // 现场跳开分表
-            $this->cacheDataKey . '_external_wash',        // 现场跳洗分表
-
-            // 其他字段
-            $this->cacheDataKey . '_turn',                 // 转数
-            $this->cacheDataKey . '_return_count',         // 回补次数
-            $this->cacheDataKey . '_table_miss',           // 码表少跳数
-
-            // ⚠️ 兼容性保留（逐步移除）- 旧字段映射
-            $this->cacheDataKey . '_is_login',             // 旧→login_status
-            $this->cacheDataKey . '_external_open_count',  // 旧→open_table
-            $this->cacheDataKey . '_external_wash_count',  // 旧→wash_table
-            $this->cacheDataKey . '_open_card_point',      // 旧→card_score
-            $this->cacheDataKey . '_point',                // 旧→machine_score
+            // ========== 兼容性保留（已废弃，逐步移除） ==========
+            $this->cacheDataKey . '_is_login',             // 废弃→login_status
+            $this->cacheDataKey . '_external_open_count',  // 废弃→open_table
+            $this->cacheDataKey . '_external_wash_count',  // 废弃→wash_table
+            $this->cacheDataKey . '_open_card_point',      // 废弃→card_score
         ];
 
-        // 推送到前端的关键字段
+        // 推送到前端的关键字段（WebSocket实时同步）
         $this->machineInfo = [
-            'auto',
-            'reward_status',
-            'point',
-            'bet',
-            'win',
-            'has_lock',
-            'is_login',
+            'auto',                // 自动状态
+            'reward_status',       // 开奖状态
+            'point',               // 当前分数（= machine_score）
+            'bet',                 // 当前押分
+            'win',                 // 总赢分数（= total_win）
+            'has_lock',            // 机台锁定状态
+            'is_login',            // 登入状态（兼容旧字段，推荐使用login_status）
+            'login_status',        // 登入状态（新字段）
+            'big_win',             // 大当状态（线下版特有）
+            'high_prob',           // 高确状态（线下版特有）
+            'small_win',           // 小当状态（线下版特有）
         ];
 
         $this->lang = $lang;
@@ -1401,23 +1418,29 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             [$cardScore, $machineScore, $totalBet, $totalWin, $statusByte] =
                 $this->parseHeartbeatData($msg);
 
-            // 更新Redis
-            $this->card_score = $cardScore;
-            $this->machine_score = $machineScore;
-            $this->total_bet = $totalBet;
-            $this->total_win = $totalWin;
+            // ========== 更新线下版特有字段（GD收账小卡协议） ==========
+            $this->card_score = $cardScore;           // 开分卡分数（心跳B1字段）
+            $this->machine_score = $machineScore;     // 机台分数（心跳B2字段）
+            $this->total_bet = $totalBet;             // 总押分数（心跳BA字段）
+            $this->total_win = $totalWin;             // 总得分数（心跳BB字段）
+
+            // ========== 同步更新兼容字段（与线上版保持一致） ==========
+            $this->score = $cardScore;                // score = card_score（兼容线上版）
+            $this->point = $machineScore;             // point = machine_score（兼容线上版）
+            $this->win = $totalWin;                   // win = total_win（兼容线上版）
 
             // 解析状态字节
             $status = $this->parseStatusByte($statusByte);
 
-            // ✅ Bug #11修复：同步更新is_login和login_status
+            // ========== 登入状态（心跳BD.b7） ==========
             $loginValue = $status['logged_out'] ? 0 : 1;
-            $this->login_status = $loginValue;
-            $this->is_login = $loginValue;  // 同步更新，确保前端显示和后台判断一致
+            $this->login_status = $loginValue;        // 新字段
+            $this->is_login = $loginValue;            // 兼容旧字段
 
-            $this->big_win = $status['big_win'] ? 1 : 0;
-            $this->high_prob = $status['high_prob'] ? 1 : 0;
-            $this->small_win = $status['small_win'] ? 1 : 0;
+            // ========== 游戏状态（心跳BD.b0/b1/b2） ==========
+            $this->big_win = $status['big_win'] ? 1 : 0;       // 大当状态
+            $this->high_prob = $status['high_prob'] ? 1 : 0;   // 高确状态
+            $this->small_win = $status['small_win'] ? 1 : 0;   // 小当状态
 
             // 检测现场跳码表
             if ($status['external_open'] || $status['external_wash']) {
