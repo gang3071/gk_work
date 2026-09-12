@@ -2261,7 +2261,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'has_lock' => $this->has_lock ?? null,                     // 故障锁定状态
                 'external_open_count' => $this->external_open_count ?? null, // B5外部按钮开分次数
                 'external_wash_count' => $this->external_wash_count ?? null, // B7外部按钮洗分次数
-                'score' => $this->score ?? null,                           // 得分（押得数值）
+                'score' => $this->score ?? null,                           // 得分（押得数值）DA 00 00 00
+                'win_number' => $this->win_number ?? null,                 // 累积转数（中洞对奖次数）D0 00 00
             ];
 
             $this->log->info('[单向指令] 发送指令', [
@@ -2291,6 +2292,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         'external_open_count' => $this->external_open_count ?? null,
                         'external_wash_count' => $this->external_wash_count ?? null,
                         'score' => $this->score ?? null,
+                        'win_number' => $this->win_number ?? null,
                     ];
 
                     // 验证结果
@@ -2359,7 +2361,12 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 break;
 
             case self::CLEAR_LOG: // 46ccba - 清除押得数值
-                // 这个指令只清除机台端的押得数值
+                // ⚠️ 这个指令会清除机台端的押得数值（score）和累积转数（win_number）
+                // win_number 非常关键：
+                // - 等同于小淞线上版的"中洞对奖次数"
+                // - 用于判断玩家游戏中使用了多少转（打码量计算）
+                // - 影响彩金、礼物等一系列逻辑
+                // - 玩家下分时会自动清理（和小淞线上版一样）
                 // 本地不需要特殊处理，等待心跳更新即可
                 break;
         }
@@ -2415,17 +2422,26 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 ];
 
             case self::CLEAR_LOG: // 46ccba - 清除押得数值
-                // 验证：score(押得/得分)应该为0
+                // 验证：score(押得/得分)和 win_number(累积转数)应该都为0
+                // score: DA 00 00 00 (得分为0)
+                // win_number: D0 00 00 (累积转数为0，等同于小淞线上版的"中洞对奖次数"）
                 $scoreCleared = ($afterState['score'] ?? null) === 0;
+                $winNumberCleared = ($afterState['win_number'] ?? null) === 0;
+
+                $allCleared = $scoreCleared && $winNumberCleared;
 
                 return [
-                    'verified' => $scoreCleared,
-                    'reason' => $scoreCleared ? '押得数值已归0' :
-                        '押得数值未归0(score=' . ($afterState['score'] ?? 'null') . ')',
+                    'verified' => $allCleared,
+                    'reason' => $allCleared ? '押得数值和累积转数已归0' :
+                        (!$scoreCleared ? '得分未归0(score=' . ($afterState['score'] ?? 'null') . ')' :
+                        '累积转数未归0(win_number=' . ($afterState['win_number'] ?? 'null') . ')'),
                     'details' => [
                         'score_cleared' => $scoreCleared,
+                        'win_number_cleared' => $winNumberCleared,
                         'before_score' => $beforeState['score'] ?? null,
                         'after_score' => $afterState['score'] ?? null,
+                        'before_win_number' => $beforeState['win_number'] ?? null,
+                        'after_win_number' => $afterState['win_number'] ?? null,
                     ],
                 ];
 
