@@ -2351,6 +2351,15 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         throw new Exception('指令执行失败: ' . $verification['reason']);
                     }
 
+                    $this->log->info('[单向指令] 执行成功', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'wait_time_ms' => $handleDuration / 1000,
+                    ]);
+
+                    // ✅ 设置指令版本号，让前端的 sendRawCmdWithReply 能检测到完成
+                    $this->setActionVersion($cmd);
+
                     return;
                 }
 
