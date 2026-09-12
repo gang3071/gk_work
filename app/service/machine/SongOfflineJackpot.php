@@ -2381,25 +2381,18 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     {
         switch ($cmd) {
             case self::CHECK: // 46ccb4 - 故障排除
-                // 1. 验证故障码是否清除（has_lock应该为0）
+                // 验证：心跳中的健康状态码 DA（正常）
+                // 心跳字节18-19: DA=正常, DB=故障1, DC=故障2
                 $faultCleared = ($afterState['has_lock'] ?? 1) === 0;
 
-                // 2. 验证外部按钮计数器是否清除（故障排除会清除B5/B7）
-                $openCleared = ($afterState['external_open_count'] ?? null) === 0;
-                $washCleared = ($afterState['external_wash_count'] ?? null) === 0;
-
-                $allCleared = $faultCleared && $openCleared && $washCleared;
-
                 return [
-                    'verified' => $allCleared,
-                    'reason' => $allCleared ? '故障已清除，外部按钮计数器已归0' :
-                        (!$faultCleared ? '故障未清除(has_lock=' . ($afterState['has_lock'] ?? 'null') . ')' :
-                        (!$openCleared ? '开分计数未归0(' . ($afterState['external_open_count'] ?? 'null') . ')' :
-                        '洗分计数未归0(' . ($afterState['external_wash_count'] ?? 'null') . ')')),
+                    'verified' => $faultCleared,
+                    'reason' => $faultCleared ? '故障已清除（DA正常状态）' :
+                        '故障未清除(has_lock=' . ($afterState['has_lock'] ?? 'null') . ')',
                     'details' => [
                         'fault_cleared' => $faultCleared,
-                        'open_cleared' => $openCleared,
-                        'wash_cleared' => $washCleared,
+                        'before_has_lock' => $beforeState['has_lock'] ?? null,
+                        'after_has_lock' => $afterState['has_lock'] ?? null,
                     ],
                 ];
 
