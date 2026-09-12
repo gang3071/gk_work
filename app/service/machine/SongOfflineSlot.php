@@ -1353,16 +1353,30 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     }
 
     /**
-     * 处理心跳消息
+     * 处理心跳消息（约1秒传一次）
      *
-     * ⚠️ 格式：B7 B1 [卡分3B] B2 [机分3B] BA [押分4B] BB [得分4B] BD [状态1B] S1 S2
+     * ⚠️ 格式：B7 B1 [开分卡分数3B] B2 [机台分数3B] BA [总押分4B] BB [总得分4B] BD [状态1B] S1 S2
      *
-     * 注意：心跳中开分卡和机台分数是3字节，不是4字节！
+     * 示例：B7 B1 0B1416 B2 02151F BA 00050B0C BB 00033305 BD xx S1(XOR) S2(ADD)
+     *       - B1: 开分卡分数旗标
+     *       - 0B1416: 开分卡分数 = 112030分
+     *       - B2: 机台分数旗标
+     *       - 02151F: 机台分数 = 22131分
+     *       - BA: 总押分旗标
+     *       - 00050B0C: 总押分 = 51112分
+     *       - BB: 总得分旗标
+     *       - 00033305: 总得分 = 35105分
+     *       - BD: 状态字节
+     *       - S1: XOR异或校验
+     *       - S2: ADD累加校验（包含S1）
+     *
+     * ⚠️ 校验算法：S1 = XOR, S2 = ADD + S1（与收账小卡其他指令的SUM1/SUM2顺序相反）
+     * ⚠️ 注意：心跳中开分卡和机台分数是3字节，总押分和总得分是4字节！
      */
     private function handleHeartbeat(string $msg): bool
     {
         try {
-            // ✅ B7心跳使用85x协议校验算法（S1=XOR, S2=ADD+S1），不是收账小卡算法
+            // ✅ B7心跳使用特殊的S1/S2校验算法（不是收账小卡标准的SUM1/SUM2）
             if (!$this->validateHeartbeatChecksum($msg)) {
                 $this->log->error('[心跳] 校验失败', [
                     'machine_code' => $this->machine->code,
@@ -1648,11 +1662,19 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     }
 
     /**
-     * 验证B7心跳校验和（使用85x协议算法）
+     * 验证B7心跳校验和（特殊的S1/S2算法）
      *
-     * ⚠️ B7心跳使用85x协议的校验算法，不是收账小卡的算法：
+     * ⚠️ 收账小卡的B7心跳使用特殊的校验算法，与其他指令（EA/A5/A6/A7等）不同：
+     *
+     * B7心跳：
      * - S1 = XOR（异或）
-     * - S2 = ADD + S1（累加）
+     * - S2 = ADD + S1（累加，包含S1）
+     *
+     * 其他指令（EA/A5/A6/A7）：
+     * - SUM1 = ADD（累加）
+     * - SUM2 = XOR ^ SUM1（异或）
+     *
+     * 算法顺序完全相反！
      */
     private function validateHeartbeatChecksum(string $data): bool
     {
