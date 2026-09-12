@@ -590,6 +590,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $fun = strtolower(substr($mainCmd, 0, 6));
         $fun1 = strtolower(substr($mainCmd, 0, 4));
 
+        $this->log->info('[processCommandMessage] 收到指令回复', [
+            'machine_code' => $this->machine->code,
+            'msg' => $msg,
+            'mainCmd' => $mainCmd,
+            'fun' => $fun,
+            'fun1' => $fun1,
+        ]);
+
         // 处理指令回复
         $result = $this->handleCommandReply($mainCmd, $fun, $fun1, $gamingUserId);
 
@@ -1517,10 +1525,24 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             case self::TURN_UP_ALL:
             case self::PUSH_THREE:
             case self::PUSH_ONE:
-            case self::CLEAR_LOG:
             case self::POINT_TO_TURN:
             case self::TURN_TO_POINT:
                 $this->setActionVersion($fun);
+                break;
+
+            case self::CLEAR_LOG:
+                $beforeSet = $this->getActionVersion($fun);
+                $this->setActionVersion($fun);
+                $afterSet = $this->getActionVersion($fun);
+
+                $this->log->info('[清除押得数值] 收到回复并设置版本号', [
+                    'machine_code' => $this->machine->code,
+                    'fun' => $fun,
+                    'msg' => $msg,
+                    'before_version' => $beforeSet,
+                    'after_version' => $afterSet,
+                    'cache_key' => $this->cacheDataKey . '_action_' . $fun,
+                ]);
                 break;
 
             case self::CHECK:
@@ -1533,13 +1555,20 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 $this->external_open_count = 0;
                 $this->external_wash_count = 0;
-                $this->setActionVersion($fun);
 
-                $this->log->info('[故障排除] 清除外部按钮计数器', [
+                $beforeSet = $this->getActionVersion($fun);
+                $this->setActionVersion($fun);
+                $afterSet = $this->getActionVersion($fun);
+
+                $this->log->info('[故障排除] 收到回复并设置版本号', [
                     'machine_code' => $this->machine->code,
+                    'fun' => $fun,
+                    'msg' => $msg,
+                    'before_version' => $beforeSet,
+                    'after_version' => $afterSet,
                     'old_open_count' => $oldOpenCount,
                     'old_wash_count' => $oldWashCount,
-                    'note' => '故障排除会清除 B5/B7 计数器，已设置10秒标记'
+                    'cache_key' => $this->cacheDataKey . '_action_' . $fun,
                 ]);
                 break;
 
@@ -1553,14 +1582,20 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 $this->external_open_count = 0;
                 $this->external_wash_count = 0;
-                $this->setActionVersion($fun);
 
-                $this->log->info('[清除外部按钮码表] 专用指令清除计数器', [
+                $beforeSet = $this->getActionVersion($fun);
+                $this->setActionVersion($fun);
+                $afterSet = $this->getActionVersion($fun);
+
+                $this->log->info('[清除外部按钮码表] 收到回复并设置版本号', [
                     'machine_code' => $this->machine->code,
-                    'cmd' => self::CLEAR_EXTERNAL_BUTTON,
+                    'fun' => $fun,
+                    'msg' => $msg,
+                    'before_version' => $beforeSet,
+                    'after_version' => $afterSet,
                     'old_open_count' => $oldOpenCount,
                     'old_wash_count' => $oldWashCount,
-                    'note' => '专用清除指令（46CCB3），仅清除B5/B7，不执行故排'
+                    'cache_key' => $this->cacheDataKey . '_action_' . $fun,
                 ]);
                 break;
 
@@ -2155,7 +2190,15 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     break;
 
                 default:
-                    Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
+                    $hexCmd = $this->createCmd($cmd, $data);
+                    $this->log->info('[sendCmd-default] 发送指令', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'data' => $data,
+                        'hex_cmd' => $hexCmd,
+                        'uid' => $uid,
+                    ]);
+                    Gateway::sendToUid($uid, hex2bin($hexCmd));
                     break;
             }
         } catch (Exception $e) {
