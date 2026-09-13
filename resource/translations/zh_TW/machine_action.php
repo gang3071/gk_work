@@ -116,7 +116,7 @@ return [
             SongJackpot::MACHINE_TURN => '當前轉數',
             SongJackpot::WIN_NUMBER => '讀取中洞兌獎次數',
             SongJackpot::CLEAR_LOG => '清除押得數值',
-            SongJackpot::CLEAR_EXTERNAL_BUTTON => '清除外部按鈕碼表',
+            // ❌ 已删除：SongJackpot::CLEAR_EXTERNAL_BUTTON（此常量仅存在于线下版 SongOfflineJackpot）
             SongJackpot::CHECK => '故障排除',
             SongJackpot::MACHINE_OPEN => '開機',
             SongJackpot::MACHINE_CLOSE => '關機',
