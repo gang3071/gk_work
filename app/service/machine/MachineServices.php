@@ -101,30 +101,50 @@ class MachineServices
 
     /**
      * 获取slot操作
-     * @param $controlType
+     * @param $controlType 控制类型
+     * @param $machineSource 机台来源（null=线上，Machine::MACHINE_SOURCE_OFFLINE=线下）
      * @return array
      */
-    public static function getSlotAction($controlType): array
+    public static function getSlotAction($controlType, $machineSource = null): array
     {
         if ($controlType == Machine::CONTROL_TYPE_SONG) {
-            return [
-                SongSlot::ALL,
-                SongSlot::MACHINE_OPEN,
-                SongSlot::MACHINE_CLOSE,
-                SongSlot::CHECK,
-                SongSlot::WASH_ZERO,
-                SongSlot::OPEN_ANY_POINT,
-                SongSlot::OUT_ON,
-                SongSlot::START,
-                SongSlot::STOP_ONE,
-                SongSlot::STOP_TWO,
-                SongSlot::STOP_THREE,
-                SongSlot::ALL_DOWN,
-                SongSlot::READ_SCORE,
-                SongSlot::READ_WIN,
-                SongSlot::READ_BET,
-                SongSlot::REWARD_SWITCH,
-            ];
+            // ✅ 小淞工控：区分线上/线下
+            if ($machineSource === Machine::MACHINE_SOURCE_OFFLINE) {
+                // 线下版（收账小卡协议）
+                return [
+                    SongOfflineSlot::ALL,
+                    SongOfflineSlot::READ_SCORE,
+                    SongOfflineSlot::READ_BET,
+                    SongOfflineSlot::READ_STATUS,
+                    SongOfflineSlot::LOGIN,
+                    SongOfflineSlot::LOGOUT,
+                    SongOfflineSlot::OPEN_POINT,
+                    SongOfflineSlot::WASH_POINT,
+                    SongOfflineSlot::ALL_DOWN,
+                    SongOfflineSlot::CHECK,
+                    SongOfflineSlot::SSR_SIGNAL,
+                ];
+            } else {
+                // 线上版（Song协议）
+                return [
+                    SongSlot::ALL,
+                    SongSlot::MACHINE_OPEN,
+                    SongSlot::MACHINE_CLOSE,
+                    SongSlot::CHECK,
+                    SongSlot::WASH_ZERO,
+                    SongSlot::OPEN_ANY_POINT,
+                    SongSlot::OUT_ON,
+                    SongSlot::START,
+                    SongSlot::STOP_ONE,
+                    SongSlot::STOP_TWO,
+                    SongSlot::STOP_THREE,
+                    SongSlot::ALL_DOWN,
+                    SongSlot::READ_SCORE,
+                    SongSlot::READ_WIN,
+                    SongSlot::READ_BET,
+                    SongSlot::REWARD_SWITCH,
+                ];
+            }
         }
         return [
             Slot::ALL,
@@ -194,33 +214,64 @@ class MachineServices
 
     /**
      * 获取钢珠操作
-     * @param $controlType
+     * @param $controlType 控制类型
+     * @param $machineSource 机台来源（null=线上，Machine::MACHINE_SOURCE_OFFLINE=线下）
      * @return array
      */
-    public static function getJackpotAction($controlType): array
+    public static function getJackpotAction($controlType, $machineSource = null): array
     {
         if ($controlType == Machine::CONTROL_TYPE_SONG) {
-            return [
-                SongJackpot::ALL,
-                SongJackpot::WASH_ZERO,
-                SongJackpot::OPEN_ANY_POINT,
-                SongJackpot::TURN_UP_ALL,
-                SongJackpot::TURN_DOWN_ALL,
-                SongJackpot::AUTO_UP_TURN,
-                SongJackpot::POINT_TO_TURN,
-                SongJackpot::SCORE_TO_POINT,
-                SongJackpot::REWARD_SWITCH,
-                SongJackpot::MACHINE_POINT,
-                SongJackpot::MACHINE_SCORE,
-                SongJackpot::MACHINE_TURN,
-                SongJackpot::WIN_NUMBER,
-                SongJackpot::CLEAR_LOG,
-                SongJackpot::CHECK,
-                SongJackpot::MACHINE_OPEN,
-                SongJackpot::MACHINE_CLOSE,
-                SongJackpot::PUSH_THREE,
-                SongJackpot::PUSH_ONE,
-            ];
+            // ✅ 小淞工控：区分线上/线下
+            if ($machineSource === Machine::MACHINE_SOURCE_OFFLINE) {
+                // 线下版（Song协议 + 线下特有指令）
+                return [
+                    SongOfflineJackpot::ALL,
+                    SongOfflineJackpot::MACHINE_POINT,
+                    SongOfflineJackpot::MACHINE_SCORE,
+                    SongOfflineJackpot::MACHINE_TURN,
+                    SongOfflineJackpot::WIN_NUMBER,
+                    SongOfflineJackpot::EXTERNAL_BUTTON_QUERY,  // 线下特有
+                    SongOfflineJackpot::WASH_ZERO,
+                    SongOfflineJackpot::OPEN_ANY_POINT,
+                    SongOfflineJackpot::TURN_UP_ALL,
+                    SongOfflineJackpot::TURN_DOWN_ALL,
+                    SongOfflineJackpot::AUTO_UP_TURN,
+                    SongOfflineJackpot::POINT_TO_TURN,
+                    SongOfflineJackpot::TURN_TO_POINT,
+                    SongOfflineJackpot::SCORE_TO_POINT,
+                    SongOfflineJackpot::REWARD_SWITCH,
+                    SongOfflineJackpot::CLEAR_LOG,
+                    SongOfflineJackpot::CLEAR_EXTERNAL_BUTTON,  // 线下特有
+                    SongOfflineJackpot::CHECK,
+                    SongOfflineJackpot::MACHINE_OPEN,
+                    SongOfflineJackpot::MACHINE_CLOSE,
+                    SongOfflineJackpot::PUSH_THREE,
+                    SongOfflineJackpot::PUSH_ONE,
+                ];
+            } else {
+                // 线上版（Song协议）
+                return [
+                    SongJackpot::ALL,
+                    SongJackpot::WASH_ZERO,
+                    SongJackpot::OPEN_ANY_POINT,
+                    SongJackpot::TURN_UP_ALL,
+                    SongJackpot::TURN_DOWN_ALL,
+                    SongJackpot::AUTO_UP_TURN,
+                    SongJackpot::POINT_TO_TURN,
+                    SongJackpot::SCORE_TO_POINT,
+                    SongJackpot::REWARD_SWITCH,
+                    SongJackpot::MACHINE_POINT,
+                    SongJackpot::MACHINE_SCORE,
+                    SongJackpot::MACHINE_TURN,
+                    SongJackpot::WIN_NUMBER,
+                    SongJackpot::CLEAR_LOG,
+                    SongJackpot::CHECK,
+                    SongJackpot::MACHINE_OPEN,
+                    SongJackpot::MACHINE_CLOSE,
+                    SongJackpot::PUSH_THREE,
+                    SongJackpot::PUSH_ONE,
+                ];
+            }
         }
         return [
             Jackpot::ALL,
