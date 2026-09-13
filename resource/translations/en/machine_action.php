@@ -125,7 +125,6 @@ return [
             '46ceac' => 'Query External Button Counter',  // SongOfflineJackpot::EXTERNAL_BUTTON_QUERY
             '46ccb3' => 'Clear External Button Counter',  // SongOfflineJackpot::CLEAR_EXTERNAL_BUTTON
             '46ccb4' => 'Fault Troubleshooting',  // SongOfflineJackpot::CHECK
-            '46ccba' => 'Clear Bet Value',  // SongOfflineJackpot::CLEAR_LOG
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_MEI => [
             Slot::ALL => 'Machine Status',

@@ -126,7 +126,6 @@ return [
             '46ceac' => '外部カウンタ照会',      // SongOfflineJackpot::EXTERNAL_BUTTON_QUERY
             '46ccb3' => '外部ボタンカウンタクリア',  // SongOfflineJackpot::CLEAR_EXTERNAL_BUTTON
             '46ccb4' => '故障排除',  // SongOfflineJackpot::CHECK
-            '46ccba' => 'ベット値クリア',  // SongOfflineJackpot::CLEAR_LOG
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_MEI => [
             Slot::ALL => 'テーブル状態',
