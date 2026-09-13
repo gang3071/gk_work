@@ -375,10 +375,15 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // ✅ Bug #16修复：E1错误识别（可能是连续的E1，如e1e1e1e1e1e1）
             if (preg_match('/^(e1)+$/i', $msg)) {
-                $this->log->warning('[收账小卡-错误] 记忆体异常需归0', [
+                $this->log->error('[收账小卡-锁定] 记忆体异常需归0，机台已锁定', [
+                    'machine_id' => $this->machine->id,
                     'machine_code' => $this->machine->code,
                     'msg' => strtoupper($msg),
                     'e1_count' => strlen($msg) / 2,
+                    'old_has_lock' => $this->has_lock ?? 0,
+                    'new_has_lock' => 1,
+                    'gaming_user_id' => $this->gaming_user_id ?? null,
+                    'reason' => 'E1错误-记忆体异常',
                 ]);
                 $this->has_lock = 1;
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
@@ -387,10 +392,30 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // 归0回复（EF=完整归0，EE=清除账目）
             if ($msg === self::RESET_COMPLETE || $msg === self::RESET_CLEAR) {
-                $this->log->info('[收账小卡-归0] 归0完成', [
-                    'machine_code' => $this->machine->code,
-                    'type' => $msg === self::RESET_COMPLETE ? '完整归0' : '清除账目',
-                ]);
+                $resetType = $msg === self::RESET_COMPLETE ? '完整归0' : '清除账目';
+                $oldHasLock = $this->has_lock ?? 0;
+
+                // ✅ 归0成功后自动解锁机台
+                if ($oldHasLock == 1) {
+                    $this->has_lock = 0;
+                    $this->log->info('[收账小卡-解锁] 归0成功，机台已自动解锁', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'reset_type' => $resetType,
+                        'old_has_lock' => $oldHasLock,
+                        'new_has_lock' => 0,
+                        'msg' => strtoupper($msg),
+                    ]);
+                } else {
+                    $this->log->info('[收账小卡-归0] 归0完成', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'reset_type' => $resetType,
+                        'has_lock' => $oldHasLock,
+                        'msg' => strtoupper($msg),
+                    ]);
+                }
+
                 return true;
             }
 
@@ -1259,6 +1284,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // ✅ 修复：归0指令允许在机台锁定时执行（其他指令需要检查锁定状态）
             if ($this->has_lock == 1 && $cmd !== self::CHECK) {
+                $this->log->warning('[收账小卡-拦截] 机台已锁定，拒绝执行指令', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'has_lock' => $this->has_lock,
+                    'cmd' => $cmd,
+                    'cmd_name' => $this->getDescription($cmd, $data),
+                    'data' => $data,
+                    'source' => $source,
+                    'gaming_user_id' => $this->gaming_user_id ?? null,
+                    'message' => '请先执行"故排（归0机板）"指令解锁',
+                ]);
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
             }
 
@@ -2247,6 +2283,21 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         if ($flags['has_fault']) {
             $oldHasLock = $this->has_lock ?? 0;
             $this->logFieldChange('账目查询', 'has_lock', $oldHasLock, 1, '检测到故障');
+
+            $this->log->error('[收账小卡-锁定] 开分卡分数标志异常（EE），机台已锁定', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'card_flag' => $data['card_flag'] ?? 'unknown',
+                'card_score' => $data['card_score'] ?? 0,
+                'machine_score' => $data['machine_score'] ?? 0,
+                'open_table' => $data['open_table'] ?? 0,
+                'wash_table' => $data['wash_table'] ?? 0,
+                'old_has_lock' => $oldHasLock,
+                'new_has_lock' => 1,
+                'gaming_user_id' => $this->gaming_user_id ?? null,
+                'reason' => 'FLAG_FAULT-开分卡分数异常',
+            ]);
+
             $this->has_lock = 1;
             sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
         }

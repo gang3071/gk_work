@@ -405,6 +405,19 @@ class AdminMachineController
 
             // ✅ 特殊处理：小淞机器解锁时自动发送故障排除指令
             if ($field === 'has_lock' && $value == 0 && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
+                Log::channel('machine_operations')->info('[机台解锁] 执行解锁操作', [
+                    'machine_id' => $machineIdInt,
+                    'machine_code' => $machine->code,
+                    'machine_type' => $machine->type,
+                    'control_type' => $machine->control_type,
+                    'machine_source' => $machine->machine_source ?? 'online',
+                    'service_class' => get_class($services),
+                    'old_has_lock' => $services->has_lock ?? 1,
+                    'new_has_lock' => 0,
+                    'operator_type' => 'admin',
+                    'operator_id' => $adminId ?? null,
+                ]);
+
                 try {
                     // ✅ 修复：使用服务实例的 CHECK 常量，自动适配线上/线下版
                     // 线上版：SongSlot::CHECK = 'afcfb4', SongJackpot::CHECK = '46cfb4'
@@ -414,26 +427,30 @@ class AdminMachineController
 
                         // 发送故障排除指令
                         $result = $services->sendCmd($checkCmd, 0, 'admin');
-                        Log::info('Song machine unlock: CHECK command sent', [
+
+                        Log::channel('machine_operations')->info('[机台解锁] 故障排除指令发送成功', [
                             'machine_id' => $machineIdInt,
-                            'type' => $machine->type,
+                            'machine_code' => $machine->code,
                             'machine_source' => $machine->machine_source ?? 'online',
                             'service_class' => get_class($services),
                             'cmd' => $checkCmd,
                             'result' => $result,
                         ]);
                     } else {
-                        Log::warning('Song machine unlock: CHECK constant not found', [
+                        Log::channel('machine_operations')->warning('[机台解锁] CHECK 常量未定义', [
                             'machine_id' => $machineIdInt,
+                            'machine_code' => $machine->code,
                             'service_class' => get_class($services),
                         ]);
                     }
                 } catch (Exception $e) {
                     // 故障排除失败不阻断主流程
-                    Log::warning('Failed to send CHECK command for SONG machine unlock', [
+                    Log::channel('machine_operations')->error('[机台解锁] 故障排除指令发送失败', [
                         'machine_id' => $machineIdInt,
+                        'machine_code' => $machine->code,
                         'service_class' => get_class($services),
                         'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString(),
                     ]);
                 }
             }
