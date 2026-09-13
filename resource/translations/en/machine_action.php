@@ -180,16 +180,17 @@ return [
             SongSlot::MACHINE_CLOSE => 'Shutdown',
             SongSlot::ALL_DOWN => 'Clean up historical data',
 
-            // ✅ SongOfflineSlot-specific commands - Accounting Card Protocol
-            SongOfflineSlot::QUERY_ACCOUNT => 'Query Account',
-            SongOfflineSlot::QUERY_TOTAL => 'Query Total Bet/Win',
-            SongOfflineSlot::QUERY_STATUS => 'Query Machine Status',
+            // ✅ SongOfflineSlot-specific commands - Accounting Card Protocol (Refactored constants)
+            SongOfflineSlot::READ_SCORE => 'Query Account',       // Was: QUERY_ACCOUNT
+            SongOfflineSlot::READ_BET => 'Query Total Bet/Win',   // Was: QUERY_TOTAL
+            SongOfflineSlot::READ_STATUS => 'Query Machine Status', // Was: QUERY_STATUS
             SongOfflineSlot::LOGIN => 'Login',
-            SongOfflineSlot::CHECK_LOGIN => 'Check Login Status',
+            SongOfflineSlot::LOGOUT => 'Logout',
             'a5xxc0' => 'Add Credit',            // For testing (special format, no constant)
             'a500c1' => 'Cash Out',              // For testing (special format, no constant)
-            SongOfflineSlot::CLEAR_ACCOUNT => 'Clear Account',
-            SongOfflineSlot::RESET_BOARD => 'Reset Board',
+            SongOfflineSlot::ALL_DOWN => 'Clear History',         // Was: CLEAR_ACCOUNT
+            SongOfflineSlot::CHECK => 'Reset Board',              // Was: RESET_BOARD
+            SongOfflineSlot::SSR_SIGNAL => 'SSR Signal 10s',
         ],
     ]
 ];

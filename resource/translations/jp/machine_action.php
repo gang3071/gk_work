@@ -181,16 +181,17 @@ return [
             SongSlot::MACHINE_CLOSE => 'シャットダウン',
             SongSlot::ALL_DOWN => '履歴データのクリーンアップ',
 
-            // ✅ 小淞オフラインSlot（SongOfflineSlot）専用コマンド - 収支カードプロトコル
-            SongOfflineSlot::QUERY_ACCOUNT => 'アカウント照会',
-            SongOfflineSlot::QUERY_TOTAL => '総ベット/総勝利照会',
-            SongOfflineSlot::QUERY_STATUS => '機台状況照会',
+            // ✅ 小淞オフラインSlot（SongOfflineSlot）専用コマンド - 収支カードプロトコル（リファクタリング後）
+            SongOfflineSlot::READ_SCORE => 'アカウント照会',       // 旧: QUERY_ACCOUNT
+            SongOfflineSlot::READ_BET => '総ベット/総勝利照会',    // 旧: QUERY_TOTAL
+            SongOfflineSlot::READ_STATUS => '機台状況照会',        // 旧: QUERY_STATUS
             SongOfflineSlot::LOGIN => 'ログイン',
-            SongOfflineSlot::CHECK_LOGIN => 'ログイン状態確認',
+            SongOfflineSlot::LOGOUT => 'ログアウト',
             'a5xxc0' => 'クレジット追加',         // テスト用（特殊形式、定数なし）
             'a500c1' => 'キャッシュアウト',       // テスト用（特殊形式、定数なし）
-            SongOfflineSlot::CLEAR_ACCOUNT => 'アカウントクリア',
-            SongOfflineSlot::RESET_BOARD => 'ボードリセット',
+            SongOfflineSlot::ALL_DOWN => '履歴クリア',            // 旧: CLEAR_ACCOUNT
+            SongOfflineSlot::CHECK => 'ボードリセット',            // 旧: RESET_BOARD
+            SongOfflineSlot::SSR_SIGNAL => 'SSR信号10秒',
         ],
     ]
 ];

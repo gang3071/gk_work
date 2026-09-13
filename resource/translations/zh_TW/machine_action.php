@@ -182,16 +182,17 @@ return [
             SongSlot::MACHINE_CLOSE => '關機',
             SongSlot::ALL_DOWN => '清理歷史數據',
 
-            // ✅ 小淞線下Slot（SongOfflineSlot）專用指令 - 收賬小卡協議
-            SongOfflineSlot::QUERY_ACCOUNT => '查詢賬目',
-            SongOfflineSlot::QUERY_TOTAL => '查詢總玩總贏',
-            SongOfflineSlot::QUERY_STATUS => '查詢機台情況',
+            // ✅ 小淞線下Slot（SongOfflineSlot）專用指令 - 收賬小卡協議（重構後常量）
+            SongOfflineSlot::READ_SCORE => '查詢賬目',       // 重構前：QUERY_ACCOUNT
+            SongOfflineSlot::READ_BET => '查詢總玩總贏',     // 重構前：QUERY_TOTAL
+            SongOfflineSlot::READ_STATUS => '查詢機台情況',   // 重構前：QUERY_STATUS
             SongOfflineSlot::LOGIN => '登入',
-            SongOfflineSlot::CHECK_LOGIN => '查詢登入狀態',
+            SongOfflineSlot::LOGOUT => '登出',
             'a5xxc0' => '上分',             // 指令測試用（特殊格式，無常量）
             'a500c1' => '下分',             // 指令測試用（特殊格式，無常量）
-            SongOfflineSlot::CLEAR_ACCOUNT => '清除賬目',
-            SongOfflineSlot::RESET_BOARD => '歸0機板',
+            SongOfflineSlot::ALL_DOWN => '清除歷史記錄',     // 重構前：CLEAR_ACCOUNT
+            SongOfflineSlot::CHECK => '歸0機板',            // 重構前：RESET_BOARD
+            SongOfflineSlot::SSR_SIGNAL => 'SSR訊號10秒',
         ],
     ]
 ];

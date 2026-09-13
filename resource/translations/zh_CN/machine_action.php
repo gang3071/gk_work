@@ -180,16 +180,17 @@ return [
             SongSlot::MACHINE_CLOSE => '关机',
             SongSlot::ALL_DOWN => '清理历史数据',
 
-            // ✅ 小淞线下Slot（SongOfflineSlot）专用指令 - 收账小卡协议
-            SongOfflineSlot::QUERY_ACCOUNT => '查询账目',
-            SongOfflineSlot::QUERY_TOTAL => '查询总玩总赢',
-            SongOfflineSlot::QUERY_STATUS => '查询机台情况',
+            // ✅ 小淞线下Slot（SongOfflineSlot）专用指令 - 收账小卡协议（重构后常量）
+            SongOfflineSlot::READ_SCORE => '查询账目',      // 重构前：QUERY_ACCOUNT
+            SongOfflineSlot::READ_BET => '查询总玩总赢',    // 重构前：QUERY_TOTAL
+            SongOfflineSlot::READ_STATUS => '查询机台情况',  // 重构前：QUERY_STATUS
             SongOfflineSlot::LOGIN => '登入',
-            SongOfflineSlot::CHECK_LOGIN => '查询登入状态',
+            SongOfflineSlot::LOGOUT => '登出',
             'a5xxc0' => '上分',             // 指令测试用（特殊格式，无常量）
             'a500c1' => '下分',             // 指令测试用（特殊格式，无常量）
-            SongOfflineSlot::CLEAR_ACCOUNT => '清除账目',
-            SongOfflineSlot::RESET_BOARD => '归0机板',
+            SongOfflineSlot::ALL_DOWN => '清除历史记录',    // 重构前：CLEAR_ACCOUNT
+            SongOfflineSlot::CHECK => '归0机板',            // 重构前：RESET_BOARD
+            SongOfflineSlot::SSR_SIGNAL => 'SSR讯号10秒',
         ],
     ]
 ];
