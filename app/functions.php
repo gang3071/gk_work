@@ -3124,12 +3124,14 @@ if (!function_exists('machineOpenAnyFree')) {
                 }
             }
 
+            // ✅ 先提交数据库事务（释放锁），再发送硬件指令
+            // 原因：硬件指令可能耗时很长（等待机台响应），导致数据库锁长时间持有
+            // 如果硬件指令失败，通过锁机台 + 人工补偿处理
+            DB::commit();
+
             // 发送开分指令（包含赠送分）
             // ⚠️ 玩家扣款只扣 openScore 的金额，但硬件要给 totalOpenScore = openScore + giftScore
             $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
-
-            // ✅ 硬件指令成功后才提交数据库（DB 是唯一真实来源）
-            DB::commit();
 
             // ✅ Redis 缓存更新（失败不影响业务，下次读取时从 DB 刷新）
             try {
@@ -3216,7 +3218,20 @@ if (!function_exists('machineOpenAnyFree')) {
             ]);
 
         } catch (\Exception $e) {
-            DB::rollback();
+            // ✅ 判断事务是否已提交（根据是否已执行到 commit 语句后）
+            // 如果异常发生在 commit 之前，需要回滚；否则已经提交，无法回滚
+            if (DB::transactionLevel() > 0) {
+                DB::rollback();
+                Log::warning('[machineOpenAnyFree] 事务已回滚（异常发生在 commit 前）', [
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                ]);
+            } else {
+                Log::warning('[machineOpenAnyFree] 事务已提交，无法回滚（异常发生在硬件指令阶段）', [
+                    'player_id' => $player->id,
+                    'machine_id' => $machine->id,
+                ]);
+            }
 
             Log::error('[machineOpenAnyFree] 上分失败', [
                 'player_id' => $player->id,
