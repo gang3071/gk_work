@@ -1475,17 +1475,18 @@ class MachineOperationService
         }
 
         // 发送归0指令（通过sendCmd调用handleCheckCommand）
+        // ✅ 修复：重构后使用 CHECK 常量代替 RESET_BOARD
         Log::channel('machine_operations')->info('[AdvancedOperation] 准备发送归0指令', [
             'machine_id' => $this->machine->id,
             'machine_code' => $this->machine->code,
             'operator_type' => $this->operatorType,
             'operator_id' => $this->operatorId,
-            'cmd' => $this->services::RESET_BOARD,
+            'cmd' => $this->services::CHECK,
             'has_lock' => $this->machine->has_lock,
         ]);
 
         $this->services->sendCmd(
-            $this->services::RESET_BOARD,
+            $this->services::CHECK,
             0,
             $this->operatorType,
             $this->operatorId

@@ -406,27 +406,33 @@ class AdminMachineController
             // ✅ 特殊处理：小淞机器解锁时自动发送故障排除指令
             if ($field === 'has_lock' && $value == 0 && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
                 try {
-                    // 根据机台类型获取故障排除指令
-                    $checkCmd = match($machine->type) {
-                        GameType::TYPE_SLOT => SongSlot::CHECK,        // 斯洛：afcfb4
-                        GameType::TYPE_STEEL_BALL => SongJackpot::CHECK, // 钢珠：46cfb4
-                        default => null,
-                    };
+                    // ✅ 修复：使用服务实例的 CHECK 常量，自动适配线上/线下版
+                    // 线上版：SongSlot::CHECK = 'afcfb4', SongJackpot::CHECK = '46cfb4'
+                    // 线下版：SongOfflineSlot::CHECK = 'a37005e0f8ce', SongOfflineJackpot::CHECK = '46ccb4'
+                    if (defined(get_class($services) . '::CHECK')) {
+                        $checkCmd = $services::CHECK;
 
-                    if ($checkCmd) {
                         // 发送故障排除指令
                         $result = $services->sendCmd($checkCmd, 0, 'admin');
                         Log::info('Song machine unlock: CHECK command sent', [
                             'machine_id' => $machineIdInt,
                             'type' => $machine->type,
+                            'machine_source' => $machine->machine_source ?? 'online',
+                            'service_class' => get_class($services),
                             'cmd' => $checkCmd,
                             'result' => $result,
+                        ]);
+                    } else {
+                        Log::warning('Song machine unlock: CHECK constant not found', [
+                            'machine_id' => $machineIdInt,
+                            'service_class' => get_class($services),
                         ]);
                     }
                 } catch (Exception $e) {
                     // 故障排除失败不阻断主流程
                     Log::warning('Failed to send CHECK command for SONG machine unlock', [
                         'machine_id' => $machineIdInt,
+                        'service_class' => get_class($services),
                         'error' => $e->getMessage(),
                     ]);
                 }
