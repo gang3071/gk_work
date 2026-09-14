@@ -419,15 +419,59 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 }
             }
 
-            // ⚠️ 第三步：如果缓冲区不是心跳，尝试处理其他消息
-            // 如果缓冲区开头不是B7，说明可能是其他回复消息
-            if (substr($buffer, 0, 2) !== 'b7') {
-                // 使用原来的逻辑处理
-                $msg = $buffer;
-                // 清空缓冲区（已处理）
-                self::$msgBuffer[$machineId] = '';
+            // ⚠️ 第2.5步：判断并处理账目查询回复（A6前缀，44字符）
+            if (preg_match('/^(a6[0-9a-f]{42})/', $buffer, $matches)) {
+                $accountMsg = $matches[0];
+                $processed = $this->handleAccountReply($accountMsg);
+
+                // ✅ P1修复：检查残留数据合法性
+                $remaining = substr($buffer, 44);
+                if (strlen($remaining) > 0) {
+                    $remainingHeader = substr($remaining, 0, 2);
+                    if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                        $this->log->warning('[TCP分包] 清除非法残留数据', [
+                            'machine_code' => $this->machine->code,
+                            'remaining' => strtoupper($remaining),
+                            'remaining_size' => strlen($remaining),
+                        ]);
+                        $remaining = '';
+                    }
+                }
+                self::$msgBuffer[$machineId] = $remaining;
+                return $processed;
+            }
+
+            // ⚠️ 第三步：如果缓冲区不是心跳或A6，尝试处理其他消息
+            // 如果缓冲区开头不是B7或A6，说明可能是其他回复消息
+            if (substr($buffer, 0, 2) !== 'b7' && substr($buffer, 0, 2) !== 'a6') {
+                // ✅ P2修复：检测消息长度，处理粘包
+                $header = substr($buffer, 0, 2);
+                $msgLength = $this->getMessageLength($header, $buffer);
+
+                if ($msgLength > 0 && strlen($buffer) >= $msgLength) {
+                    // 提取完整消息
+                    $msg = substr($buffer, 0, $msgLength);
+                    $remaining = substr($buffer, $msgLength);
+
+                    // 检查残留数据合法性
+                    if (strlen($remaining) > 0) {
+                        $remainingHeader = substr($remaining, 0, 2);
+                        if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                            $this->log->warning('[TCP分包] 清除非法残留数据', [
+                                'machine_code' => $this->machine->code,
+                                'remaining' => strtoupper($remaining),
+                                'remaining_size' => strlen($remaining),
+                            ]);
+                            $remaining = '';
+                        }
+                    }
+                    self::$msgBuffer[$machineId] = $remaining;
+                } else {
+                    // 不完整，等待更多数据
+                    return false;
+                }
             } else {
-                // 等待更多数据（心跳不完整）
+                // 等待更多数据（心跳或A6不完整）
                 return false;
             }
 
@@ -3250,5 +3294,72 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->log->{$level}("[{$context}] {$operation}{$status}", array_merge([
             'machine_code' => $this->machine->code,
         ], $data));
+    }
+
+    /**
+     * 获取消息的完整长度（用于TCP分包处理）
+     *
+     * @param string $header 消息头（2字符）
+     * @param string $buffer 缓冲区数据
+     * @return int 消息长度，0表示无法确定
+     */
+    private function getMessageLength(string $header, string $buffer): int
+    {
+        switch ($header) {
+            case 'a7':
+                // A7 系列消息需要根据子类型判断长度
+                if (strlen($buffer) < 4) {
+                    return 0; // 长度不足，无法判断子类型
+                }
+                $subType = substr($buffer, 2, 2);
+                if ($subType === 'c3' || $subType === 'c5') {
+                    return 4;  // 登入/登出回复
+                }
+                if ($subType === 'd8') {
+                    return 26; // 总押分回复
+                }
+                if (in_array($subType, ['d2', 'd3', 'd6', 'd7'])) {
+                    return 44; // 机台状态回复
+                }
+                return 0;
+
+            case 'a6':
+                return 44; // 账目查询回复
+
+            case 'a5':
+                return 6;  // 操作回复（A5 + 状态2字符 + 校验和2字符）
+
+            case 'a3':
+                // A3 归0回复
+                if (strlen($buffer) >= 4) {
+                    $status = substr($buffer, 2, 2);
+                    if ($status === 'ee' || $status === 'ef') {
+                        return 4; // 归0完成回复
+                    }
+                }
+                if (strlen($buffer) >= 4 && substr($buffer, 0, 4) === 'a370') {
+                    return 12; // 归0指令回复（A3 70 05 E0 F8 CE）
+                }
+                return 0;
+
+            case 'b7':
+                return 46; // 心跳
+
+            case 'fa':
+                if (strlen($buffer) >= 3 && substr($buffer, 0, 3) === 'fah') {
+                    return 3; // FAH 开机信号
+                }
+                return 2; // FA 开机信号
+
+            case 'e1':
+                // E1 可能重复多次（e1e1e1...）
+                if (preg_match('/^(e1)+/', $buffer, $matches)) {
+                    return strlen($matches[0]);
+                }
+                return 0;
+
+            default:
+                return 0; // 未知消息类型
+        }
     }
 }
