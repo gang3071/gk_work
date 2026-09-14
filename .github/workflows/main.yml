@@ -1,16 +1,15 @@
-name: Work
+name: Deploy Release Branches
 
-# 触发条件：支持正式线和测试线的自动部署
+# 触发条件：仅 release/** 分支自动部署
 on:
   push:
     branches:
-      - super9-main  # 正式线
-      - jin  # 金尊
-      - fix-high-score  # 金尊
-      - fix/**       # 测试线（所有 fix 开头的分支）
-      - feature/**   # 测试线（所有 feature 开头的分支）
-      - test/**      # 测试线（所有 test 开头的分支）
-      - release/**   # 发布分支（所有 release 开头的分支）
+      - 'release/**'  # 仅发布分支触发（如 release/v1.0.0、release/hotfix-login）
+
+# 🔒 并发控制：防止多个 release 分支同时部署导致覆盖
+concurrency:
+  group: gk-work-deploy-${{ github.ref }}  # 按分支分组（不同 release 分支排队）
+  cancel-in-progress: true  # 新推送自动取消旧的部署任务
 
 jobs:
   deploy:
