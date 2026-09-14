@@ -69,6 +69,7 @@ use yzh52521\WebmanLock\Locker;
  * @property int $login_status 登入状态（0=未登入 1=已登入，心跳BD.b7取反）
  * @property int $card_score 开分卡分数（心跳B1字段，3字节BCD）
  * @property int $machine_score 机台分数（心跳B2字段，3字节BCD）
+ * @property int $last_card_score 上一次心跳的开分卡分数（用于计算线下洗分金额）
  * @property int $total_bet 总押分数（心跳BA字段，4字节BCD）
  * @property int $total_win 总得分数（心跳BB字段，4字节BCD）
  * @property int $open_table 开分码表（外部开分累计金额，查询账目EA C4回复）
@@ -187,6 +188,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // ========== 线下版特有字段（GD收账小卡协议） ==========
             $this->cacheDataKey . '_login_status',         // 登入状态（心跳BD.b7取反）
             $this->cacheDataKey . '_card_score',           // 开分卡分数（心跳B1字段）
+            $this->cacheDataKey . '_last_card_score',      // 上一次心跳的开分卡分数（用于计算线下洗分金额）
             $this->cacheDataKey . '_machine_score',        // 机台分数（心跳B2字段）
             $this->cacheDataKey . '_total_bet',            // 总押分数（心跳BA字段）
             $this->cacheDataKey . '_total_win',            // 总得分数（心跳BB字段）
@@ -1667,6 +1669,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->logFieldChange('心跳', 'machine_score', $oldMachineScore, $machineScore);
             }
 
+            // ✅ 保存上一次心跳的开分卡分数（用于计算线下洗分金额）
+            if ($oldCardScore > 0) {
+                $this->last_card_score = $oldCardScore;
+            }
+
             $this->card_score = $cardScore;           // 开分卡分数（心跳B1字段）
             $this->machine_score = $machineScore;     // 机台分数（心跳B2字段）
             $this->total_bet = $totalBet;             // 总押分数（心跳BA字段）
@@ -1870,7 +1877,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 检测洗分表
             if ($status['external_wash']) {
                 $this->external_wash = 1;
-                $this->processExternalTable('wash', $gamingUserId);
+                // ✅ 使用开分卡分数差值计算洗分金额
+                $this->processExternalWash($gamingUserId);
             }
 
         } finally {
@@ -1922,6 +1930,301 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 'type' => $type,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * 处理线下洗分（通过开分卡分数差值计算）
+     *
+     * ✅ 新逻辑：根据上一次心跳的开分卡分数作为洗分金额
+     * - 洗分前：last_card_score（上一次心跳）
+     * - 洗分后：card_score（当前心跳）
+     * - 洗分金额 = last_card_score - card_score
+     *
+     * @param int $gamingUserId 当前游戏玩家ID（0=无玩家）
+     */
+    private function processExternalWash(int $gamingUserId): void
+    {
+        try {
+            // 1. 获取洗分前后的开分卡分数
+            $cardScoreBefore = $this->last_card_score ?? 0;
+            $cardScoreAfter = $this->card_score ?? 0;
+
+            // 2. 计算实际洗掉的分数
+            $washedScore = $cardScoreBefore - $cardScoreAfter;
+
+            // 3. 验证洗分金额
+            if ($washedScore <= 0) {
+                $this->log->warning('[线下洗分] 开分卡分数未减少，跳过处理', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'card_score_before' => $cardScoreBefore,
+                    'card_score_after' => $cardScoreAfter,
+                    'gaming_user_id' => $gamingUserId,
+                ]);
+                return;
+            }
+
+            // 4. 转换成玩家余额（使用机台比值）
+            // 公式：game_amount = floor(wash_point * odds_x / odds_y)
+            $washedAmount = floor(
+                bcmul(
+                    bcdiv($washedScore, $this->machine->odds_y ?? 1, 4),
+                    $this->machine->odds_x ?? 1,
+                    2
+                )
+            );
+
+            $this->log->info('[线下洗分] 检测到开分卡分数减少', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'card_score_before' => $cardScoreBefore,
+                'card_score_after' => $cardScoreAfter,
+                'washed_score' => $washedScore,
+                'washed_amount' => $washedAmount,
+                'odds_x' => $this->machine->odds_x,
+                'odds_y' => $this->machine->odds_y,
+                'gaming_user_id' => $gamingUserId,
+            ]);
+
+            // 5. 处理玩家余额
+            if ($gamingUserId > 0) {
+                // 有玩家：返回余额到钱包
+                $this->returnBalanceToPlayer($gamingUserId, $washedScore, $washedAmount);
+            } else {
+                // 无玩家：只记录操作
+                $this->recordExternalWashWithoutPlayer($washedScore, $washedAmount);
+            }
+
+            // 6. ✅ 自动发送清除故障指令（清除 b4 标志）
+            try {
+                $this->sendCmd(self::CHECK, 0, 'system');
+                $this->log->info('[线下洗分] 自动发送 CHECK 指令清除 b4 标志', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                ]);
+            } catch (Exception $e) {
+                $this->log->error('[线下洗分] 发送 CHECK 指令失败', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+        } catch (Exception $e) {
+            $this->log->error('[线下洗分] 处理失败', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+        }
+    }
+
+    /**
+     * 返回余额给玩家（线下洗分）
+     *
+     * 流程：
+     * 1. 创建下分记录（PlayerGameLog）
+     * 2. 创建金流记录（PlayerDeliveryRecord）
+     * 3. 更新游戏记录（PlayerGameRecord）
+     * 4. 钱包加款（WalletService）
+     * 5. 推送余额变化（BalancePushService）
+     */
+    private function returnBalanceToPlayer(int $playerId, int $washedScore, string $washedAmount): void
+    {
+        DB::beginTransaction();
+
+        try {
+            $player = \app\model\Player::find($playerId);
+            if (!$player) {
+                throw new Exception("玩家不存在: {$playerId}");
+            }
+
+            // 1. 获取游戏记录
+            $gameRecord = \app\model\PlayerGameRecord::query()
+                ->where('machine_id', $this->machine->id)
+                ->where('player_id', $playerId)
+                ->where('status', \app\model\PlayerGameRecord::STATUS_START)
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            // 2. 读取玩家余额
+            $beforeBalance = \app\service\WalletService::getBalance($playerId);
+            $afterBalance = bcadd($beforeBalance, $washedAmount, 2);
+
+            // 3. 创建下分记录（PlayerGameLog）
+            $playerGameLog = addPlayerGameLog(
+                $player,
+                $this->machine,
+                $gameRecord,
+                $this->machine->control_open_point ?? 100
+            );
+            $playerGameLog->wash_point = $washedScore;
+            $playerGameLog->game_amount = $washedAmount;
+            $playerGameLog->before_game_amount = $beforeBalance;
+            $playerGameLog->after_game_amount = $afterBalance;
+            $playerGameLog->action = \app\model\PlayerGameLog::ACTION_DOWN;
+            $playerGameLog->chip_amount = 0;
+            $playerGameLog->is_system = 0;
+            $playerGameLog->remark = '线下实体按键洗分';
+            $playerGameLog->save();
+
+            // 4. 创建金流记录（PlayerDeliveryRecord）
+            $playerDeliveryRecord = new \app\model\PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = $playerId;
+            $playerDeliveryRecord->department_id = $player->department_id;
+            $playerDeliveryRecord->target = $playerGameLog->getTable();
+            $playerDeliveryRecord->target_id = $playerGameLog->id;
+            $playerDeliveryRecord->machine_id = $this->machine->id;
+            $playerDeliveryRecord->machine_name = $this->machine->name;
+            $playerDeliveryRecord->machine_type = $this->machine->type;
+            $playerDeliveryRecord->code = $this->machine->code;
+            $playerDeliveryRecord->type = \app\model\PlayerDeliveryRecord::TYPE_MACHINE_DOWN;
+            $playerDeliveryRecord->source = 'external_button';  // 标记为外部按键
+            $playerDeliveryRecord->amount = $washedAmount;
+            $playerDeliveryRecord->amount_before = $beforeBalance;
+            $playerDeliveryRecord->amount_after = $afterBalance;
+            $playerDeliveryRecord->tradeno = $playerGameLog->tradeno ?? '';
+            $playerDeliveryRecord->remark = '线下实体按键洗分';
+            $playerDeliveryRecord->save();
+
+            // 5. 更新游戏记录
+            if ($gameRecord) {
+                $gameRecord->wash_point = bcadd($gameRecord->wash_point, $washedScore, 2);
+                $gameRecord->wash_amount = bcadd($gameRecord->wash_amount, $washedAmount, 2);
+                $gameRecord->after_game_amount = $afterBalance;
+                $gameRecord->save();
+            }
+
+            // 6. 更新 Redis 记录
+            $this->last_point_at = time();
+            $this->player_wash_point = bcadd($this->player_wash_point ?? '0', $washedScore, 2);
+
+            DB::commit();
+
+            // 7. 钱包加款（在事务外执行）
+            try {
+                $addResult = \app\service\WalletService::add($playerId, $washedAmount);
+
+                $this->log->info('[线下洗分] 钱包加款成功', [
+                    'player_id' => $playerId,
+                    'washed_score' => $washedScore,
+                    'washed_amount' => $washedAmount,
+                    'before_balance' => $beforeBalance,
+                    'after_balance' => $addResult['balance'],
+                    'machine_id' => $this->machine->id,
+                ]);
+
+                // 8. 推送余额变化
+                \app\service\BalancePushService::pushBalanceChange(
+                    $playerId,
+                    $beforeBalance,
+                    $addResult['balance'],
+                    'settle',
+                    [
+                        'platform' => $this->machine->name ?? $this->machine->code,
+                        'machine_id' => $this->machine->id,
+                        'type' => 'external_wash',
+                    ]
+                );
+
+            } catch (Exception $walletError) {
+                // 钱包加款失败，发送告警
+                $this->log->critical('[线下洗分] 钱包加款失败，需要人工介入', [
+                    'player_id' => $playerId,
+                    'amount' => $washedAmount,
+                    'error' => $walletError->getMessage(),
+                    'action' => '已记录下分成功，但钱包未加款，请立即手动给玩家加款',
+                ]);
+
+                // 发送 Telegram 告警
+                try {
+                    $telegramConfig = config('telegram');
+                    if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
+                        $telegram = new \app\service\TelegramService($telegramConfig['bot_token'], $telegramConfig['chat_id']);
+                        $telegram->sendAlert([
+                            'datetime' => new \DateTime(),
+                            'level_name' => 'CRITICAL',
+                            'message' => '线下洗分成功但钱包加款失败',
+                            'context' => [
+                                'player_id' => $playerId,
+                                'machine_id' => $this->machine->id,
+                                'amount' => $washedAmount,
+                                'action' => '请立即手动给玩家加款',
+                            ],
+                        ]);
+                    }
+                } catch (Exception $e) {
+                    // 忽略 Telegram 告警失败
+                }
+            }
+
+        } catch (Exception $e) {
+            DB::rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * 记录无玩家的线下洗分操作
+     *
+     * 仅创建下分记录，不涉及钱包操作
+     */
+    private function recordExternalWashWithoutPlayer(int $washedScore, string $washedAmount): void
+    {
+        DB::beginTransaction();
+
+        try {
+            // 创建系统下分记录（player_id = 0）
+            $playerGameLog = new \app\model\PlayerGameLog();
+            $playerGameLog->player_id = 0;  // 系统记录
+            $playerGameLog->department_id = $this->machine->department_id ?? 0;
+            $playerGameLog->machine_id = $this->machine->id;
+            $playerGameLog->machine_name = $this->machine->name;
+            $playerGameLog->machine_code = $this->machine->code;
+            $playerGameLog->wash_point = $washedScore;
+            $playerGameLog->game_amount = $washedAmount;
+            $playerGameLog->before_game_amount = 0;
+            $playerGameLog->after_game_amount = 0;
+            $playerGameLog->action = \app\model\PlayerGameLog::ACTION_DOWN;
+            $playerGameLog->chip_amount = 0;
+            $playerGameLog->is_system = 1;
+            $playerGameLog->remark = '线下实体按键洗分（无玩家）';
+            $playerGameLog->save();
+
+            // 创建金流记录
+            $playerDeliveryRecord = new \app\model\PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = 0;
+            $playerDeliveryRecord->department_id = $this->machine->department_id ?? 0;
+            $playerDeliveryRecord->target = $playerGameLog->getTable();
+            $playerDeliveryRecord->target_id = $playerGameLog->id;
+            $playerDeliveryRecord->machine_id = $this->machine->id;
+            $playerDeliveryRecord->machine_name = $this->machine->name;
+            $playerDeliveryRecord->machine_type = $this->machine->type;
+            $playerDeliveryRecord->code = $this->machine->code;
+            $playerDeliveryRecord->type = \app\model\PlayerDeliveryRecord::TYPE_MACHINE_DOWN;
+            $playerDeliveryRecord->source = 'external_button';
+            $playerDeliveryRecord->amount = $washedAmount;
+            $playerDeliveryRecord->amount_before = 0;
+            $playerDeliveryRecord->amount_after = 0;
+            $playerDeliveryRecord->tradeno = $playerGameLog->tradeno ?? '';
+            $playerDeliveryRecord->remark = '线下实体按键洗分（无玩家）';
+            $playerDeliveryRecord->save();
+
+            DB::commit();
+
+            $this->log->info('[线下洗分] 无玩家游戏，已记录下分操作', [
+                'washed_score' => $washedScore,
+                'washed_amount' => $washedAmount,
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'player_game_log_id' => $playerGameLog->id,
+            ]);
+
+        } catch (Exception $e) {
+            DB::rollback();
+            throw $e;
         }
     }
 
