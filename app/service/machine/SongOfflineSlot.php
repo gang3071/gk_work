@@ -558,14 +558,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'msg_len' => strlen($msg),
         ]);
 
-        // ✅ 修复：添加最小长度检查
-        // A7 C3/C5/D8... SUM1 SUM2 最小长度 = 8字符
-        if (strlen($msg) < 8) {
+        // ✅ 修复：先检查最小长度（A7 + 类型 = 4字符）
+        if (strlen($msg) < 4) {
             $this->log->error('[状态查询] 回复长度不足', [
                 'machine_code' => $this->machine->code,
                 'msg' => strtoupper($msg),
                 'len' => strlen($msg),
-                'expected_min' => 8,
+                'expected_min' => 4,
             ]);
             return false;
         }
@@ -573,10 +572,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $type = substr($msg, 2, 2);
 
         switch ($type) {
-            case 'c3': // A7 C3 登入回复
-            case 'c5': // A7 C5 登出回复
-                // ✅ 使用公共方法校验和验证
-                if (!$this->validateMessageChecksum($msg, '登入登出')) {
+            case 'c3': // A7 C3 登入回复（简短回复，无校验和，只有4字节）
+            case 'c5': // A7 C5 登出回复（简短回复，无校验和，只有4字节）
+                // ✅ 修复：登入/登出回复只有 4 字节，不包含 SUM1/SUM2
+                // 协议说明：EA C3 → 回复 A7 C3（表示登入中）
+                if (strlen($msg) !== 4) {
+                    $this->log->error('[登入登出] 回复长度异常', [
+                        'machine_code' => $this->machine->code,
+                        'msg' => strtoupper($msg),
+                        'len' => strlen($msg),
+                        'expected' => 4,
+                    ]);
                     return false;
                 }
 
