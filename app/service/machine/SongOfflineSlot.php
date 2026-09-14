@@ -2301,6 +2301,30 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeBalance = \app\service\WalletService::getBalance($playerId);
             $afterBalance = bcadd($beforeBalance, $washedAmount, 2);
 
+            // 2.5 ✅ 计算玩家游戏期间的打码量
+            $playerPressure = $this->player_pressure ?? 0;  // 玩家进入时的押分
+            $playerScore = $this->player_score ?? 0;        // 玩家进入时的得分
+            $totalBet = $this->total_bet ?? 0;              // 当前总押分
+            $totalWin = $this->total_win ?? 0;              // 当前总得分
+
+            // 计算游戏期间的押分和得分
+            $gamingPressure = max(0, $totalBet - $playerPressure);
+            $gamingScore = max(0, $totalWin - $playerScore);
+
+            // 计算打码量：押分 * 比值
+            $ratio = bcdiv($this->machine->odds_x ?? 1, $this->machine->odds_y ?? 1, 4);
+            $chipAmount = bcmul($gamingPressure, $ratio, 2);
+
+            $this->log->info('[线下洗分] 计算打码量', [
+                'player_id' => $playerId,
+                'player_pressure' => $playerPressure,
+                'total_bet' => $totalBet,
+                'gaming_pressure' => $gamingPressure,
+                'gaming_score' => $gamingScore,
+                'ratio' => floatval($ratio),
+                'chip_amount' => floatval($chipAmount),
+            ]);
+
             // 3. 创建下分记录（PlayerGameLog）
             $playerGameLog = addPlayerGameLog(
                 $player,
@@ -2313,7 +2337,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->before_game_amount = $beforeBalance;
             $playerGameLog->after_game_amount = $afterBalance;
             $playerGameLog->action = \app\model\PlayerGameLog::ACTION_DOWN;
-            $playerGameLog->chip_amount = 0;
+            $playerGameLog->chip_amount = floatval($chipAmount);  // ✅ 记录打码量
+            $playerGameLog->pressure = $gamingPressure;           // ✅ 记录游戏期间押分
+            $playerGameLog->score = $gamingScore;                 // ✅ 记录游戏期间得分
+            $playerGameLog->turn_point = 0;                       // Slot机台无转数
             $playerGameLog->is_system = 0;
             $playerGameLog->remark = '线下实体按键洗分';
             $playerGameLog->save();
@@ -2350,6 +2377,19 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->player_wash_point = bcadd($this->player_wash_point ?? '0', $washedScore, 2);
 
             DB::commit();
+
+            // 6.5 ✅ 清理玩家游戏数据（洗分后归零）
+            $this->player_pressure = 0;  // 清零玩家押分
+            $this->player_score = 0;     // 清零玩家得分
+            $this->bet = 0;              // 清零当前押分
+
+            $this->log->info('[线下洗分] 清理玩家游戏数据', [
+                'player_id' => $playerId,
+                'machine_id' => $this->machine->id,
+                'player_pressure' => 0,
+                'player_score' => 0,
+                'bet' => 0,
+            ]);
 
             // 7. 钱包加款（在事务外执行）
             try {
