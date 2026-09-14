@@ -1685,6 +1685,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->point = $machineScore;             // point = machine_score（兼容线上版）
             $this->win = $totalWin;                   // win = total_win（兼容线上版）
 
+            // ✅ 优化：心跳更新数据时同步更新 actionVersion，避免查询指令等待超时
+            // 场景：发送查询指令后，心跳先到达并包含最新数据，此时应解除等待
+            $this->setActionVersion(self::READ_SCORE);  // card_score, machine_score 已更新
+            $this->setActionVersion(self::READ_BET);    // total_bet, total_win 已更新
+
             // 解析状态字节
             $status = $this->parseStatusByte($statusByte);
 
@@ -1695,6 +1700,15 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             $this->login_status = $loginValue;        // 新字段
             $this->is_login = $loginValue;            // 兼容旧字段
+
+            // ✅ 优化：登入状态变化时更新 actionVersion
+            if ($oldLoginStatus !== $loginValue) {
+                if ($loginValue === 1) {
+                    $this->setActionVersion(self::LOGIN);   // 登入成功
+                } else {
+                    $this->setActionVersion(self::LOGOUT);  // 登出成功
+                }
+            }
 
             // ========== 游戏状态（心跳BD.b0/b1/b2） ==========
             $oldBigWin = $this->big_win ?? 0;
