@@ -373,7 +373,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $processed = false;
 
             // ⚠️ 第一步：检查机板开机标识（FAH）
-            if (preg_match('/^(fa|fah)/', $buffer, $matches)) {
+            // ✅ 修复：fah 在前（长的优先匹配），避免 "fah" 被识别为 "fa"
+            if (preg_match('/^(fah|fa)/', $buffer, $matches)) {
                 $bootMsg = $matches[0];
                 $this->log->info('[收账小卡-开机] 机版开机', [
                     'machine_code' => $this->machine->code,
@@ -383,8 +384,22 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->is_login = 0;
                 $this->login_status = 0;
 
-                // 清除已处理的消息
-                self::$msgBuffer[$machineId] = substr($buffer, strlen($bootMsg));
+                // ✅ 修复：检查残留数据合法性，防止脏数据污染
+                $remaining = substr($buffer, strlen($bootMsg));
+                if (strlen($remaining) > 0) {
+                    $remainingHeader = substr($remaining, 0, 2);
+                    // 检查是否是合法的消息头
+                    if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                        // 非法消息头 → 可能是脏数据 → 清空
+                        $this->log->warning('[TCP分包] 清除非法残留数据', [
+                            'machine_code' => $this->machine->code,
+                            'remaining' => strtoupper($remaining),
+                            'remaining_size' => strlen($remaining),
+                        ]);
+                        $remaining = '';
+                    }
+                }
+                self::$msgBuffer[$machineId] = $remaining;
                 return true;
             }
 
@@ -3321,6 +3336,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if (in_array($subType, ['d2', 'd3', 'd6', 'd7'])) {
                     return 44; // 机台状态回复
                 }
+
+                // ✅ 优化：未知 A7 子类型，记录警告便于发现新协议
+                $this->log->warning('[TCP分包] 未知的A7子类型', [
+                    'machine_code' => $this->machine->code,
+                    'buffer' => strtoupper(substr($buffer, 0, min(20, strlen($buffer)))),
+                    'sub_type' => strtoupper($subType),
+                ]);
                 return 0;
 
             case 'a6':
