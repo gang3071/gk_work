@@ -406,27 +406,26 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // ⚠️ 第二步：判断并处理心跳消息（B7前缀，46字符）
             if (preg_match('/^(b7[0-9a-f]{44})/', $buffer, $matches)) {
                 $heartbeat = $matches[0];
-                if ($this->isHeartbeat($heartbeat)) {
-                    $processed = $this->handleHeartbeat($heartbeat);
+                // ✅ 直接处理，删除冗余的 isHeartbeat() 检查（消除死锁风险）
+                $processed = $this->handleHeartbeat($heartbeat);
 
-                    // ✅ P0修复：检查残留数据合法性，防止脏数据污染
-                    $remaining = substr($buffer, 46);
-                    if (strlen($remaining) > 0) {
-                        $remainingHeader = substr($remaining, 0, 2);
-                        // 检查是否是合法的消息头
-                        if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
-                            // 非法消息头 → 可能是脏数据 → 清空
-                            $this->log->warning('[TCP分包] 清除非法残留数据', [
-                                'machine_code' => $this->machine->code,
-                                'remaining' => strtoupper($remaining),
-                                'remaining_size' => strlen($remaining),
-                            ]);
-                            $remaining = '';
-                        }
+                // ✅ P0修复：检查残留数据合法性，防止脏数据污染
+                $remaining = substr($buffer, 46);
+                if (strlen($remaining) > 0) {
+                    $remainingHeader = substr($remaining, 0, 2);
+                    // 检查是否是合法的消息头
+                    if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                        // 非法消息头 → 可能是脏数据 → 清空
+                        $this->log->warning('[TCP分包] 清除非法残留数据', [
+                            'machine_code' => $this->machine->code,
+                            'remaining' => strtoupper($remaining),
+                            'remaining_size' => strlen($remaining),
+                        ]);
+                        $remaining = '';
                     }
-                    self::$msgBuffer[$machineId] = $remaining;
-                    return $processed;
                 }
+                self::$msgBuffer[$machineId] = $remaining;
+                return $processed;
             }
 
             // ⚠️ 第2.5步：判断并处理账目查询回复（A6前缀，44字符）
