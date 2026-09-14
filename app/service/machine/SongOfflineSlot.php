@@ -403,11 +403,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 return true;
             }
 
-            $this->log->info('[收账小卡-开机] 接收指令', [
-                'machine_code' => $this->machine->code,
-                'msg' => strtoupper($msg),
-            ]);
-
             // ⚠️ 第二步：判断并处理心跳消息（B7前缀，46字符）
             if (preg_match('/^(b7[0-9a-f]{44})/', $buffer, $matches)) {
                 $heartbeat = $matches[0];
