@@ -398,8 +398,23 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $heartbeat = $matches[0];
                 if ($this->isHeartbeat($heartbeat)) {
                     $processed = $this->handleHeartbeat($heartbeat);
-                    // 清除已处理的心跳
-                    self::$msgBuffer[$machineId] = substr($buffer, 46);
+
+                    // ✅ P0修复：检查残留数据合法性，防止脏数据污染
+                    $remaining = substr($buffer, 46);
+                    if (strlen($remaining) > 0) {
+                        $remainingHeader = substr($remaining, 0, 2);
+                        // 检查是否是合法的消息头
+                        if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                            // 非法消息头 → 可能是脏数据 → 清空
+                            $this->log->warning('[TCP分包] 清除非法残留数据', [
+                                'machine_code' => $this->machine->code,
+                                'remaining' => strtoupper($remaining),
+                                'remaining_size' => strlen($remaining),
+                            ]);
+                            $remaining = '';
+                        }
+                    }
+                    self::$msgBuffer[$machineId] = $remaining;
                     return $processed;
                 }
             }
