@@ -409,22 +409,31 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 // ✅ 直接处理，删除冗余的 isHeartbeat() 检查（消除死锁风险）
                 $processed = $this->handleHeartbeat($heartbeat);
 
-                // ✅ P0修复：检查残留数据合法性，防止脏数据污染
-                $remaining = substr($buffer, 46);
-                if (strlen($remaining) > 0) {
-                    $remainingHeader = substr($remaining, 0, 2);
-                    // 检查是否是合法的消息头
-                    if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
-                        // 非法消息头 → 可能是脏数据 → 清空
-                        $this->log->warning('[TCP分包] 清除非法残留数据', [
-                            'machine_code' => $this->machine->code,
-                            'remaining' => strtoupper($remaining),
-                            'remaining_size' => strlen($remaining),
-                        ]);
-                        $remaining = '';
+                // ✅ 只有处理成功才更新缓冲区（防止消息丢失）
+                if ($processed) {
+                    // ✅ P0修复：检查残留数据合法性，防止脏数据污染
+                    $remaining = substr($buffer, 46);
+                    if (strlen($remaining) > 0) {
+                        $remainingHeader = substr($remaining, 0, 2);
+                        // 检查是否是合法的消息头
+                        if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                            // 非法消息头 → 可能是脏数据 → 清空
+                            $this->log->warning('[TCP分包] 清除非法残留数据', [
+                                'machine_code' => $this->machine->code,
+                                'remaining' => strtoupper($remaining),
+                                'remaining_size' => strlen($remaining),
+                            ]);
+                            $remaining = '';
+                        }
                     }
+                    self::$msgBuffer[$machineId] = $remaining;
+                } else {
+                    // ⚠️ 处理失败，保留消息在缓冲区待重试
+                    $this->log->warning('[TCP分包] 心跳处理失败，保留在缓冲区', [
+                        'machine_code' => $this->machine->code,
+                        'heartbeat' => strtoupper(substr($heartbeat, 0, 20)) . '...',
+                    ]);
                 }
-                self::$msgBuffer[$machineId] = $remaining;
                 return $processed;
             }
 
@@ -433,36 +442,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $accountMsg = $matches[0];
                 $processed = $this->handleAccountReply($accountMsg);
 
-                // ✅ P1修复：检查残留数据合法性
-                $remaining = substr($buffer, 44);
-                if (strlen($remaining) > 0) {
-                    $remainingHeader = substr($remaining, 0, 2);
-                    if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
-                        $this->log->warning('[TCP分包] 清除非法残留数据', [
-                            'machine_code' => $this->machine->code,
-                            'remaining' => strtoupper($remaining),
-                            'remaining_size' => strlen($remaining),
-                        ]);
-                        $remaining = '';
-                    }
-                }
-                self::$msgBuffer[$machineId] = $remaining;
-                return $processed;
-            }
-
-            // ⚠️ 第三步：如果缓冲区不是心跳或A6，尝试处理其他消息
-            // 如果缓冲区开头不是B7或A6，说明可能是其他回复消息
-            if (substr($buffer, 0, 2) !== 'b7' && substr($buffer, 0, 2) !== 'a6') {
-                // ✅ P2修复：检测消息长度，处理粘包
-                $header = substr($buffer, 0, 2);
-                $msgLength = $this->getMessageLength($header, $buffer);
-
-                if ($msgLength > 0 && strlen($buffer) >= $msgLength) {
-                    // 提取完整消息
-                    $msg = substr($buffer, 0, $msgLength);
-                    $remaining = substr($buffer, $msgLength);
-
-                    // 检查残留数据合法性
+                // ✅ 只有处理成功才更新缓冲区（防止消息丢失）
+                if ($processed) {
+                    // ✅ P1修复：检查残留数据合法性
+                    $remaining = substr($buffer, 44);
                     if (strlen($remaining) > 0) {
                         $remainingHeader = substr($remaining, 0, 2);
                         if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
@@ -476,6 +459,26 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     }
                     self::$msgBuffer[$machineId] = $remaining;
                 } else {
+                    // ⚠️ 处理失败，保留消息在缓冲区待重试
+                    $this->log->warning('[TCP分包] 账目查询回复处理失败，保留在缓冲区', [
+                        'machine_code' => $this->machine->code,
+                        'account_msg' => strtoupper(substr($accountMsg, 0, 20)) . '...',
+                    ]);
+                }
+                return $processed;
+            }
+
+            // ⚠️ 第三步：如果缓冲区不是心跳或A6，尝试处理其他消息
+            // 如果缓冲区开头不是B7或A6，说明可能是其他回复消息
+            if (substr($buffer, 0, 2) !== 'b7' && substr($buffer, 0, 2) !== 'a6') {
+                // ✅ P2修复：检测消息长度，处理粘包
+                $header = substr($buffer, 0, 2);
+                $msgLength = $this->getMessageLength($header, $buffer);
+
+                if ($msgLength > 0 && strlen($buffer) >= $msgLength) {
+                    // 提取完整消息（暂不更新缓冲区）
+                    $msg = substr($buffer, 0, $msgLength);
+                } else {
                     // 不完整，等待更多数据
                     return false;
                 }
@@ -486,6 +489,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // 识别消息类型
             $header = substr($msg, 0, 2);
+            $processed = false;
 
             // ✅ Bug #16修复：E1错误识别（可能是连续的E1，如e1e1e1e1e1e1）
             if (preg_match('/^(e1)+$/i', $msg)) {
@@ -501,11 +505,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 ]);
                 $this->has_lock = 1;
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
-                return true;
+                $processed = true;
             }
-
             // 归0回复（EF=完整归0，EE=清除账目）
-            if ($msg === self::RESET_COMPLETE || $msg === self::RESET_CLEAR) {
+            elseif ($msg === self::RESET_COMPLETE || $msg === self::RESET_CLEAR) {
                 $resetType = $msg === self::RESET_COMPLETE ? '完整归0' : '清除账目';
                 $oldHasLock = $this->has_lock ?? 0;
 
@@ -530,27 +533,60 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     ]);
                 }
 
-                return true;
+                $processed = true;
+            }
+            // 根据头部识别消息类型
+            else {
+                switch ($header) {
+                    case self::REPLY_A6:
+                        $processed = $this->handleAccountReply($msg);
+                        break;
+                    case self::REPLY_A7:
+                        $processed = $this->handleStatusReply($msg);
+                        break;
+                    case self::REPLY_A5:
+                        $processed = $this->handleActionReply($msg);
+                        break;
+                    case self::REPLY_A3:
+                        $processed = $this->handleResetReply($msg);
+                        break;
+                    default:
+                        $this->log->warning('[收账小卡] 未识别的消息类型', [
+                            'machine_code' => $this->machine->code,
+                            'msg' => $msg,
+                            'header' => $header,
+                        ]);
+                        $processed = false;
+                        break;
+                }
             }
 
-            // 根据头部识别消息类型
-            switch ($header) {
-                case self::REPLY_A6:
-                    return $this->handleAccountReply($msg);
-                case self::REPLY_A7:
-                    return $this->handleStatusReply($msg);
-                case self::REPLY_A5:
-                    return $this->handleActionReply($msg);
-                case self::REPLY_A3:
-                    return $this->handleResetReply($msg);
-                default:
-                    $this->log->warning('[收账小卡] 未识别的消息类型', [
-                        'machine_code' => $this->machine->code,
-                        'msg' => $msg,
-                        'header' => $header,
-                    ]);
-                    return false;
+            // ✅ 只有处理成功才更新缓冲区（防止消息丢失）
+            if ($processed) {
+                $remaining = substr($buffer, $msgLength);
+                // 检查残留数据合法性
+                if (strlen($remaining) > 0) {
+                    $remainingHeader = substr($remaining, 0, 2);
+                    if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                        $this->log->warning('[TCP分包] 清除非法残留数据', [
+                            'machine_code' => $this->machine->code,
+                            'remaining' => strtoupper($remaining),
+                            'remaining_size' => strlen($remaining),
+                        ]);
+                        $remaining = '';
+                    }
+                }
+                self::$msgBuffer[$machineId] = $remaining;
+            } else {
+                // ⚠️ 处理失败，保留消息在缓冲区待重试
+                $this->log->warning('[TCP分包] 消息处理失败，保留在缓冲区', [
+                    'machine_code' => $this->machine->code,
+                    'msg_type' => strtoupper($header),
+                    'msg' => strtoupper(substr($msg, 0, 20)) . '...',
+                ]);
             }
+
+            return $processed;
 
         } catch (\Exception $e) {
             $this->log->error('[收账小卡] 消息处理错误', [
