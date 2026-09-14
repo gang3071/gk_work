@@ -46,6 +46,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property string deleted_at 删除时间
  * @property string created_at 创建时间
  * @property string updated_at 最后一次修改时间
+ * @property string remark 备注
  * @property int is_test 是否为测试数据 0否 1是
  *
  * @property Player player 玩家信息

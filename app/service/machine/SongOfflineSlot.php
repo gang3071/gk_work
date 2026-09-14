@@ -5,6 +5,7 @@ namespace app\service\machine;
 use app\model\AdminUser;
 use app\model\Machine;
 use app\model\Notice;
+use app\model\PlayerGameRecord;
 use Exception;
 use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
@@ -823,9 +824,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * - 需要将失败的金额（回补次数 × 100分）退回给玩家钱包
      *
      * @param int $retryCount 回补次数（开分失败次数）
-     * @return bool 是否处理成功
+     * @return void 是否处理成功
      */
-    private function handleRetryRefund(int $retryCount): bool
+    private function handleRetryRefund(int $retryCount): void
     {
         // 1. 检查是否有玩家在使用机台
         $gamingUserId = $this->gaming_user_id ?? 0;
@@ -837,7 +838,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 'retry_count' => $retryCount,
                 'refund_amount' => $retryCount * self::OPEN_UNIT,
             ]);
-            return true;
+            return;
         }
 
         // 2. 计算需要退款的金额（回补次数 × 100分）
@@ -906,7 +907,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'note' => '需要根据实际钱包API实现退款逻辑',
         ]);
 
-        return true;
     }
 
     /**
@@ -1079,6 +1079,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * @param int $amount 金额
      * @param float $betAmount 打码量
      * @param int $timestamp 时间戳
+     * @throws Exception
      */
     private function createExternalButtonGameLog(string $type, int $amount, float $betAmount, int $timestamp): void
     {
@@ -1283,20 +1284,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if (!Gateway::isUidOnline($uid)) {
                 throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
             }
-
+            $this->log->warning('[收账小卡-发送] 发送指令', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'has_lock' => $this->has_lock,
+                'cmd' => $cmd,
+            ]);
             // ✅ 修复：归0指令允许在机台锁定时执行（其他指令需要检查锁定状态）
             if ($this->has_lock == 1 && $cmd !== self::CHECK) {
-                $this->log->warning('[收账小卡-拦截] 机台已锁定，拒绝执行指令', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'has_lock' => $this->has_lock,
-                    'cmd' => $cmd,
-                    'cmd_name' => $this->getDescription($cmd, $data),
-                    'data' => $data,
-                    'source' => $source,
-                    'gaming_user_id' => $this->gaming_user_id ?? null,
-                    'message' => '请先执行"故排（归0机板）"指令解锁',
-                ]);
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
             }
 
@@ -2160,25 +2155,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->remark = '线下实体按键开分（现金投币）';
             $playerGameLog->save();
 
-            // 4. 创建金流记录（PlayerDeliveryRecord）
-            $playerDeliveryRecord = new \app\model\PlayerDeliveryRecord();
-            $playerDeliveryRecord->player_id = $playerId;
-            $playerDeliveryRecord->department_id = $player->department_id;
-            $playerDeliveryRecord->target = $playerGameLog->getTable();
-            $playerDeliveryRecord->target_id = $playerGameLog->id;
-            $playerDeliveryRecord->machine_id = $this->machine->id;
-            $playerDeliveryRecord->machine_name = $this->machine->name;
-            $playerDeliveryRecord->machine_type = $this->machine->type;
-            $playerDeliveryRecord->code = $this->machine->code;
-            $playerDeliveryRecord->type = \app\model\PlayerDeliveryRecord::TYPE_MACHINE_OPEN;
-            $playerDeliveryRecord->source = 'external_button';  // 标记为外部按键
-            $playerDeliveryRecord->amount = $openAmount;
-            $playerDeliveryRecord->amount_before = $balance;
-            $playerDeliveryRecord->amount_after = $balance;  // 余额不变
-            $playerDeliveryRecord->tradeno = $playerGameLog->tradeno ?? '';
-            $playerDeliveryRecord->remark = '线下实体按键开分（现金投币）';
-            $playerDeliveryRecord->save();
-
             // 5. 更新游戏记录
             if ($gameRecord) {
                 $gameRecord->open_point = bcadd($gameRecord->open_point, $openedScore, 2);
@@ -2222,8 +2198,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->player_id = 0;  // 系统记录
             $playerGameLog->department_id = $this->machine->department_id ?? 0;
             $playerGameLog->machine_id = $this->machine->id;
-            $playerGameLog->machine_name = $this->machine->name;
-            $playerGameLog->machine_code = $this->machine->code;
             $playerGameLog->open_point = $openedScore;
             $playerGameLog->game_amount = $openAmount;
             $playerGameLog->before_game_amount = 0;
@@ -2233,25 +2207,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->is_system = 1;
             $playerGameLog->remark = '线下实体按键开分（无玩家，现金投币）';
             $playerGameLog->save();
-
-            // 创建金流记录
-            $playerDeliveryRecord = new \app\model\PlayerDeliveryRecord();
-            $playerDeliveryRecord->player_id = 0;
-            $playerDeliveryRecord->department_id = $this->machine->department_id ?? 0;
-            $playerDeliveryRecord->target = $playerGameLog->getTable();
-            $playerDeliveryRecord->target_id = $playerGameLog->id;
-            $playerDeliveryRecord->machine_id = $this->machine->id;
-            $playerDeliveryRecord->machine_name = $this->machine->name;
-            $playerDeliveryRecord->machine_type = $this->machine->type;
-            $playerDeliveryRecord->code = $this->machine->code;
-            $playerDeliveryRecord->type = \app\model\PlayerDeliveryRecord::TYPE_MACHINE_OPEN;
-            $playerDeliveryRecord->source = 'external_button';
-            $playerDeliveryRecord->amount = $openAmount;
-            $playerDeliveryRecord->amount_before = 0;
-            $playerDeliveryRecord->amount_after = 0;
-            $playerDeliveryRecord->tradeno = $playerGameLog->tradeno ?? '';
-            $playerDeliveryRecord->remark = '线下实体按键开分（无玩家，现金投币）';
-            $playerDeliveryRecord->save();
 
             DB::commit();
 
@@ -2326,6 +2281,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             ]);
 
             // 3. 创建下分记录（PlayerGameLog）
+            /** @var PlayerGameRecord $gameRecord */
             $playerGameLog = addPlayerGameLog(
                 $player,
                 $this->machine,
@@ -2469,8 +2425,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->player_id = 0;  // 系统记录
             $playerGameLog->department_id = $this->machine->department_id ?? 0;
             $playerGameLog->machine_id = $this->machine->id;
-            $playerGameLog->machine_name = $this->machine->name;
-            $playerGameLog->machine_code = $this->machine->code;
             $playerGameLog->wash_point = $washedScore;
             $playerGameLog->game_amount = $washedAmount;
             $playerGameLog->before_game_amount = 0;
@@ -2727,6 +2681,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
     /**
      * 确保已登入（发送指令前调用）
+     * @throws Exception
      */
     private function ensureLoggedIn(): void
     {
