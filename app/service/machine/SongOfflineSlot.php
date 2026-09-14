@@ -1871,7 +1871,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 检测开分表
             if ($status['external_open']) {
                 $this->external_open = 1;
-                $this->processExternalTable('open', $gamingUserId);
+                // ✅ 使用开分码表差值记录线下开分
+                $this->processExternalOpen($gamingUserId);
             }
 
             // 检测洗分表
@@ -2018,6 +2019,253 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
+        }
+    }
+
+    /**
+     * 处理线下开分（通过开分码表差值记录）
+     *
+     * ✅ 新逻辑：根据开分码表差值记录线下开分
+     * - 查询：总账（EA C4）- 网络账（EA C7）= 线下账
+     * - 记录：创建开分记录（PlayerGameLog）
+     * - 注意：不扣减玩家余额（线下现金投币）
+     *
+     * @param int $gamingUserId 当前游戏玩家ID（0=无玩家）
+     */
+    private function processExternalOpen(int $gamingUserId): void
+    {
+        try {
+            // 1. 查询开分码表差值
+            $detail = $this->queryDetailSync();
+            $newOpenTable = $detail['open_table'] ?? 0;
+            $oldOpenTable = $this->open_table ?? 0;
+
+            // 2. 计算开分增量
+            $openIncrement = $newOpenTable - $oldOpenTable;
+
+            // 3. 验证开分金额
+            if ($openIncrement <= 0) {
+                $this->log->warning('[线下开分] 开分码表未增加，跳过处理', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'old_open_table' => $oldOpenTable,
+                    'new_open_table' => $newOpenTable,
+                    'gaming_user_id' => $gamingUserId,
+                ]);
+                return;
+            }
+
+            // 4. 转换成金额（用于记录，不扣减余额）
+            $openAmount = floor(
+                bcmul(
+                    bcdiv($openIncrement, $this->machine->odds_y ?? 1, 4),
+                    $this->machine->odds_x ?? 1,
+                    2
+                )
+            );
+
+            $this->log->info('[线下开分] 检测到开分码表增加', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'old_open_table' => $oldOpenTable,
+                'new_open_table' => $newOpenTable,
+                'open_increment' => $openIncrement,
+                'open_amount' => $openAmount,
+                'odds_x' => $this->machine->odds_x,
+                'odds_y' => $this->machine->odds_y,
+                'gaming_user_id' => $gamingUserId,
+            ]);
+
+            // 5. 记录开分操作（不扣减余额）
+            if ($gamingUserId > 0) {
+                // 有玩家：记录玩家开分
+                $this->recordExternalOpenForPlayer($gamingUserId, $openIncrement, $openAmount);
+            } else {
+                // 无玩家：记录系统开分
+                $this->recordExternalOpenWithoutPlayer($openIncrement, $openAmount);
+            }
+
+            // 6. 更新开分码表
+            $this->open_table = $newOpenTable;
+
+            // 7. ✅ 自动发送清除故障指令（清除 b5 标志）
+            try {
+                $this->sendCmd(self::CHECK, 0, 'system');
+                $this->log->info('[线下开分] 自动发送 CHECK 指令清除 b5 标志', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                ]);
+            } catch (Exception $e) {
+                $this->log->error('[线下开分] 发送 CHECK 指令失败', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+        } catch (Exception $e) {
+            $this->log->error('[线下开分] 处理失败', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+        }
+    }
+
+    /**
+     * 记录玩家的线下开分操作
+     *
+     * 流程：
+     * 1. 创建开分记录（PlayerGameLog）
+     * 2. 创建金流记录（PlayerDeliveryRecord）
+     * 3. 更新游戏记录（PlayerGameRecord）
+     * 4. 不扣减玩家余额（线下现金投币）
+     */
+    private function recordExternalOpenForPlayer(int $playerId, int $openedScore, string $openAmount): void
+    {
+        DB::beginTransaction();
+
+        try {
+            $player = \app\model\Player::find($playerId);
+            if (!$player) {
+                throw new Exception("玩家不存在: {$playerId}");
+            }
+
+            // 1. 获取游戏记录
+            $gameRecord = \app\model\PlayerGameRecord::query()
+                ->where('machine_id', $this->machine->id)
+                ->where('player_id', $playerId)
+                ->where('status', \app\model\PlayerGameRecord::STATUS_START)
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            // 2. 读取玩家余额（记录用，不扣减）
+            $balance = \app\service\WalletService::getBalance($playerId);
+
+            // 3. 创建开分记录（PlayerGameLog）
+            $playerGameLog = addPlayerGameLog(
+                $player,
+                $this->machine,
+                $gameRecord,
+                $this->machine->control_open_point ?? 100
+            );
+            $playerGameLog->open_point = $openedScore;
+            $playerGameLog->game_amount = $openAmount;
+            $playerGameLog->before_game_amount = $balance;
+            $playerGameLog->after_game_amount = $balance;  // 余额不变
+            $playerGameLog->action = \app\model\PlayerGameLog::ACTION_OPEN;
+            $playerGameLog->chip_amount = 0;
+            $playerGameLog->is_system = 0;
+            $playerGameLog->remark = '线下实体按键开分（现金投币）';
+            $playerGameLog->save();
+
+            // 4. 创建金流记录（PlayerDeliveryRecord）
+            $playerDeliveryRecord = new \app\model\PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = $playerId;
+            $playerDeliveryRecord->department_id = $player->department_id;
+            $playerDeliveryRecord->target = $playerGameLog->getTable();
+            $playerDeliveryRecord->target_id = $playerGameLog->id;
+            $playerDeliveryRecord->machine_id = $this->machine->id;
+            $playerDeliveryRecord->machine_name = $this->machine->name;
+            $playerDeliveryRecord->machine_type = $this->machine->type;
+            $playerDeliveryRecord->code = $this->machine->code;
+            $playerDeliveryRecord->type = \app\model\PlayerDeliveryRecord::TYPE_MACHINE_OPEN;
+            $playerDeliveryRecord->source = 'external_button';  // 标记为外部按键
+            $playerDeliveryRecord->amount = $openAmount;
+            $playerDeliveryRecord->amount_before = $balance;
+            $playerDeliveryRecord->amount_after = $balance;  // 余额不变
+            $playerDeliveryRecord->tradeno = $playerGameLog->tradeno ?? '';
+            $playerDeliveryRecord->remark = '线下实体按键开分（现金投币）';
+            $playerDeliveryRecord->save();
+
+            // 5. 更新游戏记录
+            if ($gameRecord) {
+                $gameRecord->open_point = bcadd($gameRecord->open_point, $openedScore, 2);
+                $gameRecord->open_amount = bcadd($gameRecord->open_amount, $openAmount, 2);
+                $gameRecord->save();
+            }
+
+            // 6. 更新 Redis 记录
+            $this->last_point_at = time();
+            $this->player_open_point = bcadd($this->player_open_point ?? '0', $openedScore, 2);
+
+            DB::commit();
+
+            $this->log->info('[线下开分] 玩家开分记录创建成功', [
+                'player_id' => $playerId,
+                'opened_score' => $openedScore,
+                'open_amount' => $openAmount,
+                'machine_id' => $this->machine->id,
+                'balance_unchanged' => $balance,
+                'player_game_log_id' => $playerGameLog->id,
+            ]);
+
+        } catch (Exception $e) {
+            DB::rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * 记录无玩家的线下开分操作
+     *
+     * 仅创建开分记录，标记为线下按键操作
+     */
+    private function recordExternalOpenWithoutPlayer(int $openedScore, string $openAmount): void
+    {
+        DB::beginTransaction();
+
+        try {
+            // 创建系统开分记录（player_id = 0）
+            $playerGameLog = new \app\model\PlayerGameLog();
+            $playerGameLog->player_id = 0;  // 系统记录
+            $playerGameLog->department_id = $this->machine->department_id ?? 0;
+            $playerGameLog->machine_id = $this->machine->id;
+            $playerGameLog->machine_name = $this->machine->name;
+            $playerGameLog->machine_code = $this->machine->code;
+            $playerGameLog->open_point = $openedScore;
+            $playerGameLog->game_amount = $openAmount;
+            $playerGameLog->before_game_amount = 0;
+            $playerGameLog->after_game_amount = 0;
+            $playerGameLog->action = \app\model\PlayerGameLog::ACTION_OPEN;
+            $playerGameLog->chip_amount = 0;
+            $playerGameLog->is_system = 1;
+            $playerGameLog->remark = '线下实体按键开分（无玩家，现金投币）';
+            $playerGameLog->save();
+
+            // 创建金流记录
+            $playerDeliveryRecord = new \app\model\PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = 0;
+            $playerDeliveryRecord->department_id = $this->machine->department_id ?? 0;
+            $playerDeliveryRecord->target = $playerGameLog->getTable();
+            $playerDeliveryRecord->target_id = $playerGameLog->id;
+            $playerDeliveryRecord->machine_id = $this->machine->id;
+            $playerDeliveryRecord->machine_name = $this->machine->name;
+            $playerDeliveryRecord->machine_type = $this->machine->type;
+            $playerDeliveryRecord->code = $this->machine->code;
+            $playerDeliveryRecord->type = \app\model\PlayerDeliveryRecord::TYPE_MACHINE_OPEN;
+            $playerDeliveryRecord->source = 'external_button';
+            $playerDeliveryRecord->amount = $openAmount;
+            $playerDeliveryRecord->amount_before = 0;
+            $playerDeliveryRecord->amount_after = 0;
+            $playerDeliveryRecord->tradeno = $playerGameLog->tradeno ?? '';
+            $playerDeliveryRecord->remark = '线下实体按键开分（无玩家，现金投币）';
+            $playerDeliveryRecord->save();
+
+            DB::commit();
+
+            $this->log->info('[线下开分] 无玩家游戏，已记录开分操作', [
+                'opened_score' => $openedScore,
+                'open_amount' => $openAmount,
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'player_game_log_id' => $playerGameLog->id,
+            ]);
+
+        } catch (Exception $e) {
+            DB::rollback();
+            throw $e;
         }
     }
 
