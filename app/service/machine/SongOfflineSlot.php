@@ -163,6 +163,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     // ✅ 指令测试支持：记录原始指令码（用于设置正确的 actionVersion）
     private $originalCmd = null;
 
+    // ✅ TCP分包处理：消息缓冲区（静态，所有实例共享）
+    private static $msgBuffer = [];
+    private static $bufferLastClearTime = [];
+
     public function __construct(Machine $machine, $lang = 'zh_CN')
     {
         $this->machine = $machine;
@@ -345,6 +349,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     /**
      * 处理消息（心跳/查询回复）
      *
+     * ✅ 支持TCP分包：消息可能被拆分成多个TCP包，需要缓冲拼接
+     *
      * @param string $msg 收到的消息（小写十六进制）
      * @return bool
      */
@@ -353,24 +359,61 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         try {
             $msg = strtolower(trim($msg));
+            $machineId = $this->machine->id;
+
+            // ✅ 步骤0：TCP分包处理 - 拼接到缓冲区
+            if (!isset(self::$msgBuffer[$machineId])) {
+                self::$msgBuffer[$machineId] = '';
+                self::$bufferLastClearTime[$machineId] = time();
+            }
+            self::$msgBuffer[$machineId] .= $msg;
+            $buffer = self::$msgBuffer[$machineId];
+
+            // ✅ 尝试从缓冲区提取并处理完整消息
+            $processed = false;
+
             // ⚠️ 第一步：检查机板开机标识（FAH）
-            if (substr($msg, 0, 2) === self::BOOT || $msg === self::POWER_ON) {
+            if (preg_match('/^(fa|fah)/', $buffer, $matches)) {
+                $bootMsg = $matches[0];
                 $this->log->info('[收账小卡-开机] 机版开机', [
                     'machine_code' => $this->machine->code,
-                    'msg' => strtoupper($msg),
+                    'msg' => strtoupper($bootMsg),
                 ]);
                 // 开机后应该重新登入
                 $this->is_login = 0;
                 $this->login_status = 0;
+
+                // 清除已处理的消息
+                self::$msgBuffer[$machineId] = substr($buffer, strlen($bootMsg));
                 return true;
             }
+
             $this->log->info('[收账小卡-开机] 接收指令', [
                 'machine_code' => $this->machine->code,
                 'msg' => strtoupper($msg),
             ]);
-            // ⚠️ 第二步：判断并处理心跳消息（B7前缀）
-            if ($this->isHeartbeat($msg)) {
-                return $this->handleHeartbeat($msg);
+
+            // ⚠️ 第二步：判断并处理心跳消息（B7前缀，46字符）
+            if (preg_match('/^(b7[0-9a-f]{44})/', $buffer, $matches)) {
+                $heartbeat = $matches[0];
+                if ($this->isHeartbeat($heartbeat)) {
+                    $processed = $this->handleHeartbeat($heartbeat);
+                    // 清除已处理的心跳
+                    self::$msgBuffer[$machineId] = substr($buffer, 46);
+                    return $processed;
+                }
+            }
+
+            // ⚠️ 第三步：如果缓冲区不是心跳，尝试处理其他消息
+            // 如果缓冲区开头不是B7，说明可能是其他回复消息
+            if (substr($buffer, 0, 2) !== 'b7') {
+                // 使用原来的逻辑处理
+                $msg = $buffer;
+                // 清空缓冲区（已处理）
+                self::$msgBuffer[$machineId] = '';
+            } else {
+                // 等待更多数据（心跳不完整）
+                return false;
             }
 
             // 识别消息类型
@@ -444,10 +487,40 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         } catch (\Exception $e) {
             $this->log->error('[收账小卡] 消息处理错误', [
                 'machine_code' => $this->machine->code,
-                'msg' => $msg,
+                'msg' => $msg ?? 'unknown',
                 'error' => $e->getMessage(),
             ]);
             return false;
+        } finally {
+            // ✅ 定期清理缓冲区（防止内存泄漏）
+            if (isset(self::$msgBuffer[$machineId])) {
+                $now = time();
+                $bufferSize = strlen(self::$msgBuffer[$machineId]);
+
+                // 条件1：缓冲区超过200字符（异常情况）
+                if ($bufferSize > 200) {
+                    $this->log->warning('[TCP分包] 缓冲区过大，清空', [
+                        'machine_code' => $this->machine->code,
+                        'buffer_size' => $bufferSize,
+                        'buffer_content' => strtoupper(substr(self::$msgBuffer[$machineId], 0, 50)) . '...',
+                    ]);
+                    self::$msgBuffer[$machineId] = '';
+                    self::$bufferLastClearTime[$machineId] = $now;
+                }
+
+                // 条件2：超过10秒未清理（可能有残留数据）
+                if (isset(self::$bufferLastClearTime[$machineId])
+                    && ($now - self::$bufferLastClearTime[$machineId]) > 10) {
+                    if ($bufferSize > 0) {
+                        $this->log->debug('[TCP分包] 定期清理缓冲区', [
+                            'machine_code' => $this->machine->code,
+                            'buffer_size' => $bufferSize,
+                        ]);
+                    }
+                    self::$msgBuffer[$machineId] = '';
+                    self::$bufferLastClearTime[$machineId] = $now;
+                }
+            }
         }
     }
 
