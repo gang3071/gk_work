@@ -3156,8 +3156,13 @@ if (!function_exists('machineOpenAnyFree')) {
 
             // 发送开分指令（包含赠送分）
             // ⚠️ 玩家扣款只扣 openScore 的金额，但硬件要给 totalOpenScore = openScore + giftScore
-            $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
-
+                if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $machine->control_type == Machine::CONTROL_TYPE_SONG
+                    && $machine->type == GameType::TYPE_SLOT) {
+                    $services->sendCmd($services::OPEN_ANY_POINT, bcadd($money, $giftScore, 2), 'admin', $player->id);
+                } else {
+                    $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
+                }
             // ✅ Redis 缓存更新（失败不影响业务，下次读取时从 DB 刷新）
             try {
                 // ✅ 诊断日志：记录 Redis 更新前的值
