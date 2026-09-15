@@ -58,8 +58,8 @@ use yzh52521\WebmanLock\Locker;
  * @property int $play_start_time 开始游戏时间
  * @property int $gaming_user_id 游戏中玩家ID
  * @property int $gaming 是否游戏中
- * @property int $point 当前分数（= machine_score，机台上面的分数）
- * @property int $score 当前得分（= card_score，开分卡上的分数）
+ * @property int $point 当前分数（= card_score，开分卡上的分数，洗分时退还此分数）
+ * @property int $score 当前得分（= machine_score，机台上的分数，游戏中使用）
  * @property int $bet 当前押分
  * @property int $win 总赢分数（= total_win）
  * @property int $last_play_time 最后游戏时间
@@ -182,8 +182,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_play_start_time',      // 开始游戏时间
             $this->cacheDataKey . '_gaming_user_id',       // 游戏中玩家ID
             $this->cacheDataKey . '_gaming',               // 是否游戏中
-            $this->cacheDataKey . '_point',                // 当前分数（= machine_score）
-            $this->cacheDataKey . '_score',                // 当前得分（= card_score）
+            $this->cacheDataKey . '_point',                // 当前分数（= card_score，开分卡分数）
+            $this->cacheDataKey . '_score',                // 当前得分（= machine_score，机台分数）
             $this->cacheDataKey . '_bet',                  // 当前押分
             $this->cacheDataKey . '_win',                  // 总赢分数（= total_win）
             $this->cacheDataKey . '_last_play_time',       // 最后游戏时间
@@ -1922,8 +1922,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->total_win = $totalWin;             // 总得分数（心跳BB字段）
 
             // ========== 同步更新兼容字段（与线上版保持一致） ==========
-            $this->score = $cardScore;                // score = card_score（兼容线上版）
-            $this->point = $machineScore;             // point = machine_score（兼容线上版）
+            // ✅ 修正：point应该指向开分卡分数，因为洗分时退的是开分卡上的分数
+            $this->point = $cardScore;                // point = card_score（开分卡分数）
+            $this->score = $machineScore;             // score = machine_score（机台分数）
             $this->win = $totalWin;                   // win = total_win（兼容线上版）
 
             // ✅ 优化：心跳更新数据时同步更新 actionVersion，避免查询指令等待超时
@@ -3165,7 +3166,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->machine_score = $data['machine_score'];
 
         // 旧字段（兼容性）
-        $this->point = $data['machine_score'];              // 旧名
+        // ✅ 修正：point应该指向开分卡分数，因为洗分时退的是开分卡上的分数
+        $this->point = $data['card_score'];                 // 旧名（开分卡分数）
+        $this->score = $data['machine_score'];              // 旧名（机台分数）
         $this->open_card_point = $data['card_score'];       // 旧名
 
         // ✅ 注意：FLAG_FAULT（card_flag="EE"）的处理已移至handleSmartCardCommunicationFault方法
