@@ -1639,6 +1639,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'times' => $times,
             'unit' => self::OPEN_UNIT,
             'cmd' => strtoupper($fullCmd),
+
+            // ✅ 诊断日志：记录当前分数，用于对比
+            'current_card_score' => $this->card_score ?? 0,
+            'current_machine_score' => $this->machine_score ?? 0,
+            'expected_card_score_increase' => $data,
+            'note' => '期望卡分增加' . $data . '分，请关注后续心跳/账目查询是否符合预期',
         ]);
 
         Gateway::sendToUid($uid, hex2bin($fullCmd));
@@ -1688,6 +1694,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'current_machine_score' => $currentMachineScore,
             'cmd' => strtoupper($fullCmd),
             'note' => 'A5 00 C1 = 全部洗分',
+
+            // ✅ 诊断日志：记录当前分数，用于对比
+            'current_card_score' => $this->card_score ?? 0,
+            'expected_card_score_after_wash' => 0,
+            'note2' => '期望洗分后卡分为0，请关注后续心跳/账目查询是否符合预期',
         ]);
 
         Gateway::sendToUid($uid, hex2bin($fullCmd));
@@ -1854,11 +1865,39 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // ✅ 记录分数变化（只在有显著变化时记录，避免心跳日志过多）
             $oldCardScore = $this->card_score ?? 0;
             $oldMachineScore = $this->machine_score ?? 0;
+
+            // ✅ 诊断日志：详细记录分数变化原因，帮助排查锁机台问题
             if (abs($cardScore - $oldCardScore) > 0) {
-                $this->logFieldChange('心跳', 'card_score', $oldCardScore, $cardScore);
+                $cardScoreChange = $cardScore - $oldCardScore;
+                $changeReason = '未知';
+
+                if ($cardScoreChange > 0) {
+                    $changeReason = '上分操作（期望增加：查看上分日志）';
+                } elseif ($cardScoreChange < 0) {
+                    if ($cardScore === 0) {
+                        $changeReason = '洗分操作（全部洗分，期望变为0）';
+                    } else {
+                        $changeReason = '下分操作（部分洗分）或游戏消耗';
+                    }
+                }
+
+                $this->logFieldChange('心跳', 'card_score', $oldCardScore, $cardScore, $changeReason);
+
+                $this->log->info('[心跳-分数诊断] 卡分变化', [
+                    'machine_code' => $this->machine->code,
+                    'old_card_score' => $oldCardScore,
+                    'new_card_score' => $cardScore,
+                    'change' => $cardScoreChange,
+                    'reason' => $changeReason,
+                    'note' => '如果此变化后出现锁机台，说明分数变化不符合预期',
+                ]);
             }
+
             if (abs($machineScore - $oldMachineScore) > 0) {
-                $this->logFieldChange('心跳', 'machine_score', $oldMachineScore, $machineScore);
+                $machineScoreChange = $machineScore - $oldMachineScore;
+                $changeReason = '游戏进行中的分数变化';
+
+                $this->logFieldChange('心跳', 'machine_score', $oldMachineScore, $machineScore, $changeReason);
             }
 
             // ✅ 保存上一次心跳的开分卡分数（用于计算线下洗分金额）
@@ -3023,7 +3062,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->logFieldChange('账目查询', 'reward_status', $oldRewardStatus, $newRewardStatus, '开奖状态');
         $this->reward_status = $newRewardStatus;
 
-        // ✅ 记录分数变化
+        // ✅ 记录分数变化（保存旧值用于诊断）
         $oldCardScore = $this->card_score ?? 0;
         $oldMachineScore = $this->machine_score ?? 0;
         $this->logFieldChange('账目查询', 'card_score', $oldCardScore, $data['card_score'], '开分卡分数');
@@ -3041,18 +3080,67 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $oldHasLock = $this->has_lock ?? 0;
             $this->logFieldChange('账目查询', 'has_lock', $oldHasLock, 1, '检测到故障');
 
+            // ✅ 诊断日志：分析分数变化是否符合预期
+            $cardScoreChange = $data['card_score'] - $oldCardScore;
+            $machineScoreChange = $data['machine_score'] - $oldMachineScore;
+
+            // 判断分数变化方向
+            $operationType = '未知';
+            if ($cardScoreChange > 0) {
+                $operationType = '上分';
+            } elseif ($cardScoreChange < 0) {
+                if ($data['card_score'] === 0) {
+                    $operationType = '全部洗分';
+                } else {
+                    $operationType = '部分洗分或下分';
+                }
+            } else {
+                $operationType = '无变化（可能是查询操作）';
+            }
+
+            // ✅ 详细诊断日志：记录完整上下文帮助排查
             $this->log->error('[收账小卡-锁定] 开分卡分数标志异常（EE），机台已锁定', [
                 'machine_id' => $this->machine->id,
                 'machine_code' => $this->machine->code,
+
+                // 标志信息（关键诊断数据）
                 'card_flag' => $data['card_flag'] ?? 'unknown',
-                'card_score' => $data['card_score'] ?? 0,
-                'machine_score' => $data['machine_score'] ?? 0,
+                'open_flag' => $data['open_flag'] ?? 'unknown',
+                'wash_flag' => $data['wash_flag'] ?? 'unknown',
+
+                // 分数变化对比（关键诊断数据）
+                'old_card_score' => $oldCardScore,
+                'new_card_score' => $data['card_score'],
+                'card_score_change' => $cardScoreChange,
+
+                'old_machine_score' => $oldMachineScore,
+                'new_machine_score' => $data['machine_score'],
+                'machine_score_change' => $machineScoreChange,
+
+                // 操作类型判断
+                'suspected_operation_type' => $operationType,
+
+                // 码表信息
                 'open_table' => $data['open_table'] ?? 0,
                 'wash_table' => $data['wash_table'] ?? 0,
+
+                // 锁定状态
                 'old_has_lock' => $oldHasLock,
                 'new_has_lock' => 1,
+
+                // 用户信息
                 'gaming_user_id' => $this->gaming_user_id ?? null,
+
+                // 原因说明
                 'reason' => 'FLAG_FAULT-开分卡分数异常',
+                'diagnosis' => 'card_flag=EE 表示机台检测到开分卡分数异常',
+                'possible_causes' => [
+                    '1. 上下分金额与预期不符（检查上方的操作日志，对比expected_card_score_increase/decrease）',
+                    '2. 码表数据错误（检查open_table/wash_table是否正常）',
+                    '3. 通讯故障导致指令丢失或重复',
+                    '4. 机台硬件异常',
+                ],
+                'next_steps' => '对比上方最近的上分/下分日志中的expected值，判断是否符合预期',
             ]);
 
             $this->has_lock = 1;
