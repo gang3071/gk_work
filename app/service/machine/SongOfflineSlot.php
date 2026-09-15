@@ -1623,18 +1623,24 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // ⚠️ 确保已登入（自动登入）
         $this->ensureLoggedIn();
 
-        // ⚠️ 特殊逻辑：机台分数转换成次数（100分为单位）
-        if ($data % self::OPEN_UNIT != 0) {
-            $this->log->error('[收账小卡-上分] 分数不是100的倍数，内部错误', [
+        // ⚠️ 特殊逻辑：机台分数通过odds转换成标准分数（100分单位），再计算次数
+        // 公式：标准分数 = 机台分数 × (odds_x ÷ odds_y)
+        // 例如：机台25分，odds 100:25 → 标准分数 = 25 × (100÷25) = 100分 → 1次
+        $standardScore = $data * ($this->machine->odds_x / $this->machine->odds_y);
+
+        if ($standardScore % self::OPEN_UNIT != 0) {
+            $this->log->error('[收账小卡-上分] 标准分数不是100的倍数，内部错误', [
                 'machine_code' => $this->machine->code,
-                'data' => $data,
+                'machine_score' => $data,
+                'odds' => $this->machine->odds_x . ':' . $this->machine->odds_y,
+                'standard_score' => $standardScore,
                 'unit' => self::OPEN_UNIT,
-                'note' => 'gk_api的checkMachineOpenAny应该不经过odds转换，直接验证充值金额是否100的倍数',
+                'note' => 'gk_api的checkMachineOpenAny应该验证(money+giftScore)是100的倍数',
             ]);
-            throw new Exception('内部错误：上分分数必须是' . self::OPEN_UNIT . '的倍数，当前：' . $data . '（请联系技术支持）');
+            throw new Exception('内部错误：标准分数必须是' . self::OPEN_UNIT . '的倍数，当前：' . $standardScore . '（请联系技术支持）');
         }
 
-        $times = intval($data / self::OPEN_UNIT);
+        $times = intval($standardScore / self::OPEN_UNIT);
 
         if ($times <= 0 || $times > self::MAX_OPEN_TIMES) {
             throw new Exception('开分次数超出范围（1-' . self::MAX_OPEN_TIMES . '），当前：' . $times);
@@ -1653,9 +1659,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->log->info('[收账小卡-上分] 发送上分指令', [
             'machine_code' => $this->machine->code,
             'machine_score' => $data,
+            'odds' => $this->machine->odds_x . ':' . $this->machine->odds_y,
+            'standard_score' => $standardScore,
             'times' => $times,
             'unit' => self::OPEN_UNIT,
             'cmd' => strtoupper($fullCmd),
+            'conversion' => "机台{$data}分 × ({$this->machine->odds_x}÷{$this->machine->odds_y}) = 标准{$standardScore}分 = {$times}次",
 
             // ✅ 诊断日志：记录当前分数，用于对比
             'current_card_score' => $this->card_score ?? 0,
@@ -1670,7 +1679,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             sendSocketMessage('private-admin-1-' . $source_id, [
                 'msg_type' => 'machine_action_result',
                 'id' => $this->machine->id,
-                'description' => "上分指令已发送（{$times}次×" . self::OPEN_UNIT . "分={$data}分）",
+                'description' => "上分指令已发送（机台{$data}分 → 标准{$standardScore}分 = {$times}次×100）",
             ]);
         }
     }
