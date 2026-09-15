@@ -112,13 +112,12 @@ class MachineServices
             if ($machineSource === Machine::MACHINE_SOURCE_OFFLINE) {
                 // 线下版（收账小卡协议）
                 return [
-                    SongOfflineSlot::ALL,
                     SongOfflineSlot::READ_SCORE,
                     SongOfflineSlot::READ_BET,
                     SongOfflineSlot::READ_STATUS,
                     SongOfflineSlot::LOGIN,
                     SongOfflineSlot::LOGOUT,
-                    SongOfflineSlot::OPEN_POINT,
+                    SongOfflineSlot::OPEN_ANY_POINT,
                     SongOfflineSlot::WASH_POINT,
                     SongOfflineSlot::ALL_DOWN,
                     SongOfflineSlot::CHECK,

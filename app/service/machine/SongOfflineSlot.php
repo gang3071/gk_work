@@ -113,8 +113,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     // ========================================
     // 资金操作指令
     // ========================================
-    const OPEN_POINT = 'a5';                // 上分前缀（需拼接次数：A5 XX C0 SUM1 SUM2）
-    const OPEN_ANY_POINT = 'a5';            // 开任意分数（别名，兼容gk_api/gk_admin统一调用）
+    const OPEN_ANY_POINT = 'a5';                // 上分前缀（需拼接次数：A5 XX C0 SUM1 SUM2）
     const WASH_POINT = 'a500c1';            // 下分（全部洗分：A5 00 C1 SUM1 SUM2）
 
     // ========================================
@@ -1512,7 +1511,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if (preg_match('/^a5[0-9a-f]{2}c0$/i', $cmd)) {
                 // 上分指令格式：a5xxc0
                 $this->originalCmd = strtolower($cmd);  // 保存原始指令（小写）
-                $cmd = self::OPEN_POINT;
+                $cmd = self::OPEN_ANY_POINT;
 
                 // ✅ 保存到 Redis（跨请求传递，60秒过期）
                 Cache::set($this->cacheDataKey . '_pending_cmd', $this->originalCmd, 60);
@@ -1547,7 +1546,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $this->handleCheckCommand($uid, $source, $source_id);
                     break;
 
-                case self::OPEN_POINT:      // 上分（需拼接次数）
+                case self::OPEN_ANY_POINT:      // 上分（需拼接次数）
                     $this->handleOpenPoint($uid, $data, $source, $source_id);
                     break;
 
@@ -1637,7 +1636,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // ✅ 优化：构建指令 A5 XX C0，使用统一方法添加校验和
         $timesHex = str_pad(dechex($times), 2, '0', STR_PAD_LEFT);
-        $cmdData = self::OPEN_POINT . $timesHex . 'c0';
+        $cmdData = self::OPEN_ANY_POINT . $timesHex . 'c0';
 
         // 手动计算校验和（因为指令格式特殊，不能直接用 createCmd）
         $sum1 = $this->calculateSUM1($cmdData);
@@ -1775,7 +1774,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 case self::SSR_SIGNAL:
                     $description = '给SSR讯号10秒';
                     break;
-                case self::OPEN_POINT:
+                case self::OPEN_ANY_POINT:
                     $description = "上分（{$data}分）";
                     break;
                 case self::WASH_POINT:
