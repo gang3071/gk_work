@@ -1173,11 +1173,21 @@ class MachineOperationService
                 break;
 
             case 'stop_auto':
-                // 关闭自动出分（所有斯洛机）
-                $this->sendCmd($this->services::OUT_OFF);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 OUT_OFF', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                // 关闭自动出分（除线下小淞外的所有斯洛机）
+                // ✅ 线下小淞机台不支持 OUT_OFF 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::OUT_OFF);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 OUT_OFF', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 OUT_OFF 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             case 'out_1_pulse':
@@ -1198,27 +1208,57 @@ class MachineOperationService
                 break;
 
             case 'stop_1':
-                // 停止转轴1（所有斯洛机）
-                $this->sendCmd($this->services::STOP_ONE);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_ONE', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                // 停止转轴1（除线下小淞外的所有斯洛机）
+                // ✅ 线下小淞机台不支持 STOP_ONE 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::STOP_ONE);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_ONE', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 STOP_ONE 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             case 'stop_2':
-                // 停止转轴2（所有斯洛机）
-                $this->sendCmd($this->services::STOP_TWO);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_TWO', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                // 停止转轴2（除线下小淞外的所有斯洛机）
+                // ✅ 线下小淞机台不支持 STOP_TWO 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::STOP_TWO);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_TWO', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 STOP_TWO 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             case 'stop_3':
-                // 停止转轴3（所有斯洛机）
-                $this->sendCmd($this->services::STOP_THREE);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_THREE', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                // 停止转轴3（除线下小淞外的所有斯洛机）
+                // ✅ 线下小淞机台不支持 STOP_THREE 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::STOP_THREE);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_THREE', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 STOP_THREE 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             default:
