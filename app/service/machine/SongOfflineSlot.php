@@ -1139,8 +1139,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // ✅ 指令测试支持：如果有原始指令码，也为其设置版本号
         // 这样前端发送 'a500c0' 时，等待的 actionKey 也能收到版本更新
+        // ⚠️ 跨请求场景：从 Redis 读取原始指令（因为 sendCmd 和 handleMsg 是不同对象实例）
+        if (!$this->originalCmd) {
+            $this->originalCmd = Cache::get($this->cacheDataKey . '_pending_cmd');
+        }
+
         if ($this->originalCmd) {
             $this->setActionVersion($this->originalCmd);
+            // 删除临时数据（已使用）
+            Cache::delete($this->cacheDataKey . '_pending_cmd');
+
             $this->log->info('[收账小卡-操作] 同时更新原始指令版本号', [
                 'machine_code' => $this->machine->code,
                 'original_cmd' => $this->originalCmd,
@@ -1493,10 +1501,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 // 上分指令格式：a5xxc0
                 $this->originalCmd = strtolower($cmd);  // 保存原始指令（小写）
                 $cmd = self::OPEN_POINT;
+
+                // ✅ 保存到 Redis（跨请求传递，60秒过期）
+                Cache::set($this->cacheDataKey . '_pending_cmd', $this->originalCmd, 60);
             } elseif (preg_match('/^a500c1$/i', $cmd)) {
                 // 下分指令格式：a500c1（固定00）
                 $this->originalCmd = strtolower($cmd);  // 保存原始指令（小写）
                 $cmd = self::WASH_POINT;
+
+                // ✅ 保存到 Redis（跨请求传递，60秒过期）
+                Cache::set($this->cacheDataKey . '_pending_cmd', $this->originalCmd, 60);
             }
 
             switch ($cmd) {
