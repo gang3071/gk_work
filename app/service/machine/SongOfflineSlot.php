@@ -214,7 +214,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->machineInfo = [
             'auto',                // 自动状态
             'reward_status',       // 开奖状态
-            'point',               // 当前分数（= machine_score）
+            'point',               // 当前分数（= card_score，开分卡分数）
             'bet',                 // 当前押分
             'win',                 // 总赢分数（= total_win）
             'has_lock',            // 机台锁定状态
