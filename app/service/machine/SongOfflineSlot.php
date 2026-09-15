@@ -1625,7 +1625,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // ⚠️ 特殊逻辑：机台分数转换成次数（100分为单位）
         if ($data % self::OPEN_UNIT != 0) {
-            throw new Exception('开分金额必须是' . self::OPEN_UNIT . '的倍数，当前：' . $data);
+            $this->log->error('[收账小卡-上分] 分数不是100的倍数，内部错误', [
+                'machine_code' => $this->machine->code,
+                'data' => $data,
+                'unit' => self::OPEN_UNIT,
+                'note' => '应该在gk_api的checkMachineOpenAny中向上取整到100的倍数',
+            ]);
+            throw new Exception('内部错误：上分分数必须是' . self::OPEN_UNIT . '的倍数，当前：' . $data . '（请联系技术支持）');
         }
 
         $times = intval($data / self::OPEN_UNIT);
