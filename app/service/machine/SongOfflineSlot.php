@@ -11,6 +11,7 @@ use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
 use support\Cache;
 use support\Log;
+use Workerman\Timer;
 use yzh52521\WebmanLock\Locker;
 
 /**
@@ -3072,30 +3073,37 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $maxRetries = 3;  // 最大重试3次
 
         if ($retryCount < $maxRetries) {
-            // 未达到最大重试次数，增加计数并重新查询
+            // 未达到最大重试次数，增加计数并延迟1秒后重试
             $retryCount++;
             Cache::set($retryKey, $retryCount, 60);  // 60秒过期
 
-            $this->log->warning('[收账小卡-通讯故障] Smart卡通讯超时（EE），丢弃数据并重新查询', [
+            $this->log->warning('[收账小卡-通讯故障] Smart卡通讯超时（EE），丢弃数据并延迟1秒后重试', [
                 'machine_code' => $this->machine->code,
                 'card_flag' => $data['card_flag'],
                 'retry_count' => $retryCount,
                 'max_retries' => $maxRetries,
+                'retry_delay' => '1秒',
                 'reason' => 'Smart卡1秒内未发送完整信号（可能是RS232线路接触不良或信号干扰）',
-                'action' => '丢弃当前数据，立即重新查询最新数据',
+                'action' => '丢弃当前数据，1秒后重新查询最新数据',
                 'data_status' => '维持上一个有效值，不会丢失分数',
+                'note' => 'Smart卡大约1秒更新一次，延迟1秒确保机台有足够时间获取新数据',
             ]);
 
-            // 立即重新发送READ_SCORE查询指令
+            // 使用Workerman定时器，1秒后发送重试查询
             $uid = $this->machine->domain . ':' . $this->machine->port;
-            $cmd = $this->createCmd(self::READ_SCORE);
-            Gateway::sendToUid($uid, hex2bin($cmd));
+            $machineCode = $this->machine->code;
+            $log = $this->log;
+            $cmd = $this->createCmd(self::READ_SCORE);  // 在闭包外生成指令
 
-            $this->log->info('[收账小卡] 发送指令', [
-                'machine_code' => $this->machine->code,
-                'cmd' => strtoupper($cmd),
-                'reason' => '重试获取最新数据（第' . $retryCount . '次）',
-            ]);
+            Timer::add(1, function() use ($uid, $machineCode, $retryCount, $log, $cmd) {
+                Gateway::sendToUid($uid, hex2bin($cmd));
+
+                $log->info('[收账小卡] 发送指令', [
+                    'machine_code' => $machineCode,
+                    'cmd' => strtoupper($cmd),
+                    'reason' => '延迟1秒后重试（第' . $retryCount . '次）',
+                ]);
+            }, null, false);  // false表示只执行一次
 
             // 返回true，表示消息已处理（从缓冲区移除），但数据已丢弃（不更新Redis）
             return true;
