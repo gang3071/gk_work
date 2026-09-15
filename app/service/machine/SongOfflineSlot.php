@@ -114,6 +114,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     // 资金操作指令
     // ========================================
     const OPEN_POINT = 'a5';                // 上分前缀（需拼接次数：A5 XX C0 SUM1 SUM2）
+    const OPEN_ANY_POINT = 'a5';            // 开任意分数（别名，兼容gk_api/gk_admin统一调用）
     const WASH_POINT = 'a500c1';            // 下分（全部洗分：A5 00 C1 SUM1 SUM2）
 
     // ========================================
