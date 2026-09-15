@@ -672,7 +672,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'machine_score' => $data['machine_score'],
             'is_rewarding' => $flags['is_rewarding'],
             'has_fault' => $flags['has_fault'],
+            'card_flag' => $data['card_flag'],
         ]);
+
+        // ✅ 检测Smart卡通讯故障（card_flag="EE"）
+        if ($flags['has_fault']) {
+            return $this->handleSmartCardCommunicationFault($data);
+        }
+
+        // ✅ 通讯正常，清除重试计数
+        $retryKey = $this->cacheDataKey . '_account_retry_count';
+        Cache::delete($retryKey);
 
         // ✅ 使用提取的方法更新状态
         $this->updateAccountData($data, $flags);
@@ -3049,6 +3059,81 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     }
 
     /**
+     * 处理Smart卡通讯故障（card_flag="EE"）
+     *
+     * @param array $data 解析后的数据
+     * @return bool true表示消息已处理（从缓冲区移除），数据已丢弃
+     */
+    private function handleSmartCardCommunicationFault(array $data): bool
+    {
+        // 获取重试计数
+        $retryKey = $this->cacheDataKey . '_account_retry_count';
+        $retryCount = (int) Cache::get($retryKey, 0);
+        $maxRetries = 3;  // 最大重试3次
+
+        if ($retryCount < $maxRetries) {
+            // 未达到最大重试次数，增加计数并重新查询
+            $retryCount++;
+            Cache::set($retryKey, $retryCount, 60);  // 60秒过期
+
+            $this->log->warning('[收账小卡-通讯故障] Smart卡通讯超时（EE），丢弃数据并重新查询', [
+                'machine_code' => $this->machine->code,
+                'card_flag' => $data['card_flag'],
+                'retry_count' => $retryCount,
+                'max_retries' => $maxRetries,
+                'reason' => 'Smart卡1秒内未发送完整信号（可能是RS232线路接触不良或信号干扰）',
+                'action' => '丢弃当前数据，立即重新查询最新数据',
+                'data_status' => '维持上一个有效值，不会丢失分数',
+            ]);
+
+            // 立即重新发送READ_SCORE查询指令
+            $uid = $this->machine->domain . ':' . $this->machine->port;
+            $cmd = $this->createCmd(self::READ_SCORE);
+            Gateway::sendToUid($uid, hex2bin($cmd));
+
+            $this->log->info('[收账小卡] 发送指令', [
+                'machine_code' => $this->machine->code,
+                'cmd' => strtoupper($cmd),
+                'reason' => '重试获取最新数据（第' . $retryCount . '次）',
+            ]);
+
+            // 返回true，表示消息已处理（从缓冲区移除），但数据已丢弃（不更新Redis）
+            return true;
+        }
+
+        // 达到最大重试次数，锁定机台
+        $oldHasLock = $this->has_lock ?? 0;
+        $this->logFieldChange('账目查询', 'has_lock', $oldHasLock, 1, 'Smart卡通讯故障持续');
+
+        $this->log->error('[收账小卡-锁定] Smart卡通讯故障持续（EE），机台已锁定', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'card_flag' => $data['card_flag'],
+            'retry_count' => $retryCount,
+            'max_retries' => $maxRetries,
+            'reason' => 'Smart卡通讯故障，' . $maxRetries . '次重试后仍未恢复',
+            'diagnosis' => 'card_flag=EE 表示账务小卡1秒内未收到Smart卡完整信号',
+            'possible_causes' => [
+                '1. RS232线路接触不良（账务小卡上的4P 2线）',
+                '2. 信号干扰/杂讯导致数据不完整',
+                '3. Smart卡硬件故障',
+                '4. 账务小卡读卡器故障',
+            ],
+            'next_steps' => [
+                '1. 检查RS232线路连接',
+                '2. 重新插拔4P 2线',
+                '3. 如果频繁出现，考虑更换线材或检查硬件',
+            ],
+        ]);
+
+        $this->has_lock = 1;
+        sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+
+        // 返回true，表示消息已处理（从缓冲区移除），但数据已丢弃（不更新Redis）
+        return true;
+    }
+
+    /**
      * 更新账目数据到Redis
      *
      * @param array $data 解析后的数据
@@ -3075,77 +3160,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->point = $data['machine_score'];              // 旧名
         $this->open_card_point = $data['card_score'];       // 旧名
 
-        // 处理故障
-        if ($flags['has_fault']) {
-            $oldHasLock = $this->has_lock ?? 0;
-            $this->logFieldChange('账目查询', 'has_lock', $oldHasLock, 1, '检测到故障');
-
-            // ✅ 诊断日志：分析分数变化是否符合预期
-            $cardScoreChange = $data['card_score'] - $oldCardScore;
-            $machineScoreChange = $data['machine_score'] - $oldMachineScore;
-
-            // 判断分数变化方向
-            $operationType = '未知';
-            if ($cardScoreChange > 0) {
-                $operationType = '上分';
-            } elseif ($cardScoreChange < 0) {
-                if ($data['card_score'] === 0) {
-                    $operationType = '全部洗分';
-                } else {
-                    $operationType = '部分洗分或下分';
-                }
-            } else {
-                $operationType = '无变化（可能是查询操作）';
-            }
-
-            // ✅ 详细诊断日志：记录完整上下文帮助排查
-            $this->log->error('[收账小卡-锁定] 开分卡分数标志异常（EE），机台已锁定', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-
-                // 标志信息（关键诊断数据）
-                'card_flag' => $data['card_flag'] ?? 'unknown',
-                'open_flag' => $data['open_flag'] ?? 'unknown',
-                'wash_flag' => $data['wash_flag'] ?? 'unknown',
-
-                // 分数变化对比（关键诊断数据）
-                'old_card_score' => $oldCardScore,
-                'new_card_score' => $data['card_score'],
-                'card_score_change' => $cardScoreChange,
-
-                'old_machine_score' => $oldMachineScore,
-                'new_machine_score' => $data['machine_score'],
-                'machine_score_change' => $machineScoreChange,
-
-                // 操作类型判断
-                'suspected_operation_type' => $operationType,
-
-                // 码表信息
-                'open_table' => $data['open_table'] ?? 0,
-                'wash_table' => $data['wash_table'] ?? 0,
-
-                // 锁定状态
-                'old_has_lock' => $oldHasLock,
-                'new_has_lock' => 1,
-
-                // 用户信息
-                'gaming_user_id' => $this->gaming_user_id ?? null,
-
-                // 原因说明
-                'reason' => 'FLAG_FAULT-开分卡分数异常',
-                'diagnosis' => 'card_flag=EE 表示机台检测到开分卡分数异常',
-                'possible_causes' => [
-                    '1. 上下分金额与预期不符（检查上方的操作日志，对比expected_card_score_increase/decrease）',
-                    '2. 码表数据错误（检查open_table/wash_table是否正常）',
-                    '3. 通讯故障导致指令丢失或重复',
-                    '4. 机台硬件异常',
-                ],
-                'next_steps' => '对比上方最近的上分/下分日志中的expected值，判断是否符合预期',
-            ]);
-
-            $this->has_lock = 1;
-            sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
-        }
+        // ✅ 注意：FLAG_FAULT（card_flag="EE"）的处理已移至handleSmartCardCommunicationFault方法
+        // 此方法只会在card_flag="E9"（正常）时被调用，因此不需要处理故障情况
     }
 
     /**
