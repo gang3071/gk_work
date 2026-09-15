@@ -1147,12 +1147,22 @@ class MachineOperationService
                     ]);
                 }
 
-                // 条件3: 开始指令（所有斯洛机）
-                $this->sendCmd($this->services::START);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 START', [
-                    'machine_id' => $this->machine->id,
-                    'control_type' => $controlType === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞',
-                ]);
+                // 条件3: 开始指令（除线下小淞外的斯洛机）
+                // ✅ 线下小淞机台不支持 START 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::START);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 START', [
+                        'machine_id' => $this->machine->id,
+                        'control_type' => $controlType === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞',
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 START 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             case 'auto':
@@ -1164,12 +1174,22 @@ class MachineOperationService
                     ]);
                 }
 
-                // 条件2: 开启自动出分（所有斯洛机）
-                $this->sendCmd($this->services::OUT_ON);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 OUT_ON', [
-                    'machine_id' => $this->machine->id,
-                    'control_type' => $controlType === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞',
-                ]);
+                // 条件2: 开启自动出分（除线下小淞外的斯洛机）
+                // ✅ 线下小淞机台不支持 OUT_ON 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::OUT_ON);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 OUT_ON', [
+                        'machine_id' => $this->machine->id,
+                        'control_type' => $controlType === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞',
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 OUT_ON 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             case 'stop_auto':
