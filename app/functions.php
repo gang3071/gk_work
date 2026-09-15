@@ -1219,15 +1219,19 @@ function machineWash(
                 }
                 break;
             case GameType::TYPE_SLOT:
-                if ($services->move_point == 1 && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
+                // ✅ 线下小淞机台不需要发送 MOVE_POINT_OFF/OUT_OFF/STOP_ONE/TWO/THREE 指令
+                $isOfflineSong = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong && $services->move_point == 1 && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
                     $services->sendCmd($services::MOVE_POINT_OFF, 0, 'player', $player->id, $is_system);
                 }
-                if ($services->auto == 1) {
+                if (!$isOfflineSong && $services->auto == 1) {
                     $services->sendCmd($services::OUT_OFF, 0, 'player', $player->id, $is_system);
                 }
 
-                // STOP 指令：双美总是执行，小淞只在弃台时执行
-                if ($machine->control_type == Machine::CONTROL_TYPE_MEI || $path == 'leave') {
+                // STOP 指令：双美总是执行，小淞只在弃台时执行，线下小淞不执行
+                if (!$isOfflineSong && ($machine->control_type == Machine::CONTROL_TYPE_MEI || $path == 'leave')) {
                     $services->sendCmd($services::STOP_ONE, 0, 'player', $player->id, $is_system);
                     $services->sendCmd($services::STOP_TWO, 0, 'player', $player->id, $is_system);
                     $services->sendCmd($services::STOP_THREE, 0, 'player', $player->id, $is_system);
@@ -3436,15 +3440,21 @@ if (!function_exists('resetMachineTrans')) {
                         }
                         break;
                     case GameType::TYPE_SLOT:
-                        if ($services->move_point == 1 && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
+                        // ✅ 线下小淞机台不需要发送 MOVE_POINT_OFF/OUT_OFF/STOP_ONE/TWO/THREE 指令
+                        $isOfflineSong = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                            && $machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                        if (!$isOfflineSong && $services->move_point == 1 && $machine->control_type == Machine::CONTROL_TYPE_MEI) {
                             $services->sendCmd($services::MOVE_POINT_OFF, 0, 'player', $player->id);
                         }
-                        if ($services->auto == 1) {
-                            $services->sendCmd($services::OUT_OFF, 0, 'player', $player->id);
-                        } else {
-                            $services->sendCmd($services::STOP_ONE, 0, 'player', $player->id);
-                            $services->sendCmd($services::STOP_TWO, 0, 'player', $player->id);
-                            $services->sendCmd($services::STOP_THREE, 0, 'player', $player->id);
+                        if (!$isOfflineSong) {
+                            if ($services->auto == 1) {
+                                $services->sendCmd($services::OUT_OFF, 0, 'player', $player->id);
+                            } else {
+                                $services->sendCmd($services::STOP_ONE, 0, 'player', $player->id);
+                                $services->sendCmd($services::STOP_TWO, 0, 'player', $player->id);
+                                $services->sendCmd($services::STOP_THREE, 0, 'player', $player->id);
+                            }
                         }
 
                         // ✅ 强制踢出：清零机台分数（没收分数）
