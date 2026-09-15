@@ -2803,6 +2803,7 @@ if (!function_exists('machineOpenAnyFree')) {
             try {
             // ⚠️ checkMachineOpenAny 只验证 openScore（购买的分），不包含赠分
             // giftScore 会在硬件上分时额外加上
+                $offSlotOpenScore = $openScore;
             $openScore = checkMachineOpenAny($machine, $openScore, 0);
 
             // ✅ 计算总上分（购买分 + 赠送分）
@@ -3159,7 +3160,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG
                     && $machine->type == GameType::TYPE_SLOT) {
-                    $services->sendCmd($services::OPEN_ANY_POINT, $openScore, 'admin', $player->id);
+                    $services->sendCmd($services::OPEN_ANY_POINT, $offSlotOpenScore, 'admin', $player->id);
                 } else {
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
                 }
