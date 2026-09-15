@@ -1426,7 +1426,7 @@ function machineWash(
 
                 // ✅ 弃台时登出机台（仅线下版小淞）
                 if ($path == 'leave' && $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
-                    && $machine->control_type == Machine::CONTROL_TYPE_SONG_OFFLINE) {
+                    && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
 
                     // 检查登入状态
                     if ($services->login_status == 1 || $services->is_login == 1) {
@@ -3159,7 +3159,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG
                     && $machine->type == GameType::TYPE_SLOT) {
-                    $services->sendCmd($services::OPEN_ANY_POINT, bcadd($money, $giftScore, 2), 'admin', $player->id);
+                    $services->sendCmd($services::OPEN_ANY_POINT, $openScore, 'admin', $player->id);
                 } else {
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
                 }
