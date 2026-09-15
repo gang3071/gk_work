@@ -1629,7 +1629,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 'machine_code' => $this->machine->code,
                 'data' => $data,
                 'unit' => self::OPEN_UNIT,
-                'note' => '应该在gk_api的checkMachineOpenAny中向上取整到100的倍数',
+                'note' => 'gk_api的checkMachineOpenAny应该直接传递充值金额，不经过odds转换',
             ]);
             throw new Exception('内部错误：上分分数必须是' . self::OPEN_UNIT . '的倍数，当前：' . $data . '（请联系技术支持）');
         }
