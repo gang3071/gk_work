@@ -1669,7 +1669,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $this->point = $point;
                 $this->setActionVersion(self::MACHINE_POINT);
                 // ✅ 同时设置心跳版本号（单向指令需要检测）
-                $this->setActionVersion($fun);  // GET_MACHINE_POINT 或 AUTO_MACHINE_POINT
+                $this->setActionVersion($action);  // GET_MACHINE_POINT 或 AUTO_MACHINE_POINT
                 break;
 
             // 查询得分响应
