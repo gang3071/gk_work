@@ -1423,6 +1423,31 @@ function machineWash(
                 Log::channel('slot_machine')->info('[machineWash-硬件清零] ALL_DOWN 执行完成', [
                     'machine_code' => $machine->code,
                 ]);
+
+                // ✅ 弃台时登出机台（仅线下版小淞）
+                if ($path == 'leave' && $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $machine->control_type == Machine::CONTROL_TYPE_SONG_OFFLINE) {
+
+                    // 检查登入状态
+                    if ($services->login_status == 1 || $services->is_login == 1) {
+                        Log::channel('slot_machine')->info('[machineWash-弃台登出] 检测到机台已登入，执行登出', [
+                            'machine_code' => $machine->code,
+                            'login_status' => $services->login_status,
+                            'is_login' => $services->is_login,
+                        ]);
+
+                        $services->sendCmd($services::LOGOUT, 0, 'player', $player->id, $is_system);
+
+                        Log::channel('slot_machine')->info('[machineWash-弃台登出] 登出指令已发送', [
+                            'machine_code' => $machine->code,
+                        ]);
+                    } else {
+                        Log::channel('slot_machine')->info('[machineWash-弃台登出] 机台未登入，跳过登出', [
+                            'machine_code' => $machine->code,
+                            'login_status' => $services->login_status,
+                        ]);
+                    }
+                }
                 break;
         }
 
