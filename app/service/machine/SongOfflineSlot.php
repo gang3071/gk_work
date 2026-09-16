@@ -66,6 +66,10 @@ use yzh52521\WebmanLock\Locker;
  * @property int $action_time 操作时间
  * @property int $now_turn 当前累积转数
  * @property int $has_lock 机台锁定状态
+ * @property int $keep_seconds 保留剩余时长
+ * @property int $keeping 保留状态（0=未保留 1=保留中）
+ * @property int $keeping_user_id 保留玩家ID
+ * @property int $last_keep_at 最后进入保留时间
  *
  * ========== 线下版特有字段（GD收账小卡协议） ==========
  * @property int $login_status 登入状态（0=未登入 1=已登入，心跳BD.b7取反）
@@ -190,6 +194,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_action_time',          // 操作时间
             $this->cacheDataKey . '_now_turn',             // 当前累积转数（= turn）
             $this->cacheDataKey . '_has_lock',             // 机台锁定状态
+            $this->cacheDataKey . '_keep_seconds',         // 保留剩余时长
+            $this->cacheDataKey . '_keeping',              // 保留状态
+            $this->cacheDataKey . '_keeping_user_id',      // 保留玩家ID
+            $this->cacheDataKey . '_last_keep_at',         // 最后进入保留时间
 
             // ========== 线下版特有字段（GD收账小卡协议） ==========
             $this->cacheDataKey . '_login_status',         // 登入状态（心跳BD.b7取反）
