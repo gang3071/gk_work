@@ -80,6 +80,8 @@ use yzh52521\WebmanLock\Locker;
  * @property int $total_win 总得分数（心跳BB字段，4字节BCD）
  * @property int $open_table 开分码表（外部开分累计金额，查询账目EA C4回复）
  * @property int $wash_table 洗分码表（外部洗分累计金额，查询账目EA C4回复）
+ * @property int $prev_open_table 上一次EA C4更新前的开分码表值（用于B7外部开分差值计算）
+ * @property int $prev_wash_table 上一次EA C4更新前的洗分码表值（用于B7外部洗分差值计算）
  * @property int $big_win 大当状态（心跳BD.b0）
  * @property int $high_prob 高确状态（心跳BD.b1）
  * @property int $small_win 小当状态（心跳BD.b2）
@@ -208,6 +210,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_total_win',            // 总得分数（心跳BB字段）
             $this->cacheDataKey . '_open_table',           // 开分码表（查询账目回复）
             $this->cacheDataKey . '_wash_table',           // 洗分码表（查询账目回复）
+            $this->cacheDataKey . '_prev_open_table',      // 上一次EA C4更新前的开分码表值（外部开分差值计算用）
+            $this->cacheDataKey . '_prev_wash_table',      // 上一次EA C4更新前的洗分码表值（外部洗分差值计算用）
             $this->cacheDataKey . '_big_win',              // 大当状态（心跳BD.b0）
             $this->cacheDataKey . '_high_prob',            // 高确状态（心跳BD.b1）
             $this->cacheDataKey . '_small_win',            // 小当状态（心跳BD.b2）
@@ -498,7 +502,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // 识别消息类型
             $header = substr($msg, 0, 2);
-            $processed = false;
 
             // ✅ Bug #16修复：E1错误识别（可能是连续的E1，如e1e1e1e1e1e1）
             if (preg_match('/^(e1)+$/i', $msg)) {
@@ -703,6 +706,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // 处理开分码表变化
         if ($data['open_table'] != $oldOpenTable) {
+            // 保存上一次的值，供 processExternalOpen 计算差值（避免调用 queryDetailSync 阻塞事件循环）
+            $this->prev_open_table = $oldOpenTable;
             $result = $this->processCounterChange('open', $oldOpenTable, $data['open_table'], $now);
             if ($result['should_update']) {
                 $this->open_table = $data['open_table'];              // ⚠️ 新字段
@@ -721,6 +726,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // 处理洗分码表变化
         if ($data['wash_table'] != $oldWashTable) {
+            // 保存上一次的值，与 prev_open_table 对称，供未来洗分逻辑使用
+            $this->prev_wash_table = $oldWashTable;
             $result = $this->processCounterChange('wash', $oldWashTable, $data['wash_table'], $now);
             if ($result['should_update']) {
                 $this->wash_table = $data['wash_table'];              // ⚠️ 新字段
@@ -2300,10 +2307,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function processExternalOpen(int $gamingUserId): void
     {
         try {
-            // 1. 查询开分码表差值
-            $detail = $this->queryDetailSync();
-            $newOpenTable = $detail['open_table'] ?? 0;
-            $oldOpenTable = $this->open_table ?? 0;
+            // 1. 使用缓存数据计算开分码表差值
+            // 原设计调用 queryDetailSync()，但该方法在 Workerman 事件处理器内会阻塞整个事件循环
+            // 导致 EA C4 回复无法被处理，必然超时。改为使用 EA C4 回复时保存的前值。
+            $oldOpenTable = $this->prev_open_table ?? 0;
+            $newOpenTable = $this->open_table ?? 0;
 
             // 2. 计算开分增量
             $openIncrement = $newOpenTable - $oldOpenTable;
@@ -2350,8 +2358,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->recordExternalOpenWithoutPlayer($openIncrement, $openAmount);
             }
 
-            // 6. 更新开分码表
-            $this->open_table = $newOpenTable;
+            // 6. 更新前值，防止下次 B7 重复处理同一次开分事件
+            $this->prev_open_table = $newOpenTable;
 
             // 7. ✅ 自动发送清除故障指令（清除 b5 标志）
             try {
@@ -3079,10 +3087,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 获取重试计数
         $retryKey = $this->cacheDataKey . '_account_retry_count';
         $retryCount = (int) Cache::get($retryKey, 0);
-        $maxRetries = 3;  // 最大重试3次
+        $maxRetries = 5;  // 最大重试5次
 
         if ($retryCount < $maxRetries) {
-            // 未达到最大重试次数，增加计数并延迟1秒后重试
+            // 未达到最大重试次数，增加计数并延迟5秒后重试
             $retryCount++;
             Cache::set($retryKey, $retryCount, 60);  // 60秒过期
 
@@ -3128,7 +3136,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'card_flag' => $data['card_flag'],
             'retry_count' => $retryCount,
             'max_retries' => $maxRetries,
-            'reason' => 'Smart卡通讯故障，' . $maxRetries . '次重试后仍未恢复',
+            'reason' => 'Smart卡通讯故障，' . $maxRetries . '次重试（每次间隔1秒）后仍未恢复',
             'diagnosis' => 'card_flag=EE 表示账务小卡1秒内未收到Smart卡完整信号',
             'possible_causes' => [
                 '1. RS232线路接触不良（账务小卡上的4P 2线）',
