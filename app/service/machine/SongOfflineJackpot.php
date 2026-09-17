@@ -17,6 +17,7 @@ use support\Log;
 use support\Redis;
 use Webman\Push\PushException;
 use Webman\RedisQueue\Client;
+use Workerman\Timer;
 use yzh52521\WebmanLock\Locker;
 
 /**
@@ -1406,8 +1407,65 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             ]);
 
             // 自动执行"得分→分数"转换
-            $this->sendCmd(self::SCORE_TO_POINT, 0, 'player', $gamingUserId);
+            $this->sendScoreToPointAsync($gamingUserId);
         }
+    }
+
+    /**
+     * 异步发送 SCORE_TO_POINT 指令（Timer 确认回复，避免在 onMessage 中阻塞事件循环）
+     */
+    private function sendScoreToPointAsync(int $gamingUserId, int $attempts = 0): void
+    {
+        $maxRetries = 3;
+        $uid = $this->machine->domain . ':' . $this->machine->port;
+
+        if (!Gateway::isUidOnline($uid)) {
+            $this->log->error('[SCORE_TO_POINT] 机台离线，跳过', [
+                'machine_code' => $this->machine->code, 'attempt' => $attempts,
+            ]);
+            return;
+        }
+
+        $sentVersion = $this->setActionVersion(self::SCORE_TO_POINT);
+        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::SCORE_TO_POINT)));
+
+        $this->log->info('[SCORE_TO_POINT] 异步发送', [
+            'machine_code' => $this->machine->code,
+            'attempt'      => $attempts + 1,
+            'sent_version' => $sentVersion,
+        ]);
+
+        $machineId = $this->machine->id;
+
+        Timer::add(1, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
+            $machine = Machine::find($machineId);
+            if (!$machine) return;
+
+            $svc = new static($machine);
+            $currentVersion = $svc->getActionVersion(self::SCORE_TO_POINT);
+
+            if ($currentVersion > $sentVersion) {
+                $svc->log->info('[SCORE_TO_POINT] 确认成功', [
+                    'machine_code'    => $machine->code,
+                    'attempt'         => $attempts + 1,
+                    'current_version' => $currentVersion,
+                ]);
+                return;
+            }
+
+            $newAttempts = $attempts + 1;
+            if ($newAttempts >= $maxRetries) {
+                $svc->log->error('[SCORE_TO_POINT] 重试耗尽，放弃', [
+                    'machine_code' => $machine->code, 'attempts' => $newAttempts,
+                ]);
+                return;
+            }
+
+            $svc->log->warning('[SCORE_TO_POINT] 超时未回复，重试', [
+                'machine_code' => $machine->code, 'attempt' => $newAttempts,
+            ]);
+            $svc->sendScoreToPointAsync($gamingUserId, $newAttempts);
+        }, null, false); // false = 只触发一次，不循环
     }
 
     /**

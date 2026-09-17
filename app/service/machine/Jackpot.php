@@ -14,6 +14,7 @@ use support\Cache;
 use support\Log;
 use Webman\Push\PushException;
 use Webman\RedisQueue\Client;
+use Workerman\Timer;
 
 /**
  * Class Jackpot
@@ -388,7 +389,7 @@ class Jackpot extends MachineServices implements BaseMachine
                         'machine_code' => $this->machine->code,
                         'gaming_user_id' => $this->machine->gaming_user_id,
                     ]);
-                    $this->sendCmd(self::SCORE_TO_POINT, 0, 'player', $this->machine->gaming_user_id);
+                    $this->sendScoreToPointAsync($this->machine->gaming_user_id);
                 }
             }
             if ($orgBbStatus == 0 && $orgRushStatus == 0 && $this->bb_status == 1 && $this->rush_status == 1 && $this->now_turn > 0) {
@@ -576,6 +577,63 @@ class Jackpot extends MachineServices implements BaseMachine
         }
 
         return true;
+    }
+
+    /**
+     * 异步发送 SCORE_TO_POINT 指令（Timer 确认回复，避免在 onMessage 中阻塞事件循环）
+     */
+    private function sendScoreToPointAsync(int $gamingUserId, int $attempts = 0): void
+    {
+        $maxRetries = 3;
+        $uid = $this->machine->domain . ':' . $this->machine->port;
+
+        if (!Gateway::isUidOnline($uid)) {
+            $this->log->error('[SCORE_TO_POINT] 机台离线，跳过', [
+                'machine_code' => $this->machine->code, 'attempt' => $attempts,
+            ]);
+            return;
+        }
+
+        $sentVersion = $this->setActionVersion(self::SCORE_TO_POINT);
+        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::SCORE_TO_POINT)));
+
+        $this->log->info('[SCORE_TO_POINT] 异步发送', [
+            'machine_code' => $this->machine->code,
+            'attempt'      => $attempts + 1,
+            'sent_version' => $sentVersion,
+        ]);
+
+        $machineId = $this->machine->id;
+
+        Timer::add(1, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
+            $machine = Machine::find($machineId);
+            if (!$machine) return;
+
+            $svc = new static($machine);
+            $currentVersion = $svc->getActionVersion(self::SCORE_TO_POINT);
+
+            if ($currentVersion > $sentVersion) {
+                $svc->log->info('[SCORE_TO_POINT] 确认成功', [
+                    'machine_code'    => $machine->code,
+                    'attempt'         => $attempts + 1,
+                    'current_version' => $currentVersion,
+                ]);
+                return;
+            }
+
+            $newAttempts = $attempts + 1;
+            if ($newAttempts >= $maxRetries) {
+                $svc->log->error('[SCORE_TO_POINT] 重试耗尽，放弃', [
+                    'machine_code' => $machine->code, 'attempts' => $newAttempts,
+                ]);
+                return;
+            }
+
+            $svc->log->warning('[SCORE_TO_POINT] 超时未回复，重试', [
+                'machine_code' => $machine->code, 'attempt' => $newAttempts,
+            ]);
+            $svc->sendScoreToPointAsync($gamingUserId, $newAttempts);
+        }, null, false); // false = 只触发一次，不循环
     }
 
     /**
