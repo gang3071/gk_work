@@ -287,18 +287,20 @@ class DGGameController
                         $betKey = "game:record:bet:DG:{$orderNo}";
 
                         // 首次下注：补充完整字段
+                        // DGMergedBetHandler 返回的 balance 已转为元，写入 Redis 前须转回分
+                        // 以保持与 enrichInsertRecords / batchUpdateRecords 的一致性（均假设 Redis 存分）
                         if ($result['is_first_bet'] ?? false) {
                             \support\Redis::hMSet($betKey, [
                                 'game_type' => '',
                                 'game_name' => '',
                                 'bet_type' => 'bet',
                                 'original_data' => json_encode($params, JSON_UNESCAPED_UNICODE),
-                                'balance_before' => $result['old_balance'] ?? 0,
-                                'balance_after' => $result['balance'],
+                                'balance_before' => (int)round(($result['old_balance'] ?? 0) * 100),
+                                'balance_after' => (int)round(($result['balance'] ?? 0) * 100),
                             ]);
                         } else {
                             // 追加下注：只更新 balance_after（余额在变化）
-                            \support\Redis::hSet($betKey, 'balance_after', $result['balance']);
+                            \support\Redis::hSet($betKey, 'balance_after', (int)round(($result['balance'] ?? 0) * 100));
                         }
                     }
                 } else {
