@@ -631,6 +631,7 @@ class GameRecordSyncWorker
                         'created_at' => $record->created_at,  // 使用第一条记录的时间
                         'game_codes' => [],
                         'record_ids' => [],  // ✅ 记录所有涉及的 record ID（用于生成唯一批次ID）
+                        'platform_amounts' => [],  // 按 platform_id 拆分的打码量，用于积分计算
                     ];
                 }
 
@@ -638,6 +639,9 @@ class GameRecordSyncWorker
                 $grouped[$groupKey]['count']++;
                 $grouped[$groupKey]['game_codes'][] = $record->game_code ?? 'unknown';
                 $grouped[$groupKey]['record_ids'][] = $record->id;  // ✅ 收集 record ID
+                $platformId = $record->platform_id;
+                $grouped[$groupKey]['platform_amounts'][$platformId] =
+                    ($grouped[$groupKey]['platform_amounts'][$platformId] ?? 0) + $record->bet;
             }
 
             // ✅ 批量投递（每组一条消息）
@@ -665,13 +669,14 @@ class GameRecordSyncWorker
 
                 // ✅ 新增：同时发送积分队列（跨项目投递到 gk_api）
                 // 注意：gk_api 和 gk_work 共用同一个 Redis，队列可以跨项目
+                // platform_amounts: { platform_id => bet_amount }，消费者按各平台积分基数分别计算
                 \Webman\RedisQueue\Client::send('player-points', [
-                    'player_id' => $groupData['player_id'],
-                    'bet_amount' => $groupData['bet_amount'],
-                    'source' => 'betting',
-                    'created_at' => $groupData['created_at'],
-                    'batch_id' => $batchId,  // ✅ 使用相同的批次ID（方便关联和去重）
-                    'record_ids' => $groupData['record_ids'],  // ✅ 记录IDs（用于查询平台信息）
+                    'player_id'        => $groupData['player_id'],
+                    'platform_amounts' => $groupData['platform_amounts'],
+                    'source'           => 'betting',
+                    'created_at'       => $groupData['created_at'],
+                    'batch_id'         => $batchId,
+                    'record_ids'       => $groupData['record_ids'],
                 ]);
             }
 
