@@ -11,6 +11,7 @@ use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
 use support\Cache;
 use support\Log;
+use Webman\RedisQueue\Client;
 use Workerman\Timer;
 use yzh52521\WebmanLock\Locker;
 
@@ -121,7 +122,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     // ========================================
     const OPEN_ANY_POINT = 'a5';                // 上分前缀（需拼接次数：A5 XX C0 SUM1 SUM2）
     const WASH_POINT = 'a500c1';            // 下分（全部洗分：A5 00 C1 SUM1 SUM2）
-    const WASH_ZERO  = 'a500c1';            // 洗分清零（兼容 functions.php 通用调用，映射到 WASH_POINT）
 
     // ========================================
     // 管理指令（统一命名：ALL_DOWN/CHECK）
@@ -1518,6 +1518,18 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $currentGamingUserId = $this->gaming_user_id;
                 if (!empty($currentGamingUserId)) {
                     $this->last_play_time = time();
+                    // 投递保留状态队列（线下机台不累加保留时间，但玩家活跃时需解除保留状态）
+                    Client::send('play-keep-machine', [
+                        'change_amount' => 1,
+                        'machine_id' => $this->machine->id,
+                        'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                            $this->machine->domain, $this->machine->port, $this->machine->type
+                        ),
+                        'player_id' => $currentGamingUserId,
+                        'gaming_user_id' => $currentGamingUserId,
+                        'keep_seconds' => $this->keep_seconds,
+                        'keeping' => $this->keeping,
+                    ]);
                 }
             }
 

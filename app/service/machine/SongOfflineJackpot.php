@@ -1568,6 +1568,21 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // 更新最后游玩时间
         $this->last_play_time = time();
 
+        // 投递保留状态队列（线下机台不累加保留时间，但玩家活跃时需解除保留状态）
+        if (!empty($gamingUserId)) {
+            Client::send('play-keep-machine', [
+                'change_amount' => $consumed,
+                'machine_id' => $this->machine->id,
+                'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                    $this->machine->domain, $this->machine->port, $this->machine->type
+                ),
+                'player_id' => $gamingUserId,
+                'gaming_user_id' => $gamingUserId,
+                'keep_seconds' => $this->keep_seconds,
+                'keeping' => $this->keeping,
+            ]);
+        }
+
         // 投递打码量统计
         $this->sendBetStatistics($consumed, $gamingUserId);
     }

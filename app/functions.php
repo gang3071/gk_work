@@ -240,6 +240,14 @@ function machineKeepOutPlayer(): void
                     'keeping' => $services->keeping
                 ]);
             } else {
+                // 线下机台不累加保留时间，keep_seconds 始终为 0，不触发踢出
+                if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE) {
+                    $log->info('PlayOutMachine: 线下机台保留时间为0，保持保留状态等待玩家操作', [
+                        'machine_id' => $machine->id,
+                        'machine_code' => $machine->code,
+                    ]);
+                    continue;
+                }
                 // 保留时间为0时踢出玩家
                 // ✅ 从 Redis 读取实时余额
                 $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
