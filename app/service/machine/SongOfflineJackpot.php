@@ -69,6 +69,10 @@ use yzh52521\WebmanLock\Locker;
  * @property float $player_win_number 玩家使用转数（累积消耗的转数，用于打码量统计）
  * @property int $external_open_count 外部按钮开分次数（B5协议，次数非金额）
  * @property int $external_wash_count 外部按钮洗分次数（B7协议，次数非金额）
+ * @property int $keep_seconds 保留剩余时长（秒）
+ * @property int $keeping 保留状态（0=未保留 1=保留中）
+ * @property int $keeping_user_id 保留玩家ID
+ * @property int $last_keep_at 最后进入保留时间
  *
  * @package app\service\machine
  * @author Claude Code
@@ -179,6 +183,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // ✅ 外部按钮计数器（B5/B7协议，仅线下版）
             $this->cacheDataKey . '_external_open_count',  // 外部按钮开分次数（B5）
             $this->cacheDataKey . '_external_wash_count',  // 外部按钮洗分次数（B7）
+            // 保留时间（与线上机台统一用 Redis 追踪，由 machineOpenAnyFree 赋初值）
+            $this->cacheDataKey . '_keep_seconds',   // 保留剩余时长（秒）
+            $this->cacheDataKey . '_keeping',        // 保留状态（0=未保留 1=保留中）
+            $this->cacheDataKey . '_keeping_user_id',// 保留玩家ID
+            $this->cacheDataKey . '_last_keep_at',   // 最后进入保留时间
         ];
 
         // 推送到前端的关键字段
@@ -340,7 +349,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     'push_auto' => $machineCacheInfo[$this->cacheDataKey . '_push_auto'] ?? 0,
                     'now_turn' => $machineCacheInfo[$this->cacheDataKey . '_now_turn'] ?? 0,
                     'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'] ?? 0,
-                    'keep_seconds' => $this->machine->keep_seconds ?? 0, // ✅ 从数据库读取保留时间配置
+                    'keep_seconds' => $machineCacheInfo[$this->cacheDataKey . '_keep_seconds'] ?? 0,
+                    'keeping' => $machineCacheInfo[$this->cacheDataKey . '_keeping'] ?? 0,
                     // ✅ 玩家使用转数（从Redis缓存读取，由心跳累加）
                     'player_win_number' => $machineCacheInfo[$this->cacheDataKey . '_player_win_number'] ?? 0,
                     // ✅ 外部按钮计数器（仅线下版）
