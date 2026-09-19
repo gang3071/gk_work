@@ -19,6 +19,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string machine_code 机台code
  * @property int game_type 机台类型
  * @property int source 来源
+ * @property int distribute_type 派发类型 0=正常派发 1=精灵球派发
+ * @property int pokemon_ball_machine_id 精灵球机台ID
  * @property int play_game_record_id 电子游戏记录id
  * @property int player_game_record_id 机台游戏记录id
  * @property string odds 比值
@@ -65,6 +67,14 @@ class PlayerLotteryRecord extends Model
     const SOURCE_MACHINE = 1;// 实体机台
     const SOURCE_GAME = 2;// 电子游戏
     const SOURCE_MANUAL = 3;// 手动发放
+
+    // 派发类型
+    const DISTRIBUTE_TYPE_NORMAL = 0;        // 正常派发
+    const DISTRIBUTE_TYPE_POKEMON_BALL = 1;  // 精灵球派发
+
+    // 精灵球派发状态
+    const STATUS_POKEMON_BALL_PENDING = 4;   // 精灵球待游玩
+    const STATUS_POKEMON_BALL_FAILED = 5;    // 精灵球派发失败（可重发）
     protected $dataAuth = ['department_id' => 'department_id']; // 已完成
     protected $table = 'player_lottery_record';
 

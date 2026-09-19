@@ -58,6 +58,10 @@ class GameLotteryServices
     const COOLDOWN_DURATION = 1800;           // 冷却期时长（秒），30分钟
     const REDIS_KEY_LOTTERY_COOLDOWN = 'game_lottery_cooldown:';  // 彩金冷却期键
 
+    // 精灵球彩金配置
+    const REDIS_KEY_POKEMON_BALL_PENDING = 'game_lottery_pending:';
+    const POKEMON_BALL_PENDING_TTL = 300;     // 待确认过期时间（秒），5分钟
+
     /**
      * Lua 脚本：批量累积多个彩金池（性能优化）
      *
@@ -799,6 +803,37 @@ LUA;
                     'stats_daily_wins' => $stats['daily_win'],
                     'stats_daily_win_rate' => $stats['daily_win_rate'],
                 ]);
+
+                // ✅ 精灵球彩金分支：如果彩金启用了精灵球模式，走精灵球流程
+                if ($this->isPokemonBallLottery($lottery)) {
+                    $this->log->info('🎰 彩金命中精灵球模式', [
+                        'lottery_id' => $lottery->id,
+                        'machine_id' => $lottery->pokemon_ball_machine_id,
+                        'amount' => $amount,
+                    ]);
+
+                    // 检查机台在线状态
+                    if (!$this->checkMachineOnline($lottery->pokemon_ball_machine_id)) {
+                        $this->log->warning('⚠️ 精灵球机台离线，记录失败', [
+                            'lottery_id' => $lottery->id,
+                            'machine_id' => $lottery->pokemon_ball_machine_id,
+                        ]);
+                        $this->createFailedPokemonBallRecord($lottery, $amount, $playGameRecordId, 'machine_offline');
+                        break;
+                    }
+
+                    // 保存 pending 到 Redis + 通知客户端
+                    $pendingSaved = $this->savePokemonBallPending($lottery, $amount, $playGameRecordId, $burstInfo, $isDoubled);
+                    if ($pendingSaved) {
+                        $this->sendPokemonBallNotification($this->player->id, $lottery->pokemon_ball_machine_id, $lottery, $amount);
+                    } else {
+                        $this->createFailedPokemonBallRecord($lottery, $amount, $playGameRecordId, 'pending_save_failed');
+                    }
+
+                    break; // 跳出当前彩金的检查循环
+                }
+
+                // ✅ 常规派发流程
                 try {
                     $distributed = $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $i, $participateTimes, $isDoubled);
                 } catch (PushException $e) {
@@ -2389,6 +2424,413 @@ LUA;
 
             return '';
         }
+    }
+
+    // ==================== 精灵球彩金模式 ====================
+
+    /**
+     * 精灵球彩金派发（公共方法，供 handlePokemonBallResult 调用）
+     *
+     * @param GameLottery $lottery
+     * @param float $amount
+     * @param int $lotteryMultiple
+     * @param float|int $bet
+     * @param int $playGameRecordId
+     * @param array $burstInfo
+     * @param int $attemptIndex
+     * @param int $totalAttempts
+     * @param bool $isDoubled
+     * @return bool
+     */
+    public function distributePokemonBallPrize(
+        GameLottery $lottery,
+        float       $amount,
+        int         $lotteryMultiple,
+        float|int   $bet,
+        int         $playGameRecordId,
+        array       $burstInfo,
+        int         $attemptIndex,
+        int         $totalAttempts,
+        bool        $isDoubled = false
+    ): bool
+    {
+        return $this->tryDistributeLottery($lottery, $amount, $lotteryMultiple, $bet, $playGameRecordId, $burstInfo, $attemptIndex, $totalAttempts, $isDoubled);
+    }
+
+    /**
+     * 判断彩金是否启用了精灵球模式
+     *
+     * @param GameLottery $lottery
+     * @return bool
+     */
+    private function isPokemonBallLottery(GameLottery $lottery): bool
+    {
+        return $lottery->isPokemonBallEnabled();
+    }
+
+    /**
+     * 检查精灵球机台是否在线
+     *
+     * @param int $machineId 机台ID
+     * @return bool
+     */
+    private function checkMachineOnline(int $machineId): bool
+    {
+        try {
+            $machine = \app\model\Machine::query()->find($machineId);
+            if (!$machine) {
+                return false;
+            }
+
+            $uid = $machine->domain . ':' . $machine->port;
+            return \GatewayWorker\Lib\Gateway::isUidOnline($uid);
+        } catch (\Exception $e) {
+            $this->log->warning('检查精灵球机台在线状态失败', [
+                'machine_id' => $machineId,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * 保存精灵球待确认状态到 Redis
+     *
+     * @param GameLottery $lottery
+     * @param float $amount 彩金金额
+     * @param int $playGameRecordId 游戏记录ID
+     * @param array $burstInfo 爆彩信息
+     * @param bool $isDoubled 是否双倍
+     * @return bool
+     */
+    private function savePokemonBallPending(
+        GameLottery $lottery,
+        float       $amount,
+        int         $playGameRecordId,
+        array       $burstInfo,
+        bool        $isDoubled
+    ): bool
+    {
+        try {
+            $redis = \support\Redis::connection()->client();
+            $key = self::REDIS_KEY_POKEMON_BALL_PENDING . $this->player->id . ':' . $lottery->id;
+
+            $pendingData = json_encode([
+                'player_id' => $this->player->id,
+                'lottery_id' => $lottery->id,
+                'lottery_name' => $lottery->name,
+                'machine_id' => $lottery->pokemon_ball_machine_id,
+                'amount' => $amount,
+                'play_game_record_id' => $playGameRecordId,
+                'bet' => 0, // bet 在回调时不需要
+                'burst_info' => $burstInfo,
+                'is_doubled' => $isDoubled,
+                'created_at' => date('Y-m-d H:i:s'),
+                'expires_at' => time() + self::POKEMON_BALL_PENDING_TTL,
+            ]);
+
+            $result = $redis->set($key, $pendingData, self::POKEMON_BALL_PENDING_TTL);
+
+            if ($result) {
+                // 同时创建反向索引：机台ID → 玩家pending key
+                $machineKey = 'game_lottery_machine_pending:' . $lottery->pokemon_ball_machine_id;
+                $redis->set($machineKey, $key, self::POKEMON_BALL_PENDING_TTL);
+
+                $this->log->info('精灵球彩金待确认已保存', [
+                    'player_id' => $this->player->id,
+                    'lottery_id' => $lottery->id,
+                    'machine_id' => $lottery->pokemon_ball_machine_id,
+                    'amount' => $amount,
+                    'ttl' => self::POKEMON_BALL_PENDING_TTL,
+                ]);
+            }
+
+            return $result;
+        } catch (\Exception $e) {
+            $this->log->error('保存精灵球彩金待确认失败', [
+                'player_id' => $this->player->id,
+                'lottery_id' => $lottery->id,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * 创建精灵球派发失败记录
+     *
+     * @param GameLottery $lottery
+     * @param float $amount 彩金金额
+     * @param int $playGameRecordId 游戏记录ID
+     * @param string $reason 失败原因
+     * @return void
+     */
+    private function createFailedPokemonBallRecord(
+        GameLottery $lottery,
+        float       $amount,
+        int         $playGameRecordId,
+        string      $reason
+    ): void
+    {
+        try {
+            $record = new PlayerLotteryRecord();
+            $record->player_id = $this->player->id;
+            $record->uuid = $this->player->uuid;
+            $record->player_phone = $this->player->phone ?? '';
+            $record->player_name = $this->player->name ?? '';
+            $record->is_coin = $this->player->is_coin;
+            $record->is_promoter = $this->player->is_promoter;
+            $record->is_test = $this->player->is_test;
+            $record->department_id = $this->player->department_id;
+            $record->source = PlayerLotteryRecord::SOURCE_GAME;
+            $record->distribute_type = PlayerLotteryRecord::DISTRIBUTE_TYPE_POKEMON_BALL;
+            $record->pokemon_ball_machine_id = $lottery->pokemon_ball_machine_id;
+            $record->bet = 0;
+            $record->play_game_record_id = $playGameRecordId;
+            $record->amount = $amount;
+            $record->lottery_id = $lottery->id;
+            $record->lottery_name = $lottery->name;
+            $record->lottery_pool_amount = $lottery->amount;
+            $record->lottery_rate = $lottery->rate;
+            $record->lottery_type = $lottery->lottery_type;
+            $record->lottery_multiple = 0;
+            $record->status = PlayerLotteryRecord::STATUS_POKEMON_BALL_FAILED;
+            $record->reject_reason = $reason;
+            $record->save();
+
+            $this->log->info('精灵球派发失败记录已创建', [
+                'record_id' => $record->id,
+                'player_id' => $this->player->id,
+                'lottery_id' => $lottery->id,
+                'machine_id' => $lottery->pokemon_ball_machine_id,
+                'amount' => $amount,
+                'reason' => $reason,
+            ]);
+        } catch (\Exception $e) {
+            $this->log->error('创建精灵球派发失败记录异常', [
+                'player_id' => $this->player->id,
+                'lottery_id' => $lottery->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * 发送精灵球彩金通知给客户端
+     *
+     * @param int $playerId 玩家ID
+     * @param int $machineId 机台ID
+     * @param GameLottery $lottery 彩金信息
+     * @param float $amount 彩金金额
+     * @return void
+     */
+    private function sendPokemonBallNotification(
+        int         $playerId,
+        int         $machineId,
+        GameLottery $lottery,
+        float       $amount
+    ): void
+    {
+        try {
+            sendSocketMessage('player-' . $playerId, [
+                'msg_type' => 'game_lottery_pokemon_ball',
+                'player_id' => $playerId,
+                'lottery_id' => $lottery->id,
+                'lottery_name' => $lottery->name,
+                'machine_id' => $machineId,
+                'amount' => $amount,
+                'message' => '恭喜中奖！请前往精灵球机台游玩以领取彩金。',
+                'ttl' => self::POKEMON_BALL_PENDING_TTL,
+            ]);
+
+            $this->log->info('精灵球彩金通知已发送', [
+                'player_id' => $playerId,
+                'lottery_id' => $lottery->id,
+                'machine_id' => $machineId,
+                'amount' => $amount,
+            ]);
+        } catch (\Exception $e) {
+            $this->log->error('发送精灵球彩金通知失败', [
+                'player_id' => $playerId,
+                'lottery_id' => $lottery->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * 处理精灵球游戏结果回调（静态方法，供 PokemonBall 调用）
+     *
+     * @param int $machineId 机台ID
+     * @param array $gameResult 游戏结果 [is_winner, level, hole9_full, light3_full]
+     * @return bool
+     */
+    public static function handlePokemonBallResult(int $machineId, array $gameResult): bool
+    {
+        try {
+            $redis = \support\Redis::connection()->client();
+            $log = Log::channel('game_lottery');
+
+            // 通过反向索引查找该机台的 pending key
+            $machineKey = 'game_lottery_machine_pending:' . $machineId;
+            $pendingKey = $redis->get($machineKey);
+
+            if (!$pendingKey) {
+                $log->info('精灵球回调：无待确认的彩金', [
+                    'machine_id' => $machineId,
+                ]);
+                return false;
+            }
+
+            $pendingData = $redis->get($pendingKey);
+            if (!$pendingData) {
+                $log->warning('精灵球回调：pending 数据已过期', [
+                    'machine_id' => $machineId,
+                    'pending_key' => $pendingKey,
+                ]);
+                $redis->del($machineKey);
+                return false;
+            }
+
+            $pending = json_decode($pendingData, true);
+            if (!$pending) {
+                $log->error('精灵球回调：pending 数据解析失败', [
+                    'machine_id' => $machineId,
+                    'pending_key' => $pendingKey,
+                ]);
+                $redis->del($machineKey);
+                return false;
+            }
+
+            // ✅ 验证当前游玩玩家是否就是彩金中奖玩家
+            // 从 Redis 缓存读取 gaming_user_id（实时数据源，机台不存在时缓存为空）
+            $cacheKey = 'machine_tcp_data_cache_' . $machineId . '_gaming_user_id';
+            $gamingUserId = (int)(\support\Cache::get($cacheKey) ?? 0);
+
+            if ($gamingUserId <= 0) {
+                $log->warning('精灵球回调：机台无玩家游玩', [
+                    'machine_id' => $machineId,
+                    'gaming_user_id' => $gamingUserId,
+                ]);
+                // 不删除 pending，等玩家真正游玩时再触发
+                return false;
+            }
+
+            if ($gamingUserId != $pending['player_id']) {
+                $log->warning('精灵球回调：游玩玩家与中奖玩家不匹配', [
+                    'machine_id' => $machineId,
+                    'gaming_user_id' => $gamingUserId,
+                    'pending_player_id' => $pending['player_id'],
+                ]);
+                // 不删除 pending，非中奖玩家的游戏结果不处理彩金
+                return false;
+            }
+
+            // 计算发放金额
+            $baseAmount = $pending['amount'];
+            $finalAmount = self::calculatePokemonBallAmount($baseAmount, $machineId, $gameResult);
+
+            $log->info('精灵球游戏结果处理', [
+                'machine_id' => $machineId,
+                'player_id' => $pending['player_id'],
+                'lottery_id' => $pending['lottery_id'],
+                'base_amount' => $baseAmount,
+                'final_amount' => $finalAmount,
+                'game_result' => $gameResult,
+            ]);
+
+            // 清除 pending 数据
+            $redis->del($pendingKey);
+            $redis->del($machineKey);
+
+            if ($finalAmount > 0) {
+                // 中奖：触发派发
+                $player = Player::query()->find($pending['player_id']);
+                if (!$player) {
+                    $log->error('精灵球回调：玩家不存在', [
+                        'player_id' => $pending['player_id'],
+                    ]);
+                    return false;
+                }
+
+                $lottery = GameLottery::query()->find($pending['lottery_id']);
+                if (!$lottery) {
+                    $log->error('精灵球回调：彩金不存在', [
+                        'lottery_id' => $pending['lottery_id'],
+                    ]);
+                    return false;
+                }
+
+                // 调用派发逻辑
+                $service = new self();
+                $service->setPlayer($player)->setLog()->setLotteryList();
+
+                // 通过公共方法调用派发
+                $distributeResult = $service->distributePokemonBallPrize(
+                    $lottery,
+                    $finalAmount,
+                    1, // lotteryMultiple
+                    $pending['bet'] ?? 0,
+                    $pending['play_game_record_id'] ?? 0,
+                    $pending['burst_info'] ?? ['is_bursting' => false, 'multiplier' => 1.0],
+                    1, // attemptIndex
+                    1, // totalAttempts
+                    $pending['is_doubled'] ?? false
+                );
+
+                $log->info('精灵球彩金派发结果', [
+                    'player_id' => $pending['player_id'],
+                    'lottery_id' => $pending['lottery_id'],
+                    'amount' => $finalAmount,
+                    'distributed' => $distributeResult,
+                ]);
+
+                return $distributeResult;
+            } else {
+                // 未中奖：创建失败记录
+                $player = Player::query()->find($pending['player_id']);
+                $lottery = GameLottery::query()->find($pending['lottery_id']);
+
+                if ($player && $lottery) {
+                    $service = new self();
+                    $service->setPlayer($player)->setLog();
+                    $service->createFailedPokemonBallRecord(
+                        $lottery,
+                        $baseAmount,
+                        $pending['play_game_record_id'] ?? 0,
+                        'pokemon_ball_lose'
+                    );
+                }
+
+                return false;
+            }
+        } catch (\Exception $e) {
+            Log::channel('game_lottery')->error('处理精灵球游戏结果异常', [
+                'machine_id' => $machineId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * 根据精灵球游戏结果计算彩金发放金额
+     *
+     * @param float $baseAmount 彩金基础金额
+     * @param int $machineId 机台ID
+     * @param array $gameResult 游戏结果
+     * @return float 发放金额（0 表示不发放）
+     */
+    public static function calculatePokemonBallAmount(float $baseAmount, int $machineId, array $gameResult): float
+    {
+        $multiplier = \app\model\PokemonBallPlayRule::matchMultiplier($machineId, $gameResult);
+
+        if ($multiplier <= 0) {
+            return 0;
+        }
+
+        return floor($baseAmount * $multiplier);
     }
 
 }

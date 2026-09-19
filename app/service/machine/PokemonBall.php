@@ -650,6 +650,10 @@ class PokemonBall extends MachineServices implements BaseMachine
                     'game_over' => true,
                 ]));
                 $this->sendFrame(self::CMD_CATEGORY_SERVER, '0C'); // 发送 01 0C
+
+                // ✅ 彩金回调：检查该机台是否有待确认的精灵球彩金
+                $this->handleLotteryResult($resultParsed);
+
                 return true;
 
             case substr(self::CMD_BUTTON_SIGNAL, 2, 2): // 按钮信号
@@ -886,6 +890,41 @@ class PokemonBall extends MachineServices implements BaseMachine
         $result['light3_full'] = (hexdec(substr($hex, 6, 2)) === 1);
 
         return $result;
+    }
+
+    /**
+     * 处理精灵球游戏结果中的彩金回调
+     *
+     * 检查该机台是否有待确认的精灵球彩金 pending，
+     * 如果有则根据游戏结果触发彩金发放/拒绝。
+     *
+     * @param array $gameResult parseGameResult() 返回的结果
+     * @return void
+     */
+    protected function handleLotteryResult(array $gameResult): void
+    {
+        try {
+            $this->log->info('[PokemonBall] 检查彩金回调', [
+                'machine_id' => $this->machine->id,
+                'game_result' => $gameResult,
+            ]);
+
+            $result = \app\service\GameLotteryServices::handlePokemonBallResult(
+                $this->machine->id,
+                $gameResult
+            );
+
+            $this->log->info('[PokemonBall] 彩金回调结果', [
+                'machine_id' => $this->machine->id,
+                'result' => $result,
+            ]);
+        } catch (\Exception $e) {
+            $this->log->error('[PokemonBall] 彩金回调异常', [
+                'machine_id' => $this->machine->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+        }
     }
 
     /**

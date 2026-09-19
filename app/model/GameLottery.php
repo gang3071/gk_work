@@ -34,6 +34,8 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * @property string|array burst_trigger_config 爆彩触发概率配置JSON
  * @property int auto_refill_status 自动补充状态：1启用 0禁用
  * @property float auto_refill_amount 自动补充目标金额(彩池不足时补充到此金额)
+ * @property int pokemon_ball_status 精灵球开关 0=关闭 1=开启
+ * @property int pokemon_ball_machine_id 绑定的精灵球机台ID
  * @property string created_at 创建时间
  * @property string updated_at 最后一次修改时间
  * @property string deleted_at 删除时间
@@ -250,5 +252,14 @@ class GameLottery extends Model
         }
 
         return ($this->amount / $this->max_pool_amount) * 100;
+    }
+
+    /**
+     * 判断是否启用了精灵球彩金模式
+     * @return bool
+     */
+    public function isPokemonBallEnabled(): bool
+    {
+        return $this->pokemon_ball_status == 1 && $this->pokemon_ball_machine_id > 0;
     }
 }
