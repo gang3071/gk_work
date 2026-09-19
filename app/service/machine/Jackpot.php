@@ -476,20 +476,17 @@ class Jackpot extends MachineServices implements BaseMachine
                         if ($this->reward_status == 0) {
                             $changeAmount = abs($data - $this->win_number);
 
-                            // 线下机台无保留时间机制，不投递 play-keep-machine
-                            if ($this->machine->machine_source != Machine::MACHINE_SOURCE_OFFLINE) {
-                                Client::send('play-keep-machine', [
-                                    'change_amount' => $changeAmount,
-                                    'machine_id' => $this->machine->id,
-                                    'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
-                                        $this->machine->domain, $this->machine->port, $this->machine->type
-                                    ),
-                                    'player_id' => $currentGamingUserId,
-                                    'gaming_user_id' => $currentGamingUserId,
-                                    'keep_seconds' => $this->keep_seconds,
-                                    'keeping' => $this->keeping,
-                                ]);
-                            }
+                            Client::send('play-keep-machine', [
+                                'change_amount' => $changeAmount,
+                                'machine_id' => $this->machine->id,
+                                'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                                    $this->machine->domain, $this->machine->port, $this->machine->type
+                                ),
+                                'player_id' => $currentGamingUserId,
+                                'gaming_user_id' => $currentGamingUserId,
+                                'keep_seconds' => $this->keep_seconds,
+                                'keeping' => $this->keeping,
+                            ]);
 
                             // ✅ 同时投递打码量统计（change_amount = 转数增量）
                             if ($changeAmount > 0) {

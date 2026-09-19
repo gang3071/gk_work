@@ -87,8 +87,9 @@ class PlayKeepMachine implements Consumer
             $newKeepSeconds = $oldKeepSeconds;
             $newKeeping = $oldKeeping;
 
-            // 增加保留时间
-            if ($keepMinutes > 0 && $changeAmount > 0) {
+            // 增加保留时间（线下机台不累加保留时间，只处理解除保留状态）
+            $isOffline = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE);
+            if (!$isOffline && $keepMinutes > 0 && $changeAmount > 0) {
                 $addSeconds = bcmul($keepMinutes, $changeAmount, 2);
                 $newKeepSeconds = bcadd($oldKeepSeconds, $addSeconds, 2);
 
