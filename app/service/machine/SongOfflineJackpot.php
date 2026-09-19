@@ -312,6 +312,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // 推送WebSocket消息
             $machineCacheInfo = $this->getAllData() ?? [];
             if (!empty($machineCacheInfo)) {
+                $cateId = $this->machine->cate_id;
+                $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+                $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey) ?? 0;
                 $info = [
                     'id' => $this->machine->id,
                     'last_game_at' => $this->machine->last_game_at,
@@ -339,6 +342,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     // ✅ 外部按钮计数器（仅线下版）
                     'external_open_count' => $machineCacheInfo[$this->cacheDataKey . '_external_open_count'] ?? 0,
                     'external_wash_count' => $machineCacheInfo[$this->cacheDataKey . '_external_wash_count'] ?? 0,
+                    'chip_amount' => bcmul(
+                        (string) ($machineCacheInfo[$this->cacheDataKey . '_player_win_number'] ?? 0),
+                        (string) $turnUsedPoint,
+                        2
+                    ),
                 ];
 
                 switch ($name) {

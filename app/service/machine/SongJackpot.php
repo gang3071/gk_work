@@ -288,6 +288,9 @@ class SongJackpot extends MachineServices implements BaseMachine
 
             $machineCacheInfo = $this->getAllData() ?? [];
             if (!empty($machineCacheInfo)) {
+                $cateId = $this->machine->cate_id;
+                $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+                $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey) ?? 0;
                 $info = [
                     'id' => $this->machine->id,
                     'last_game_at' => $this->machine->last_game_at,
@@ -322,6 +325,11 @@ class SongJackpot extends MachineServices implements BaseMachine
                     'now_turn' => $machineCacheInfo[$this->cacheDataKey . '_now_turn'],
                     'rush_status' => $machineCacheInfo[$this->cacheDataKey . '_rush_status'],
                     'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'],
+                    'chip_amount' => bcmul(
+                        (string) ($machineCacheInfo[$this->cacheDataKey . '_player_win_number'] ?? 0),
+                        (string) $turnUsedPoint,
+                        2
+                    ),
                 ];
                 switch ($name) {
                     case 'gaming_user_id':

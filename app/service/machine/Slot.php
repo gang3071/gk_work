@@ -329,6 +329,18 @@ class Slot extends MachineServices implements BaseMachine
                     'rb_status' => $machineCacheInfo[$this->cacheDataKey . '_rb_status'],
                     'bb_status' => $machineCacheInfo[$this->cacheDataKey . '_bb_status'],
                     'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'],
+                    'chip_amount' => bcmul(
+                        (string) max(0, (int) bcsub(
+                            (string) ($machineCacheInfo[$this->cacheDataKey . '_bet'] ?? 0),
+                            (string) ($machineCacheInfo[$this->cacheDataKey . '_player_pressure'] ?? 0)
+                        )),
+                        bcdiv(
+                            (string) ($this->machine->odds_x ?? 1),
+                            (string) ($this->machine->odds_y ?? 1),
+                            8
+                        ),
+                        2
+                    ),
                 ];
                 switch ($name) {
                     case 'gaming_user_id':
@@ -1285,7 +1297,7 @@ class Slot extends MachineServices implements BaseMachine
                     break;
                 case Slot::WASH_TABLE:
                     $this->wash_point = $data;
-                    $version = $this->setActionVersion($fun);
+                    $this->setActionVersion($fun);
                     break;
                 case Slot::OPEN_TESTING:
                     $this->sendMachineNowStatusMessage($this->machine->id);
