@@ -209,6 +209,11 @@ function machineKeepOutPlayer(): void
                 $log->info('PlayOutMachine: 非保留状态跳过' . $machine->code);
                 continue;
             }
+            // 线下机台不使用保留时间计时机制，保留停止时段（keeping_off）对其无效
+            // 保留状态由玩家操作（play-keep-machine 队列）解除，此处直接跳过
+            if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE) {
+                continue;
+            }
             if ($isFreeTime && $services->keep_seconds > 1800) {
                 $log->info('PlayOutMachine: 自由时间且时间大于1800秒跳过' . $machine->code);
                 continue;
@@ -240,14 +245,6 @@ function machineKeepOutPlayer(): void
                     'keeping' => $services->keeping
                 ]);
             } else {
-                // 线下机台不累加保留时间，keep_seconds 始终为 0，不触发踢出
-                if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE) {
-                    $log->info('PlayOutMachine: 线下机台保留时间为0，保持保留状态等待玩家操作', [
-                        'machine_id' => $machine->id,
-                        'machine_code' => $machine->code,
-                    ]);
-                    continue;
-                }
                 // 保留时间为0时踢出玩家
                 // ✅ 从 Redis 读取实时余额
                 $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
