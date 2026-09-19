@@ -476,17 +476,20 @@ class Jackpot extends MachineServices implements BaseMachine
                         if ($this->reward_status == 0) {
                             $changeAmount = abs($data - $this->win_number);
 
-                            Client::send('play-keep-machine', [
-                                'change_amount' => $changeAmount,
-                                'machine_id' => $this->machine->id,
-                                'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
-                                    $this->machine->domain, $this->machine->port, $this->machine->type
-                                ),
-                                'player_id' => $currentGamingUserId,
-                                'gaming_user_id' => $currentGamingUserId,
-                                'keep_seconds' => $this->keep_seconds,
-                                'keeping' => $this->keeping,
-                            ]);
+                            // 线下机台无保留时间机制，不投递 play-keep-machine
+                            if ($this->machine->machine_source != Machine::MACHINE_SOURCE_OFFLINE) {
+                                Client::send('play-keep-machine', [
+                                    'change_amount' => $changeAmount,
+                                    'machine_id' => $this->machine->id,
+                                    'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                                        $this->machine->domain, $this->machine->port, $this->machine->type
+                                    ),
+                                    'player_id' => $currentGamingUserId,
+                                    'gaming_user_id' => $currentGamingUserId,
+                                    'keep_seconds' => $this->keep_seconds,
+                                    'keeping' => $this->keeping,
+                                ]);
+                            }
 
                             // ✅ 同时投递打码量统计（change_amount = 转数增量）
                             if ($changeAmount > 0) {
@@ -541,10 +544,14 @@ class Jackpot extends MachineServices implements BaseMachine
                     if (($this->rush_status == 0 && $this->bb_status == 0) || ($this->rush_status == 1 && $this->bb_status == 0)) {
                         $nowTurn = $this->now_turn;
                         $bet = $this->win_number;
-                        $this->now_turn = bcadd($nowTurn, bcsub($data, $bet, 2), 2);
-                        if (!empty($currentGamingUserId)) {
-                            $playerNumber = $this->player_win_number;
-                            $this->player_win_number = bcadd($playerNumber, bcsub($data, $bet, 2), 2);
+                        $winNumberDelta = bcsub($data, $bet, 2);
+                        // 只在 win_number 正向增加时累加（开奖后机台归零时 delta 为负，不累加以防止负数）
+                        if (bccomp($winNumberDelta, '0', 2) > 0) {
+                            $this->now_turn = bcadd($nowTurn, $winNumberDelta, 2);
+                            if (!empty($currentGamingUserId)) {
+                                $playerNumber = $this->player_win_number;
+                                $this->player_win_number = bcadd($playerNumber, $winNumberDelta, 2);
+                            }
                         }
                     }
                     $this->win_number = $data;

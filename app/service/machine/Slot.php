@@ -1213,17 +1213,20 @@ class Slot extends MachineServices implements BaseMachine
                         }
                         $changeAmount = abs($data - $this->bet);
 
-                        Client::send('play-keep-machine', [
-                            'change_amount' => $changeAmount,
-                            'machine_id' => $this->machine->id,
-                            'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
-                                $this->machine->domain, $this->machine->port, $this->machine->type
-                            ),
-                            'player_id' => $gamingUserId,
-                            'gaming_user_id' => $gamingUserId,
-                            'keep_seconds' => $this->keep_seconds,
-                            'keeping' => $this->keeping,
-                        ]);
+                        // 线下机台无保留时间机制，不投递 play-keep-machine
+                        if ($this->machine->machine_source != Machine::MACHINE_SOURCE_OFFLINE) {
+                            Client::send('play-keep-machine', [
+                                'change_amount' => $changeAmount,
+                                'machine_id' => $this->machine->id,
+                                'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                                    $this->machine->domain, $this->machine->port, $this->machine->type
+                                ),
+                                'player_id' => $gamingUserId,
+                                'gaming_user_id' => $gamingUserId,
+                                'keep_seconds' => $this->keep_seconds,
+                                'keeping' => $this->keeping,
+                            ]);
+                        }
 
                         // ✅ 同时投递打码量统计（change_amount × 兑换比 = 元）
                         if ($changeAmount > 0) {
