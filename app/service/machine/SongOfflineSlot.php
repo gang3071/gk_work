@@ -1688,22 +1688,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         Gateway::sendToUid($uid, hex2bin($fullCmd));
 
-        // 首次开分赠送保留时长：以实际开分量为基数，PlayKeepMachine 仅在 keep_seconds=0 时累加
-        $currentGamingUserId = $this->gaming_user_id;
-        if (!empty($currentGamingUserId)) {
-            Client::send('play-keep-machine', [
-                'change_amount' => $data,
-                'machine_id' => $this->machine->id,
-                'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
-                    $this->machine->domain, $this->machine->port, $this->machine->type
-                ),
-                'player_id' => $currentGamingUserId,
-                'gaming_user_id' => $currentGamingUserId,
-                'keep_seconds' => $this->keep_seconds,
-                'keeping' => $this->keeping,
-            ]);
-        }
-
         if ($source == 'admin') {
             sendSocketMessage('private-admin-1-' . $source_id, [
                 'msg_type' => 'machine_action_result',
