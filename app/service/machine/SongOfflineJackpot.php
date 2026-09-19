@@ -314,7 +314,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             if (!empty($machineCacheInfo)) {
                 $cateId = $this->machine->cate_id;
                 $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
-                $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey) ?? 0;
+                $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+                if ($turnUsedPoint === null) {
+                    $turnUsedPoint = \app\model\MachineCategory::query()->where('id', $cateId)->value('turn_used_point') ?? 0;
+                    \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+                }
                 $info = [
                     'id' => $this->machine->id,
                     'last_game_at' => $this->machine->last_game_at,
