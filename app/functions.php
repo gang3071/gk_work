@@ -209,12 +209,8 @@ function machineKeepOutPlayer(): void
                 $log->info('PlayOutMachine: 非保留状态跳过' . $machine->code);
                 continue;
             }
-            // 线下机台没有 $isFreeTime（保留停止时段）及 keep_seconds 计时机制
-            // 保留状态由玩家操作（play-keep-machine 队列）解除，此处直接跳过
-            if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE) {
-                continue;
-            }
-            if ($isFreeTime && $services->keep_seconds > 1800) {
+            // 线下机台没有 $isFreeTime（保留停止时段不适用），直接进入倒扣逻辑
+            if ($isFreeTime && $machine->machine_source != Machine::MACHINE_SOURCE_OFFLINE && $services->keep_seconds > 1800) {
                 $log->info('PlayOutMachine: 自由时间且时间大于1800秒跳过' . $machine->code);
                 continue;
             }
