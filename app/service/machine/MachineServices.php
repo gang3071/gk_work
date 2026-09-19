@@ -388,7 +388,9 @@ class MachineServices
                 $info['player_score'] = ($info['win'] ?? 0) - ($info['player_score'] ?? 0);
                 break;
             case GameType::TYPE_STEEL_BALL:
-                $info['player_win_number'] = $info['win_number'] - $info['player_win_number'];
+                // player_win_number 已是本局累积消耗转数，无需与 win_number 相减
+                // （win_number 是中洞次数/机台计数器，与消耗转数量级不同，相减必产生负值）
+                $info['player_win_number'] = max(0, (int)($info['player_win_number'] ?? 0));
                 break;
         }
         $seconds = intval($info['keep_seconds']); // 取整，避免小数导致取模运算异常
