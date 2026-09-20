@@ -1317,6 +1317,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $this->now_turn = $nowWinNumber;
         $this->ratio = $nowRatio;
 
+        // 开奖中持续刷新活动时间，防止机台因闲置进入保留状态导致保留时间被扣除
+        // processTurnChange 在开奖中会 return，不会更新 last_play_time，
+        // 此处由心跳驱动持续保持机台活跃，与 Jackpot.php 通过 win_number 变化更新的机制等价
+        if ($nowRewardStatus == 1 && !empty($gamingUserId)) {
+            $this->last_play_time = time();
+        }
+
         // 设置查询指令的actionVersion（心跳包含所有查询数据）
         $this->setActionVersion(self::MACHINE_POINT);
         $this->setActionVersion(self::MACHINE_SCORE);
