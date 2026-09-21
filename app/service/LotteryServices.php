@@ -304,10 +304,10 @@ class LotteryServices
     public function addLotteryPool($newNum, $lastNum): LotteryServices
     {
         // 基本验证
-        if (empty($newNum)) {
+        if ($newNum === null || $newNum === '') {
             throw new Exception('机台新数据错误');
         }
-        if (empty($lastNum)) {
+        if ($lastNum === null || $lastNum === '') {
             throw new Exception('机台上次数据错误');
         }
         if ($newNum == $lastNum) {
