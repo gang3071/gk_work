@@ -936,6 +936,16 @@ class Jackpot extends MachineServices implements BaseMachine
                     return;
                 }
                 if ($handleDuration >= $this->expirationTime) {
+                    $uid = $this->machine->domain . ':' . $this->machine->port;
+                    $this->log->error('[Jackpot-openPoint] 等待硬件回复超时', [
+                        'machine_code'    => $this->machine->code,
+                        'cmd'             => $cmd,
+                        'data'            => $data,
+                        'before_point'    => $beforePoint,
+                        'current_point'   => $this->point,
+                        'expiration_ms'   => $this->expirationTime / 1000,
+                        'still_online'    => Gateway::isUidOnline($uid),
+                    ]);
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
                 usleep($sleep);
@@ -997,6 +1007,12 @@ class Jackpot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
+                $this->log->error('[Jackpot-machineAction] 重试耗尽，硬件始终未回复', [
+                    'machine_code' => $this->machine->code,
+                    'cmd'          => $cmd,
+                    'attempts'     => $attempts,
+                    'still_online' => Gateway::isUidOnline($uid),
+                ]);
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
             usleep(50000);
