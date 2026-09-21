@@ -2814,15 +2814,11 @@ if (!function_exists('machineOpenAnyFree')) {
             // ✅ 计算总上分（购买分 + 赠送分）
             $totalOpenScore = $openScore + $giftScore;
 
-            //測試連線
-            if ($machine->type == GameType::TYPE_STEEL_BALL) {
-            } else {
-                // ✅ 检查机台分数上限（包含赠分）
-                // 使用机台配置的 max_point，而不是硬编码的 4000
-                $maxPoint = $machine->max_point > 0 ? $machine->max_point : 4000; // 兼容：未配置时使用 4000
-                if ($services->point + $totalOpenScore > $maxPoint) {
-                    throw new Exception(trans('machine_wash_point_limit_exceeded', [], 'message') . "（限制：{$maxPoint}）");
+                if ($machine->min_point != 0 && $machine->min_point > $totalOpenScore) {
+                    throw new Exception(trans('machine_min_open', [], 'message') . $machine->min_point);
                 }
+                if ($machine->max_point != 0 && ($machine->max_point < $services->point || $machine->max_point < $totalOpenScore || $machine->max_point < ($services->point + $totalOpenScore))) {
+                    throw new Exception(trans('machine_max_open', [], 'message') . $machine->max_point);
             }
 
             // ========== Phase 1: 计算扣款金额 ==========
