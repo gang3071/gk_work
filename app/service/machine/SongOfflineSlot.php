@@ -122,6 +122,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     // ========================================
     const OPEN_ANY_POINT = 'a5';                // 上分前缀（需拼接次数：A5 XX C0 SUM1 SUM2）
     const WASH_POINT = 'a500c1';            // 下分（全部洗分：A5 00 C1 SUM1 SUM2）
+    const WASH_ZERO   = self::WASH_POINT;   // functions.php 统一接口别名
 
     // ========================================
     // 管理指令（统一命名：ALL_DOWN/CHECK）
