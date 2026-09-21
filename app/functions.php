@@ -2814,7 +2814,7 @@ if (!function_exists('machineOpenAnyFree')) {
             // ✅ 计算总上分（购买分 + 赠送分）
             $totalOpenScore = $openScore + $giftScore;
 
-                if ($machine->min_point != 0 && $machine->min_point > $totalOpenScore) {
+            if ($machine->min_point != 0 && $machine->min_point > $totalOpenScore) {
                     throw new Exception(trans('machine_min_open', [], 'message') . $machine->min_point);
                 }
                 if ($machine->max_point != 0 && ($machine->max_point < $services->point || $machine->max_point < $totalOpenScore || $machine->max_point < ($services->point + $totalOpenScore))) {
