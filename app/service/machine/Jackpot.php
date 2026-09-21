@@ -897,11 +897,26 @@ class Jackpot extends MachineServices implements BaseMachine
     {
         try {
             $beforePoint = $this->point;
+            $beforeActionTime0 = $this->action_time;
+            $this->log->info('[Jackpot-openPoint] 开始', [
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'data' => $data,
+                'before_point' => $beforePoint,
+                'before_action_time' => $beforeActionTime0,
+            ]);
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . $cmd, $data)));
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::MACHINE_POINT)));
             $beforeActionTime = $this->action_time;
+            $this->log->info('[Jackpot-openPoint] 命令已发送', [
+                'machine_code' => $this->machine->code,
+                'before_action_time_pre' => $beforeActionTime0,
+                'before_action_time_post' => $beforeActionTime,
+                'action_time_shifted' => $beforeActionTime > $beforeActionTime0,
+            ]);
             $handleDuration = 0;
-            $sleep = 50000; // 5毫秒取一次值
+            $sleep = 50000; // 50毫秒取一次值
+            $lastLoggedPoint = $beforePoint;
 
             // ✅ 主动查询分数的时间节点（微秒）：1秒、2秒、3秒、5秒、7秒（间隔：1+1+1+2+2）
             $queryIntervals = [1000000, 2000000, 3000000, 5000000, 7000000];
@@ -925,7 +940,26 @@ class Jackpot extends MachineServices implements BaseMachine
                     }
                 }
 
+                // 分数变化时记录一次日志
+                if ($point != $lastLoggedPoint) {
+                    $this->log->info('[Jackpot-openPoint] 分数变化', [
+                        'machine_code' => $this->machine->code,
+                        'before_point' => $beforePoint,
+                        'point_now' => $point,
+                        'action_time_ok' => $actionTime > $beforeActionTime,
+                        'point_ok' => $beforePoint < $point,
+                        'duration_ms' => $handleDuration / 1000,
+                    ]);
+                    $lastLoggedPoint = $point;
+                }
+
                 if ($actionTime > $beforeActionTime && $beforePoint < $point) {
+                    $this->log->info('[Jackpot-openPoint] 成功', [
+                        'machine_code' => $this->machine->code,
+                        'before_point' => $beforePoint,
+                        'final_point' => $point,
+                        'duration_ms' => $handleDuration / 1000,
+                    ]);
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -938,13 +972,17 @@ class Jackpot extends MachineServices implements BaseMachine
                 if ($handleDuration >= $this->expirationTime) {
                     $uid = $this->machine->domain . ':' . $this->machine->port;
                     $this->log->error('[Jackpot-openPoint] 等待硬件回复超时', [
-                        'machine_code'    => $this->machine->code,
-                        'cmd'             => $cmd,
-                        'data'            => $data,
-                        'before_point'    => $beforePoint,
-                        'current_point'   => $this->point,
-                        'expiration_ms'   => $this->expirationTime / 1000,
-                        'still_online'    => Gateway::isUidOnline($uid),
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'data' => $data,
+                        'before_point' => $beforePoint,
+                        'current_point' => $this->point,
+                        'action_time_ok' => $actionTime > $beforeActionTime,
+                        'point_ok' => $beforePoint < $this->point,
+                        'before_action_time' => $beforeActionTime,
+                        'current_action_time' => $actionTime,
+                        'expiration_ms' => $this->expirationTime / 1000,
+                        'still_online' => Gateway::isUidOnline($uid),
                     ]);
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }

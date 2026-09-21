@@ -114,14 +114,52 @@ class Events
         $port = $_SERVER['REMOTE_PORT'];
         $gatewayPort = $_SERVER['GATEWAY_PORT'];
 
+        $log->info('onMessage触发', [
+            'domain' => $domain,
+            'port' => $port,
+            'gateway_port' => $gatewayPort,
+            'length' => strlen($message),
+            'hex' => strtoupper(bin2hex($message)),
+        ]);
+
         if (empty($message)) {
+            $log->warning('onMessage空消息关闭', ['domain' => $domain, 'port' => $port]);
             return Gateway::closeClient($client_id);
         }
         $machine = self::getMachine($gatewayPort, $domain, $port, $client_id);
         if (empty($machine) || $machine->status == 0 || $machine->deleted_at != null) {
+            $log->warning('onMessage无效机台关闭', [
+                'domain' => $domain,
+                'port' => $port,
+                'machine_null' => empty($machine),
+                'status' => $machine?->status,
+                'deleted_at' => $machine?->deleted_at,
+                'code' => $machine?->code,
+                'control_type' => $machine?->control_type,
+            ]);
             return Gateway::closeClient($client_id);
         }
-        $service = MachineServices::createServices($machine);
+        $log->info('onMessage机台信息', [
+            'code' => $machine->code,
+            'type' => $machine->type,
+            'control_type' => $machine->control_type,
+            'machine_source' => $machine->machine_source,
+            'domain' => $domain,
+            'port' => $port,
+        ]);
+        try {
+            $service = MachineServices::createServices($machine);
+        } catch (\Throwable $e) {
+            $log->error('onMessage createServices失败', [
+                'code' => $machine->code,
+                'type' => $machine->type,
+                'control_type' => $machine->control_type,
+                'domain' => $domain,
+                'port' => $port,
+                'error' => $e->getMessage(),
+            ]);
+            return true;
+        }
         $isOffline = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE);
         switch ($gatewayPort) {
             case config('gateway_worker.slot_port'):
@@ -184,6 +222,12 @@ class Events
                         ]);
                         return $service->jackPotCmd($hexSong);
                     default:
+                        $log->warning('jackpot_port未知control_type', [
+                            'code' => $machine->code,
+                            'control_type' => $machine->control_type,
+                            'domain' => $domain,
+                            'port' => $port,
+                        ]);
                         return true;
                 }
             default:

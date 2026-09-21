@@ -68,7 +68,7 @@ $handlers = [
                 'constructor' => [
                     runtime_path() . '/logs/jackpot_machine_log.log',
                     2, //$maxFiles (优化：3天 → 2天)
-                    Monolog\Logger::WARNING, // 优化：DEBUG → WARNING
+                    Monolog\Logger::INFO, // 优化：DEBUG → WARNING
                 ],
                 'formatter' => [
                     'class' => Monolog\Formatter\LineFormatter::class,
