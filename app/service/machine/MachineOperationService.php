@@ -171,6 +171,16 @@ class MachineOperationService
      */
     private function dispatch(string $action, array $params): array
     {
+        // 纯查询操作不依赖硬件连接，跳过在线检查
+        $skipOnlineCheck = in_array($action, ['query_status', 'check_online', 'get_description']);
+
+        if (!$skipOnlineCheck) {
+            $onlineInfo = $this->checkOnline();
+            if (!$onlineInfo['online']) {
+                throw new Exception(trans('machine_connect_timeout', [], 'message', $this->lang));
+            }
+        }
+
         // 基础操作（查询）
         if ($this->isBasicOperation($action)) {
             return $this->executeBasicOperation($action, $params);
