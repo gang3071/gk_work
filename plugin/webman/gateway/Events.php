@@ -113,6 +113,7 @@ class Events
         $domain = $_SERVER['REMOTE_ADDR'];
         $port = $_SERVER['REMOTE_PORT'];
         $gatewayPort = $_SERVER['GATEWAY_PORT'];
+
         if (empty($message)) {
             return Gateway::closeClient($client_id);
         }
@@ -121,13 +122,18 @@ class Events
             return Gateway::closeClient($client_id);
         }
         $service = MachineServices::createServices($machine);
+        $isOffline = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE);
         switch ($gatewayPort) {
             case config('gateway_worker.slot_port'):
                 switch ($machine->control_type) {
                     case Machine::CONTROL_TYPE_MEI:
-                        // ✅ 双美机台消息处理（二进制转十六进制）
                         $msg = strtoupper(bin2hex($message));
-                        // 按32字符分块处理（双美Slot消息固定32字符）
+                        Log::channel('slot_machine')->info('收到双美Slot消息', [
+                            'code' => $machine->code,
+                            'remote_addr' => $domain,
+                            'remote_port' => $port,
+                            'hex' => $msg,
+                        ]);
                         $chunkSize = 32;
                         for ($i = 0; $i < strlen($msg); $i += $chunkSize) {
                             $chunk = substr($msg, $i, $chunkSize);
@@ -135,18 +141,48 @@ class Events
                         }
                         return true;
                     case Machine::CONTROL_TYPE_SONG:
-                        return $service->slotCmd(bin2hex($message));
+                        $hex = bin2hex($message);
+                        $channel = $isOffline ? 'song_offline_slot_machine' : 'song_slot_machine';
+                        Log::channel($channel)->info($isOffline ? '收到小淞线下Slot消息' : '收到小淞Slot消息', [
+                            'code' => $machine->code,
+                            'remote_addr' => $domain,
+                            'remote_port' => $port,
+                            'hex' => $hex,
+                        ]);
+                        return $service->slotCmd($hex);
                     default:
                         return true;
                 }
             case config('gateway_worker.slot_auto_port'):
-                return $service->slotAutoCmd(strtoupper(bin2hex($message)));
+                $hexAuto = strtoupper(bin2hex($message));
+                Log::channel('slot_machine')->info('收到双美Slot自动机消息', [
+                    'code' => $machine->code,
+                    'remote_addr' => $domain,
+                    'remote_port' => $port,
+                    'hex' => $hexAuto,
+                ]);
+                return $service->slotAutoCmd($hexAuto);
             case config('gateway_worker.jackpot_port'):
                 switch ($machine->control_type) {
                     case Machine::CONTROL_TYPE_MEI:
-                        return $service->jackPotCmd(strtoupper(bin2hex($message)));
+                        $hexMei = strtoupper(bin2hex($message));
+                        Log::channel('jackpot_machine')->info('收到双美钢珠消息', [
+                            'code' => $machine->code,
+                            'remote_addr' => $domain,
+                            'remote_port' => $port,
+                            'hex' => $hexMei,
+                        ]);
+                        return $service->jackPotCmd($hexMei);
                     case Machine::CONTROL_TYPE_SONG:
-                        return $service->jackPotCmd(bin2hex($message));
+                        $hexSong = bin2hex($message);
+                        $channel = $isOffline ? 'song_offline_jackpot_machine' : 'song_jackpot_machine';
+                        Log::channel($channel)->info($isOffline ? '收到小淞线下钢珠消息' : '收到小淞钢珠消息', [
+                            'code' => $machine->code,
+                            'remote_addr' => $domain,
+                            'remote_port' => $port,
+                            'hex' => $hexSong,
+                        ]);
+                        return $service->jackPotCmd($hexSong);
                     default:
                         return true;
                 }
