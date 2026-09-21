@@ -359,6 +359,7 @@ class Jackpot extends MachineServices implements BaseMachine
      */
     public function jackPotCmd(string $msg): bool
     {
+        $this->log->info('接收指令', ['machine_code' => $this->machine->code, 'hex' => $msg]);
         try {
             jackPotCheckCRC8($msg); // 检查crc8
             $fun = substr($msg, 2, 2);
@@ -813,7 +814,9 @@ class Jackpot extends MachineServices implements BaseMachine
         $cmd .= "{$option}00" . $decodeData;
         $cmd .= jackpotEncodeDataXor55($data) . '000000000000'; // 异或位处理
         $cmd .= crc8(hex2bin($cmd), 0x31, 0x00, 0x00, true, true, false);
-        return $cmd . 'DD';
+        $full = $cmd . 'DD';
+        $this->log->info('发送指令', ['machine_code' => $this->machine->code, 'hex' => $full]);
+        return $full;
     }
 
     /**
