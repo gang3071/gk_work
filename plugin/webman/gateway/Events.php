@@ -81,11 +81,11 @@ class Events
         $log = Log::channel('machine');
         $domain = $_SERVER['REMOTE_ADDR'];
         $port = $_SERVER['REMOTE_PORT'];
-        $log->info('机台上线', [
-            'remote_addr' => $domain,
-            'remote_port' => $port,
-            'gateway_port' => $_SERVER['GATEWAY_PORT'],
-        ]);
+//        $log->info('机台上线', [
+//            'remote_addr' => $domain,
+//            'remote_port' => $port,
+//            'gateway_port' => $_SERVER['GATEWAY_PORT'],
+//        ]);
         if (!in_array($domain, config('gateway_worker.whitelist'))) {
             return Gateway::closeClient($client_id);
         }
