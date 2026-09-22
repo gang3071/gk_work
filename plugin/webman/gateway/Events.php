@@ -81,6 +81,11 @@ class Events
         $log = Log::channel('machine');
         $domain = $_SERVER['REMOTE_ADDR'];
         $port = $_SERVER['REMOTE_PORT'];
+        $log->info('机台上线', [
+            'remote_addr' => $domain,
+            'remote_port' => $port,
+            'gateway_port' => $_SERVER['GATEWAY_PORT'],
+        ]);
         if (!in_array($domain, config('gateway_worker.whitelist'))) {
             return Gateway::closeClient($client_id);
         }
@@ -88,12 +93,6 @@ class Events
         if (!empty($machine) && $machine->status == 1 && $machine->deleted_at == null) {
             Gateway::bindUid($client_id, $domain . ':' . $port);
             MachineServices::sendMachineNowStatusMessage($machine->id);
-            $log->info('机台上线', [
-                'code' => $machine->code,
-                'remote_addr' => $domain,
-                'remote_port' => $port,
-                'gateway_port' => $_SERVER['GATEWAY_PORT'],
-            ]);
         } else {
             return Gateway::closeClient($client_id);
         }
@@ -114,16 +113,7 @@ class Events
         $port = $_SERVER['REMOTE_PORT'];
         $gatewayPort = $_SERVER['GATEWAY_PORT'];
 
-        $log->info('onMessage触发', [
-            'domain' => $domain,
-            'port' => $port,
-            'gateway_port' => $gatewayPort,
-            'length' => strlen($message),
-            'hex' => strtoupper(bin2hex($message)),
-        ]);
-
         if (empty($message)) {
-            $log->warning('onMessage空消息关闭', ['domain' => $domain, 'port' => $port]);
             return Gateway::closeClient($client_id);
         }
         $machine = self::getMachine($gatewayPort, $domain, $port, $client_id);
@@ -139,14 +129,6 @@ class Events
             ]);
             return Gateway::closeClient($client_id);
         }
-        $log->info('onMessage机台信息', [
-            'code' => $machine->code,
-            'type' => $machine->type,
-            'control_type' => $machine->control_type,
-            'machine_source' => $machine->machine_source,
-            'domain' => $domain,
-            'port' => $port,
-        ]);
         try {
             $service = MachineServices::createServices($machine);
         } catch (\Throwable $e) {
