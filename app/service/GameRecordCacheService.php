@@ -430,6 +430,13 @@ LUA;
         if (isset($data['is_sub_order'])) {
             $updates['is_sub_order'] = $data['is_sub_order'];
         }
+        // V2 新增字段（Lua 脚本不保存，由 saveBet 追加）
+        if (isset($data['bet_kind'])) {
+            $updates['bet_kind'] = $data['bet_kind'];
+        }
+        if (isset($data['game_order_number'])) {
+            $updates['game_order_number'] = $data['game_order_number'];
+        }
 
         // ✅ 直接hMSet追加字段（Redis的hMSet只更新指定字段，不影响其他字段）
         self::redis()->hMSet($key, $updates);
@@ -470,7 +477,7 @@ LUA;
         if ($betExists) {
             // ⚠️ 关键：不覆盖 Lua 保存的 win/diff（Lua 已经正确保存为"分"）
             // 只追加 settlement_status, action_data 等补充信息
-            self::redis()->hMSet($betKey, [
+            $settleUpdates = [
                 'settlement_status' => 1,  // 已结算
                 'settle_type' => $data['settle_type'] ?? 'settle',  // settle | refund | jackpot | adjust | reward
                 'settle_time' => time(),
@@ -478,7 +485,15 @@ LUA;
                 'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
                 'status' => 'pending',  // 重新标记待同步
                 // ✅ 不覆盖 Lua 保存的 win/diff/balance_before/balance_after
-            ]);
+            ];
+            // V2 新增字段：SyncWorker 据此决定是否触发彩金/打码量
+            if (isset($data['is_final'])) {
+                $settleUpdates['is_final'] = $data['is_final'];
+            }
+            if (isset($data['bet_kind'])) {
+                $settleUpdates['bet_kind'] = $data['bet_kind'];
+            }
+            self::redis()->hMSet($betKey, $settleUpdates);
 
             // 更新同步队列（提升优先级）
             self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
@@ -515,6 +530,10 @@ LUA;
                 // ✅ 保存余额变化信息（已转换为"分"）
                 'balance_before' => $balanceBeforeInCents,
                 'balance_after' => $balanceAfterInCents,
+                // V2 新增字段
+                'game_order_number' => $data['game_order_number'] ?? '',
+                'is_final' => $data['is_final'] ?? 1,
+                'bet_kind' => $data['bet_kind'] ?? 1,
             ];
 
             self::redis()->hMSet($settleKey, $record);
