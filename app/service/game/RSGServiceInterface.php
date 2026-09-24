@@ -162,7 +162,6 @@ class RSGServiceInterface extends GameServiceFactory implements GameServiceInter
             ])
             ->withBody('Msg=' . $reqBase64, 'application/json')
             ->post($url);
-        Log::info('发送请求', ['params' => $params, 'response' => $response]);
         if (!$response->ok()) {
             Log::channel('rsg_server')->error($url, [
                 'config'   => $config,

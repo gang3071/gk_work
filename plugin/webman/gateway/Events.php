@@ -78,14 +78,8 @@ class Events
      */
     public static function onConnect($client_id): bool
     {
-        $log = Log::channel('machine');
         $domain = $_SERVER['REMOTE_ADDR'];
         $port = $_SERVER['REMOTE_PORT'];
-//        $log->info('机台上线', [
-//            'remote_addr' => $domain,
-//            'remote_port' => $port,
-//            'gateway_port' => $_SERVER['GATEWAY_PORT'],
-//        ]);
         if (!in_array($domain, config('gateway_worker.whitelist'))) {
             return Gateway::closeClient($client_id);
         }
@@ -118,15 +112,6 @@ class Events
         }
         $machine = self::getMachine($gatewayPort, $domain, $port, $client_id);
         if (empty($machine) || $machine->status == 0 || $machine->deleted_at != null) {
-            $log->warning('onMessage无效机台关闭', [
-                'domain' => $domain,
-                'port' => $port,
-                'machine_null' => empty($machine),
-                'status' => $machine?->status,
-                'deleted_at' => $machine?->deleted_at,
-                'code' => $machine?->code,
-                'control_type' => $machine?->control_type,
-            ]);
             return Gateway::closeClient($client_id);
         }
         try {
@@ -175,41 +160,16 @@ class Events
                 }
             case config('gateway_worker.slot_auto_port'):
                 $hexAuto = strtoupper(bin2hex($message));
-                Log::channel('slot_machine')->info('收到双美Slot自动机消息', [
-                    'code' => $machine->code,
-                    'remote_addr' => $domain,
-                    'remote_port' => $port,
-                    'hex' => $hexAuto,
-                ]);
                 return $service->slotAutoCmd($hexAuto);
             case config('gateway_worker.jackpot_port'):
                 switch ($machine->control_type) {
                     case Machine::CONTROL_TYPE_MEI:
                         $hexMei = strtoupper(bin2hex($message));
-                        Log::channel('jackpot_machine')->info('收到双美钢珠消息', [
-                            'code' => $machine->code,
-                            'remote_addr' => $domain,
-                            'remote_port' => $port,
-                            'hex' => $hexMei,
-                        ]);
                         return $service->jackPotCmd($hexMei);
                     case Machine::CONTROL_TYPE_SONG:
                         $hexSong = bin2hex($message);
-                        $channel = $isOffline ? 'song_offline_jackpot_machine' : 'song_jackpot_machine';
-                        Log::channel($channel)->info($isOffline ? '收到小淞线下钢珠消息' : '收到小淞钢珠消息', [
-                            'code' => $machine->code,
-                            'remote_addr' => $domain,
-                            'remote_port' => $port,
-                            'hex' => $hexSong,
-                        ]);
                         return $service->jackPotCmd($hexSong);
                     default:
-                        $log->warning('jackpot_port未知control_type', [
-                            'code' => $machine->code,
-                            'control_type' => $machine->control_type,
-                            'domain' => $domain,
-                            'port' => $port,
-                        ]);
                         return true;
                 }
             default:
