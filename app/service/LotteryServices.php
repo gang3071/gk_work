@@ -1352,9 +1352,8 @@ LUA;
                     // 彩金倍数标记（只由双倍派彩决定）
                     $lotteryMultiple = $isDoubled ? 2 : 1;
 
-                    // ✅ 返回 sort 最小的彩金（门槛最低的）
-                    // 先满足触发条件，然后在满足条件的彩金中选 sort 最小的
-                    if ($fixedAllowLottery['lottery_sort'] === '' || $lottery->sort < $fixedAllowLottery['lottery_sort']) {
+                    // 返回 sort 最大的彩金（档次最高的，即玩家达到的最高档位）
+                    if ($fixedAllowLottery['lottery_sort'] === '' || $lottery->sort > $fixedAllowLottery['lottery_sort']) {
                         $fixedAllowLottery['lottery_id'] = $lottery->id;
                         $fixedAllowLottery['lottery_rate'] = $isDoubled ? ($lottery->rate * 2) : $lottery->rate;
                         $fixedAllowLottery['lottery_name'] = $lottery->name;
@@ -1382,10 +1381,9 @@ LUA;
                 // ✅ 组装下一档彩金信息
                 $nextLottery = null;
 
-                // 查找下一档彩金（sort 比当前小的，即门槛更高的）
-                // lotteryList 按 order DESC 排序，sort 按遍历顺序生成
-                // sort 越大 = 门槛越低，sort 越小 = 门槛越高
-                // 下一档 = sort 比当前小的彩金中最接近的
+                // 查找下一档彩金（sort 比当前大的，即档次更高的）
+                // lotteryList 按 sort DESC 排序，sort 越大 = 档次越高 = 条件越高
+                // 下一档 = condition 刚好大于当前分数、最接近的那一个
                 $closestLottery = null;
                 foreach ($lotteryList as $lottery) {
                     if ($lottery->condition > $condition) {
