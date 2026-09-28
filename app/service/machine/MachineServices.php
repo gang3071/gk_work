@@ -224,7 +224,6 @@ class MachineServices
             if ($machineSource === Machine::MACHINE_SOURCE_OFFLINE) {
                 // 线下版（Song协议 + 线下特有指令）
                 return [
-                    SongOfflineJackpot::ALL,
                     SongOfflineJackpot::MACHINE_POINT,
                     SongOfflineJackpot::MACHINE_SCORE,
                     SongOfflineJackpot::MACHINE_TURN,
