@@ -547,6 +547,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     ]);
                 }
 
+                // ✅ 更新版本号，让 sendRawCmdWithReply 等待循环能感知到回复
+                $this->setActionVersion(self::ALL_DOWN);
+
                 $processed = true;
             }
             // 根据头部识别消息类型
@@ -3540,16 +3543,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             case 'a5':
                 return 6;  // 操作回复（A5 + 状态2字符 + 校验和2字符）
 
+            case 'ee':  // RESET_CLEAR（清除账目完成，单字节回复）
+            case 'ef':  // RESET_COMPLETE（完整归0完成，单字节回复）
+                return 2;
+
             case 'a3':
-                // A3 归0回复
-                if (strlen($buffer) >= 4) {
-                    $status = substr($buffer, 2, 2);
-                    if ($status === 'ee' || $status === 'ef') {
-                        return 4; // 归0完成回复
-                    }
-                }
-                if (strlen($buffer) >= 4 && substr($buffer, 0, 4) === 'a370') {
-                    return 12; // 归0指令回复（A3 70 05 E0 F8 CE）
+                // A3 归0回复：A3 F8 XX（机台收到归0指令的中间确认，3字节）
+                if (strlen($buffer) >= 4 && substr($buffer, 2, 2) === 'f8') {
+                    return 6;
                 }
                 return 0;
 
