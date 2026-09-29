@@ -77,7 +77,7 @@ class TNineSlotV2GameController
 
     public function __construct()
     {
-        $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_TNINE_SLOT_V2);
+        $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_TNINE_SLOT);
         $this->logger = Log::channel('tnine_slot_server');
     }
 
