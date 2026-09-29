@@ -48,7 +48,7 @@ class TNineSlotV2ServiceInterface extends GameServiceFactory implements GameServ
     public function __construct(Player $player = null)
     {
         $this->config = config('game_platform.TNINE_SLOT');
-        $this->platform = GamePlatform::query()->where('code', 'TNINE_SLOT')->first();
+        $this->platform = GamePlatform::query()->where('code', 'TNINE_SLOT_V2')->first();
         $this->player = $player;
         $this->log = Log::channel('tnine_slot_server');
     }
