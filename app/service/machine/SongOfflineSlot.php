@@ -2055,8 +2055,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->high_prob = $newHighProb;   // 高确状态
             $this->small_win = $newSmallWin;   // 小当状态
 
-            // ✅ 同步 reward_status：大当/小当/高确任一置位时视为开奖中（兼容客户端 WS machineInfo）
-            $newRewardStatus = ($newBigWin || $newSmallWin || $newHighProb) ? 1 : 0;
+            // ✅ 同步 reward_status：大当/小当置位时视为开奖中（兼容客户端 WS machineInfo）
+            // ⚠️ 高确（high_prob）是概率模式不是派彩过程，不纳入 reward_status
+            $newRewardStatus = ($newBigWin || $newSmallWin) ? 1 : 0;
             if ($newRewardStatus !== ($this->reward_status ?? 0)) {
                 $this->reward_status = $newRewardStatus;
             }
