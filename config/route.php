@@ -193,7 +193,7 @@ Route::group('/single-wallet', function () {
         // 响应格式：{"statusCode": 0, "data": {...}}（V1 为 resultCode）
         // 新增接口：/bet、/settle、/modify-game-order
         Route::group('/t9-integration', function () {
-            Route::post('/balance', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'balance']);
+            Route::post('/get-balance', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'balance']);
             Route::post('/bet-and-settle', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'betAndSettle']);
             Route::post('/cancel-bet', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'cancelBet']);
             Route::post('/bet', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'bet']);
