@@ -2429,26 +2429,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->recordExternalWashWithoutPlayer($washedScore, $washedAmount);
             }
 
-            // 6. ✅ 硬件归零：发送 EADE 清除机台历史记录（total_bet / total_win 归零）
-            // 与在线版洗分流程保持一致，确保下一位玩家从 0 开始计算打码量
-            try {
-                $this->sendCmd(self::ALL_DOWN, 0, 'system');
-                $this->log->info('[线下洗分] ALL_DOWN 执行完成，total_bet/total_win 已归零', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                ]);
-            } catch (Exception $e) {
-                $this->log->error('[线下洗分] 发送 ALL_DOWN 指令失败', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-
-            // 7. ✅ 自动发送清除故障指令（清除 b4 标志）
+            // 6. ✅ 发送 CHECK（A37005E0F8CE）归零机台 total_bet/total_win，同时清除 b4 标志
+            // CHECK 是让机台计数器归零的正确指令（机台回复 a3f833 → EE/EF 后计数器清零）
             try {
                 $this->sendCmd(self::CHECK, 0, 'system');
-                $this->log->info('[线下洗分] 自动发送 CHECK 指令清除 b4 标志', [
+                $this->log->info('[线下洗分] CHECK 指令已发送，等待机台 total_bet/total_win 归零', [
                     'machine_id' => $this->machine->id,
                     'machine_code' => $this->machine->code,
                 ]);
