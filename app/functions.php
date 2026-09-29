@@ -3168,6 +3168,12 @@ if (!function_exists('machineOpenAnyFree')) {
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG
                     && $machine->type == GameType::TYPE_SLOT) {
+                    // ✅ 开分前先发 CHECK 归零 total_bet/total_win，确保新玩家从 0 开始计算打码量
+                    $services->sendCmd($services::CHECK, 0, 'player', $player->id);
+                    Log::channel('slot_machine')->info('[machineOpenAnyFree] CHECK 执行完成，total_bet/total_win 已归零', [
+                        'machine_code' => $machine->code,
+                        'player_id' => $player->id,
+                    ]);
                     $services->sendCmd($services::OPEN_ANY_POINT, $offSlotOpenScore, 'admin', $player->id);
                 } else {
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
