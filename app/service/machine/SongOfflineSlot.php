@@ -280,8 +280,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 上分成功时更新活动时间
             if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
                 Cache::set($this->cacheDataKey . '_last_play_time', time());
-                // 快照玩家进入时的押分/得分，作为本局打码量的基准
-                Cache::set($this->cacheDataKey . '_player_pressure', Cache::get($this->cacheDataKey . '_total_bet', 0));
+                // 延迟快照：标记"需要在下一次心跳时"记录基准值
+                // 原因：API进程设置gaming_user_id时，连接进程可能还有前一玩家的遗留心跳未处理，
+                // 立即快照会导致基准值偏低，下一个心跳的增量被误算为新玩家打码量。
+                // 由心跳处理时取当时的total_bet作为基准，确保包含所有遗留增量。
+                Cache::set($this->cacheDataKey . '_needs_pressure_snapshot', 1);
                 Cache::set($this->cacheDataKey . '_player_score', Cache::get($this->cacheDataKey . '_total_win', 0));
             }
 
@@ -1965,7 +1968,20 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // total_bet 是机台累计押分（单位：分），增加时说明有新押注
             // 条件：旧值>0（排除EADE后复位）、押分增加、有玩家在游戏
             $currentGamingUserId = $this->gaming_user_id ?? 0;
-            if ($oldTotalBet > 0 && $totalBet > $oldTotalBet && !empty($currentGamingUserId)) {
+
+            // 延迟快照：第一次检测到gaming_user_id已设置时，用当前total_bet作基准
+            // 避免将上分前遗留的心跳增量（前一玩家的押注）误算为新玩家打码量
+            if (!empty($currentGamingUserId)
+                && !empty(\support\Cache::get($this->cacheDataKey . '_needs_pressure_snapshot'))) {
+                \support\Cache::set($this->cacheDataKey . '_player_pressure', $totalBet);
+                \support\Cache::set($this->cacheDataKey . '_needs_pressure_snapshot', 0);
+                $this->log->info('[心跳-打码量基准] 延迟快照完成', [
+                    'machine_code' => $this->machine->code,
+                    'player_id' => $currentGamingUserId,
+                    'player_pressure' => $totalBet,
+                ]);
+                // 本次心跳不触发打码量（基准建立心跳，跳过push）
+            } elseif ($oldTotalBet > 0 && $totalBet > $oldTotalBet && !empty($currentGamingUserId)) {
                 $betIncrement = $totalBet - $oldTotalBet;  // 增量（分）
                 // 分→券：除以100，使 calculateBetAmount 里 incrementNum × turn_used_point 单位正确
                 $numForQueue = $totalBet / 100;
