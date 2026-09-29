@@ -2011,6 +2011,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->point = $cardScore;                // point = card_score（开分卡分数）
             $this->score = $machineScore;             // score = machine_score（机台分数）
             $this->win = $totalWin;                   // win = total_win（兼容线上版）
+            $this->bet = $totalBet;                   // bet = total_bet（兼容客户端 WS machineInfo）
 
             // ✅ 优化：心跳更新数据时同步更新 actionVersion，避免查询指令等待超时
             // 场景：发送查询指令后，心跳先到达并包含最新数据，此时应解除等待
@@ -2053,6 +2054,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->big_win = $newBigWin;       // 大当状态
             $this->high_prob = $newHighProb;   // 高确状态
             $this->small_win = $newSmallWin;   // 小当状态
+
+            // ✅ 同步 reward_status：大当/小当/高确任一置位时视为开奖中（兼容客户端 WS machineInfo）
+            $newRewardStatus = ($newBigWin || $newSmallWin || $newHighProb) ? 1 : 0;
+            if ($newRewardStatus !== ($this->reward_status ?? 0)) {
+                $this->reward_status = $newRewardStatus;
+            }
 
             // 检测现场跳码表
             if ($status['external_open'] || $status['external_wash']) {
