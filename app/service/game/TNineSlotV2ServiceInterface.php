@@ -150,7 +150,6 @@ class TNineSlotV2ServiceInterface extends GameServiceFactory implements GameServ
         $params = [
             'gameCode' => $game->game_extend->code ?? '',
             'gameAccount' => $this->player->uuid,
-            'gameCategory' => $this->resolveGameCategory($game), // V2: 字符串
             'language' => $this->resolveLang($lang),
             'isMobileLogin' => true,  // TODO: 由调用方传入设备类型
         ];
