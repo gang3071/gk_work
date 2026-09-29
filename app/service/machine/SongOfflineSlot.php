@@ -1908,6 +1908,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // ✅ 记录分数变化（只在有显著变化时记录，避免心跳日志过多）
             $oldCardScore = $this->card_score ?? 0;
             $oldMachineScore = $this->machine_score ?? 0;
+            $oldTotalBet = $this->total_bet ?? 0;
 
             // ✅ 诊断日志：详细记录分数变化原因，帮助排查锁机台问题
             if (abs($cardScore - $oldCardScore) > 0) {
@@ -1952,6 +1953,58 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->machine_score = $machineScore;     // 机台分数（心跳B2字段）
             $this->total_bet = $totalBet;             // 总押分数（心跳BA字段）
             $this->total_win = $totalWin;             // 总得分数（心跳BB字段）
+
+            // ========== 打码量统计（心跳 BA 押分增量触发） ==========
+            // total_bet 是机台累计押分（单位：分），增加时说明有新押注
+            // 条件：旧值>0（排除EADE后复位）、押分增加、有玩家在游戏
+            $currentGamingUserId = $this->gaming_user_id ?? 0;
+            if ($oldTotalBet > 0 && $totalBet > $oldTotalBet && !empty($currentGamingUserId)) {
+                $betIncrement = $totalBet - $oldTotalBet;  // 增量（分）
+                // 分→券：除以100，使 calculateBetAmount 里 incrementNum × turn_used_point 单位正确
+                $numForQueue = $totalBet / 100;
+                $lastNumForQueue = $oldTotalBet / 100;
+
+                try {
+                    // 彩金抽奖检查
+                    \Webman\RedisQueue\Client::send('lottery-machine', [
+                        'num' => $numForQueue,
+                        'last_num' => $lastNumForQueue,
+                        'machine_id' => $this->machine->id,
+                        'player_id' => $currentGamingUserId,
+                    ]);
+
+                    // 实时打码量统计
+                    $cateId = $this->machine->cate_id;
+                    $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+                    $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+                    if ($turnUsedPoint === null) {
+                        $turnUsedPoint = \app\model\MachineCategory::query()
+                            ->where('id', $cateId)->value('turn_used_point') ?? 0;
+                        \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+                    }
+
+                    if ($turnUsedPoint > 0) {
+                        $betAmount = bcmul(bcdiv((string)$betIncrement, '100', 4), (string)$turnUsedPoint, 2);
+                        if (bccomp($betAmount, '0', 2) > 0) {
+                            \Webman\RedisQueue\Client::send('bet-statistics', [
+                                'player_id' => $currentGamingUserId,
+                                'stat_type' => 'machine',
+                                'bet_amount' => floatval($betAmount),
+                                'source' => 'song_offline_slot',
+                                'machine_id' => $this->machine->id,
+                                'created_at' => date('Y-m-d H:i:s'),
+                            ]);
+                        }
+                    }
+                } catch (\Exception $e) {
+                    $this->log->error('[心跳-打码量] 投递队列失败', [
+                        'machine_code' => $this->machine->code,
+                        'player_id' => $currentGamingUserId,
+                        'bet_increment' => $betIncrement,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
 
             // ========== 同步更新兼容字段（与线上版保持一致） ==========
             // ✅ 修正：point应该指向开分卡分数，因为洗分时退的是开分卡上的分数
