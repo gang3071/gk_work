@@ -222,6 +222,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_turn',                 // 转数（查询机台情况回复）
             $this->cacheDataKey . '_return_count',         // 回补次数（查询机台情况回复）
             $this->cacheDataKey . '_table_miss',           // 码表少跳数（查询机台情况回复）
+
+            // ========== 玩家游戏快照（用于打码量基准计算） ==========
+            $this->cacheDataKey . '_player_pressure',      // 玩家进入时的押分快照
+            $this->cacheDataKey . '_player_score',         // 玩家进入时的得分快照
         ];
 
         // 推送到前端的关键字段（WebSocket实时同步）
@@ -276,6 +280,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 上分成功时更新活动时间
             if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
                 Cache::set($this->cacheDataKey . '_last_play_time', time());
+                // 快照玩家进入时的押分/得分，作为本局打码量的基准
+                Cache::set($this->cacheDataKey . '_player_pressure', Cache::get($this->cacheDataKey . '_total_bet', 0));
+                Cache::set($this->cacheDataKey . '_player_score', Cache::get($this->cacheDataKey . '_total_win', 0));
             }
 
             try {
@@ -2622,9 +2629,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $gamingPressure = max(0, $totalBet - $playerPressure);
             $gamingScore = max(0, $totalWin - $playerScore);
 
-            // 计算打码量：押分 * 比值
-            $ratio = bcdiv($this->machine->odds_x ?? 1, $this->machine->odds_y ?? 1, 4);
-            $chipAmount = bcmul($gamingPressure, $ratio, 2);
+            // 计算打码量：(押分÷100) × turn_used_point（与 LotteryServices::calculateBetAmount 一致）
+            $cateId = $this->machine->cate_id;
+            $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+            $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+            if ($turnUsedPoint === null) {
+                $turnUsedPoint = \app\model\MachineCategory::query()
+                    ->where('id', $cateId)->value('turn_used_point') ?? 0;
+                \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+            }
+            $chipAmount = bcmul(bcdiv($gamingPressure, 100, 4), $turnUsedPoint, 2);
 
             $this->log->info('[线下洗分] 计算打码量', [
                 'player_id' => $playerId,
@@ -2632,7 +2646,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 'total_bet' => $totalBet,
                 'gaming_pressure' => $gamingPressure,
                 'gaming_score' => $gamingScore,
-                'ratio' => floatval($ratio),
+                'turn_used_point' => floatval($turnUsedPoint),
                 'chip_amount' => floatval($chipAmount),
             ]);
 
