@@ -67,7 +67,7 @@ class TNineSlotV2ServiceInterface extends GameServiceFactory implements GameServ
         $params['gameAccount'] = ($params['gameAccount'] ?? '') . '_' . $agentId;
         $params['agentId'] = $agentId;
         $params['apiKey'] = $key;
-        $params['platform'] = 'T9SlotSeamless';
+//        $params['platform'] = 'T9SlotSeamless';
 
         $fullUrl = $this->config['api_domain'] . $url;
 

@@ -188,20 +188,20 @@ Route::group('/single-wallet', function () {
         Route::post('/SeamlessGameHub/GetBalance', [\app\wallet\controller\game\TNineSlotGameController::class, 'balance']);
         Route::post('/SeamlessGameHub/BetAndSettle', [\app\wallet\controller\game\TNineSlotGameController::class, 'bet']);
         Route::post('/SeamlessGameHub/CancelBet', [\app\wallet\controller\game\TNineSlotGameController::class, 'cancelBet']);
+        // ========== T9 电子 V2（2026-09-23 新增）==========
+        // 对接版本：V2 t9-integration
+        // 响应格式：{"statusCode": 0, "data": {...}}（V1 为 resultCode）
+        // 新增接口：/bet、/settle、/modify-game-order
+        Route::group('/t9-integration', function () {
+            Route::post('/get-balance', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'balance']);
+            Route::post('/bet-and-settle', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'betAndSettle']);
+            Route::post('/cancel-bet', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'cancelBet']);
+            Route::post('/bet', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'bet']);
+            Route::post('/settle', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'settle']);
+            Route::post('/modify-game-order', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'modifyGameOrder']);
+        });
     });
 
-    // ========== T9 电子 V2（2026-09-23 新增）==========
-    // 对接版本：V2 t9-integration
-    // 响应格式：{"statusCode": 0, "data": {...}}（V1 为 resultCode）
-    // 新增接口：/bet、/settle、/modify-game-order
-    Route::group('/t9-integration', function () {
-        Route::post('/balance', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'balance']);
-        Route::post('/bet-and-settle', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'betAndSettle']);
-        Route::post('/cancel-bet', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'cancelBet']);
-        Route::post('/bet', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'bet']);
-        Route::post('/settle', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'settle']);
-        Route::post('/modify-game-order', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'modifyGameOrder']);
-    });
     Route::group('/kt-channel', function () {
         Route::post('/auth', [\app\wallet\controller\game\KTGameController::class, 'auth']);
         Route::post('/balance', [\app\wallet\controller\game\KTGameController::class, 'balance']);
