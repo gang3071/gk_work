@@ -1426,6 +1426,16 @@ function machineWash(
                     'machine_code' => $machine->code,
                 ]);
 
+                // ✅ 线下版小淞：发送 CHECK 归零 total_bet/total_win（GD收账小卡协议）
+                // CHECK(A37005E0F8CE) 回复链 a3f833→EE/EF 后机台计数器清零
+                if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
+                    $services->sendCmd($services::CHECK, 0, 'player', $player->id, $is_system);
+                    Log::channel('slot_machine')->info('[machineWash-硬件清零] CHECK 执行完成（线下归零total_bet/total_win）', [
+                        'machine_code' => $machine->code,
+                    ]);
+                }
+
                 // ✅ 弃台时登出机台（仅线下版小淞）
                 if ($path == 'leave' && $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
