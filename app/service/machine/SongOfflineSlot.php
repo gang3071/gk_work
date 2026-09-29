@@ -1971,21 +1971,34 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // 延迟快照：第一次检测到gaming_user_id已设置时，用当前total_bet作基准
             // 避免将上分前遗留的心跳增量（前一玩家的押注）误算为新玩家打码量
-            if (!empty($currentGamingUserId)
-                && !empty(\support\Cache::get($this->cacheDataKey . '_needs_pressure_snapshot'))) {
+            $needsPressureSnapshot = !empty(\support\Cache::get($this->cacheDataKey . '_needs_pressure_snapshot'));
+            if (!empty($currentGamingUserId) && $needsPressureSnapshot) {
                 \support\Cache::set($this->cacheDataKey . '_player_pressure', $totalBet);
                 \support\Cache::set($this->cacheDataKey . '_needs_pressure_snapshot', 0);
                 $this->log->info('[心跳-打码量基准] 延迟快照完成', [
                     'machine_code' => $this->machine->code,
                     'player_id' => $currentGamingUserId,
                     'player_pressure' => $totalBet,
+                    'note' => 'EADE归零后total_bet可能为0，此后第一次押注从0开始累加',
                 ]);
                 // 本次心跳不触发打码量（基准建立心跳，跳过push）
-            } elseif ($oldTotalBet > 0 && $totalBet > $oldTotalBet && !empty($currentGamingUserId)) {
+            } elseif (!empty($currentGamingUserId) && !$needsPressureSnapshot && $totalBet > $oldTotalBet) {
+                // ✅ 去掉 $oldTotalBet > 0 条件：EADE 归零后 total_bet=0，oldTotalBet=0，
+                // 但只要快照已建立（!$needsPressureSnapshot），第一笔押注就应该被统计
                 $betIncrement = $totalBet - $oldTotalBet;  // 增量（分）
                 // 分→券：除以100，使 calculateBetAmount 里 incrementNum × turn_used_point 单位正确
                 $numForQueue = $totalBet / 100;
                 $lastNumForQueue = $oldTotalBet / 100;
+
+                $this->log->info('[心跳-打码量] 检测到押分增量', [
+                    'machine_code'  => $this->machine->code,
+                    'player_id'     => $currentGamingUserId,
+                    'old_total_bet' => $oldTotalBet,
+                    'new_total_bet' => $totalBet,
+                    'bet_increment' => $betIncrement,
+                    'num_for_queue' => $numForQueue,
+                    'last_num'      => $lastNumForQueue,
+                ]);
 
                 try {
                     // 彩金抽奖检查
@@ -1994,6 +2007,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         'last_num' => $lastNumForQueue,
                         'machine_id' => $this->machine->id,
                         'player_id' => $currentGamingUserId,
+                    ]);
+                    $this->log->info('[心跳-打码量] lottery-machine 已投递', [
+                        'machine_code' => $this->machine->code,
+                        'player_id'    => $currentGamingUserId,
+                        'num'          => $numForQueue,
+                        'last_num'     => $lastNumForQueue,
                     ]);
 
                     // 实时打码量统计
@@ -2008,6 +2027,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
                     if ($turnUsedPoint > 0) {
                         $betAmount = bcmul(bcdiv((string)$betIncrement, '100', 4), (string)$turnUsedPoint, 2);
+                        $this->log->info('[心跳-打码量] 打码金额计算', [
+                            'machine_code'      => $this->machine->code,
+                            'player_id'         => $currentGamingUserId,
+                            'bet_increment_fen' => $betIncrement,
+                            'turn_used_point'   => $turnUsedPoint,
+                            'bet_amount'        => $betAmount,
+                        ]);
                         if (bccomp($betAmount, '0', 2) > 0) {
                             \Webman\RedisQueue\Client::send('bet-statistics', [
                                 'player_id' => $currentGamingUserId,
@@ -2017,14 +2043,47 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                                 'machine_id' => $this->machine->id,
                                 'created_at' => date('Y-m-d H:i:s'),
                             ]);
+                            $this->log->info('[心跳-打码量] bet-statistics 已投递', [
+                                'machine_code' => $this->machine->code,
+                                'player_id'    => $currentGamingUserId,
+                                'bet_amount'   => $betAmount,
+                            ]);
                         }
+                    } else {
+                        $this->log->warning('[心跳-打码量] turn_used_point 为0，跳过bet-statistics', [
+                            'machine_code'    => $this->machine->code,
+                            'cate_id'         => $cateId,
+                            'turn_used_point' => $turnUsedPoint,
+                        ]);
                     }
                 } catch (\Exception $e) {
                     $this->log->error('[心跳-打码量] 投递队列失败', [
-                        'machine_code' => $this->machine->code,
-                        'player_id' => $currentGamingUserId,
+                        'machine_code'  => $this->machine->code,
+                        'player_id'     => $currentGamingUserId,
                         'bet_increment' => $betIncrement,
-                        'error' => $e->getMessage(),
+                        'error'         => $e->getMessage(),
+                    ]);
+                }
+            } else {
+                // 条件不满足时记录原因，便于排查"打码量不增加"问题
+                $skipReason = [];
+                if ($totalBet <= $oldTotalBet) {
+                    $skipReason[] = "total_bet未增加（old={$oldTotalBet}, new={$totalBet}）";
+                }
+                if (empty($currentGamingUserId)) {
+                    $skipReason[] = 'gaming_user_id为空（无玩家在游戏）';
+                }
+                if ($needsPressureSnapshot) {
+                    $skipReason[] = '快照尚未建立（_needs_pressure_snapshot=1，基准心跳将跳过push）';
+                }
+                if (!empty($skipReason)) {
+                    $this->log->debug('[心跳-打码量] 本次心跳不触发打码量', [
+                        'machine_code'   => $this->machine->code,
+                        'old_total_bet'  => $oldTotalBet,
+                        'new_total_bet'  => $totalBet,
+                        'gaming_user_id' => $currentGamingUserId,
+                        'needs_snapshot' => $needsPressureSnapshot,
+                        'skip_reason'    => implode('；', $skipReason),
                     ]);
                 }
             }
@@ -2370,7 +2429,23 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->recordExternalWashWithoutPlayer($washedScore, $washedAmount);
             }
 
-            // 6. ✅ 自动发送清除故障指令（清除 b4 标志）
+            // 6. ✅ 硬件归零：发送 EADE 清除机台历史记录（total_bet / total_win 归零）
+            // 与在线版洗分流程保持一致，确保下一位玩家从 0 开始计算打码量
+            try {
+                $this->sendCmd(self::ALL_DOWN, 0, 'system');
+                $this->log->info('[线下洗分] ALL_DOWN 执行完成，total_bet/total_win 已归零', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                ]);
+            } catch (Exception $e) {
+                $this->log->error('[线下洗分] 发送 ALL_DOWN 指令失败', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // 7. ✅ 自动发送清除故障指令（清除 b4 标志）
             try {
                 $this->sendCmd(self::CHECK, 0, 'system');
                 $this->log->info('[线下洗分] 自动发送 CHECK 指令清除 b4 标志', [
