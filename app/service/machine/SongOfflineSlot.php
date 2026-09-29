@@ -224,8 +224,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_table_miss',           // 码表少跳数（查询机台情况回复）
 
             // ========== 玩家游戏快照（用于打码量基准计算） ==========
-            $this->cacheDataKey . '_player_pressure',      // 玩家进入时的押分快照
-            $this->cacheDataKey . '_player_score',         // 玩家进入时的得分快照
+            // _player_pressure / _player_score 已移除：CHECK 归零后 total_bet 每局从0开始，基准恒为0
         ];
 
         // 推送到前端的关键字段（WebSocket实时同步）
@@ -280,12 +279,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 上分成功时更新活动时间
             if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
                 Cache::set($this->cacheDataKey . '_last_play_time', time());
-                // 延迟快照：标记"需要在下一次心跳时"记录基准值
-                // 原因：API进程设置gaming_user_id时，连接进程可能还有前一玩家的遗留心跳未处理，
-                // 立即快照会导致基准值偏低，下一个心跳的增量被误算为新玩家打码量。
-                // 由心跳处理时取当时的total_bet作为基准，确保包含所有遗留增量。
-                Cache::set($this->cacheDataKey . '_needs_pressure_snapshot', 1);
-                Cache::set($this->cacheDataKey . '_player_score', Cache::get($this->cacheDataKey . '_total_win', 0));
             }
 
             try {
@@ -1969,22 +1962,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 条件：旧值>0（排除EADE后复位）、押分增加、有玩家在游戏
             $currentGamingUserId = $this->gaming_user_id ?? 0;
 
-            // 延迟快照：第一次检测到gaming_user_id已设置时，用当前total_bet作基准
-            // 避免将上分前遗留的心跳增量（前一玩家的押注）误算为新玩家打码量
-            $needsPressureSnapshot = !empty(\support\Cache::get($this->cacheDataKey . '_needs_pressure_snapshot'));
-            if (!empty($currentGamingUserId) && $needsPressureSnapshot) {
-                \support\Cache::set($this->cacheDataKey . '_player_pressure', $totalBet);
-                \support\Cache::set($this->cacheDataKey . '_needs_pressure_snapshot', 0);
-                $this->log->info('[心跳-打码量基准] 延迟快照完成', [
-                    'machine_code' => $this->machine->code,
-                    'player_id' => $currentGamingUserId,
-                    'player_pressure' => $totalBet,
-                    'note' => 'EADE归零后total_bet可能为0，此后第一次押注从0开始累加',
-                ]);
-                // 本次心跳不触发打码量（基准建立心跳，跳过push）
-            } elseif (!empty($currentGamingUserId) && !$needsPressureSnapshot && $totalBet > $oldTotalBet) {
-                // ✅ 去掉 $oldTotalBet > 0 条件：EADE 归零后 total_bet=0，oldTotalBet=0，
-                // 但只要快照已建立（!$needsPressureSnapshot），第一笔押注就应该被统计
+            // CHECK 在每次开分前归零 total_bet，每局从 0 开始，直接用增量判断
+            if (!empty($currentGamingUserId) && $totalBet > $oldTotalBet) {
                 $betIncrement = $totalBet - $oldTotalBet;  // 增量（分）
                 // 分→券：除以100，使 calculateBetAmount 里 incrementNum × turn_used_point 单位正确
                 $numForQueue = $totalBet / 100;
@@ -2065,7 +2044,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     ]);
                 }
             } else {
-                // 条件不满足时记录原因，便于排查"打码量不增加"问题
                 $skipReason = [];
                 if ($totalBet <= $oldTotalBet) {
                     $skipReason[] = "total_bet未增加（old={$oldTotalBet}, new={$totalBet}）";
@@ -2073,16 +2051,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if (empty($currentGamingUserId)) {
                     $skipReason[] = 'gaming_user_id为空（无玩家在游戏）';
                 }
-                if ($needsPressureSnapshot) {
-                    $skipReason[] = '快照尚未建立（_needs_pressure_snapshot=1，基准心跳将跳过push）';
-                }
                 if (!empty($skipReason)) {
                     $this->log->debug('[心跳-打码量] 本次心跳不触发打码量', [
                         'machine_code'   => $this->machine->code,
                         'old_total_bet'  => $oldTotalBet,
                         'new_total_bet'  => $totalBet,
                         'gaming_user_id' => $currentGamingUserId,
-                        'needs_snapshot' => $needsPressureSnapshot,
                         'skip_reason'    => implode('；', $skipReason),
                     ]);
                 }
@@ -2696,14 +2670,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $afterBalance = bcadd($beforeBalance, $washedAmount, 2);
 
             // 2.5 ✅ 计算玩家游戏期间的打码量
-            $playerPressure = $this->player_pressure ?? 0;  // 玩家进入时的押分
-            $playerScore = $this->player_score ?? 0;        // 玩家进入时的得分
-            $totalBet = $this->total_bet ?? 0;              // 当前总押分
-            $totalWin = $this->total_win ?? 0;              // 当前总得分
-
-            // 计算游戏期间的押分和得分
-            $gamingPressure = max(0, $totalBet - $playerPressure);
-            $gamingScore = max(0, $totalWin - $playerScore);
+            // CHECK 在开分前已归零 total_bet/total_win，每局从 0 开始，直接使用当前值
+            $gamingPressure = $this->total_bet ?? 0;   // 本局总押分（分）
+            $gamingScore    = $this->total_win ?? 0;   // 本局总得分（分）
 
             // 计算打码量：(押分÷100) × turn_used_point（与 LotteryServices::calculateBetAmount 一致）
             $cateId = $this->machine->cate_id;
@@ -2717,13 +2686,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $chipAmount = bcmul(bcdiv($gamingPressure, 100, 4), $turnUsedPoint, 2);
 
             $this->log->info('[线下洗分] 计算打码量', [
-                'player_id' => $playerId,
-                'player_pressure' => $playerPressure,
-                'total_bet' => $totalBet,
+                'player_id'      => $playerId,
                 'gaming_pressure' => $gamingPressure,
-                'gaming_score' => $gamingScore,
+                'gaming_score'   => $gamingScore,
                 'turn_used_point' => floatval($turnUsedPoint),
-                'chip_amount' => floatval($chipAmount),
+                'chip_amount'    => floatval($chipAmount),
             ]);
 
             // 3. 创建下分记录（PlayerGameLog）
@@ -2781,16 +2748,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             DB::commit();
 
             // 6.5 ✅ 清理玩家游戏数据（洗分后归零）
-            $this->player_pressure = 0;  // 清零玩家押分
-            $this->player_score = 0;     // 清零玩家得分
-            $this->bet = 0;              // 清零当前押分
+            $this->bet = 0;
 
             $this->log->info('[线下洗分] 清理玩家游戏数据', [
-                'player_id' => $playerId,
+                'player_id'  => $playerId,
                 'machine_id' => $this->machine->id,
-                'player_pressure' => 0,
-                'player_score' => 0,
-                'bet' => 0,
+                'bet'        => 0,
             ]);
 
             // 7. 钱包加款（在事务外执行）
