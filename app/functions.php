@@ -1421,9 +1421,6 @@ function machineWash(
                     ]);
                 }
 
-                Log::channel('slot_machine')->info('[machineWash-硬件清零] 开始执行 ALL_DOWN', [
-                    'machine_code' => $machine->code,
-                ]);
                 $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
                 Log::channel('slot_machine')->info('[machineWash-硬件清零] ALL_DOWN 执行完成', [
                     'machine_code' => $machine->code,
