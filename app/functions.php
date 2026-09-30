@@ -214,12 +214,9 @@ function machineKeepOutPlayer(): void
                 $log->info('PlayOutMachine: 自由时间且时间大于1800秒跳过' . $machine->code);
                 continue;
             }
-            // 开奖中不扣时间、不踢人（对所有机型生效）
-            if ($services->reward_status == 1) {
-                $log->info('PlayOutMachine: ' . $machine->code . '开奖中跳过保留时间处理', [
-                    'machine_type' => $machine->type,
-                    'keep_seconds' => $services->keep_seconds,
-                ]);
+            // 钢珠机开奖中不扣时间、不踢人
+            if ($services->reward_status == 1 && $machine->type == GameType::TYPE_STEEL_BALL) {
+                $log->info('PlayOutMachine: ' . $machine->code . '开奖中跳过保留时间处理');
                 continue;
             }
             $keepSeconds = $services->keep_seconds;
