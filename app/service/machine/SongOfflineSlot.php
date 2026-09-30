@@ -2685,22 +2685,23 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $gamingPressure = $this->total_bet ?? 0;   // 本局总押分（分）
             $gamingScore    = $this->total_win ?? 0;   // 本局总得分（分）
 
-            // 计算打码量：(押分÷100) × turn_used_point（与 LotteryServices::calculateBetAmount 一致）
-            $cateId = $this->machine->cate_id;
-            $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
-            $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
-            if ($turnUsedPoint === null) {
-                $turnUsedPoint = \app\model\MachineCategory::query()
-                    ->where('id', $cateId)->value('turn_used_point') ?? 0;
-                \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
-            }
-            $chipAmount = bcmul(bcdiv($gamingPressure, 100, 4), $turnUsedPoint, 2);
+            // 打码量：bet(分) × (odds_x/odds_y) 换算为金额，与 WS chip_amount 和在线版 Slot.php 一致
+            $chipAmount = bcmul(
+                (string) max(0, (int) $gamingPressure),
+                bcdiv(
+                    (string) ($this->machine->odds_x ?? 1),
+                    (string) ($this->machine->odds_y ?? 1),
+                    8
+                ),
+                2
+            );
 
             $this->log->info('[线下洗分] 计算打码量', [
                 'player_id'      => $playerId,
                 'gaming_pressure' => $gamingPressure,
                 'gaming_score'   => $gamingScore,
-                'turn_used_point' => floatval($turnUsedPoint),
+                'odds_x'         => $this->machine->odds_x,
+                'odds_y'         => $this->machine->odds_y,
                 'chip_amount'    => floatval($chipAmount),
             ]);
 
