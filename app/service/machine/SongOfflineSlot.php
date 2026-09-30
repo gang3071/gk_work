@@ -324,6 +324,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $machineCacheInfo = $this->getAllData() ?? [];
             if (!empty($machineCacheInfo)) {
                 // ✅ Bug #15修复：所有字段添加默认值，防止Undefined array key错误
+                // chip_amount 实时打码量：CHECK归零后 bet(=total_bet) 每局从0开始
+                // 公式：bet(分) ÷ 100 × turn_used_point（与 LotteryServices::calculateBetAmount 一致）
+                $betVal = $machineCacheInfo[$this->cacheDataKey . '_bet'] ?? 0;
+                $turnUsedPointCacheKey = "machine_category:{$this->machine->cate_id}:turn_used_point";
+                $turnUsedPointForInfo = \support\Cache::get($turnUsedPointCacheKey) ?? 0;
+                $chipAmountForInfo = bcmul(bcdiv((string)$betVal, '100', 4), (string)$turnUsedPointForInfo, 2);
+
                 $info = [
                     'id' => $this->machine->id,
                     'last_game_at' => $this->machine->last_game_at,
@@ -333,10 +340,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     'auto' => $machineCacheInfo[$this->cacheDataKey . '_auto'] ?? 0,
                     'reward_status' => $machineCacheInfo[$this->cacheDataKey . '_reward_status'] ?? 0,
                     'point' => $machineCacheInfo[$this->cacheDataKey . '_point'] ?? 0,
-                    'bet' => $machineCacheInfo[$this->cacheDataKey . '_bet'] ?? 0,
+                    'bet' => $betVal,
                     'win' => $machineCacheInfo[$this->cacheDataKey . '_win'] ?? 0,
                     'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'] ?? 0,
                     'is_login' => $machineCacheInfo[$this->cacheDataKey . '_is_login'] ?? 0,
+                    'chip_amount' => floatval($chipAmountForInfo),
                 ];
 
                 $currentGamingUserId = $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0;
