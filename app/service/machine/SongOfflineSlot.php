@@ -1254,44 +1254,24 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function recordExternalButtonOperation(string $type, int $amount, int $timestamp): void
     {
         try {
-            // ⚠️ 线下版Slot：码表记录的是金额，不是次数
-            // 需要从machine_category读取turn_used_point来计算打码量
-
-            $cateId = $this->machine->cate_id;
-            $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
-            $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
-
-            if ($turnUsedPoint === null) {
-                $turnUsedPoint = \app\model\MachineCategory::query()
-                    ->where('id', $cateId)
-                    ->value('turn_used_point') ?? 0;
-                \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
-            }
-
-            if ($turnUsedPoint === null || $turnUsedPoint <= 0) {
-                $this->log->warning('[收账小卡-记录] 机台类别缺少turn_used_point配置', [
-                    'machine_id' => $this->machine->id,
-                    'category_id' => $cateId,
-                    'type' => $type,
-                    'amount' => $amount,
-                ]);
-                return;
-            }
-
-            // 计算打码量：金额（分）÷ 100 × turn_used_point = 打码量（元）
-            // ⚠️ 修复：$amount是"分"，需要先转成"元"再乘turn_used_point
-            $betAmount = bcmul(bcdiv($amount, 100, 2), $turnUsedPoint, 2);
-
-            if (bccomp($betAmount, '0', 2) <= 0) {
-                return;
-            }
+            // 金额换算：分 × (odds_x/odds_y) = 元，与其他日志保持一致
+            $betAmount = bcmul(
+                (string) max(0, $amount),
+                bcdiv(
+                    (string) ($this->machine->odds_x ?? 1),
+                    (string) ($this->machine->odds_y ?? 1),
+                    8
+                ),
+                2
+            );
 
             $this->log->info('[收账小卡-记录] 外部按钮操作', [
                 'machine_id' => $this->machine->id,
                 'machine_code' => $this->machine->code,
                 'type' => $type,
                 'amount' => $amount,
-                'turn_used_point' => $turnUsedPoint,
+                'odds_x' => $this->machine->odds_x,
+                'odds_y' => $this->machine->odds_y,
                 'bet_amount' => floatval($betAmount),
             ]);
 

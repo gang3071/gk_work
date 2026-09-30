@@ -440,14 +440,6 @@ class SongSlot extends MachineServices implements BaseMachine
                         // ⚠️ CRITICAL：重新读取 gaming_user_id，防止使用已被踢出的玩家ID
                         $currentGamingUserId = $this->gaming_user_id;
 
-                        Log::channel('bet_statistics')->debug('[BetStats] SongSlot 压分变化检测', [
-                            'machine_id' => $this->machine->id,
-                            'now_bet' => $nowBet,
-                            'org_bet' => $orgBet,
-                            'reward_status' => $this->reward_status,
-                            'gaming_user_id' => $currentGamingUserId,
-                        ]);
-
                         if (!empty($currentGamingUserId)) {
                             $this->last_play_time = time();
 
@@ -477,11 +469,6 @@ class SongSlot extends MachineServices implements BaseMachine
                                         'source' => 'song_slot',
                                         'machine_id' => $this->machine->id,
                                         'created_at' => date('Y-m-d H:i:s'),
-                                    ]);
-                                } else {
-                                    Log::channel('bet_statistics')->debug('[BetStats] SongSlot 打码量为0，跳过投递', [
-                                        'machine_id' => $this->machine->id,
-                                        'bet_amount' => $betAmount,
                                     ]);
                                 }
                             } catch (\Exception $e) {
@@ -523,16 +510,6 @@ class SongSlot extends MachineServices implements BaseMachine
                                 );
 
                                 if (bccomp($betAmount, '0', 2) > 0) {
-                                    Log::channel('bet_statistics')->info('[BetStats] SongSlot 保留时投递打码量', [
-                                        'machine_id' => $this->machine->id,
-                                        'player_id' => $currentGamingUserId,
-                                        'change_amount' => $changeAmount,
-                                        'odds_x' => $this->machine->odds_x,
-                                        'odds_y' => $this->machine->odds_y,
-                                        'bet_amount' => floatval($betAmount),
-                                        'source' => 'keep_machine',
-                                    ]);
-
                                     Client::send('bet-statistics', [
                                         'player_id' => $currentGamingUserId,
                                         'stat_type' => 'machine',
@@ -540,12 +517,6 @@ class SongSlot extends MachineServices implements BaseMachine
                                         'source' => 'song_slot',
                                         'machine_id' => $this->machine->id,
                                         'created_at' => date('Y-m-d H:i:s'),
-                                    ]);
-                                } else {
-                                    Log::channel('bet_statistics')->debug('[BetStats] SongSlot 保留时打码量为0，跳过投递', [
-                                        'machine_id' => $this->machine->id,
-                                        'change_amount' => $changeAmount,
-                                        'bet_amount' => $betAmount,
                                     ]);
                                 }
                             }
@@ -830,18 +801,8 @@ class SongSlot extends MachineServices implements BaseMachine
                     break;
                 case self::WASH_ZERO:
                     $code = sprintf('%02x', rand(0, 0x63));
-                    $this->log->info('[SongSlot-sendCmd] 准备调用 washPoint', [
-                        'machine_code' => $this->machine->code,
-                        'cmd' => $cmd,
-                        'code' => $code,
-                        'uid' => $uid,
-                        'source' => $source,
-                        'source_id' => $source_id,
-                        'current_point' => $this->point,
-                    ]);
                     $point = $this->point;
                     $this->pre_wash_point = empty($data) ? $point : $data;
-                    $this->log->info('发送下分操作: 预下分为', [$this->pre_wash_point]);
                     $this->washPoint($uid, $cmd . $code, $this->pre_wash_point, $source, $source_id);
                     break;
                 case self::READ_BET:
@@ -1238,17 +1199,6 @@ class SongSlot extends MachineServices implements BaseMachine
         try {
             $beforeActionTime = $this->setActionVersion($cmd);
             $cmdHex = $this->createCmd($cmd . 'c1', 0);
-
-            $this->log->info('[SongSlot-washPoint] 发送 WASH_ZERO 指令', [
-                'machine_code' => $this->machine->code,
-                'uid' => $uid,
-                'cmd' => $cmd,
-                'cmd_hex' => $cmdHex,
-                'data' => $data,
-                'before_point' => $this->point,
-                'attempts' => $attempts,
-            ]);
-
             Gateway::sendToUid($uid, hex2bin($cmdHex));
             $handleDuration = 0;
             $sleep = 50000; // 5毫秒取一次值
