@@ -324,13 +324,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $machineCacheInfo = $this->getAllData() ?? [];
             if (!empty($machineCacheInfo)) {
                 // ✅ Bug #15修复：所有字段添加默认值，防止Undefined array key错误
-                // chip_amount 实时打码量：CHECK归零后 bet(=total_bet) 每局从0开始
-                // 公式：bet(分) ÷ 100 × turn_used_point（与 LotteryServices::calculateBetAmount 一致）
-                $betVal = $machineCacheInfo[$this->cacheDataKey . '_bet'] ?? 0;
-                $turnUsedPointCacheKey = "machine_category:{$this->machine->cate_id}:turn_used_point";
-                $turnUsedPointForInfo = \support\Cache::get($turnUsedPointCacheKey) ?? 0;
-                $chipAmountForInfo = bcmul(bcdiv((string)$betVal, '100', 4), (string)$turnUsedPointForInfo, 2);
-
                 $info = [
                     'id' => $this->machine->id,
                     'last_game_at' => $this->machine->last_game_at,
@@ -340,11 +333,21 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     'auto' => $machineCacheInfo[$this->cacheDataKey . '_auto'] ?? 0,
                     'reward_status' => $machineCacheInfo[$this->cacheDataKey . '_reward_status'] ?? 0,
                     'point' => $machineCacheInfo[$this->cacheDataKey . '_point'] ?? 0,
-                    'bet' => $betVal,
+                    'bet' => $machineCacheInfo[$this->cacheDataKey . '_bet'] ?? 0,
                     'win' => $machineCacheInfo[$this->cacheDataKey . '_win'] ?? 0,
                     'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'] ?? 0,
                     'is_login' => $machineCacheInfo[$this->cacheDataKey . '_is_login'] ?? 0,
-                    'chip_amount' => floatval($chipAmountForInfo),
+                    // chip_amount：bet(分) × (odds_x/odds_y) 换算为金额，与在线版Slot.php一致
+                    // player_pressure 恒为0（CHECK每局归零），故直接用 bet
+                    'chip_amount' => bcmul(
+                        (string) max(0, (int) ($machineCacheInfo[$this->cacheDataKey . '_bet'] ?? 0)),
+                        bcdiv(
+                            (string) ($this->machine->odds_x ?? 1),
+                            (string) ($this->machine->odds_y ?? 1),
+                            8
+                        ),
+                        2
+                    ),
                 ];
 
                 $currentGamingUserId = $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0;
