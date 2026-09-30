@@ -1562,7 +1562,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'turn_delta' => $turnDelta
             ]);
         }
-        // turnDelta == 0：没有变化，不累加
     }
 
     /**
