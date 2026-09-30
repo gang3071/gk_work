@@ -222,9 +222,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_turn',                 // 转数（查询机台情况回复）
             $this->cacheDataKey . '_return_count',         // 回补次数（查询机台情况回复）
             $this->cacheDataKey . '_table_miss',           // 码表少跳数（查询机台情况回复）
-
-            // ========== 玩家游戏快照（用于打码量基准计算） ==========
-            // _player_pressure / _player_score 已移除：CHECK 归零后 total_bet 每局从0开始，基准恒为0
         ];
 
         // 推送到前端的关键字段（WebSocket实时同步）
@@ -1959,6 +1956,20 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 // 分→券：除以100，使 calculateBetAmount 里 incrementNum × turn_used_point 单位正确
                 $numForQueue = $totalBet / 100;
                 $lastNumForQueue = $oldTotalBet / 100;
+
+                // 玩家正在打码，更新活跃时间并解除保留状态
+                $this->last_play_time = time();
+                \Webman\RedisQueue\Client::send('play-keep-machine', [
+                    'change_amount'    => 1,
+                    'machine_id'       => $this->machine->id,
+                    'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                        $this->machine->domain, $this->machine->port, $this->machine->type
+                    ),
+                    'player_id'        => $currentGamingUserId,
+                    'gaming_user_id'   => $currentGamingUserId,
+                    'keep_seconds'     => $this->keep_seconds,
+                    'keeping'          => $this->keeping,
+                ]);
 
                 $this->log->info('[心跳-打码量] 检测到押分增量', [
                     'machine_code'  => $this->machine->code,
