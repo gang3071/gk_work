@@ -2185,11 +2185,22 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'is_locked' => false,
             ]);
 
-            // ⚠️ 玩家操作时立即更新活动时间
+            // ⚠️ 玩家操作时立即更新活动时间并解除保留状态
             if ($source == 'player') {
                 $currentGamingUserId = $this->gaming_user_id;
                 if (!empty($currentGamingUserId)) {
                     $this->last_play_time = time();
+                    \Webman\RedisQueue\Client::send('play-keep-machine', [
+                        'change_amount'     => 1,
+                        'machine_id'        => $this->machine->id,
+                        'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                            $this->machine->domain, $this->machine->port, $this->machine->type
+                        ),
+                        'player_id'         => $currentGamingUserId,
+                        'gaming_user_id'    => $currentGamingUserId,
+                        'keep_seconds'      => $this->keep_seconds,
+                        'keeping'           => $this->keeping,
+                    ]);
                 }
             }
 
