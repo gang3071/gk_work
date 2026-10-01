@@ -1606,6 +1606,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 设置check标记（10秒有效）
         Cache::set('check_flag_' . $this->machine->id, true, 10);
 
+        // CHECK 归零机台 total_bet，同步重置转数
+        $this->now_turn = 0;
+
         // 清除外部按钮计数器（同步清除新旧字段）
         $oldOpenCount = $this->external_open_count ?? 0;
         $oldWashCount = $this->external_wash_count ?? 0;
@@ -1953,6 +1956,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // CHECK 在每次开分前归零 total_bet，每局从 0 开始，直接用增量判断
             if (!empty($currentGamingUserId) && $totalBet > $oldTotalBet) {
                 $betIncrement = $totalBet - $oldTotalBet;  // 增量（分）
+
+                // 累加转数（与线上版一致，API 展示时除以3转换为转数）
+                $this->now_turn = bcadd($this->now_turn ?? '0', (string)$betIncrement, 2);
+
                 // 分→券：除以100，使 calculateBetAmount 里 incrementNum × turn_used_point 单位正确
                 $numForQueue = $totalBet / 100;
                 $lastNumForQueue = $oldTotalBet / 100;
