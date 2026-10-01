@@ -277,6 +277,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
                 Cache::set($this->cacheDataKey . '_last_play_time', time());
             }
+            // 玩家离开时重置转数（新玩家从0开始）
+            if ($name === 'gaming_user_id' && empty($value) && !empty($this->gaming_user_id)) {
+                Cache::set($this->cacheDataKey . '_now_turn', 0);
+            }
 
             try {
                 $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
@@ -1605,9 +1609,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     {
         // 设置check标记（10秒有效）
         Cache::set('check_flag_' . $this->machine->id, true, 10);
-
-        // CHECK 归零机台 total_bet，同步重置转数
-        $this->now_turn = 0;
 
         // 清除外部按钮计数器（同步清除新旧字段）
         $oldOpenCount = $this->external_open_count ?? 0;
