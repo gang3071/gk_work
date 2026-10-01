@@ -2153,23 +2153,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     }
                 }
 
-                if ($oldRewardStatus == 1 && $newRewardStatus == 0) {
-                    // 开奖结束：写入结束记录（线下机台无观看玩家，不需要踢出）
-                    $gamingUserId = $this->gaming_user_id ?? 0;
-                    if (!empty($gamingUserId)) {
-                        try {
-                            $lotteryRecord = new MachineLotteryRecord();
-                            $lotteryRecord->machine_id = $this->machine->id;
-                            $lotteryRecord->player_id = $gamingUserId;
-                            $lotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
-                            $lotteryRecord->draw_bet = $this->bet;
-                            $lotteryRecord->use_turn = $this->now_turn;
-                            $lotteryRecord->save();
-                        } catch (\Throwable $e) {
-                            $this->log->error('[心跳] 写入开奖结束记录失败', ['error' => $e->getMessage()]);
-                        }
-                    }
-                }
+                // 开奖结束（1→0）：线下机台无观看玩家，不需要推送也不需要写库
 
                 // 开奖状态切换时重置转数（开奖开始/结束都归零）
                 $this->now_turn = 0;
