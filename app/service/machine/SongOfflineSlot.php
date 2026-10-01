@@ -2154,13 +2154,21 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 }
 
                 if ($oldRewardStatus == 1 && $newRewardStatus == 0) {
-                    // 开奖结束：踢出观看中玩家（与线上版一致）
-                    sendSocketMessage('group-' . $this->machine->id, [
-                        'msg_type'       => 'machine_reward_end',
-                        'machine_id'     => $this->machine->id,
-                        'machine_code'   => $this->machine->code,
-                        'gaming_user_id' => $this->machine->gaming_user_id,
-                    ]);
+                    // 开奖结束：写入结束记录（线下机台无观看玩家，不需要踢出）
+                    $gamingUserId = $this->gaming_user_id ?? 0;
+                    if (!empty($gamingUserId)) {
+                        try {
+                            $lotteryRecord = new MachineLotteryRecord();
+                            $lotteryRecord->machine_id = $this->machine->id;
+                            $lotteryRecord->player_id = $gamingUserId;
+                            $lotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
+                            $lotteryRecord->draw_bet = $this->bet;
+                            $lotteryRecord->use_turn = $this->now_turn;
+                            $lotteryRecord->save();
+                        } catch (\Throwable $e) {
+                            $this->log->error('[心跳] 写入开奖结束记录失败', ['error' => $e->getMessage()]);
+                        }
+                    }
                 }
 
                 // 开奖状态切换时重置转数（开奖开始/结束都归零）
