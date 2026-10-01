@@ -4,6 +4,7 @@ namespace app\service\machine;
 
 use app\model\AdminUser;
 use app\model\Machine;
+use app\model\MachineLotteryRecord;
 use app\model\Notice;
 use app\model\PlayerGameRecord;
 use Exception;
@@ -2133,7 +2134,36 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $newRewardStatus = ($newBigWin || $newSmallWin) ? 1 : 0;
             if ($newRewardStatus !== $oldRewardStatus) {
                 $this->reward_status = $newRewardStatus;
-                // 开奖状态切换时重置转数（与线上版一致：开奖开始/结束都归零）
+
+                if ($oldRewardStatus == 0 && $newRewardStatus == 1 && $this->now_turn > 0) {
+                    // 开奖开始：记录本局打码量（与线上版一致）
+                    $gamingUserId = $this->gaming_user_id ?? 0;
+                    if (!empty($gamingUserId)) {
+                        try {
+                            $lotteryRecord = new MachineLotteryRecord();
+                            $lotteryRecord->machine_id = $this->machine->id;
+                            $lotteryRecord->player_id = $gamingUserId;
+                            $lotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
+                            $lotteryRecord->draw_bet = $this->bet;
+                            $lotteryRecord->use_turn = $this->now_turn;
+                            $lotteryRecord->save();
+                        } catch (\Throwable $e) {
+                            $this->log->error('[心跳] 写入开奖记录失败', ['error' => $e->getMessage()]);
+                        }
+                    }
+                }
+
+                if ($oldRewardStatus == 1 && $newRewardStatus == 0) {
+                    // 开奖结束：踢出观看中玩家（与线上版一致）
+                    sendSocketMessage('group-' . $this->machine->id, [
+                        'msg_type'       => 'machine_reward_end',
+                        'machine_id'     => $this->machine->id,
+                        'machine_code'   => $this->machine->code,
+                        'gaming_user_id' => $this->machine->gaming_user_id,
+                    ]);
+                }
+
+                // 开奖状态切换时重置转数（开奖开始/结束都归零）
                 $this->now_turn = 0;
             }
 
