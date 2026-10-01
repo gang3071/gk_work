@@ -1957,8 +1957,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if (!empty($currentGamingUserId) && $totalBet > $oldTotalBet) {
                 $betIncrement = $totalBet - $oldTotalBet;  // 增量（分）
 
-                // 累加转数：betIncrement 单位为"分"，除以100换算为"券"后累加，与线上版单位一致
-                $this->now_turn = bcadd($this->now_turn ?? '0', bcdiv((string)$betIncrement, '100', 2), 2);
+                // 累加机台转数（betIncrement 即为机台转数增量）
+                $this->now_turn = bcadd($this->now_turn ?? '0', (string)$betIncrement, 2);
 
                 // 分→券：除以100，使 calculateBetAmount 里 incrementNum × turn_used_point 单位正确
                 $numForQueue = $totalBet / 100;
