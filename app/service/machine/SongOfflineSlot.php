@@ -1903,6 +1903,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $oldCardScore = $this->card_score ?? 0;
             $oldMachineScore = $this->machine_score ?? 0;
             $oldTotalBet = $this->total_bet ?? 0;
+            $oldRewardStatus = $this->reward_status ?? 0;
+
+            // 提前从 statusByte 解析本次心跳的开奖状态（big_win=bit0，small_win=bit2）
+            $statusVal = hexdec($statusByte);
+            $heartbeatRewardStatus = (($statusVal & 0x01) > 0 || ($statusVal & 0x04) > 0) ? 1 : 0;
 
             // ✅ 诊断日志：详细记录分数变化原因，帮助排查锁机台问题
             if (abs($cardScore - $oldCardScore) > 0) {
@@ -1957,8 +1962,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if (!empty($currentGamingUserId) && $totalBet > $oldTotalBet) {
                 $betIncrement = $totalBet - $oldTotalBet;  // 增量（分）
 
-                // 累加机台转数（betIncrement 即为机台转数增量）
-                $this->now_turn = bcadd($this->now_turn ?? '0', (string)$betIncrement, 2);
+                // 累加机台转数（开奖中不累加，与线上版一致）
+                if ($heartbeatRewardStatus == 0) {
+                    $this->now_turn = bcadd($this->now_turn ?? '0', (string)$betIncrement, 2);
+                }
 
                 // 分→券：除以100，使 calculateBetAmount 里 incrementNum × turn_used_point 单位正确
                 $numForQueue = $totalBet / 100;
@@ -2123,8 +2130,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // ✅ 同步 reward_status：大当/小当置位时视为开奖中（兼容客户端 WS machineInfo）
             // ⚠️ 高确（high_prob）是概率模式不是派彩过程，不纳入 reward_status
             $newRewardStatus = ($newBigWin || $newSmallWin) ? 1 : 0;
-            if ($newRewardStatus !== ($this->reward_status ?? 0)) {
+            if ($newRewardStatus !== $oldRewardStatus) {
                 $this->reward_status = $newRewardStatus;
+                // 开奖状态切换时重置转数（与线上版一致：开奖开始/结束都归零）
+                $this->now_turn = 0;
             }
 
             // 检测现场跳码表
