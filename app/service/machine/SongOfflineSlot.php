@@ -2159,6 +2159,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->now_turn = 0;
             }
 
+            // 开奖中持续刷新活动时间，防止保留计时器计入闲置（大当可能持续较长时间）
+            if ($newRewardStatus == 1) {
+                $gamingUserId = $this->gaming_user_id ?? 0;
+                if (!empty($gamingUserId)) {
+                    $this->last_play_time = time();
+                }
+            }
+
             // 检测现场跳码表
             if ($status['external_open'] || $status['external_wash']) {
                 $this->handleExternalButton($status);
