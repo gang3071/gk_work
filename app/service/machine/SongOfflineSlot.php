@@ -278,9 +278,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
                 Cache::set($this->cacheDataKey . '_last_play_time', time());
             }
-            // 玩家离开时重置转数（新玩家从0开始）
+            // 玩家离开时重置转数（新玩家从0开始），走 __set 路径保证有重试逻辑
             if ($name === 'gaming_user_id' && empty($value) && !empty($this->gaming_user_id)) {
-                Cache::set($this->cacheDataKey . '_now_turn', 0);
+                $this->now_turn = 0;
             }
 
             try {
@@ -2167,11 +2167,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             // 开奖中持续刷新活动时间，防止保留计时器计入闲置（大当可能持续较长时间）
-            if ($newRewardStatus == 1) {
-                $gamingUserId = $this->gaming_user_id ?? 0;
-                if (!empty($gamingUserId)) {
-                    $this->last_play_time = time();
-                }
+            if ($newRewardStatus == 1 && !empty($currentGamingUserId)) {
+                $this->last_play_time = time();
             }
 
             // 检测现场跳码表
