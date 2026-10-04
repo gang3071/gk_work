@@ -1960,6 +1960,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 条件：旧值>0（排除EADE后复位）、押分增加、有玩家在游戏
             $currentGamingUserId = $this->gaming_user_id ?? 0;
 
+            // machine_score 变化说明机台正在处理游戏结果（赢/输），刷新活跃时间防止被判为闲置
+            if ($machineScore !== $oldMachineScore && !empty($currentGamingUserId)) {
+                $this->last_play_time = time();
+            }
+
             // CHECK 在每次开分前归零 total_bet，每局从 0 开始，直接用增量判断
             if (!empty($currentGamingUserId) && $totalBet > $oldTotalBet) {
                 $betIncrement = $totalBet - $oldTotalBet;  // 增量（分）
