@@ -2154,6 +2154,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 }
 
                 // 开奖结束（1→0）：线下机台无观看玩家，不需要推送也不需要写库
+                // 刷新活跃时间，防止开奖结束后玩家立即被判为闲置
+                if ($oldRewardStatus == 1 && $newRewardStatus == 0) {
+                    $gamingUserId = $this->gaming_user_id ?? 0;
+                    if (!empty($gamingUserId)) {
+                        $this->last_play_time = time();
+                    }
+                }
 
                 // 开奖状态切换时重置转数（开奖开始/结束都归零）
                 $this->now_turn = 0;
