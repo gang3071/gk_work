@@ -513,14 +513,20 @@ class LotteryServices
                         $isDoubled = true;
                     }
 
-                    // 3. 应用最大金额限制（双倍后也不能超过）
+                    // 3. 应用机台分类派彩系数
+                    $cateRate = $this->machine->machineCategory->lottery_rate ?? 0;
+                    if ($cateRate > 0) {
+                        $amount = bcmul($amount, (string)$cateRate, 2);
+                    }
+
+                    // 4. 应用最大金额限制
                     if ($lottery->max_status == 1) {
                         if ($lottery->max_amount > 0 && $amount > $lottery->max_amount) {
                             $amount = floatval($lottery->max_amount);
                         }
                     }
 
-                    // 4. 发放金额向下取整（只保留整数位）
+                    // 5. 发放金额向下取整（只保留整数位）
                     $amount = floor($amount);
 
                     // 彩金倍数标记（只由双倍派彩决定）
@@ -1339,14 +1345,20 @@ LUA;
                         $isDoubled = true;
                     }
 
-                    // 3. 应用最大金额限制（双倍后也不能超过）
+                    // 3. 应用机台分类派彩系数
+                    $cateRate = $this->machine->machineCategory->lottery_rate ?? 0;
+                    if ($cateRate > 0) {
+                        $amount = bcmul($amount, (string)$cateRate, 2);
+                    }
+
+                    // 4. 应用最大金额限制
                     if ($lottery->max_status == 1) {
                         if ($lottery->max_amount > 0 && $amount > $lottery->max_amount) {
                             $amount = floatval($lottery->max_amount);
                         }
                     }
 
-                    // 4. 发放金额向下取整（只保留整数位）
+                    // 5. 发放金额向下取整（只保留整数位）
                     $amount = floor($amount);
 
                     // 彩金倍数标记（只由双倍派彩决定）
@@ -1534,9 +1546,8 @@ LUA;
                     $playerDeliveryRecord->user_name = '';
                     $playerDeliveryRecord->save();
 
-                    // 扣减彩金池（从 lottery.amount 扣减）
-                    $rate = $lotteryModel->rate > 0 ? $lotteryModel->rate : 100;
-                    $baseDeductAmount = bcmul($lotteryModel->amount, bcdiv($rate, 100, 4), 2);
+                    // 扣减彩金池：直接用实际派彩金额，保证扣除 = 派出，避免因池值变化导致账目不平
+                    $baseDeductAmount = $fixedAllowLottery['amount'];
                     $lotteryModel->amount = bcsub($lotteryModel->amount, $baseDeductAmount, 2);
 
                     // 派彩成功后补充到保底金额（参考随机彩金逻辑）
