@@ -117,6 +117,10 @@ class Events
         $port = $_SERVER['REMOTE_PORT'];
         $gatewayPort = $_SERVER['GATEWAY_PORT'];
         if (empty($message)) {
+            $log->error('空包消息', [
+                'domain' => $domain,
+                'port' => $port,
+            ]);
             return Gateway::closeClient($client_id);
         }
         $machine = self::getMachine($gatewayPort, $domain, $port, $client_id);
@@ -187,6 +191,11 @@ class Events
                         return true;
                 }
             default:
+                $log->error('设备连接port错误', [
+                    'domain' => $domain,
+                    'port' => $port,
+                    'message' => strtoupper(bin2hex($message)),
+                ]);
                 return Gateway::closeClient($client_id);
         }
     }
