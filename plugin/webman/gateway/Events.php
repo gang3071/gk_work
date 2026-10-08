@@ -84,9 +84,10 @@ class Events
         if (!in_array($domain, config('gateway_worker.whitelist'))) {
             return Gateway::closeClient($client_id);
         }
-        $log->error('设备不存在', [
+        $log->error('设备连接', [
             'domain' => $domain,
             'port' => $port,
+            'GATEWAY_PORT' => $_SERVER['GATEWAY_PORT']
         ]);
         $machine = self::getMachine($_SERVER['GATEWAY_PORT'], $domain, $port, $client_id);
         if (!empty($machine) && $machine->status == 1 && $machine->deleted_at == null) {
