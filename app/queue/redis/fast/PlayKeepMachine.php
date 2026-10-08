@@ -87,12 +87,11 @@ class PlayKeepMachine implements Consumer
             $newKeepSeconds = $oldKeepSeconds;
             $newKeeping = $oldKeeping;
 
-            // 增加保留时间
-            // 线下机台：保留时间由首次上分的 gift_keeping_minutes 直接赋值，
-            //           押注/游戏不增加保留时间，此处完全跳过累加
-            // 线上机台：每次押注都累加保留时间
+            // 增加保留时间（线上/线下均适用）
+            // 线上机台：change_amount = 实际押注增量，keep_minutes × 增量 = 本次增加秒数
+            // 线下机台：change_amount = 1（每次心跳/操作触发），keep_minutes × 1 = 本次增加秒数
             $isOffline = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE);
-            if (!$isOffline && $keepMinutes > 0 && $changeAmount > 0) {
+            if ($keepMinutes > 0 && $changeAmount > 0) {
                 $addSeconds = bcmul($keepMinutes, $changeAmount, 2);
                 $newKeepSeconds = bcadd($oldKeepSeconds, $addSeconds, 2);
 
