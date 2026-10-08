@@ -1584,7 +1584,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // 更新最后游玩时间
         $this->last_play_time = time();
 
-        // 投递保留状态队列（线下机台不累加保留时间，但玩家活跃时需解除保留状态）
+        // 投递保留状态队列：累加保留时间 + 若在保留中则解除
         if (!empty($gamingUserId)) {
             Client::send('play-keep-machine', [
                 'change_amount' => $consumed,
@@ -2185,7 +2185,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'is_locked' => false,
             ]);
 
-            // ⚠️ 玩家操作时立即更新活动时间并解除保留状态
+            // 玩家操作时更新活动时间并累加保留时间
             if ($source == 'player') {
                 $currentGamingUserId = $this->gaming_user_id;
                 if (!empty($currentGamingUserId)) {

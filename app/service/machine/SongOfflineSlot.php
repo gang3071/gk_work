@@ -1518,7 +1518,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $currentGamingUserId = $this->gaming_user_id;
                 if (!empty($currentGamingUserId)) {
                     $this->last_play_time = time();
-                    // 投递保留状态队列（线下机台不累加保留时间，但玩家活跃时需解除保留状态）
+                    // 投递保留状态队列：累加保留时间 + 若在保留中则解除
                     Client::send('play-keep-machine', [
                         'change_amount' => 1,
                         'machine_id' => $this->machine->id,
@@ -1978,7 +1978,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $numForQueue = $totalBet / 100;
                 $lastNumForQueue = $oldTotalBet / 100;
 
-                // 玩家正在打码，更新活跃时间并解除保留状态
+                // 玩家正在打码，更新活跃时间并累加保留时间
                 $this->last_play_time = time();
                 \Webman\RedisQueue\Client::send('play-keep-machine', [
                     'change_amount'    => 1,
