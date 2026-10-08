@@ -80,6 +80,11 @@ class Events
     {
         $domain = $_SERVER['REMOTE_ADDR'];
         $port = $_SERVER['REMOTE_PORT'];
+        $log = Log::channel('machine');
+        $log->error('设备连接', [
+            'domain' => $domain,
+            'port' => $port,
+        ]);
         if (!in_array($domain, config('gateway_worker.whitelist'))) {
             return Gateway::closeClient($client_id);
         }
@@ -106,7 +111,11 @@ class Events
         $domain = $_SERVER['REMOTE_ADDR'];
         $port = $_SERVER['REMOTE_PORT'];
         $gatewayPort = $_SERVER['GATEWAY_PORT'];
-
+        $log->error('设备消息', [
+            'domain' => $domain,
+            'port' => $port,
+            'message' => strtoupper(bin2hex($message)),
+        ]);
         if (empty($message)) {
             return Gateway::closeClient($client_id);
         }
