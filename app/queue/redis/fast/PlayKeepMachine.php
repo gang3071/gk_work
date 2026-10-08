@@ -86,24 +86,15 @@ class PlayKeepMachine implements Consumer
             $keepingChanged = false;
             $newKeepSeconds = $oldKeepSeconds;
             $newKeeping = $oldKeeping;
+            $currentGamingUserId = 0;
 
-            // 增加保留时间（线上/线下均适用）
+            // 预计算本次应增加的秒数（线上/线下均适用）
             // 线上机台：change_amount = 实际押注增量，keep_minutes × 增量 = 本次增加秒数
             // 线下机台：change_amount = 1（每次心跳/操作触发），keep_minutes × 1 = 本次增加秒数
             $isOffline = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE);
+            $addSeconds = '0';
             if ($keepMinutes > 0 && $changeAmount > 0) {
                 $addSeconds = bcmul($keepMinutes, $changeAmount, 2);
-                $newKeepSeconds = bcadd($oldKeepSeconds, $addSeconds, 2);
-
-                // 检查最大保留时间限制
-                $maxKeepSeconds = $this->getMaxKeepSeconds();
-                if ($maxKeepSeconds > 0 && $newKeepSeconds > $maxKeepSeconds) {
-                    $newKeepSeconds = $maxKeepSeconds;
-                }
-
-                if ($newKeepSeconds != $oldKeepSeconds) {
-                    $keepSecondsChanged = true;
-                }
             }
 
             // 解除保留状态
@@ -120,8 +111,8 @@ class PlayKeepMachine implements Consumer
             }
 
             // ✅ 更新 Redis（只在有变化时）
-            if ($keepSecondsChanged || $keepingChanged) {
-                // 创建 MachineServices 更新 Redis（复用前面已获取的 $machine）
+            $willAddSeconds = bccomp($addSeconds, '0', 2) > 0;
+            if ($willAddSeconds || $keepingChanged) {
                 try {
                     $services = MachineServices::createServices($machine);
 
@@ -147,11 +138,28 @@ class PlayKeepMachine implements Consumer
                         }
                     }
 
-                    if ($keepSecondsChanged) {
-                        $services->keep_seconds = $newKeepSeconds;
+                    if ($willAddSeconds) {
+                        // ⚠️ 基于 Redis 实时值累加，而非消息快照：
+                        // 队列积压时多条消息会并发处理，若用快照值覆盖会导致前面消息的累加结果丢失
+                        $currentKeepSeconds = $services->keep_seconds;
+                        $newKeepSeconds = bcadd($currentKeepSeconds, $addSeconds, 2);
+
+                        // 检查最大保留时间限制
+                        $maxKeepSeconds = $this->getMaxKeepSeconds();
+                        if ($maxKeepSeconds > 0 && $newKeepSeconds > $maxKeepSeconds) {
+                            $newKeepSeconds = $maxKeepSeconds;
+                        }
+
+                        if ($newKeepSeconds != $currentKeepSeconds) {
+                            $services->keep_seconds = $newKeepSeconds;
+                            $keepSecondsChanged = true;
+                        }
                     }
                 } catch (\Throwable $e) {
-                    // 更新失败不影响推送
+                    Log::error('[PlayKeepMachine] Redis更新失败', [
+                        'machine_id' => $machineId,
+                        'error' => $e->getMessage(),
+                    ]);
                 }
 
                 // 推送到客户端（使用实时 gaming_user_id）
