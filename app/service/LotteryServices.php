@@ -513,10 +513,10 @@ class LotteryServices
                         $isDoubled = true;
                     }
 
-                    // 3. 应用机台分类派彩系数
+                    // 3. 应用机台分类派彩系数（百分比口径，100 = 100%）
                     $cateRate = $this->machine->machineCategory->lottery_rate ?? 0;
                     if ($cateRate > 0) {
-                        $amount = bcmul($amount, (string)$cateRate, 2);
+                        $amount = bcmul($amount, bcdiv($cateRate, 100, 4), 2);
                     }
 
                     // 4. 应用最大金额限制
@@ -1345,10 +1345,10 @@ LUA;
                         $isDoubled = true;
                     }
 
-                    // 3. 应用机台分类派彩系数
+                    // 3. 应用机台分类派彩系数（百分比口径，100 = 100%）
                     $cateRate = $this->machine->machineCategory->lottery_rate ?? 0;
                     if ($cateRate > 0) {
-                        $amount = bcmul($amount, (string)$cateRate, 2);
+                        $amount = bcmul($amount, bcdiv($cateRate, 100, 4), 2);
                     }
 
                     // 4. 应用最大金额限制
