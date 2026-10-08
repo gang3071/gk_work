@@ -93,6 +93,10 @@ class Events
             Gateway::bindUid($client_id, $domain . ':' . $port);
             MachineServices::sendMachineNowStatusMessage($machine->id);
         } else {
+            $log->error('设备不存在', [
+                'domain' => $domain,
+                'port' => $port,
+            ]);
             return Gateway::closeClient($client_id);
         }
         return true;
@@ -111,16 +115,16 @@ class Events
         $domain = $_SERVER['REMOTE_ADDR'];
         $port = $_SERVER['REMOTE_PORT'];
         $gatewayPort = $_SERVER['GATEWAY_PORT'];
-        $log->error('设备消息', [
-            'domain' => $domain,
-            'port' => $port,
-            'message' => strtoupper(bin2hex($message)),
-        ]);
         if (empty($message)) {
             return Gateway::closeClient($client_id);
         }
         $machine = self::getMachine($gatewayPort, $domain, $port, $client_id);
         if (empty($machine) || $machine->status == 0 || $machine->deleted_at != null) {
+            $log->error('设备不存在', [
+                'domain' => $domain,
+                'port' => $port,
+                'message' => strtoupper(bin2hex($message)),
+            ]);
             return Gateway::closeClient($client_id);
         }
         try {
