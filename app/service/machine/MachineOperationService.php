@@ -81,6 +81,7 @@ class MachineOperationService
      * - 斯洛机 + 小淞 → SongSlot
      * - 钢珠机 + 双美 → Jackpot
      * - 钢珠机 + 小淞 → SongJackpot
+     * - 精灵球 → PokemonBall
      */
     private function initServices(): void
     {
@@ -89,6 +90,9 @@ class MachineOperationService
             $serviceClass = ($this->machine->control_type === Machine::CONTROL_TYPE_MEI)
                 ? \app\service\machine\Slot::class
                 : \app\service\machine\SongSlot::class;
+        } elseif ($this->machine->type == GameType::TYPE_POKEMON_BALL) {
+            // 精灵球：单一实现，不区分 control_type
+            $serviceClass = \app\service\machine\PokemonBall::class;
         } else {
             // 钢珠机 (TYPE_STEEL_BALL) 或其他类型
             $serviceClass = ($this->machine->control_type === Machine::CONTROL_TYPE_MEI)
