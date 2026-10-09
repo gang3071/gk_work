@@ -117,6 +117,18 @@ Route::group('/single-wallet', function () {
         Route::post('/SeamlessGameHub/GetBalance', [\app\wallet\controller\game\TNineSlotGameController::class, 'balance']); //商戶會員餘額查詢
         Route::post('/SeamlessGameHub/BetAndSettle', [\app\wallet\controller\game\TNineSlotGameController::class, 'bet']); //商戶會員餘額查詢
         Route::post('SeamlessGameHub/CancelBet', [\app\wallet\controller\game\TNineSlotGameController::class, 'cancelBet']); //商戶會員餘額查詢
+
+        // ========== T9 电子 V2（t9-integration）==========
+        // 响应格式：{"statusCode": 0, "data": {...}}（V1 为 resultCode）
+        // 新增接口：/bet、/settle、/modify-game-order
+        Route::group('/t9-integration', function () {
+            Route::post('/get-balance', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'balance']);
+            Route::post('/bet-and-settle', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'betAndSettle']);
+            Route::post('/cancel-bet', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'cancelBet']);
+            Route::post('/bet', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'bet']);
+            Route::post('/settle', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'settle']);
+            Route::post('/modify-game-order', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'modifyGameOrder']);
+        });
     });
     Route::group('/kt-channel', function () {
         Route::post('/auth', [\app\wallet\controller\game\KTGameController::class, 'auth']);
