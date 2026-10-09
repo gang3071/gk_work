@@ -1974,10 +1974,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $oddsY = (string)($this->machine->odds_y ?: 1);
 
                 // 累加机台转数（开奖中不累加，与线上版一致）
-                // 线下版直接存转数：betIncrement × odds_x / odds_y
+                // now_turn 直接累加机台原始分，与线上 Slot.php 保持一致
                 if ($heartbeatRewardStatus == 0) {
-                    $turnIncrement = bcmul(bcdiv((string)$betIncrement, $oddsY, 8), $oddsX, 4);
-                    $this->now_turn = bcadd($this->now_turn ?? '0', $turnIncrement, 4);
+                    $this->now_turn = bcadd($this->now_turn ?? '0', (string)$betIncrement, 2);
                 }
 
                 // 分→转：使 calculateBetAmount 里 incrementNum × turn_used_point 单位正确
