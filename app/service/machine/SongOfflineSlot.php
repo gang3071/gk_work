@@ -1967,21 +1967,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // CHECK 在每次开分前归零 total_bet，每局从 0 开始，直接用增量判断
             if (!empty($currentGamingUserId) && $totalBet > $oldTotalBet) {
-                $betIncrement = $totalBet - $oldTotalBet;  // 增量（分）
-
-                // 分→转：用机台比值换算（1转 = odds_y/odds_x 分），而非固定除以100
-                $oddsX = (string)($this->machine->odds_x ?: 1);
-                $oddsY = (string)($this->machine->odds_y ?: 1);
+                $betIncrement = $totalBet - $oldTotalBet;  // 增量（转）
 
                 // 累加机台转数（开奖中不累加，与线上版一致）
-                // now_turn 直接累加机台原始分，与线上 Slot.php 保持一致
+                // total_bet 从机台指令读上来已经是转数，直接使用
                 if ($heartbeatRewardStatus == 0) {
                     $this->now_turn = bcadd($this->now_turn ?? '0', (string)$betIncrement, 2);
                 }
 
-                // 分→转：使 calculateBetAmount 里 incrementNum × turn_used_point 单位正确
-                $numForQueue = bcmul(bcdiv((string)$totalBet, $oddsY, 8), $oddsX, 4);
-                $lastNumForQueue = bcmul(bcdiv((string)$oldTotalBet, $oddsY, 8), $oddsX, 4);
+                // total_bet 已是转数，直接作为 num/last_num 传入彩金队列
+                $numForQueue = $totalBet;
+                $lastNumForQueue = $oldTotalBet;
 
                 // 玩家正在打码，更新活跃时间并累加保留时间
                 $this->last_play_time = time();
@@ -2033,17 +2029,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     }
 
                     if ($turnUsedPoint > 0) {
-                        // 分→转→元：betIncrement × (odds_x/odds_y) × turn_used_point
-                        $betAmount = bcmul(
-                            bcmul(bcdiv((string)$betIncrement, $oddsY, 8), $oddsX, 4),
-                            (string)$turnUsedPoint,
-                            2
-                        );
+                        // 转→元：betIncrement（转）× turn_used_point（元/转）= 打码金额
+                        $betAmount = bcmul((string)$betIncrement, (string)$turnUsedPoint, 2);
                         $this->log->info('[心跳-打码量] 打码金额计算', [
                             'machine_code'      => $this->machine->code,
                             'player_id'         => $currentGamingUserId,
-                            'bet_increment_fen' => $betIncrement,
-                            'odds'              => "{$oddsX}:{$oddsY}",
+                            'bet_increment_turn' => $betIncrement,
                             'turn_used_point'   => $turnUsedPoint,
                             'bet_amount'        => $betAmount,
                         ]);
