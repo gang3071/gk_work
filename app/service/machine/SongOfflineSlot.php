@@ -32,7 +32,7 @@ use yzh52521\WebmanLock\Locker;
  * - 读取状态: EA D4 → 回复开分状态、洗分状态、转数
  * - 登入: EA C3 → 回复A7 C3（表示登入中，必须登入才能上下分）
  * - 登出: EA C5 → 回复A7 C5（表示登出中）
- * - 上分: A5 XX C0 SUM1 SUM2（XX=开分次数，固定100分为单位）
+ * - 上分: A5 XX C0 SUM1 SUM2（XX=开分次数，固定300分为单位）
  * - 下分: A5 00 C1 SUM1 SUM2（固定00表示全部洗分）
  * - 清除历史记录: EA DE
  * - 故排: A3 70 05 E0 F8 CE → 回复A3 F8 33 → EF/EE
@@ -163,7 +163,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     // 业务限制常量
     // ========================================
     const MAX_SCORE = 99999999;             // 最大分数（4字节BCD = 99,999,999）
-    const OPEN_UNIT = 100;                  // 上分单位（固定100分）
+    const OPEN_UNIT = 300;                  // 上分单位（固定300分）
     const MAX_OPEN_TIMES = 255;             // 最大开分次数（1字节 = 0-255）
 
     public $cacheData = [];
@@ -1071,7 +1071,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             return;
         }
 
-        // 2. 计算需要退款的金额（回补次数 × 100分）
+        // 2. 计算需要退款的金额（回补次数 × 300分）
         $refundAmount = $retryCount * self::OPEN_UNIT;
 
         $this->log->warning('[收账小卡-回补] 检测到开分失败，需要退款', [
@@ -1642,8 +1642,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * 处理上分指令（A5 XX C0 SUM1 SUM2）
      *
      * ⚠️ 小淞线下Slot特殊规则：
-     * 1. 固定100分为单位（self::OPEN_UNIT）
-     * 2. 玩家开分1000需要发送开分指令10次（1000÷100=10次）
+     * 1. 固定300分为单位（self::OPEN_UNIT）
+     * 2. 玩家开分3000需要发送开分指令10次（3000÷300=10次）
      * 3. $data参数是机台分数（不是玩家钱包金额）
      */
     private function handleOpenPoint(string $uid, int $data, string $source, int $source_id): void
@@ -1651,7 +1651,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // ⚠️ 确保已登入（自动登入）
         $this->ensureLoggedIn();
 
-        // ⚠️ 特殊逻辑：机台分数转换成次数（100分为单位）
+        // ⚠️ 特殊逻辑：机台分数转换成次数（300分为单位）
         if ($data % self::OPEN_UNIT != 0) {
             throw new Exception('开分金额必须是' . self::OPEN_UNIT . '的倍数，当前：' . $data);
         }
@@ -1701,7 +1701,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * 处理下分指令（A5 00 C1 SUM1 SUM2）
      *
      * ⚠️ 小淞线下Slot特殊规则：
-     * 1. 固定100分为单位（self::OPEN_UNIT）
+     * 1. 固定300分为单位（self::OPEN_UNIT）
      * 2. 不能全部洗分（根据用户说明）
      * 3. 洗分需要根据洗分的次数换算成对应的玩家分数
      *
