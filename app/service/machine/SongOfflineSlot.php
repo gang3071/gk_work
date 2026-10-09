@@ -2018,25 +2018,22 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         'last_num'     => $lastNumForQueue,
                     ]);
 
-                    // 实时打码量统计
-                    $cateId = $this->machine->cate_id;
-                    $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
-                    $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
-                    if ($turnUsedPoint === null) {
-                        $turnUsedPoint = \app\model\MachineCategory::query()
-                            ->where('id', $cateId)->value('turn_used_point') ?? 0;
-                        \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
-                    }
-
-                    if ($turnUsedPoint > 0) {
-                        // 转→元：betIncrement（转）× turn_used_point（元/转）= 打码金额
-                        $betAmount = bcmul((string)$betIncrement, (string)$turnUsedPoint, 2);
+                    // 实时打码量统计：转数 × (odds_x/odds_y) = 元，与洗分打码量公式一致
+                    $oddsX = $this->machine->odds_x ?? 1;
+                    $oddsY = $this->machine->odds_y ?? 1;
+                    if ($oddsY > 0) {
+                        $betAmount = bcmul(
+                            (string)$betIncrement,
+                            bcdiv((string)$oddsX, (string)$oddsY, 8),
+                            2
+                        );
                         $this->log->info('[心跳-打码量] 打码金额计算', [
-                            'machine_code'      => $this->machine->code,
-                            'player_id'         => $currentGamingUserId,
+                            'machine_code'       => $this->machine->code,
+                            'player_id'          => $currentGamingUserId,
                             'bet_increment_turn' => $betIncrement,
-                            'turn_used_point'   => $turnUsedPoint,
-                            'bet_amount'        => $betAmount,
+                            'odds_x'             => $oddsX,
+                            'odds_y'             => $oddsY,
+                            'bet_amount'         => $betAmount,
                         ]);
                         if (bccomp($betAmount, '0', 2) > 0) {
                             \Webman\RedisQueue\Client::send('bet-statistics', [
@@ -2053,12 +2050,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                                 'bet_amount'   => $betAmount,
                             ]);
                         }
-                    } else {
-                        $this->log->warning('[心跳-打码量] turn_used_point 为0，跳过bet-statistics', [
-                            'machine_code'    => $this->machine->code,
-                            'cate_id'         => $cateId,
-                            'turn_used_point' => $turnUsedPoint,
-                        ]);
                     }
                 } catch (\Exception $e) {
                     $this->log->error('[心跳-打码量] 投递队列失败', [
