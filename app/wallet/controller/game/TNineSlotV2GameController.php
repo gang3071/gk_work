@@ -74,7 +74,9 @@ class TNineSlotV2GameController
     // ==================== Redis Key ====================
     // 独立 bet/settle 流程的订单映射：gameOrderNumber → bet transactionId
     private const BET_MAPPING_PREFIX = 't9slot:v2:bet_mapping:';
-    private const BET_MAPPING_TTL = 86400; // 24小时（一局游戏通常数分钟内完成）
+    // 与 GameRecordCacheService::TTL_RECORD 一致（7天）：
+    // 映射是 /settle、/cancel-bet 反查原 bet 流水号的唯一途径，须覆盖 bet 记录的整个生命周期
+    private const BET_MAPPING_TTL = 604800;
 
     // ModifyGameOrder 幂等锁
     private const MODIFY_LOCK_PREFIX = 't9slot:v2:modify_lock:';
@@ -226,6 +228,9 @@ class TNineSlotV2GameController
                     'game_order_number' => $gameOrderNo,
                     'bet_kind' => $betKind,
                 ]);
+                // 同样写 gameOrderNumber → transactionId 映射：
+                // /settle 与 /cancel-bet 都要据此反查原 bet 流水号
+                $this->storeBetMapping($gameOrderNo, $orderNo);
             }
 
             // --- 结算 ---
@@ -344,8 +349,22 @@ class TNineSlotV2GameController
 
             $this->service->player = $player;
 
-            $orderNo = (string)$params['transactionId']; // V2 改用 transactionId
+            $cancelTransactionId = (string)$params['transactionId']; // 本次取消的流水号（审计用）
+            $gameOrderNo = (string)$params['gameOrderNumber'];
             $refundAmount = (float)$params['payoutAmount'];    // V2 直接传退款金额
+
+            // ⚠️ atomicCancel 的 order_no 必须是原 bet 的流水号：
+            //   KEYS[2] = game:record:bet:T9SLOT:{order_no}，Lua 要求该记录存在，否则返回 order_not_found；
+            //   退款金额校验 validateRefundAmount() 也按此 order_no 反查下注额。
+            //   T9 的取消流水号与下注流水号不同，故按 gameOrderNumber 反查。
+            $orderNo = $this->resolveBetOrderNo($gameOrderNo, $cancelTransactionId);
+            if ($orderNo !== $cancelTransactionId) {
+                $this->logger->info('[V2] cancelBet 反查到原 bet 流水号', [
+                    'game_order_no' => $gameOrderNo,
+                    'cancel_tx' => $cancelTransactionId,
+                    'bet_tx' => $orderNo,
+                ]);
+            }
 
             $luaParams = [
                 'order_no' => $orderNo,
@@ -370,6 +389,15 @@ class TNineSlotV2GameController
                 if (($result['error'] ?? '') === 'duplicate_cancel') {
                     $this->logger->info('[V2] cancelBet 重复请求', ['order_no' => $orderNo]);
                     return $this->v2Error(self::CODE_DUPLICATE);
+                }
+                // 找不到对应下注记录（映射过期 / 注单号对不上）
+                if (($result['error'] ?? '') === 'order_not_found') {
+                    $this->logger->error('[V2] cancelBet 找不到对应 bet 记录', [
+                        'order_no' => $orderNo,
+                        'game_order_no' => $gameOrderNo,
+                        'cancel_tx' => $cancelTransactionId,
+                    ]);
+                    return $this->v2Error(self::CODE_PARAM_ERROR);
                 }
                 $this->logger->error('[V2] cancelBet atomicCancel 失败', ['result' => $result, 'order_no' => $orderNo]);
                 return $this->v2Error(self::CODE_PLATFORM_REJECT);
@@ -496,8 +524,8 @@ class TNineSlotV2GameController
                 ]);
 
                 // 存储映射：gameOrderNumber → bet transactionId
-                // /settle 接口用此映射将结算挂到正确的 bet 记录上
-                Redis::setex(self::BET_MAPPING_PREFIX . $gameOrderNo, self::BET_MAPPING_TTL, $orderNo);
+                // /settle、/cancel-bet 用此映射挂回正确的 bet 记录
+                $this->storeBetMapping($gameOrderNo, $orderNo);
 
                 $this->logger->info('[V2] bet 成功，存储订单映射', [
                     'order_no' => $orderNo,
@@ -564,21 +592,9 @@ class TNineSlotV2GameController
             $betKind = (int)($params['betKind'] ?? 1);
 
             // 通过 gameOrderNumber 找到对应的 bet transactionId
-            $betTransactionId = Redis::get(self::BET_MAPPING_PREFIX . $gameOrderNo);
-
-            // 竞态处理：/bet 还未写完映射时，等待一次
-            if (!$betTransactionId) {
-                $this->logger->warning('[V2] settle 找不到 bet 映射，等待 200ms 重试', [
-                    'settle_tx' => $settleTransactionId,
-                    'game_order_no' => $gameOrderNo,
-                ]);
-                usleep(200000);
-                $betTransactionId = Redis::get(self::BET_MAPPING_PREFIX . $gameOrderNo);
-            }
-
             // 以 bet transactionId 为 orderNo（关联到 bet 记录）
             // 若仍找不到，回退到 settle 的 transactionId（走独立 settle 路径）
-            $orderNo = $betTransactionId ?: $settleTransactionId;
+            $orderNo = $this->resolveBetOrderNo($gameOrderNo, $settleTransactionId);
             $gameCode = $this->extractGameCodeV2($params);
             $actualWin = bcadd($betAmount, $payoutAmount, 2);
             $diff = bcsub($actualWin, $betAmount, 2);
@@ -887,6 +903,44 @@ class TNineSlotV2GameController
             return;
         }
         GameRecordCacheService::updateRecord('T9SLOT', $orderNo, $fields);
+    }
+
+    /**
+     * 记录 gameOrderNumber → bet transactionId 映射
+     *
+     * /bet、/bet-and-settle 都要写。/settle、/cancel-bet 靠它把交易挂回原 bet 记录
+     * （atomicCancel 的 order_no 必须是 bet 流水号，否则直接 order_not_found）。
+     */
+    private function storeBetMapping(string $gameOrderNo, string $betTransactionId): void
+    {
+        if (!$gameOrderNo || !$betTransactionId) {
+            return;
+        }
+        Redis::setex(self::BET_MAPPING_PREFIX . $gameOrderNo, self::BET_MAPPING_TTL, $betTransactionId);
+    }
+
+    /**
+     * 由 gameOrderNumber 反查原 bet 流水号
+     *
+     * 找不到时返回 $fallback（调用方自身的 transactionId），并做一次 200ms 重试，
+     * 覆盖 /bet 尚未写完映射的竞态。
+     */
+    private function resolveBetOrderNo(string $gameOrderNo, string $fallback): string
+    {
+        $betTransactionId = Redis::get(self::BET_MAPPING_PREFIX . $gameOrderNo);
+        if ($betTransactionId) {
+            return (string)$betTransactionId;
+        }
+
+        // 竞态处理：/bet 还未写完映射时，等待一次
+        $this->logger->warning('[V2] 找不到 bet 映射，等待 200ms 重试', [
+            'game_order_no' => $gameOrderNo,
+            'fallback' => $fallback,
+        ]);
+        usleep(200000);
+        $betTransactionId = Redis::get(self::BET_MAPPING_PREFIX . $gameOrderNo);
+
+        return $betTransactionId ? (string)$betTransactionId : $fallback;
     }
 
     /**
