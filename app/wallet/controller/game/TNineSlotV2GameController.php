@@ -4,9 +4,9 @@ namespace app\wallet\controller\game;
 
 use app\Constants\TransactionType;
 use app\model\Player;
+use app\service\game\GameServiceFactory;
 use app\service\game\GameServiceInterface;
 use app\service\game\SingleWalletServiceInterface;
-use app\service\game\TNineSlotV2ServiceInterface;
 use app\service\GameRecordCacheService;
 use app\service\RedisLuaScripts;
 use app\service\WalletService;
@@ -55,7 +55,10 @@ use support\Response;
  *   POST /settle           - 独立结算（V1 无此接口）
  *   POST /modify-game-order - 修改订单（V1 无此接口）
  *
+ * 服务分发：GameServiceFactory::TYPE_TNINE_SLOT → TNineSlotV2ServiceInterface
+ *          （进游戏 enterGame/lobbyLogin/createPlayer 与钱包控制器统一走 V2 出站）
  * V1 保留：app/wallet/controller/game/TNineSlotGameController.php
+ *         与 app/service/game/TNineSlotServiceInterface.php（代码保留，不再由工厂分发）
  * 一致性测试：tests/Unit/Wallet/TNineSlotV2SeamlessApiSpecTest.php
  * ============================================================
  */
@@ -87,9 +90,7 @@ class TNineSlotV2GameController
 
     public function __construct()
     {
-        // 直接实例化 V2 服务，不经过 GameServiceFactory
-        // （factory 的 TYPE_TNINE_SLOT 仍指向 V1，保持核心文件不动）
-        $this->service = new TNineSlotV2ServiceInterface();
+        $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_TNINE_SLOT);
         $this->logger = Log::channel('tnine_slot_server');
     }
 
