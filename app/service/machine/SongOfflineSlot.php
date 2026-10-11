@@ -1620,6 +1620,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->external_wash_count = 0;  // 旧字段（兼容性）
         $this->open_table = 0;           // 新字段：CHECK 会将机台 open_table 硬件计数器清零
         $this->wash_table = 0;           // 新字段：CHECK 会将机台 wash_table 硬件计数器清零
+        $this->prev_open_table = 0;      // 防止 B7 路径重复记录 CHECK 后的首次开分事件
+        $this->prev_wash_table = 0;      // 防止 B7 路径重复记录 CHECK 后的首次洗分事件
 
         $this->log->info('[收账小卡-故障排除] 清除外部码表', [
             'machine_code' => $this->machine->code,
@@ -2462,6 +2464,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 // 无玩家：只记录操作
                 $this->recordExternalWashWithoutPlayer($washedScore, $washedAmount);
             }
+
+            // 5.5 设置去重标记，防止 EAC4 路径重复创建"外部按键"记录
+            // B7 路径（processExternalWash）已处理本次洗分，EAC4 检测到 wash_table 变化时应跳过
+            \support\Cache::set('external_counter_wash_last_update_' . $this->machine->id, time(), 30);
 
             // 6. 重置 last_card_score，防止下次 B7 复用旧值导致重复洗分
             $this->last_card_score = $cardScoreAfter;
