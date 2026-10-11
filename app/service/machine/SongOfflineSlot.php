@@ -1618,12 +1618,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // ✅ Bug #12修复：同步清除新旧字段，确保一致性
         $this->external_open_count = 0;  // 旧字段（兼容性）
         $this->external_wash_count = 0;  // 旧字段（兼容性）
+        $this->open_table = 0;           // 新字段：CHECK 会将机台 open_table 硬件计数器清零
+        $this->wash_table = 0;           // 新字段：CHECK 会将机台 wash_table 硬件计数器清零
 
         $this->log->info('[收账小卡-故障排除] 清除外部码表', [
             'machine_code' => $this->machine->code,
             'old_open_count' => $oldOpenCount,
             'old_wash_count' => $oldWashCount,
-            'note' => '故障排除会清除开分码表和洗分码表，已设置10秒标记',
+            'note' => '故障排除会清除开分码表和洗分码表，已同步清零 open_table/wash_table',
         ]);
 
         // 发送故排指令（固定指令：A3 70 05 E0 F8 CE）
@@ -2461,7 +2463,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->recordExternalWashWithoutPlayer($washedScore, $washedAmount);
             }
 
-            // 6. ✅ 发送 CHECK（A37005E0F8CE）归零机台 total_bet/total_win，同时清除 b4 标志
+            // 6. 重置 last_card_score，防止下次 B7 复用旧值导致重复洗分
+            $this->last_card_score = $cardScoreAfter;
+
+            // 7. ✅ 发送 CHECK（A37005E0F8CE）归零机台 total_bet/total_win，同时清除 b4 标志
             // CHECK 回复链：a3f833 → EE/EF → 机台计数器归零
             try {
                 $this->sendCmd(self::CHECK, 0, 'system');
