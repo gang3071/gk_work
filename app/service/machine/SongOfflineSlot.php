@@ -1623,6 +1623,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->prev_open_table = 0;      // 防止 B7 路径重复记录 CHECK 后的首次开分事件
         $this->prev_wash_table = 0;      // 防止 B7 路径重复记录 CHECK 后的首次洗分事件
 
+        // CHECK 是管理员洗分流程最后一步：机台物理出分在 CHECK 之后完成，
+        // 硬件 wash_table 会在出分期间自增，导致下次 EAC4 误判为"外部按键"洗分。
+        // 设置 30 秒去重窗口，覆盖管理员洗分和物理按键洗分两条路径。
+        \support\Cache::set('external_counter_wash_last_update_' . $this->machine->id, time(), 30);
+
         $this->log->info('[收账小卡-故障排除] 清除外部码表', [
             'machine_code' => $this->machine->code,
             'old_open_count' => $oldOpenCount,
@@ -2818,12 +2823,20 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             DB::commit();
 
             // 6.5 ✅ 清理玩家游戏数据（洗分后归零）
-            $this->bet = 0;
+            // now_turn 仅在 reward_status 切换时归零，洗分不会触发切换，
+            // 若不手动归零，下次游戏的 use_turn 会从旧值累加，导致彩金过早触发。
+            $this->bet       = 0;
+            $this->now_turn  = 0;
+            $this->total_bet = 0;
+            $this->total_win = 0;
 
             $this->log->info('[线下洗分] 清理玩家游戏数据', [
                 'player_id'  => $playerId,
                 'machine_id' => $this->machine->id,
                 'bet'        => 0,
+                'now_turn'   => 0,
+                'total_bet'  => 0,
+                'total_win'  => 0,
             ]);
 
             // 7. 钱包加款（在事务外执行）
