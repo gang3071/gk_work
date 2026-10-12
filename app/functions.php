@@ -2936,7 +2936,8 @@ if (!function_exists('machineOpenAnyFree')) {
                 ->orderBy('created_at', 'desc')
                 ->first();
 
-            if (empty($gameRecord)) {
+            $gameRecordIsNew = empty($gameRecord);
+            if ($gameRecordIsNew) {
                 // 首次上分，创建新的游戏记录
                 $gameRecord = new PlayerGameRecord();
                 $gameRecord->game_id = $machine->machineCategory?->game_id ?? 0;
@@ -2969,6 +2970,7 @@ if (!function_exists('machineOpenAnyFree')) {
             // ✅ 检查游戏记录是否过期（超过48小时且被其他玩家占用）
             else if (time() - strtotime($gameRecord->updated_at) > 24 * 60 * 60 * 2
                 && $machine->gaming_user_id != $player->id) {
+                $gameRecordIsNew = true;  // 旧记录废弃，新建记录，补偿路径按首次处理
                 // 旧记录设置为结束状态
                 $gameRecord->status = PlayerGameRecord::STATUS_END;
                 $gameRecord->save();
@@ -3380,14 +3382,14 @@ if (!function_exists('machineOpenAnyFree')) {
 
                         // 回滚 PlayerGameRecord 中的上分统计
                         if (isset($gameRecord)) {
-                            if (isset($isFirstOpen) && $isFirstOpen) {
-                                // 首次上分新建的记录：清零并标记结束
+                            if ($gameRecordIsNew ?? false) {
+                                // Phase 3 新建的记录（非追加上分）：清零并标记结束
                                 $gameRecord->open_point = 0;
                                 $gameRecord->open_amount = 0;
                                 $gameRecord->give_amount = 0;
                                 $gameRecord->status = \app\model\PlayerGameRecord::STATUS_END;
                             } else {
-                                // 追加上分：反向扣减本次累加的量
+                                // Phase 3 更新的已有记录：反向扣减本次累加的量
                                 $gameRecord->open_point = max(0, bcsub($gameRecord->open_point, $openScore ?? 0, 2));
                                 $gameRecord->open_amount = max(0, bcsub($gameRecord->open_amount, $money, 2));
                                 $gameRecord->give_amount = max(0, bcsub($gameRecord->give_amount, $giftScore ?? 0, 2));
