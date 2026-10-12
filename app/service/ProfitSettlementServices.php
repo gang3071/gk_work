@@ -68,6 +68,7 @@ class ProfitSettlementServices
                             PlayerDeliveryRecord::TYPE_LOTTERY,
                             PlayerDeliveryRecord::TYPE_MACHINE,
                             PlayerDeliveryRecord::TYPE_REVERSE_WATER,
+                            PlayerDeliveryRecord::TYPE_REFUND, // 机台上分失败退款需从 machine_up_amount 中扣减
                         ])
                         ->selectRaw("
                     player_id,
@@ -75,7 +76,9 @@ class ProfitSettlementServices
                     SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MODIFIED_AMOUNT_DEDUCT . " THEN `amount` ELSE 0 END) AS admin_deduct_amount,
                     SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_REGISTER_PRESENT . " THEN `amount` ELSE 0 END) AS present_amount,
                     SUM(CASE WHEN `type` IN (" . PlayerDeliveryRecord::TYPE_ACTIVITY_BONUS . "," . PlayerDeliveryRecord::TYPE_LOTTERY_TICKET_REWARD . ") THEN `amount` ELSE 0 END) AS bonus_amount,
-                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MACHINE_UP . " THEN `amount` ELSE 0 END) AS machine_up_amount,
+                    SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MACHINE_UP . " THEN `amount`
+                             WHEN `type` = " . PlayerDeliveryRecord::TYPE_REFUND . " AND `source` = 'machine_open_failed_refund' THEN -`amount`
+                             ELSE 0 END) AS machine_up_amount,
                     SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_MACHINE_DOWN . " THEN `amount` ELSE 0 END) AS machine_down_amount,
                     SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_RECHARGE . " THEN `amount` ELSE 0 END) AS recharge_amount,
                     SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_LOTTERY . " THEN `amount` ELSE 0 END) AS lottery_amount,
