@@ -1618,12 +1618,21 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // ✅ Bug #12修复：同步清除新旧字段，确保一致性
         $this->external_open_count = 0;  // 旧字段（兼容性）
         $this->external_wash_count = 0;  // 旧字段（兼容性）
+        $this->open_table = 0;           // 新字段：CHECK 会将机台 open_table 硬件计数器清零
+        $this->wash_table = 0;           // 新字段：CHECK 会将机台 wash_table 硬件计数器清零
+        $this->prev_open_table = 0;      // 防止 B7 路径重复记录 CHECK 后的首次开分事件
+        $this->prev_wash_table = 0;      // 防止 B7 路径重复记录 CHECK 后的首次洗分事件
+
+        // CHECK 是管理员洗分流程最后一步：机台物理出分在 CHECK 之后完成，
+        // 硬件 wash_table 会在出分期间自增，导致下次 EAC4 误判为"外部按键"洗分。
+        // 设置 30 秒去重窗口，覆盖管理员洗分和物理按键洗分两条路径。
+        \support\Cache::set('external_counter_wash_last_update_' . $this->machine->id, time(), 30);
 
         $this->log->info('[收账小卡-故障排除] 清除外部码表', [
             'machine_code' => $this->machine->code,
             'old_open_count' => $oldOpenCount,
             'old_wash_count' => $oldWashCount,
-            'note' => '故障排除会清除开分码表和洗分码表，已设置10秒标记',
+            'note' => '故障排除会清除开分码表和洗分码表，已同步清零 open_table/wash_table',
         ]);
 
         // 发送故排指令（固定指令：A3 70 05 E0 F8 CE）
@@ -2454,7 +2463,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->recordExternalWashWithoutPlayer($washedScore, $washedAmount);
             }
 
-            // 6. ✅ 发送 CHECK（A37005E0F8CE）归零机台 total_bet/total_win，同时清除 b4 标志
+            // 5.5 设置去重标记，防止 EAC4 路径重复创建"外部按键"记录
+            // B7 路径（processExternalWash）已处理本次洗分，EAC4 检测到 wash_table 变化时应跳过
+            \support\Cache::set('external_counter_wash_last_update_' . $this->machine->id, time(), 30);
+
+            // 6. 重置 last_card_score，防止下次 B7 复用旧值导致重复洗分
+            $this->last_card_score = $cardScoreAfter;
+
+            // 7. ✅ 发送 CHECK（A37005E0F8CE）归零机台 total_bet/total_win，同时清除 b4 标志
             // CHECK 回复链：a3f833 → EE/EF → 机台计数器归零
             try {
                 $this->sendCmd(self::CHECK, 0, 'system');
@@ -2800,12 +2816,20 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             DB::commit();
 
             // 6.5 ✅ 清理玩家游戏数据（洗分后归零）
-            $this->bet = 0;
+            // now_turn 仅在 reward_status 切换时归零，洗分不会触发切换，
+            // 若不手动归零，下次游戏的 use_turn 会从旧值累加，导致彩金过早触发。
+            $this->bet       = 0;
+            $this->now_turn  = 0;
+            $this->total_bet = 0;
+            $this->total_win = 0;
 
             $this->log->info('[线下洗分] 清理玩家游戏数据', [
                 'player_id'  => $playerId,
                 'machine_id' => $this->machine->id,
                 'bet'        => 0,
+                'now_turn'   => 0,
+                'total_bet'  => 0,
+                'total_win'  => 0,
             ]);
 
             // 7. 钱包加款（在事务外执行）

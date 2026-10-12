@@ -1403,15 +1403,41 @@ function machineWash(
                     ]);
                     $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
 
-                    // 延迟一下再读取，确保硬件完全清零
-                    usleep(200000);  // 200ms
-
-                    $pointAfterWash = $services->point;
-                    Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO 执行完成', [
-                        'machine_code' => $machine->code,
-                        'after_point_immediate' => 0,  // washPoint 返回时是 0
-                        'after_point_200ms_later' => $pointAfterWash,  // 200ms 后再读
-                    ]);
+                    // 离线小淞：轮询等待机台物理出分完成（card_score 降到 0 才确认）
+                    // 物理出分需要 1-3 秒，B7 心跳每秒上报一次，最多等 10 秒
+                    // 若超时说明机台未执行 WASH_POINT（如 L1162 第一次洗分静默失败），
+                    // 抛出异常 → DB::rollBack() → 钱包不加款，防止重复给款
+                    if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                        && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
+                        $maxAttempts = 25; // 25 × 400ms = 10 秒
+                        $confirmed = false;
+                        for ($i = 0; $i < $maxAttempts; $i++) {
+                            usleep(400000); // 400ms
+                            if ($services->card_score == 0) {
+                                $confirmed = true;
+                                break;
+                            }
+                        }
+                        $cardScoreAfterWash = $services->card_score;
+                        Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO 执行完成（离线小淞）', [
+                            'machine_code' => $machine->code,
+                            'confirmed' => $confirmed,
+                            'card_score_after_wash' => $cardScoreAfterWash,
+                            'attempts' => $i + 1,
+                        ]);
+                        if (!$confirmed) {
+                            throw new Exception("洗分失败：机台未在10秒内确认出分（card_score={$cardScoreAfterWash}），请重试");
+                        }
+                    } else {
+                        // 在线 Slot：短暂延迟，确保硬件完全清零
+                        usleep(200000);  // 200ms
+                        $pointAfterWash = $services->point;
+                        Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO 执行完成', [
+                            'machine_code' => $machine->code,
+                            'after_point_immediate' => 0,  // washPoint 返回时是 0
+                            'after_point_200ms_later' => $pointAfterWash,  // 200ms 后再读
+                        ]);
+                    }
                 } else {
                     Log::channel('slot_machine')->warning('[machineWash-硬件清零] 跳过 WASH_ZERO（硬件已是0分）', [
                         'machine_code' => $machine->code,
