@@ -3207,10 +3207,16 @@ if (!function_exists('machineOpenAnyFree')) {
                     $services->sendCmd($services::OPEN_ANY_POINT, $offSlotOpenScore, 'admin', $player->id);
 
                     // 轮询确认机台已收到上分（25 × 400ms = 10秒）
+                    // 追踪轮询期间的峰值，防止玩家快速消耗分数导致误判
                     $openConfirmed = false;
+                    $maxCardScore = $cardScoreBefore;
                     for ($oi = 0; $oi < 25; $oi++) {
                         usleep(400000);
-                        if ($services->card_score > $cardScoreBefore) {
+                        $pollScore = $services->card_score;
+                        if ($pollScore > $maxCardScore) {
+                            $maxCardScore = $pollScore;
+                        }
+                        if ($maxCardScore > $cardScoreBefore) {
                             $openConfirmed = true;
                             break;
                         }
@@ -3219,6 +3225,7 @@ if (!function_exists('machineOpenAnyFree')) {
                         'machine_code' => $machine->code,
                         'confirmed' => $openConfirmed,
                         'card_score_before' => $cardScoreBefore,
+                        'card_score_peak' => $maxCardScore,
                         'card_score_after' => $services->card_score,
                         'attempts' => $oi + 1,
                     ]);
@@ -3347,13 +3354,46 @@ if (!function_exists('machineOpenAnyFree')) {
 
                 if ($isOfflineSongSlotConfirmFail) {
                     // 硬件未确认收分：自动退款 + 解锁机台，让玩家无缝重试
+                    $walletRefunded = false;  // 用于降级日志区分钱包状态
                     try {
+                        // ── Step 1: 退款到钱包（Redis 原子操作）──
                         $refundResult = \app\service\WalletService::add($player->id, $money);
+                        if (!($refundResult['success'] ?? false)) {
+                            throw new Exception('钱包退款失败: ' . ($refundResult['error'] ?? 'unknown'));
+                        }
+                        $walletRefunded = true;
 
+                        // ── Step 2: 补偿事务（解锁机台 + 清零上分记录 + 写账变）──
                         DB::beginTransaction();
+
+                        // 解锁机台
                         $machine->gaming = 0;
                         $machine->gaming_user_id = 0;
                         $machine->save();
+
+                        // 清零 PlayerGameLog 中失败上分的分数和金额（避免报表统计偏高）
+                        if (isset($playerGameLog)) {
+                            $playerGameLog->open_point = 0;
+                            $playerGameLog->game_amount = 0;
+                            $playerGameLog->save();
+                        }
+
+                        // 回滚 PlayerGameRecord 中的上分统计
+                        if (isset($gameRecord)) {
+                            if (isset($isFirstOpen) && $isFirstOpen) {
+                                // 首次上分新建的记录：清零并标记结束
+                                $gameRecord->open_point = 0;
+                                $gameRecord->open_amount = 0;
+                                $gameRecord->give_amount = 0;
+                                $gameRecord->status = \app\model\PlayerGameRecord::STATUS_END;
+                            } else {
+                                // 追加上分：反向扣减本次累加的量
+                                $gameRecord->open_point = max(0, bcsub($gameRecord->open_point, $openScore ?? 0, 2));
+                                $gameRecord->open_amount = max(0, bcsub($gameRecord->open_amount, $money, 2));
+                                $gameRecord->give_amount = max(0, bcsub($gameRecord->give_amount, $giftScore ?? 0, 2));
+                            }
+                            $gameRecord->save();
+                        }
 
                         // 写入退款账变记录
                         $refundDelivery = new PlayerDeliveryRecord();
@@ -3368,8 +3408,8 @@ if (!function_exists('machineOpenAnyFree')) {
                         $refundDelivery->type = PlayerDeliveryRecord::TYPE_REFUND;
                         $refundDelivery->source = 'machine_open_failed_refund';
                         $refundDelivery->amount = $money;
-                        $refundDelivery->amount_before = $refundResult['old_balance'] ?? 0;
-                        $refundDelivery->amount_after = $refundResult['balance'] ?? 0;
+                        $refundDelivery->amount_before = $refundResult['old_balance'];
+                        $refundDelivery->amount_after = $refundResult['balance'];
                         $refundDelivery->remark = '机台上分失败自动退款';
                         $refundDelivery->save();
 
@@ -3395,8 +3435,13 @@ if (!function_exists('machineOpenAnyFree')) {
                             'machine_id' => $machine->id,
                             'machine_code' => $machine->code,
                             'deducted_amount' => $money,
+                            'wallet_refunded' => $walletRefunded,
+                            // wallet_refunded=true 时钱包已退款，客服只需解锁机台
+                            // wallet_refunded=false 时钱包未退款，客服需补偿玩家并解锁机台
+                            'action' => $walletRefunded
+                                ? '钱包已退款，请客服解锁机台即可'
+                                : '请客服补偿玩家 ' . $money . ' 元并解锁机台',
                             'compensate_error' => $compensateError->getMessage(),
-                            'action' => '请客服人工补偿玩家并解锁机台',
                         ]);
                     }
                 } else {
