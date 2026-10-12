@@ -3199,10 +3199,33 @@ if (!function_exists('machineOpenAnyFree')) {
 
             // 发送开分指令（包含赠送分）
             // ⚠️ 玩家扣款只扣 openScore 的金额，但硬件要给 totalOpenScore = openScore + giftScore
+            $openPointConfirmFailed = false;  // 用于区分"硬件未确认"与其他失败类型
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG
                     && $machine->type == GameType::TYPE_SLOT) {
+                    $cardScoreBefore = $services->card_score;
                     $services->sendCmd($services::OPEN_ANY_POINT, $offSlotOpenScore, 'admin', $player->id);
+
+                    // 轮询确认机台已收到上分（25 × 400ms = 10秒）
+                    $openConfirmed = false;
+                    for ($oi = 0; $oi < 25; $oi++) {
+                        usleep(400000);
+                        if ($services->card_score > $cardScoreBefore) {
+                            $openConfirmed = true;
+                            break;
+                        }
+                    }
+                    Log::channel('slot_machine')->info('[machineOpenAnyFree] OPEN_ANY_POINT 执行完成（离线小淞）', [
+                        'machine_code' => $machine->code,
+                        'confirmed' => $openConfirmed,
+                        'card_score_before' => $cardScoreBefore,
+                        'card_score_after' => $services->card_score,
+                        'attempts' => $oi + 1,
+                    ]);
+                    if (!$openConfirmed) {
+                        $openPointConfirmFailed = true;
+                        throw new Exception("上分失败：机台未在10秒内确认收分（card_score={$services->card_score}），已自动退款");
+                    }
                 } else {
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
                 }
@@ -3314,54 +3337,94 @@ if (!function_exists('machineOpenAnyFree')) {
                 'wallet_deducted' => $walletDeducted,
             ]);
 
-            // ========== 上分失败处理：锁机台 + 人工补偿 ==========
-            // 策略：不自动回滚钱包，而是锁定机台由客服人工补偿
+            // ========== 上分失败处理 ==========
             if ($walletDeducted) {
-                try {
-                    // ✅ 锁定机台（防止其他玩家使用）
-                    // 🔴 重要：has_lock 只存在于 Redis，不在数据库表中
-                    $services->has_lock = 1;  // 锁定 Redis（业务层检查这个）
+                // 判断是否为离线小淞硬件未确认收分（可自动退款场景）
+                $isOfflineSongSlotConfirmFail = ($openPointConfirmFailed ?? false)
+                    && $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $machine->control_type == Machine::CONTROL_TYPE_SONG
+                    && $machine->type == GameType::TYPE_SLOT;
 
-                    Log::critical('[machineOpenAnyFree] 上分失败，机台已锁定（Redis），需人工补偿', [
-                        'player_id' => $player->id,
-                        'machine_id' => $machine->id,
-                        'machine_code' => $machine->code,
-                        'deducted_amount' => $money,
-                        'action' => '请客服人工补偿玩家并解锁机台',
-                    ]);
-
-                    // 发送 Telegram CRITICAL 告警
+                if ($isOfflineSongSlotConfirmFail) {
+                    // 硬件未确认收分：自动退款 + 解锁机台，让玩家无缝重试
                     try {
-                        $telegramConfig = config('telegram');
-                        if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
-                            $telegram = new \app\service\TelegramService($telegramConfig['bot_token'], $telegramConfig['chat_id']);
-                            $telegram->sendAlert([
-                                'datetime' => new \DateTime(),
-                                'level_name' => 'CRITICAL',
-                                'message' => '上分失败，机台已锁定',
-                                'context' => [
-                                    'player_id' => $player->id,
-                                    'machine_id' => $machine->id,
-                                    'machine_code' => $machine->code,
-                                    'deducted_amount' => $money,
-                                    'action' => '请客服人工补偿玩家并解锁机台',
-                                ],
-                            ]);
-                        }
-                    } catch (\Exception $telegramError) {
-                        Log::error('[machineOpenAnyFree] Telegram 告警发送失败', [
-                            'error' => $telegramError->getMessage(),
+                        \app\service\WalletService::add($player->id, $money);
+
+                        DB::beginTransaction();
+                        $machine->gaming = 0;
+                        $machine->gaming_user_id = 0;
+                        $machine->save();
+                        DB::commit();
+
+                        $services->gaming = 0;
+                        $services->gaming_user_id = 0;
+
+                        Log::info('[machineOpenAnyFree] 上分硬件未确认，已自动退款并解锁机台', [
+                            'player_id' => $player->id,
+                            'machine_id' => $machine->id,
+                            'machine_code' => $machine->code,
+                            'refunded_amount' => $money,
+                        ]);
+                    } catch (\Exception $compensateError) {
+                        // 退款失败：降级为锁机台 + 人工补偿
+                        try {
+                            $services->has_lock = 1;
+                        } catch (\Exception $lockError) { }
+                        Log::critical('[machineOpenAnyFree] 自动退款失败，已锁机台，需人工补偿', [
+                            'player_id' => $player->id,
+                            'machine_id' => $machine->id,
+                            'machine_code' => $machine->code,
+                            'deducted_amount' => $money,
+                            'compensate_error' => $compensateError->getMessage(),
+                            'action' => '请客服人工补偿玩家并解锁机台',
                         ]);
                     }
+                } else {
+                    // 其他错误（DB 事务回滚前失败、Redis 异常等）：锁机台 + 人工补偿
+                    try {
+                        $services->has_lock = 1;
 
-                } catch (\Exception $lockError) {
-                    Log::critical('[machineOpenAnyFree] 锁机台失败，双重故障', [
-                        'player_id' => $player->id,
-                        'machine_id' => $machine->id,
-                        'deducted_amount' => $money,
-                        'lock_error' => $lockError->getMessage(),
-                        'action' => '紧急：手动锁机台并补偿玩家',
-                    ]);
+                        Log::critical('[machineOpenAnyFree] 上分失败，机台已锁定（Redis），需人工补偿', [
+                            'player_id' => $player->id,
+                            'machine_id' => $machine->id,
+                            'machine_code' => $machine->code,
+                            'deducted_amount' => $money,
+                            'action' => '请客服人工补偿玩家并解锁机台',
+                        ]);
+
+                        // 发送 Telegram CRITICAL 告警
+                        try {
+                            $telegramConfig = config('telegram');
+                            if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
+                                $telegram = new \app\service\TelegramService($telegramConfig['bot_token'], $telegramConfig['chat_id']);
+                                $telegram->sendAlert([
+                                    'datetime' => new \DateTime(),
+                                    'level_name' => 'CRITICAL',
+                                    'message' => '上分失败，机台已锁定',
+                                    'context' => [
+                                        'player_id' => $player->id,
+                                        'machine_id' => $machine->id,
+                                        'machine_code' => $machine->code,
+                                        'deducted_amount' => $money,
+                                        'action' => '请客服人工补偿玩家并解锁机台',
+                                    ],
+                                ]);
+                            }
+                        } catch (\Exception $telegramError) {
+                            Log::error('[machineOpenAnyFree] Telegram 告警发送失败', [
+                                'error' => $telegramError->getMessage(),
+                            ]);
+                        }
+
+                    } catch (\Exception $lockError) {
+                        Log::critical('[machineOpenAnyFree] 锁机台失败，双重故障', [
+                            'player_id' => $player->id,
+                            'machine_id' => $machine->id,
+                            'deducted_amount' => $money,
+                            'lock_error' => $lockError->getMessage(),
+                            'action' => '紧急：手动锁机台并补偿玩家',
+                        ]);
+                    }
                 }
             }
 
