@@ -3348,12 +3348,31 @@ if (!function_exists('machineOpenAnyFree')) {
                 if ($isOfflineSongSlotConfirmFail) {
                     // 硬件未确认收分：自动退款 + 解锁机台，让玩家无缝重试
                     try {
-                        \app\service\WalletService::add($player->id, $money);
+                        $refundResult = \app\service\WalletService::add($player->id, $money);
 
                         DB::beginTransaction();
                         $machine->gaming = 0;
                         $machine->gaming_user_id = 0;
                         $machine->save();
+
+                        // 写入退款账变记录
+                        $refundDelivery = new PlayerDeliveryRecord();
+                        $refundDelivery->player_id = $player->id;
+                        $refundDelivery->department_id = $player->department_id;
+                        $refundDelivery->target = (new \app\model\PlayerGameLog)->getTable();
+                        $refundDelivery->target_id = $playerGameLog->id ?? 0;
+                        $refundDelivery->machine_id = $machine->id;
+                        $refundDelivery->machine_name = $machine->name;
+                        $refundDelivery->machine_type = $machine->type;
+                        $refundDelivery->code = $machine->code;
+                        $refundDelivery->type = PlayerDeliveryRecord::TYPE_REFUND;
+                        $refundDelivery->source = 'machine_open_failed_refund';
+                        $refundDelivery->amount = $money;
+                        $refundDelivery->amount_before = $refundResult['old_balance'] ?? 0;
+                        $refundDelivery->amount_after = $refundResult['balance'] ?? 0;
+                        $refundDelivery->remark = '机台上分失败自动退款';
+                        $refundDelivery->save();
+
                         DB::commit();
 
                         $services->gaming = 0;
@@ -3364,6 +3383,7 @@ if (!function_exists('machineOpenAnyFree')) {
                             'machine_id' => $machine->id,
                             'machine_code' => $machine->code,
                             'refunded_amount' => $money,
+                            'delivery_record_id' => $refundDelivery->id,
                         ]);
                     } catch (\Exception $compensateError) {
                         // 退款失败：降级为锁机台 + 人工补偿
