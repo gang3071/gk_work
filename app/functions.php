@@ -3368,9 +3368,11 @@ if (!function_exists('machineOpenAnyFree')) {
                         // ── Step 2: 补偿事务（解锁机台 + 清零上分记录 + 写账变）──
                         DB::beginTransaction();
 
-                        // 解锁机台
-                        $machine->gaming = 0;
-                        $machine->gaming_user_id = 0;
+                        // 首次上分失败才解锁机台；追加上分失败时玩家仍在机台，不能解锁
+                        if ($gameRecordIsNew ?? false) {
+                            $machine->gaming = 0;
+                            $machine->gaming_user_id = 0;
+                        }
                         $machine->save();
 
                         // 清零 PlayerGameLog 中失败上分的分数和金额（避免报表统计偏高）
@@ -3417,10 +3419,13 @@ if (!function_exists('machineOpenAnyFree')) {
 
                         DB::commit();
 
-                        $services->gaming = 0;
-                        $services->gaming_user_id = 0;
+                        // 首次上分失败才同步 Redis 解锁；追加上分失败时玩家仍在机台
+                        if ($gameRecordIsNew ?? false) {
+                            $services->gaming = 0;
+                            $services->gaming_user_id = 0;
+                        }
 
-                        Log::info('[machineOpenAnyFree] 上分硬件未确认，已自动退款并解锁机台', [
+                        Log::info('[machineOpenAnyFree] 上分硬件未确认，已自动退款' . (($gameRecordIsNew ?? false) ? '并解锁机台' : '（追加上分失败，机台保持锁定）'), [
                             'player_id' => $player->id,
                             'machine_id' => $machine->id,
                             'machine_code' => $machine->code,
