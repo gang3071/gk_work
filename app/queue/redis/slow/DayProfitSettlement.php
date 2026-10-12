@@ -54,8 +54,7 @@ class DayProfitSettlement implements Consumer
                 SUM(CASE WHEN `type` = " . PlayerDeliveryRecord::TYPE_LOTTERY . " THEN `amount` ELSE 0 END) AS lottery_amount
             ")
             ->where('player_id', $data['player_id'])
-            ->get()
-            ->toArray();
+            ->first()?->toArray() ?? [];
 
         // 提现记录
         $playerWithdrawRecord = PlayerWithdrawRecord::query()->whereDate('updated_at', $data['day'])
