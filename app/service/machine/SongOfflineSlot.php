@@ -3136,7 +3136,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         ]);
 
         // ✅ 改进：带超时的等待回复
-        $timeout = 3000000;  // 3秒（网络抖动容错）
+        $timeout = 1000000;  // 每次等1秒，由 ensureLoggedIn 最多重试3次
         $sleep = 50000;      // 50ms
         $elapsed = 0;
 
