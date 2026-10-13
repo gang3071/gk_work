@@ -3166,24 +3166,37 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
     /**
      * 确保已登入（发送指令前调用）
+     * 机板保持长期登入状态，仅在硬件重启等异常场景需要重新登入，最多重试 3 次
      * @throws Exception
      */
     private function ensureLoggedIn(): void
     {
-        if (!$this->checkLoginStatus()) {
+        if ($this->checkLoginStatus()) {
+            return;
+        }
+
+        $maxRetries = 3;
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
             $this->log->warning('[登入检查] 机台未登入，尝试自动登入', [
                 'machine_code' => $this->machine->code,
+                'attempt'      => "$attempt/$maxRetries",
             ]);
 
-            $success = $this->loginMachine();
-            if (!$success) {
-                throw new Exception('机台登入失败，请检查机台状态');
+            if ($this->loginMachine()) {
+                $this->log->info('[登入检查] 自动登入成功', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxRetries",
+                ]);
+                return;
             }
 
-            $this->log->info('[登入检查] 自动登入成功', [
+            $this->log->warning('[登入检查] 登入失败', [
                 'machine_code' => $this->machine->code,
+                'attempt'      => "$attempt/$maxRetries",
             ]);
         }
+
+        throw new Exception('机台登入失败，请检查机台状态');
     }
 
     /**

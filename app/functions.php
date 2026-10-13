@@ -1461,30 +1461,7 @@ function machineWash(
                     ]);
                 }
 
-                // ✅ 弃台时登出机台（仅线下版小淞）
-                if ($path == 'leave' && $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
-                    && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
-
-                    // 检查登入状态
-                    if ($services->login_status == 1 || $services->is_login == 1) {
-                        Log::channel('slot_machine')->info('[machineWash-弃台登出] 检测到机台已登入，执行登出', [
-                            'machine_code' => $machine->code,
-                            'login_status' => $services->login_status,
-                            'is_login' => $services->is_login,
-                        ]);
-
-                        $services->sendCmd($services::LOGOUT, 0, 'player', $player->id, $is_system);
-
-                        Log::channel('slot_machine')->info('[machineWash-弃台登出] 登出指令已发送', [
-                            'machine_code' => $machine->code,
-                        ]);
-                    } else {
-                        Log::channel('slot_machine')->info('[machineWash-弃台登出] 机台未登入，跳过登出', [
-                            'machine_code' => $machine->code,
-                            'login_status' => $services->login_status,
-                        ]);
-                    }
-                }
+                // 机板保持长期登入状态，弃台时不再发登出指令
                 break;
         }
 
