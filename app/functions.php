@@ -3348,14 +3348,15 @@ if (!function_exists('machineOpenAnyFree')) {
 
             // ========== 上分失败处理 ==========
             if ($walletDeducted) {
-                // 判断是否为离线小淞硬件未确认收分（可自动退款场景）
-                $isOfflineSongSlotConfirmFail = ($openPointConfirmFailed ?? false)
-                    && $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                // 离线小淞 Slot：任何硬件错误（登入失败/收分超时）均可自动退款
+                // 因为 DB::commit 已执行，钱包已扣，但分未到账，必须退款
+                $isOfflineSongSlotFailed =
+                    $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG
                     && $machine->type == GameType::TYPE_SLOT;
 
-                if ($isOfflineSongSlotConfirmFail) {
-                    // 硬件未确认收分：自动退款 + 解锁机台，让玩家无缝重试
+                if ($isOfflineSongSlotFailed) {
+                    // 硬件失败（登入超时 / 收分未确认）：自动退款，让玩家无缝重试
                     $walletRefunded = false;  // 用于降级日志区分钱包状态
                     $compensateTransactionStarted = false;  // 防止补偿事务未 rollBack 导致长驻连接锁泄漏
                     try {
@@ -3428,7 +3429,7 @@ if (!function_exists('machineOpenAnyFree')) {
                             $services->gaming_user_id = 0;
                         }
 
-                        Log::info('[machineOpenAnyFree] 上分硬件未确认，已自动退款' . (($gameRecordIsNew ?? false) ? '并解锁机台' : '（追加上分失败，机台保持锁定）'), [
+                        Log::info('[machineOpenAnyFree] 上分失败已自动退款' . (($gameRecordIsNew ?? false) ? '并解锁机台' : '（追加上分，机台保持锁定）'), [
                             'player_id' => $player->id,
                             'machine_id' => $machine->id,
                             'machine_code' => $machine->code,
