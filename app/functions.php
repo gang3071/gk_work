@@ -3357,6 +3357,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 if ($isOfflineSongSlotConfirmFail) {
                     // 硬件未确认收分：自动退款 + 解锁机台，让玩家无缝重试
                     $walletRefunded = false;  // 用于降级日志区分钱包状态
+                    $compensateTransactionStarted = false;  // 防止补偿事务未 rollBack 导致长驻连接锁泄漏
                     try {
                         // ── Step 1: 退款到钱包（Redis 原子操作）──
                         $refundResult = \app\service\WalletService::add($player->id, $money);
@@ -3367,6 +3368,7 @@ if (!function_exists('machineOpenAnyFree')) {
 
                         // ── Step 2: 补偿事务（解锁机台 + 清零上分记录 + 写账变）──
                         DB::beginTransaction();
+                        $compensateTransactionStarted = true;
 
                         // 首次上分失败才解锁机台；追加上分失败时玩家仍在机台，不能解锁
                         if ($gameRecordIsNew ?? false) {
@@ -3418,6 +3420,7 @@ if (!function_exists('machineOpenAnyFree')) {
                         $refundDelivery->save();
 
                         DB::commit();
+                        $compensateTransactionStarted = false;  // commit 成功，无需 rollBack
 
                         // 首次上分失败才同步 Redis 解锁；追加上分失败时玩家仍在机台
                         if ($gameRecordIsNew ?? false) {
@@ -3433,7 +3436,11 @@ if (!function_exists('machineOpenAnyFree')) {
                             'delivery_record_id' => $refundDelivery->id,
                         ]);
                     } catch (\Exception $compensateError) {
-                        // 退款失败：降级为锁机台 + 人工补偿
+                        // 补偿事务若已开启但未 commit，必须 rollBack，否则 Workerman 长驻连接会持续持锁
+                        if ($compensateTransactionStarted) {
+                            try { DB::rollBack(); } catch (\Exception $rbErr) { }
+                        }
+                        // 降级为锁机台 + 人工补偿
                         try {
                             $services->has_lock = 1;
                         } catch (\Exception $lockError) { }
