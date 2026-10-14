@@ -2119,6 +2119,28 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 }
             }
 
+            // 心跳检测到未登入时主动补发登入指令（fire-and-forget，每10秒最多一次）
+            // 机板保持长期登入状态，硬件重启后靠此机制自动恢复，无需等玩家上分时触发
+            if ($loginValue === 0 && $this->has_lock != 1) {
+                $rateLimitKey = $this->cacheDataKey . '_login_retry_at';
+                if (!Cache::get($rateLimitKey)) {
+                    Cache::set($rateLimitKey, 1, 10);
+                    try {
+                        $uid = $this->machine->domain . ':' . $this->machine->port;
+                        $loginCmd = $this->createCmd(self::LOGIN);
+                        Gateway::sendToUid($uid, hex2bin($loginCmd));
+                        $this->log->info('[心跳] 检测到未登入，已主动发送登入指令', [
+                            'machine_code' => $this->machine->code,
+                        ]);
+                    } catch (\Exception $loginErr) {
+                        $this->log->warning('[心跳] 主动登入指令发送失败', [
+                            'machine_code' => $this->machine->code,
+                            'error'        => $loginErr->getMessage(),
+                        ]);
+                    }
+                }
+            }
+
             // ========== 游戏状态（心跳BD.b0/b1/b2） ==========
             $oldBigWin = $this->big_win ?? 0;
             $oldHighProb = $this->high_prob ?? 0;
