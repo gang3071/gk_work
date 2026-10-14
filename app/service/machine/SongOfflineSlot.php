@@ -2114,6 +2114,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if ($oldLoginStatus !== $loginValue) {
                 if ($loginValue === 1) {
                     $this->setActionVersion(self::LOGIN);   // 登入成功
+                    // 登入成功时清除限速 key，确保下次登出后能立即重试
+                    Cache::delete($this->cacheDataKey . '_login_retry_at');
                 } else {
                     $this->setActionVersion(self::LOGOUT);  // 登出成功
                 }
