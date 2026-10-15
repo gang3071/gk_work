@@ -1161,6 +1161,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     'machine_code' => $this->machine->code,
                     'version' => $version,
                 ]);
+                Cache::set($this->cacheDataKey . '_last_open_result', 'ca', 10);
                 break;
 
             case 'c5': // 操作失败（未登入）
@@ -1170,6 +1171,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 ]);
                 $this->is_login = 0;
                 $this->login_status = 0;  // 新字段
+                Cache::set($this->cacheDataKey . '_last_open_result', 'c5', 10);
                 break;
 
             default:
@@ -1655,12 +1657,19 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * 2. 玩家开分3000需要发送开分指令10次（3000÷300=10次）
      * 3. $data参数是机台分数（不是玩家钱包金额）
      */
+    /**
+     * 处理上分指令（A5 XX C0 SUM1 SUM2）
+     *
+     * 协议：
+     *   发送：A5 XX C0 SUM1 SUM2（XX=开分次数，C0=不洗分）
+     *   回复：A5 CA VV = 开分开始（成功）
+     *         A5 C5 VV = 开分失败（未登入）
+     *
+     * 重试策略：机台回复 C5 或超时时重新登入后重发，最多 5 次，
+     * 5 次全部失败才锁机台（不在第一次失败时就锁）。
+     */
     private function handleOpenPoint(string $uid, int $data, string $source, int $source_id): void
     {
-        // ⚠️ 确保已登入（自动登入）
-        $this->ensureLoggedIn();
-
-        // ⚠️ 特殊逻辑：机台分数转换成次数（300分为单位）
         if ($data % self::OPEN_UNIT != 0) {
             throw new Exception('开分金额必须是' . self::OPEN_UNIT . '的倍数，当前：' . $data);
         }
@@ -1671,39 +1680,88 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             throw new Exception('开分次数超出范围（1-' . self::MAX_OPEN_TIMES . '），当前：' . $times);
         }
 
-        // ✅ 优化：构建指令 A5 XX C0，使用统一方法添加校验和
-        $timesHex = str_pad(dechex($times), 2, '0', STR_PAD_LEFT);
-        $cmdData = self::OPEN_ANY_POINT . $timesHex . 'c0';
+        $timesHex  = str_pad(dechex($times), 2, '0', STR_PAD_LEFT);
+        $cmdData   = self::OPEN_ANY_POINT . $timesHex . 'c0';
+        $maxAttempts  = 5;
+        $replyTimeout = 3000000; // 3 秒等待机台回复（单次）
+        $pollInterval = 200000;  // 200ms
 
-        // 手动计算校验和（因为指令格式特殊，不能直接用 createCmd）
-        $sum1 = $this->calculateSUM1($cmdData);
-        $sum2 = $this->calculateSUM2($cmdData, $sum1);
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            // 每次发送前确保已登入
+            $this->ensureLoggedIn();
 
-        $fullCmd = $cmdData . $sum1 . $sum2;
+            $sum1    = $this->calculateSUM1($cmdData);
+            $sum2    = $this->calculateSUM2($cmdData, $sum1);
+            $fullCmd = $cmdData . $sum1 . $sum2;
 
-        $this->log->info('[收账小卡-上分] 发送上分指令', [
-            'machine_code' => $this->machine->code,
-            'machine_score' => $data,
-            'times' => $times,
-            'unit' => self::OPEN_UNIT,
-            'cmd' => strtoupper($fullCmd),
+            // 记录发送前版本号，清除上次结果
+            $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
+            Cache::delete($this->cacheDataKey . '_last_open_result');
 
-            // ✅ 诊断日志：记录当前分数，用于对比
-            'current_card_score' => $this->card_score ?? 0,
-            'current_machine_score' => $this->machine_score ?? 0,
-            'expected_card_score_increase' => $data,
-            'note' => '期望卡分增加' . $data . '分，请关注后续心跳/账目查询是否符合预期',
-        ]);
+            $this->log->info('[收账小卡-上分] 发送上分指令', [
+                'machine_code'  => $this->machine->code,
+                'machine_score' => $data,
+                'times'         => $times,
+                'unit'          => self::OPEN_UNIT,
+                'cmd'           => strtoupper($fullCmd),
+                'attempt'       => "$attempt/$maxAttempts",
+                'current_card_score' => $this->card_score ?? 0,
+            ]);
 
-        Gateway::sendToUid($uid, hex2bin($fullCmd));
+            Gateway::sendToUid($uid, hex2bin($fullCmd));
 
-        if ($source == 'admin') {
-            sendSocketMessage('private-admin-1-' . $source_id, [
-                'msg_type' => 'machine_action_result',
-                'id' => $this->machine->id,
-                'description' => "上分指令已发送（{$times}次×" . self::OPEN_UNIT . "分={$data}分）",
+            // 等待机台回复（A5 CA / A5 C5）
+            $waited  = 0;
+            $replied = false;
+            while ($waited < $replyTimeout) {
+                usleep($pollInterval);
+                $waited += $pollInterval;
+                if ($this->getActionVersion(self::OPEN_ANY_POINT) > $beforeVersion) {
+                    $replied = true;
+                    break;
+                }
+            }
+
+            if (!$replied) {
+                $this->log->warning('[收账小卡-上分] 等待回复超时，重试', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxAttempts",
+                ]);
+                continue;
+            }
+
+            $lastResult = Cache::get($this->cacheDataKey . '_last_open_result');
+
+            if ($lastResult === 'ca') {
+                // A5 CA：开分开始，成功
+                $this->log->info('[收账小卡-上分] 开分成功（A5 CA）', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxAttempts",
+                    'times'        => $times,
+                    'score'        => $data,
+                ]);
+
+                if ($source == 'admin') {
+                    sendSocketMessage('private-admin-1-' . $source_id, [
+                        'msg_type'    => 'machine_action_result',
+                        'id'          => $this->machine->id,
+                        'description' => "上分指令已发送（{$times}次×" . self::OPEN_UNIT . "分={$data}分）",
+                    ]);
+                }
+                return;
+            }
+
+            // A5 C5 = 未登入，重试（handleActionReply 已将 is_login 置 0）
+            $this->log->warning('[收账小卡-上分] 机台回复未登入（A5 C5），重试', [
+                'machine_code' => $this->machine->code,
+                'attempt'      => "$attempt/$maxAttempts",
             ]);
         }
+
+        // 5 次重试全部失败，才锁机台
+        $this->has_lock = 1;
+        sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+        throw new Exception("上分失败：{$maxAttempts}次重试后仍收到C5或超时，机台已锁定");
     }
 
     /**
