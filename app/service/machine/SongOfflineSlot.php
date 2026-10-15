@@ -1743,8 +1743,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 return;
             }
 
-            // A5 C5 = 未登入，重试（handleActionReply 已将 is_login 置 0）
-            $this->log->warning('[收账小卡-上分] 机台回复未登入（A5 C5），重试', [
+            // A5 C5 = 未登入；WebSocket worker 的对象已置 0，但 HTTP worker 的本地实例需手动同步，
+            // 否则下一次 ensureLoggedIn() → checkLoginStatus() 仍读到 1，导致不重新登入。
+            $this->is_login    = 0;
+            $this->login_status = 0;
+
+            $this->log->warning('[收账小卡-上分] 机台回复未登入（A5 C5），重置登入状态后重试', [
                 'machine_code' => $this->machine->code,
                 'attempt'      => "$attempt/$maxAttempts",
             ]);
