@@ -1659,14 +1659,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     /**
      * 处理上分指令（A5 XX C0 SUM1 SUM2）
      *
-     * ⚠️ 小淞线下Slot特殊规则：
-     * 1. 固定300分为单位（self::OPEN_UNIT）
-     * 2. 玩家开分3000需要发送开分指令10次（3000÷300=10次）
-     * 3. $data参数是机台分数（不是玩家钱包金额）
-     */
-    /**
-     * 处理上分指令（A5 XX C0 SUM1 SUM2）
-     *
      * 协议：
      *   发送：A5 XX C0 SUM1 SUM2（XX=开分次数，C0=不洗分）
      *   回复：A5 CA VV = 开分开始（成功）

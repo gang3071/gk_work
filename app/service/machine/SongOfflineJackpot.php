@@ -2189,7 +2189,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'machine_code' => $this->machine->code,
                 'cmd' => $cmd,
                 'is_online' => true,
-                'is_locked' => false,
+                'is_locked' => $this->has_lock == 1,
             ]);
 
             // 玩家操作时更新活动时间并累加保留时间
