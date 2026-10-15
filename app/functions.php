@@ -3184,12 +3184,14 @@ if (!function_exists('machineOpenAnyFree')) {
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG
                     && $machine->type == GameType::TYPE_SLOT) {
                     $cardScoreBefore = $services->card_score;
-                    $services->sendCmd($services::OPEN_ANY_POINT, $offSlotOpenScore, 'admin', $player->id);
+                    // sendCmd 内部重试最长阻塞 22.5s，期间机台可能已上分并被玩家消耗，
+                    // 返回后立即采样作为峰值基准，避免漏检。
+                    $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $player->id);
 
                     // 轮询确认机台已收到上分（25 × 400ms = 10秒）
                     // 追踪轮询期间的峰值，防止玩家快速消耗分数导致误判
                     $openConfirmed = false;
-                    $maxCardScore = $cardScoreBefore;
+                    $maxCardScore = max($cardScoreBefore, $services->card_score);
                     for ($oi = 0; $oi < 25; $oi++) {
                         usleep(400000);
                         $pollScore = $services->card_score;
