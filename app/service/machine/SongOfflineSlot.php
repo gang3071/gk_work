@@ -1677,8 +1677,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $timesHex  = str_pad(dechex($times), 2, '0', STR_PAD_LEFT);
         $cmdData   = self::OPEN_ANY_POINT . $timesHex . 'c0';
         $maxAttempts  = 5;
-        $replyTimeout = 1500000; // 1.5 秒等待机台回复（A5协议正常<0.5s，5次×1.5s=7.5s 不超10s HTTP超时）
-        $pollInterval = 200000;  // 200ms
+        $replyTimeout = 500000;  // 0.5s 等待CA回复（A5协议正常<0.5s，5次×0.5s=2.5s）
+        $pollInterval = 100000;  // 100ms 轮询间隔
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             // 每次发送前确保已登入
