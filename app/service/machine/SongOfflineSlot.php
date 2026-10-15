@@ -1743,10 +1743,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 return;
             }
 
-            // A5 C5 = 未登入；WebSocket worker 已将 login_status 写入 Redis，
-            // 此处再写一次作双重保险，确保 ensureLoggedIn() 能正确触发重新登入。
-            $this->login_status = 0;
-
             $this->log->warning('[收账小卡-上分] 机台回复未登入（A5 C5），重置登入状态后重试', [
                 'machine_code' => $this->machine->code,
                 'attempt'      => "$attempt/$maxAttempts",
