@@ -1510,16 +1510,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 'has_lock' => $this->has_lock,
                 'cmd' => $cmd,
             ]);
-            // 归0/上分/确认读分允许在锁定状态重试（工控确认安全，防止机台丢失指令）
-            $allowedWhenLocked = [self::CHECK, self::OPEN_ANY_POINT, self::READ_SCORE];
-            if ($this->has_lock == 1 && !in_array($cmd, $allowedWhenLocked)) {
+            // 锁定时仅允许归0指令（E1错误/上分5次失败后需 CHECK 归0解锁）
+            if ($this->has_lock == 1 && $cmd !== self::CHECK) {
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
-            }
-            if ($this->has_lock == 1 && in_array($cmd, [self::OPEN_ANY_POINT, self::READ_SCORE])) {
-                $this->log->warning('[收账小卡-锁定重试] 锁定状态下允许重发', [
-                    'machine_code' => $this->machine->code,
-                    'cmd' => $cmd,
-                ]);
             }
 
             // 玩家操作时更新活动时间

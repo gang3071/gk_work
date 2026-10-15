@@ -2168,21 +2168,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
             }
 
-            // 归0/上分/确认查分允许在锁定状态重试（工控确认安全，防止机台丢失指令）
-            $allowedWhenLocked = [self::CHECK, self::OPEN_ANY_POINT, self::MACHINE_POINT];
-            if ($this->has_lock == 1 && !in_array($cmd, $allowedWhenLocked)) {
+            // 检查机台锁定（仅允许归0指令，其他操作须先 CHECK 解锁）
+            if ($this->has_lock == 1 && $cmd != self::CHECK) {
                 $this->log->error('[sendCmd] 机台已锁定', [
                     'machine_code' => $this->machine->code,
                     'has_lock' => $this->has_lock,
                     'cmd' => $cmd,
                 ]);
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
-            }
-            if ($this->has_lock == 1 && in_array($cmd, [self::OPEN_ANY_POINT, self::MACHINE_POINT])) {
-                $this->log->warning('[sendCmd] 锁定状态下允许重发', [
-                    'machine_code' => $this->machine->code,
-                    'cmd' => $cmd,
-                ]);
             }
 
             $this->log->info('[sendCmd] 检查通过，准备发送指令', [
