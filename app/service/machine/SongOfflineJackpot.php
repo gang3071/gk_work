@@ -2168,14 +2168,21 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
             }
 
-            // 检查机台锁定
-            if ($this->has_lock == 1 && $cmd != self::CHECK) {
+            // 归0/上分/确认查分允许在锁定状态重试（工控确认安全，防止机台丢失指令）
+            $allowedWhenLocked = [self::CHECK, self::OPEN_ANY_POINT, self::MACHINE_POINT];
+            if ($this->has_lock == 1 && !in_array($cmd, $allowedWhenLocked)) {
                 $this->log->error('[sendCmd] 机台已锁定', [
                     'machine_code' => $this->machine->code,
                     'has_lock' => $this->has_lock,
                     'cmd' => $cmd,
                 ]);
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
+            }
+            if ($this->has_lock == 1 && in_array($cmd, [self::OPEN_ANY_POINT, self::MACHINE_POINT])) {
+                $this->log->warning('[sendCmd] 锁定状态下允许重发', [
+                    'machine_code' => $this->machine->code,
+                    'cmd' => $cmd,
+                ]);
             }
 
             $this->log->info('[sendCmd] 检查通过，准备发送指令', [
@@ -2299,6 +2306,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
         } catch (Exception $e) {
             if (in_array($cmd, [self::OPEN_ANY_POINT, self::WASH_ZERO])) {
+                $wasAlreadyLocked = $this->has_lock == 1;
                 $this->has_lock = 1;
                 Log::channel('machine_operations')->error('[SongOfflineJackpot-MachineLock] 机台被锁', [
                     'machine_id' => $this->machine->id,
@@ -2307,7 +2315,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     'lock_reason' => '指令执行异常',
                     'exception_message' => $e->getMessage(),
                 ]);
-                sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+                // 已锁定时重试失败不重复发送通知（防止通知轰炸）
+                if (!$wasAlreadyLocked) {
+                    sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+                }
             }
             throw new Exception($e->getMessage(). $cmd);
         }
