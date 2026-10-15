@@ -1742,10 +1742,19 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 return;
             }
 
-            $this->log->warning('[收账小卡-上分] 机台回复未登入（A5 C5），重置登入状态后重试', [
-                'machine_code' => $this->machine->code,
-                'attempt'      => "$attempt/$maxAttempts",
-            ]);
+            if ($lastResult === 'c5') {
+                $this->log->warning('[收账小卡-上分] 机台回复未登入（A5 C5），重试', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxAttempts",
+                ]);
+            } else {
+                // null：_last_open_result TTL 过期或 Redis 故障，结果未知，安全重试
+                $this->log->warning('[收账小卡-上分] 回复结果未知（非 CA/C5），重试', [
+                    'machine_code' => $this->machine->code,
+                    'last_result'  => $lastResult,
+                    'attempt'      => "$attempt/$maxAttempts",
+                ]);
+            }
         }
 
         // 5 次重试全部失败，才锁机台
