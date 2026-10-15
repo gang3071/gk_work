@@ -2790,8 +2790,9 @@ if (!function_exists('machineOpenAnyFree')) {
         }
 
         // 分布式锁：防止上下分并发
+        // TTL=60s：handleOpenPoint 最长5×(3s登入+1.5s回复)=22.5s + card_score轮询10s = 32.5s，留有余量
         $actionLockerKey = 'machine_operation_lock_' . $machine->id;
-        $lock = Locker::lock($actionLockerKey, 30, true);
+        $lock = Locker::lock($actionLockerKey, 60, true);
 
         try {
             if (!$lock->acquire()) {
