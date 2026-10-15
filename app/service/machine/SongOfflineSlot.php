@@ -1169,8 +1169,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     'machine_code' => $this->machine->code,
                     'version' => $version,
                 ]);
-                $this->is_login = 0;
-                $this->login_status = 0;  // 新字段
+                $this->login_status = 0;
                 Cache::set($this->cacheDataKey . '_last_open_result', 'c5', 10);
                 break;
 

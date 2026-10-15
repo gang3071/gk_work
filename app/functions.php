@@ -2818,8 +2818,7 @@ if (!function_exists('machineOpenAnyFree')) {
             try {
             // ⚠️ checkMachineOpenAny 只验证 openScore（购买的分），不包含赠分
             // giftScore 会在硬件上分时额外加上
-                $offSlotOpenScore = $openScore;
-            $openScore = checkMachineOpenAny($machine, $openScore, 0);
+                $openScore = checkMachineOpenAny($machine, $openScore, 0);
 
             // ✅ 计算总上分（购买分 + 赠送分）
             $totalOpenScore = $openScore + $giftScore;
@@ -3179,17 +3178,18 @@ if (!function_exists('machineOpenAnyFree')) {
 
             // 发送开分指令（包含赠送分）
             // ⚠️ 玩家扣款只扣 openScore 的金额，但硬件要给 totalOpenScore = openScore + giftScore
-            $openPointConfirmFailed = false;  // 用于区分"硬件未确认"与其他失败类型
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG
                     && $machine->type == GameType::TYPE_SLOT) {
                     $cardScoreBefore = $services->card_score;
-                    // sendCmd 内部重试最长阻塞 22.5s，期间机台可能已上分并被玩家消耗，
+                    // sendCmd 内部已通过 CA 回复确认上分成功，无异常即为权威确认。
+                    // 内部重试最长阻塞 22.5s，期间机台可能已上分并被玩家消耗，
                     // 返回后立即采样作为峰值基准，避免漏检。
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $player->id);
 
-                    // 轮询确认机台已收到上分（25 × 400ms = 10秒）
-                    // 追踪轮询期间的峰值，防止玩家快速消耗分数导致误判
+                    // card_score 轮询仅用于监控，不触发退款。
+                    // sendCmd 无异常 = CA 已收到 = 硬件上分成功；card_score 受玩家消耗影响，
+                    // 不能作为上分是否成功的判断依据。
                     $openConfirmed = false;
                     $maxCardScore = max($cardScoreBefore, $services->card_score);
                     for ($oi = 0; $oi < 25; $oi++) {
@@ -3205,15 +3205,19 @@ if (!function_exists('machineOpenAnyFree')) {
                     }
                     Log::channel('slot_machine')->info('[machineOpenAnyFree] OPEN_ANY_POINT 执行完成（离线小淞）', [
                         'machine_code' => $machine->code,
-                        'confirmed' => $openConfirmed,
+                        'card_score_confirmed' => $openConfirmed,
                         'card_score_before' => $cardScoreBefore,
                         'card_score_peak' => $maxCardScore,
                         'card_score_after' => $services->card_score,
                         'attempts' => $oi + 1,
                     ]);
                     if (!$openConfirmed) {
-                        $openPointConfirmFailed = true;
-                        throw new Exception("上分失败：机台未在10秒内确认收分（card_score={$services->card_score}），已自动退款");
+                        // CA 已确认上分成功，card_score 未上升仅表示玩家已消耗，不退款
+                        Log::channel('slot_machine')->warning('[machineOpenAnyFree] card_score 10s 内未上升（玩家可能已消耗），上分已由 CA 确认，不退款', [
+                            'machine_code' => $machine->code,
+                            'card_score_before' => $cardScoreBefore,
+                            'card_score_now' => $services->card_score,
+                        ]);
                     }
                 } else {
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
