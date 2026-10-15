@@ -1764,42 +1764,72 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function confirmOpenPointWithStatus(string $uid, int $data, int $times, string $source, int $source_id): void
     {
-        $beforeVersion = $this->getActionVersion(self::READ_STATUS);
-        Cache::delete($this->cacheDataKey . '_last_status_fields');
-        $cmd = $this->createCmd(self::READ_STATUS);
-        Gateway::sendToUid($uid, hex2bin($cmd));
-
-        $replied = false;
-        $waited  = 0;
-        while ($waited < 3000000) {   // 最长等 3s
-            usleep(200000);
-            $waited += 200000;
-            if ($this->getActionVersion(self::READ_STATUS) > $beforeVersion) {
-                $replied = true;
-                break;
-            }
-        }
+        // 最多查询5次（每次：发EA D4→等回复最长1.5s→若D3等500ms再查），总计最长10s
+        $maxChecks    = 5;
+        $replyTimeout = 1500000;  // 1.5s 等回复
+        $pollInterval = 100000;   // 100ms 轮询间隔
+        $d3Wait       = 500000;   // D3开分中：等500ms再次查询
 
         $openStatus = 'd2';
         $washStatus = 'd6';
         $retryCount = 0;
+        $confirmed  = false;
 
-        if ($replied) {
-            $raw    = Cache::get($this->cacheDataKey . '_last_status_fields');
-            $fields = $raw ? json_decode($raw, true) : [];
+        for ($check = 1; $check <= $maxChecks; $check++) {
+            $beforeVersion = $this->getActionVersion(self::READ_STATUS);
+            Cache::delete($this->cacheDataKey . '_last_status_fields');
+            $cmd = $this->createCmd(self::READ_STATUS);
+            Gateway::sendToUid($uid, hex2bin($cmd));
+
+            // 等待 A7 D2 回复
+            $replied = false;
+            $waited  = 0;
+            while ($waited < $replyTimeout) {
+                usleep($pollInterval);
+                $waited += $pollInterval;
+                if ($this->getActionVersion(self::READ_STATUS) > $beforeVersion) {
+                    $replied = true;
+                    break;
+                }
+            }
+
+            if (!$replied) {
+                $this->log->warning('[收账小卡-上分] EA D4 回复超时，重试', [
+                    'machine_code' => $this->machine->code,
+                    'check'        => "$check/$maxChecks",
+                ]);
+                continue;
+            }
+
+            $raw        = Cache::get($this->cacheDataKey . '_last_status_fields');
+            $fields     = $raw ? json_decode($raw, true) : [];
             $openStatus = $fields['open_status'] ?? 'd2';
             $washStatus = $fields['wash_status'] ?? 'd6';
             $retryCount = (int)($fields['retry_count'] ?? 0);
 
-            $this->log->info('[收账小卡-上分] EA D4 状态确认', [
+            $this->log->info('[收账小卡-上分] EA D4 查询', [
                 'machine_code' => $this->machine->code,
-                'open_status'  => $openStatus === 'd2' ? '开分完成' : '开分中',
-                'wash_status'  => $washStatus === 'd6' ? '洗分完成' : '洗分中',
+                'check'        => "$check/$maxChecks",
+                'open_status'  => $openStatus === 'd2' ? '开分完成' : '开分中(D3)',
+                'wash_status'  => $washStatus === 'd6' ? '洗分完成' : '洗分中(D7)',
                 'retry_count'  => $retryCount,
             ]);
-        } else {
-            $this->log->warning('[收账小卡-上分] EA D4 未在3秒内回复，以CA确认为准', [
+
+            if ($openStatus === 'd2') {
+                // 开分完成，退出轮询
+                $confirmed = true;
+                break;
+            }
+
+            // D3 开分中，等500ms再查
+            usleep($d3Wait);
+        }
+
+        if (!$confirmed) {
+            $this->log->warning('[收账小卡-上分] EA D4 轮询结束仍为D3或无回复，以CA确认为准', [
                 'machine_code' => $this->machine->code,
+                'open_status'  => $openStatus,
+                'checks'       => $maxChecks,
             ]);
         }
 
