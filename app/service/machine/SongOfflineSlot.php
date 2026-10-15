@@ -1016,6 +1016,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // ✅ 使用提取的方法解析字段
         $fields = $this->parseMachineStatusFields($msg);
 
+        // 存入 Redis 供 HTTP worker（handleOpenPoint/confirmOpenPointWithStatus）读取
+        Cache::set($this->cacheDataKey . '_last_status_fields', json_encode($fields), 10);
+
         // ✅ 使用提取的方法检测标志
         $flags = $this->detectMachineStatusFlags($fields['status_value']);
 
@@ -1724,21 +1727,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $lastResult = Cache::get($this->cacheDataKey . '_last_open_result');
 
             if ($lastResult === 'ca') {
-                // A5 CA：开分开始，成功
-                $this->log->info('[收账小卡-上分] 开分成功（A5 CA）', [
+                $this->log->info('[收账小卡-上分] 收到CA确认，主动查询机台执行状态（EA D4）', [
                     'machine_code' => $this->machine->code,
                     'attempt'      => "$attempt/$maxAttempts",
                     'times'        => $times,
                     'score'        => $data,
                 ]);
-
-                if ($source == 'admin') {
-                    sendSocketMessage('private-admin-1-' . $source_id, [
-                        'msg_type'    => 'machine_action_result',
-                        'id'          => $this->machine->id,
-                        'description' => "上分指令已发送（{$times}次×" . self::OPEN_UNIT . "分={$data}分）",
-                    ]);
-                }
+                $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
                 return;
             }
 
@@ -1761,6 +1756,77 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
         throw new Exception("上分失败：{$maxAttempts}次重试后仍收到C5或超时，机台已锁定");
+    }
+
+    /**
+     * CA 确认后主动发 EA D4 查询实际执行状态，并回复客户端。
+     * 解析结果存入 Redis（_last_status_fields），供外层调用者读取 retry_count 做退款。
+     */
+    private function confirmOpenPointWithStatus(string $uid, int $data, int $times, string $source, int $source_id): void
+    {
+        $beforeVersion = $this->getActionVersion(self::READ_STATUS);
+        Cache::delete($this->cacheDataKey . '_last_status_fields');
+        $cmd = $this->createCmd(self::READ_STATUS);
+        Gateway::sendToUid($uid, hex2bin($cmd));
+
+        $replied = false;
+        $waited  = 0;
+        while ($waited < 3000000) {   // 最长等 3s
+            usleep(200000);
+            $waited += 200000;
+            if ($this->getActionVersion(self::READ_STATUS) > $beforeVersion) {
+                $replied = true;
+                break;
+            }
+        }
+
+        $openStatus = 'd2';
+        $washStatus = 'd6';
+        $retryCount = 0;
+
+        if ($replied) {
+            $raw    = Cache::get($this->cacheDataKey . '_last_status_fields');
+            $fields = $raw ? json_decode($raw, true) : [];
+            $openStatus = $fields['open_status'] ?? 'd2';
+            $washStatus = $fields['wash_status'] ?? 'd6';
+            $retryCount = (int)($fields['retry_count'] ?? 0);
+
+            $this->log->info('[收账小卡-上分] EA D4 状态确认', [
+                'machine_code' => $this->machine->code,
+                'open_status'  => $openStatus === 'd2' ? '开分完成' : '开分中',
+                'wash_status'  => $washStatus === 'd6' ? '洗分完成' : '洗分中',
+                'retry_count'  => $retryCount,
+            ]);
+        } else {
+            $this->log->warning('[收账小卡-上分] EA D4 未在3秒内回复，以CA确认为准', [
+                'machine_code' => $this->machine->code,
+            ]);
+        }
+
+        if ($source === 'admin') {
+            $openDesc  = $openStatus === 'd2' ? '开分完成' : '开分中';
+            $washDesc  = $washStatus === 'd6' ? '洗分完成' : '洗分中';
+            $retryDesc = $retryCount > 0
+                ? "，回补{$retryCount}次（每次" . self::OPEN_UNIT . "分将退款）"
+                : '';
+            sendSocketMessage('private-admin-1-' . $source_id, [
+                'msg_type'    => 'machine_action_result',
+                'id'          => $this->machine->id,
+                'open_status' => $openStatus,
+                'wash_status' => $washStatus,
+                'retry_count' => $retryCount,
+                'description' => "上分{$openDesc}（{$times}次×" . self::OPEN_UNIT . "分={$data}分）｜{$washDesc}{$retryDesc}",
+            ]);
+        }
+    }
+
+    /**
+     * 读取最近一次 EA D4 查询结果（供外层调用者处理 retry_count 退款）
+     */
+    public function getLastStatusFields(): array
+    {
+        $raw = Cache::get($this->cacheDataKey . '_last_status_fields');
+        return $raw ? json_decode($raw, true) : [];
     }
 
     /**

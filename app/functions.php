@@ -3187,6 +3187,29 @@ if (!function_exists('machineOpenAnyFree')) {
                     // 返回后立即采样作为峰值基准，避免漏检。
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $player->id);
 
+                    // ── EA D4 回补退款处理 ──
+                    // sendCmd 内部已发 EA D4 并将结果存入 Redis（_last_status_fields）。
+                    // retry_count > 0 表示机台有开分失败次数（如到达积分上限），需退还对应金额。
+                    $statusFields = $services->getLastStatusFields();
+                    $retryCount   = (int)($statusFields['retry_count'] ?? 0);
+                    if ($retryCount > 0 && $openScore > 0) {
+                        // 按比例退款：每次失败退还（money / paid_times）元
+                        $paidTimes    = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
+                        $refundMoney  = $paidTimes > 0
+                            ? bcdiv(bcmul($retryCount, $money, 6), $paidTimes, 2)
+                            : '0.00';
+                        if (bccomp($refundMoney, '0', 2) > 0) {
+                            $refundResult = \app\service\WalletService::add($player->id, $refundMoney);
+                            Log::channel('slot_machine')->warning('[machineOpenAnyFree] 回补退款', [
+                                'machine_code'  => $machine->code,
+                                'player_id'     => $player->id,
+                                'retry_count'   => $retryCount,
+                                'refund_money'  => $refundMoney,
+                                'refund_ok'     => $refundResult['success'] ?? false,
+                            ]);
+                        }
+                    }
+
                     // card_score 轮询仅用于监控，不触发退款。
                     // sendCmd 无异常 = CA 已收到 = 硬件上分成功；card_score 受玩家消耗影响，
                     // 不能作为上分是否成功的判断依据。
