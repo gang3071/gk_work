@@ -3340,7 +3340,9 @@ if (!function_exists('machineOpenAnyFree')) {
                     && $machine->type == GameType::TYPE_SLOT;
 
                 if ($isOfflineSongSlotFailed) {
-                    // 硬件失败（登入超时 / 收分未确认）：自动退款，让玩家无缝重试
+                    // 硬件失败（登入3次超时 / A5 5次重试失败）：自动退款。
+                    // 注意：5次失败时 has_lock=1 已写入 Redis，机台仍处于锁定状态，
+                    // 玩家无法直接重试上分，需管理员发 CHECK 归0指令解锁后方可使用。
                     $walletRefunded = false;  // 用于降级日志区分钱包状态
                     $compensateTransactionStarted = false;  // 防止补偿事务未 rollBack 导致长驻连接锁泄漏
                     try {
