@@ -2840,10 +2840,20 @@ if (!function_exists('machineOpenAnyFree')) {
             // ✅ 计算总上分（购买分 + 赠送分）
             $totalOpenScore = $openScore + $giftScore;
 
-            if ($machine->min_point != 0 && $machine->min_point > $totalOpenScore) {
+            // SongOfflineSlot：$totalOpenScore 是机台分（machine game points），
+            // 而 $services->point 和 $machine->max_point/min_point 均为 card_score 单位，
+            // 需先换算成 card_score 再做比较。
+            $isSongOfflineSlot = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                && $machine->control_type == Machine::CONTROL_TYPE_SONG
+                && $machine->type == \app\model\GameType::TYPE_SLOT);
+            $totalOpenScoreForCheck = ($isSongOfflineSlot && $machine->odds_x > 0)
+                ? intdiv($totalOpenScore, $machine->odds_x)
+                : $totalOpenScore;
+
+            if ($machine->min_point != 0 && $machine->min_point > $totalOpenScoreForCheck) {
                     throw new Exception(trans('machine_min_open', [], 'message') . $machine->min_point);
                 }
-                if ($machine->max_point != 0 && ($machine->max_point < $services->point || $machine->max_point < $totalOpenScore || $machine->max_point < ($services->point + $totalOpenScore))) {
+                if ($machine->max_point != 0 && ($machine->max_point < $services->point || $machine->max_point < $totalOpenScoreForCheck || $machine->max_point < ($services->point + $totalOpenScoreForCheck))) {
                     throw new Exception(trans('machine_max_open', [], 'message') . $machine->max_point);
             }
 
