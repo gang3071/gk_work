@@ -2860,12 +2860,16 @@ if (!function_exists('machineOpenAnyFree')) {
             // SongOfflineSlot：客户端传入机台分 = 货币单位（1:1）。
             // checkMachineOpenAny 做的是 openScore × odds_y/odds_x，再 × odds_x/odds_y = 恒等变换，
             // 故直接以原始输入值（600）作为扣款金额，避免 × odds_x 再乘出 1800。
+            // $logOpenScore：写入记录的积分值。SongOfflineSlot 按 card_score 单位（÷ odds_x）存储，
+            // 与玩家卡片显示一致；其他机台直接存 openScore（机台分）。
             if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                 && $machine->control_type == Machine::CONTROL_TYPE_SONG
                 && $machine->type == \app\model\GameType::TYPE_SLOT) {
                 $money = (int) $openScore;
+                $logOpenScore = ($machine->odds_x > 0) ? intdiv($openScore, $machine->odds_x) : $openScore;
             } else {
                 $money = floor($openScore / $machine->odds_y * $machine->odds_x);
+                $logOpenScore = $openScore;
             }
 
             // ✅ 验证计算结果的合理性
@@ -2952,7 +2956,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 $gameRecord->code = $machine->code;
                 $gameRecord->odds = $machine->odds_x . ':' . $machine->odds_y;
                 $gameRecord->status = PlayerGameRecord::STATUS_START;
-                $gameRecord->open_point = $openScore;      // ✅ 修复：设置为实际上分金额
+                $gameRecord->open_point = $logOpenScore;   // ✅ 修复：card_score 单位（SongOfflineSlot ÷ odds_x）
                 $gameRecord->open_amount = $money;         // ✅ 修复：设置为实际扣款金额
                 $gameRecord->give_amount = $giftScore;     // ✅ 修复：设置为实际赠送金额
                 $gameRecord->wash_point = 0;
@@ -2966,7 +2970,7 @@ if (!function_exists('machineOpenAnyFree')) {
                     'player_id' => $player->id,
                     'machine_id' => $machine->id,
                     'game_record_id' => $gameRecord->id,
-                    'open_point' => $openScore,
+                    'open_point' => $logOpenScore,
                     'open_amount' => $money,
                 ]);
             }
@@ -2996,7 +3000,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 $gameRecord->code = $machine->code;
                 $gameRecord->odds = $machine->odds_x . ':' . $machine->odds_y;
                 $gameRecord->status = PlayerGameRecord::STATUS_START;
-                $gameRecord->open_point = $openScore;
+                $gameRecord->open_point = $logOpenScore;
                 $gameRecord->open_amount = $money;
                 $gameRecord->give_amount = $giftScore;
                 $gameRecord->wash_point = 0;
@@ -3010,12 +3014,12 @@ if (!function_exists('machineOpenAnyFree')) {
                     'player_id' => $player->id,
                     'machine_id' => $machine->id,
                     'new_game_record_id' => $gameRecord->id,
-                    'open_point' => $openScore,
+                    'open_point' => $logOpenScore,
                     'open_amount' => $money,
                 ]);
             } else {
                 // 更新现有游戏记录（第2次及后续上分）
-                $gameRecord->open_point = bcadd($gameRecord->open_point, $openScore, 2);
+                $gameRecord->open_point = bcadd($gameRecord->open_point, $logOpenScore, 2);
                 $gameRecord->open_amount = bcadd($gameRecord->open_amount, $money, 2);
                 $gameRecord->give_amount = bcadd($gameRecord->give_amount, $giftScore, 2);
                 $gameRecord->save();
@@ -3050,7 +3054,7 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerGameLog->type = $machine->type;
             $playerGameLog->odds = $odds;
             $playerGameLog->control_open_point = $machine->control_open_point;
-            $playerGameLog->open_point = $openScore;
+            $playerGameLog->open_point = $logOpenScore;
             $playerGameLog->wash_point = 0;
             $playerGameLog->gift_point = 0;
             $playerGameLog->game_amount = $money;  // ✅ 修复：实际扣款金额
@@ -3396,7 +3400,7 @@ if (!function_exists('machineOpenAnyFree')) {
                                 $gameRecord->status = \app\model\PlayerGameRecord::STATUS_END;
                             } else {
                                 // Phase 3 更新的已有记录：反向扣减本次累加的量
-                                $gameRecord->open_point = max(0, bcsub($gameRecord->open_point, $openScore ?? 0, 2));
+                                $gameRecord->open_point = max(0, bcsub($gameRecord->open_point, $logOpenScore ?? 0, 2));
                                 $gameRecord->open_amount = max(0, bcsub($gameRecord->open_amount, $money, 2));
                                 $gameRecord->give_amount = max(0, bcsub($gameRecord->give_amount, $giftScore ?? 0, 2));
                             }
