@@ -2895,7 +2895,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * 3. 更新游戏记录（PlayerGameRecord）
      * 4. 不扣减玩家余额（线下现金投币）
      */
-    private function recordExternalOpenForPlayer(int $playerId, int $openedScore, string $openAmount): void
+    private function recordExternalOpenForPlayer(int $playerId, int $openedScore, int $openAmount): void
     {
         DB::beginTransaction();
 
@@ -2966,7 +2966,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *
      * 仅创建开分记录，标记为线下按键操作
      */
-    private function recordExternalOpenWithoutPlayer(int $openedScore, string $openAmount): void
+    private function recordExternalOpenWithoutPlayer(int $openedScore, int $openAmount): void
     {
         DB::beginTransaction();
 
