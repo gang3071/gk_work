@@ -1350,7 +1350,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // 金额信息
             $playerGameLog->gift_point = 0;
-            $playerGameLog->game_amount = $amount;  // amount 已是卡分（分），不需除以100
+            $playerGameLog->game_amount = $amount / 100;
             $playerGameLog->before_game_amount = 0;  // 外部按钮不涉及玩家余额
             $playerGameLog->after_game_amount = 0;
 
@@ -2841,8 +2841,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 return;
             }
 
-            // 4. open_table 单位与 card_score 一致（卡分），直接用作 game_amount
-            $openAmount = $openIncrement;
+            // 4. 转换成金额（用于记录，不扣减余额）
+            $openAmount = floor(
+                bcmul(
+                    bcdiv($openIncrement, $this->machine->odds_y ?? 1, 4),
+                    $this->machine->odds_x ?? 1,
+                    2
+                )
+            );
 
             $this->log->info('[线下开分] 检测到开分码表增加', [
                 'machine_id' => $this->machine->id,
@@ -2902,7 +2908,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * 3. 更新游戏记录（PlayerGameRecord）
      * 4. 不扣减玩家余额（线下现金投币）
      */
-    private function recordExternalOpenForPlayer(int $playerId, int $openedScore, int $openAmount): void
+    private function recordExternalOpenForPlayer(int $playerId, int $openedScore, string $openAmount): void
     {
         DB::beginTransaction();
 
@@ -2973,7 +2979,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *
      * 仅创建开分记录，标记为线下按键操作
      */
-    private function recordExternalOpenWithoutPlayer(int $openedScore, int $openAmount): void
+    private function recordExternalOpenWithoutPlayer(int $openedScore, string $openAmount): void
     {
         DB::beginTransaction();
 
