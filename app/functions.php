@@ -2857,7 +2857,16 @@ if (!function_exists('machineOpenAnyFree')) {
             }
 
             // 计算实际扣款金额（游戏分 → 金额）
-            $money = floor($openScore / $machine->odds_y * $machine->odds_x);
+            // SongOfflineSlot：客户端传入机台分 = 货币单位（1:1）。
+            // checkMachineOpenAny 做的是 openScore × odds_y/odds_x，再 × odds_x/odds_y = 恒等变换，
+            // 故直接以原始输入值（600）作为扣款金额，避免 × odds_x 再乘出 1800。
+            if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                && $machine->control_type == Machine::CONTROL_TYPE_SONG
+                && $machine->type == \app\model\GameType::TYPE_SLOT) {
+                $money = (int) $openScore;
+            } else {
+                $money = floor($openScore / $machine->odds_y * $machine->odds_x);
+            }
 
             // ✅ 验证计算结果的合理性
             if ($money <= 0) {
