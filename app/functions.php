@@ -1148,8 +1148,9 @@ function machineWash(
 ): PlayerLotteryRecord|bool|array
 {
     // 分布式锁：防止上下分并发
+    // TTL=70s：SongOfflineSlot 洗分最长 handleWashPoint 48s + card_score 轮询 10s = 58s，留有余量
     $actionLockerKey = 'machine_operation_lock_' . $machine->id;
-    $lock = Locker::lock($actionLockerKey, 30, true);
+    $lock = Locker::lock($actionLockerKey, 70, true);
 
     try {
         if (!$lock->acquire()) {
@@ -2790,7 +2791,7 @@ if (!function_exists('machineOpenAnyFree')) {
         }
 
         // 分布式锁：防止上下分并发
-        // TTL=60s：handleOpenPoint 最长5×(3s登入+1.5s回复)=22.5s + card_score轮询10s = 32.5s，留有余量
+        // TTL=60s：handleOpenPoint 最长10×(3s登入+0.3s回复)=33s + EA D4轮询25×0.6s=15s = 48s，留有余量
         $actionLockerKey = 'machine_operation_lock_' . $machine->id;
         $lock = Locker::lock($actionLockerKey, 60, true);
 
@@ -2812,13 +2813,29 @@ if (!function_exists('machineOpenAnyFree')) {
                 throw new Exception(trans('exception_msg.point_must_5seconds', [], 'message', $lang));
             }
 
-            DB::beginTransaction();
-            $walletDeducted = false;  // 标记钱包是否已扣款
+            $walletDeducted = false;  // 标记钱包是否已扣款（提前初始化，确保 catch 块可引用）
             $money = 0;  // ✅ 初始化，避免异常处理时 Undefined variable
+
+            DB::beginTransaction();
             try {
+                // SongOfflineSlot：客户端传的 open_point 已经是游戏分（机台积分），不需要赔率换算。
+                // 其他机台：openScore 是货币金额，需经 checkMachineOpenAny 换算成游戏分。
+                if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $machine->control_type == Machine::CONTROL_TYPE_SONG
+                    && $machine->type == \app\model\GameType::TYPE_SLOT) {
+                    // 直接验证是否为 OPEN_UNIT（300）的倍数
+                    $openUnit = \app\service\machine\SongOfflineSlot::OPEN_UNIT;
+                    if ($openScore <= 0 || $openScore % $openUnit !== 0) {
+                        throw new \InvalidArgumentException(
+                            "上分必须是{$openUnit}分的整数倍（当前{$openScore}分）"
+                        );
+                    }
+                    // $openScore 已是游戏分，无需换算
+                } else {
             // ⚠️ checkMachineOpenAny 只验证 openScore（购买的分），不包含赠分
             // giftScore 会在硬件上分时额外加上
                 $openScore = checkMachineOpenAny($machine, $openScore, 0);
+                }
 
             // ✅ 计算总上分（购买分 + 赠送分）
             $totalOpenScore = $openScore + $giftScore;
@@ -3181,11 +3198,9 @@ if (!function_exists('machineOpenAnyFree')) {
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG
                     && $machine->type == GameType::TYPE_SLOT) {
-                    $cardScoreBefore = $services->card_score;
-                    // sendCmd 内部已通过 CA 回复确认上分成功，无异常即为权威确认。
-                    // 内部重试最长阻塞 22.5s，期间机台可能已上分并被玩家消耗，
-                    // 返回后立即采样作为峰值基准，避免漏检。
-                    $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $player->id);
+                    $cmdSource = $adminId > 0 ? 'admin' : 'player';
+                    $cmdSourceId = $adminId > 0 ? $adminId : $player->id;
+                    $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, $cmdSource, $cmdSourceId);
 
                     // ── EA D4 回补退款处理 ──
                     // sendCmd 内部已发 EA D4 并将结果存入 Redis（_last_status_fields）。
@@ -3193,9 +3208,10 @@ if (!function_exists('machineOpenAnyFree')) {
                     $statusFields = $services->getLastStatusFields();
                     $retryCount   = (int)($statusFields['retry_count'] ?? 0);
                     if ($retryCount > 0 && $openScore > 0) {
-                        // 按比例退款：每次失败退还（money / paid_times）元
-                        $paidTimes    = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
-                        $refundMoney  = $paidTimes > 0
+                        $paidTimes = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
+                        // 防御：机台异常上报值不应超过实际次数，超出则按全额退款处理
+                        $retryCount = min($retryCount, $paidTimes);
+                        $refundMoney = $paidTimes > 0
                             ? bcdiv(bcmul($retryCount, $money, 6), $paidTimes, 2)
                             : '0.00';
                         if (bccomp($refundMoney, '0', 2) > 0) {
@@ -3208,39 +3224,6 @@ if (!function_exists('machineOpenAnyFree')) {
                                 'refund_ok'     => $refundResult['success'] ?? false,
                             ]);
                         }
-                    }
-
-                    // card_score 轮询仅用于监控，不触发退款。
-                    // sendCmd 无异常 = CA 已收到 = 硬件上分成功；card_score 受玩家消耗影响，
-                    // 不能作为上分是否成功的判断依据。
-                    $openConfirmed = false;
-                    $maxCardScore = max($cardScoreBefore, $services->card_score);
-                    for ($oi = 0; $oi < 25; $oi++) {
-                        usleep(400000);
-                        $pollScore = $services->card_score;
-                        if ($pollScore > $maxCardScore) {
-                            $maxCardScore = $pollScore;
-                        }
-                        if ($maxCardScore > $cardScoreBefore) {
-                            $openConfirmed = true;
-                            break;
-                        }
-                    }
-                    Log::channel('slot_machine')->info('[machineOpenAnyFree] OPEN_ANY_POINT 执行完成（离线小淞）', [
-                        'machine_code' => $machine->code,
-                        'card_score_confirmed' => $openConfirmed,
-                        'card_score_before' => $cardScoreBefore,
-                        'card_score_peak' => $maxCardScore,
-                        'card_score_after' => $services->card_score,
-                        'attempts' => $oi + 1,
-                    ]);
-                    if (!$openConfirmed) {
-                        // CA 已确认上分成功，card_score 未上升仅表示玩家已消耗，不退款
-                        Log::channel('slot_machine')->warning('[machineOpenAnyFree] card_score 10s 内未上升（玩家可能已消耗），上分已由 CA 确认，不退款', [
-                            'machine_code' => $machine->code,
-                            'card_score_before' => $cardScoreBefore,
-                            'card_score_now' => $services->card_score,
-                        ]);
                     }
                 } else {
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);

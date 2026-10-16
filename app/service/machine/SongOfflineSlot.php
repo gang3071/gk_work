@@ -1676,8 +1676,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         $timesHex  = str_pad(dechex($times), 2, '0', STR_PAD_LEFT);
         $cmdData   = self::OPEN_ANY_POINT . $timesHex . 'c0';
-        $maxAttempts  = 5;
-        $replyTimeout = 500000;  // 0.5s 等待CA回复（A5协议正常<0.5s，5次×0.5s=2.5s）
+        $maxAttempts = 10;
+        $replyTimeout = 300000;  // 0.3s 等待CA回复，10次×0.3s=3s
         $pollInterval = 100000;  // 100ms 轮询间隔
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
@@ -1752,10 +1752,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
         }
 
-        // 5 次重试全部失败，才锁机台
+        // 10 次重试全部失败，才锁机台
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
-        throw new Exception("上分失败：{$maxAttempts}次重试后仍收到C5或超时，机台已锁定");
+        throw new Exception("上分失败：{$maxAttempts}次重试（每次0.3s）后仍无CA回复，机台已锁定，已退还玩家余额");
     }
 
     /**
@@ -1764,14 +1764,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function confirmOpenPointWithStatus(string $uid, int $data, int $times, string $source, int $source_id): void
     {
-        // 最多查询5次（每次：发EA D4→等回复最长1.5s→若D3等500ms再查），总计最长10s
-        $maxChecks    = 5;
-        $replyTimeout = 1500000;  // 1.5s 等回复
+        // 最多查询25次（每次：发EA D4→等回复最长0.3s→若D3等0.3s再查），总计最长约15s
+        $maxChecks = 25;
+        $replyTimeout = 300000;   // 0.3s 等回复
         $pollInterval = 100000;   // 100ms 轮询间隔
-        $d3Wait       = 500000;   // D3开分中：等500ms再次查询
+        $d3Wait = 300000;   // D3开分中：等0.3s再次查询
 
-        $openStatus = 'd2';
-        $washStatus = 'd6';
+        $openStatus = '';
+        $washStatus = '';
         $retryCount = 0;
         $confirmed  = false;
 
@@ -1821,7 +1821,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 break;
             }
 
-            // D3 开分中，等500ms再查
+            // D3 开分中，等0.3s再查
             usleep($d3Wait);
         }
 
@@ -1834,8 +1834,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         }
 
         if ($source === 'admin') {
-            $openDesc  = $openStatus === 'd2' ? '开分完成' : '开分中';
-            $washDesc  = $washStatus === 'd6' ? '洗分完成' : '洗分中';
+            $openDesc = $openStatus === 'd2' ? '开分完成' : ($openStatus === 'd3' ? '开分中' : '状态未知');
+            $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '状态未知');
             $retryDesc = $retryCount > 0
                 ? "，回补{$retryCount}次（每次" . self::OPEN_UNIT . "分将退款）"
                 : '';
@@ -1861,54 +1861,162 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
     /**
      * 处理下分指令（A5 00 C1 SUM1 SUM2）
-     *
-     * ⚠️ 小淞线下Slot特殊规则：
-     * 1. 固定300分为单位（self::OPEN_UNIT）
-     * 2. 不能全部洗分（根据用户说明）
-     * 3. 洗分需要根据洗分的次数换算成对应的玩家分数
-     *
-     * ⚠️ 协议说明：
-     * - A5 00 C1：固定指令，表示全部洗分
-     * - 洗分后，机台会返回洗了多少分
-     * - 需要将机台分数换算成玩家钱包金额
+     * 带CA回复确认 + EA D4轮询D6，流程与上分对称。
      */
     private function handleWashPoint(string $uid, int $data, string $source, int $source_id): void
     {
-        // ⚠️ 确保已登入（自动登入）
-        $this->ensureLoggedIn();
-
-        // ⚠️ 协议：A5 00 C1（固定00表示全部洗分）
-        // 注意：$data参数在当前协议中不使用，因为是全部洗分
-        // 如果协议支持按次数洗分，需要类似开分的逻辑
-
         $cmdData = self::WASH_POINT;
+        $maxAttempts = 10;
+        $replyTimeout = 300000;  // 0.3s 等待CA回复，10次×0.3s=3s
+        $pollInterval = 100000;  // 100ms 轮询间隔
 
-        $sum1 = $this->calculateSUM1($cmdData);
-        $sum2 = $this->calculateSUM2($cmdData, $sum1);
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $this->ensureLoggedIn();
+            $sum1 = $this->calculateSUM1($cmdData);
+            $sum2 = $this->calculateSUM2($cmdData, $sum1);
+            $fullCmd = $cmdData . $sum1 . $sum2;
 
-        $fullCmd = $cmdData . $sum1 . $sum2;
+            $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
+            Cache::delete($this->cacheDataKey . '_last_open_result');
 
-        $currentMachineScore = $this->machine_score ?? $this->point ?? 0;
+            $this->log->info('[收账小卡-下分] 发送下分指令', [
+                'machine_code' => $this->machine->code,
+                'attempt' => "$attempt/$maxAttempts",
+                'cmd' => strtoupper($fullCmd),
+                'current_card_score' => $this->card_score ?? 0,
+                'current_machine_score' => $this->machine_score ?? 0,
+            ]);
 
-        $this->log->info('[收账小卡-下分] 发送下分指令', [
-            'machine_code' => $this->machine->code,
-            'current_machine_score' => $currentMachineScore,
-            'cmd' => strtoupper($fullCmd),
-            'note' => 'A5 00 C1 = 全部洗分',
+            Gateway::sendToUid($uid, hex2bin($fullCmd));
 
-            // ✅ 诊断日志：记录当前分数，用于对比
-            'current_card_score' => $this->card_score ?? 0,
-            'expected_card_score_after_wash' => 0,
-            'note2' => '期望洗分后卡分为0，请关注后续心跳/账目查询是否符合预期',
-        ]);
+            $replied = false;
+            $waited = 0;
+            while ($waited < $replyTimeout) {
+                usleep($pollInterval);
+                $waited += $pollInterval;
+                if ($this->getActionVersion(self::OPEN_ANY_POINT) > $beforeVersion) {
+                    $replied = true;
+                    break;
+                }
+            }
 
-        Gateway::sendToUid($uid, hex2bin($fullCmd));
+            if (!$replied) {
+                $this->log->warning('[收账小卡-下分] 等待CA回复超时，重试', [
+                    'machine_code' => $this->machine->code,
+                    'attempt' => "$attempt/$maxAttempts",
+                ]);
+                continue;
+            }
 
-        if ($source == 'admin') {
+            $lastResult = Cache::get($this->cacheDataKey . '_last_open_result');
+
+            if ($lastResult === 'ca') {
+                $this->log->info('[收账小卡-下分] 收到CA确认，主动查询机台执行状态（EA D4）', [
+                    'machine_code' => $this->machine->code,
+                    'attempt' => "$attempt/$maxAttempts",
+                ]);
+                $this->confirmWashPointWithStatus($uid, $source, $source_id);
+                return;
+            }
+
+            if ($lastResult === 'c5') {
+                $this->log->warning('[收账小卡-下分] 机台回复未登入（A5 C5），重试', [
+                    'machine_code' => $this->machine->code,
+                    'attempt' => "$attempt/$maxAttempts",
+                ]);
+            } else {
+                $this->log->warning('[收账小卡-下分] 回复结果未知（非 CA/C5），重试', [
+                    'machine_code' => $this->machine->code,
+                    'last_result' => $lastResult,
+                    'attempt' => "$attempt/$maxAttempts",
+                ]);
+            }
+        }
+
+        $this->has_lock = 1;
+        sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+        throw new Exception("下分失败：{$maxAttempts}次重试（每次0.3s）后仍无CA回复，机台已锁定");
+    }
+
+    /**
+     * CA确认后轮询EA D4直到D6（洗分完成）。
+     * admin 路径：最多25次（无 card_score 验证，EA D4 是唯一状态确认）。
+     * player 路径：最多3次（machineWash 已有 card_score 轮询作权威确认，少轮询减少 DB 事务持锁时间）。
+     */
+    private function confirmWashPointWithStatus(string $uid, string $source, int $source_id): void
+    {
+        // admin 路径需完整轮询；player 路径由 machineWash card_score 验证兜底，3次够用
+        $maxChecks = $source === 'admin' ? 25 : 3;
+        $replyTimeout = 300000;   // 0.3s 等回复
+        $pollInterval = 100000;   // 100ms 轮询间隔
+        $d7Wait = 300000;   // D7洗分中：等0.3s再次查询
+
+        $openStatus = '';
+        $washStatus = '';
+        $confirmed = false;
+
+        for ($check = 1; $check <= $maxChecks; $check++) {
+            $beforeVersion = $this->getActionVersion(self::READ_STATUS);
+            Cache::delete($this->cacheDataKey . '_last_status_fields');
+            $cmd = $this->createCmd(self::READ_STATUS);
+            Gateway::sendToUid($uid, hex2bin($cmd));
+
+            $replied = false;
+            $waited = 0;
+            while ($waited < $replyTimeout) {
+                usleep($pollInterval);
+                $waited += $pollInterval;
+                if ($this->getActionVersion(self::READ_STATUS) > $beforeVersion) {
+                    $replied = true;
+                    break;
+                }
+            }
+
+            if (!$replied) {
+                $this->log->warning('[收账小卡-下分] EA D4 回复超时，重试', [
+                    'machine_code' => $this->machine->code,
+                    'check' => "$check/$maxChecks",
+                ]);
+                continue;
+            }
+
+            $raw = Cache::get($this->cacheDataKey . '_last_status_fields');
+            $fields = $raw ? json_decode($raw, true) : [];
+            $openStatus = $fields['open_status'] ?? 'd2';
+            $washStatus = $fields['wash_status'] ?? 'd6';
+
+            $this->log->info('[收账小卡-下分] EA D4 查询', [
+                'machine_code' => $this->machine->code,
+                'check' => "$check/$maxChecks",
+                'open_status' => $openStatus === 'd2' ? '开分完成' : '开分中(D3)',
+                'wash_status' => $washStatus === 'd6' ? '洗分完成' : '洗分中(D7)',
+            ]);
+
+            if ($washStatus === 'd6') {
+                $confirmed = true;
+                break;
+            }
+
+            usleep($d7Wait);
+        }
+
+        if (!$confirmed) {
+            $this->log->warning('[收账小卡-下分] EA D4 轮询结束仍为D7或无回复，以CA确认为准', [
+                'machine_code' => $this->machine->code,
+                'wash_status' => $washStatus,
+                'checks' => $maxChecks,
+            ]);
+        }
+
+        if ($source === 'admin') {
+            $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '状态未知');
+            $openDesc = $openStatus === 'd2' ? '开分完成' : ($openStatus === 'd3' ? '开分中' : '状态未知');
             sendSocketMessage('private-admin-1-' . $source_id, [
                 'msg_type' => 'machine_action_result',
                 'id' => $this->machine->id,
-                'description' => '下分指令已发送（全部洗分）',
+                'open_status' => $openStatus,
+                'wash_status' => $washStatus,
+                'description' => "下分{$washDesc}（EA D4确认）｜{$openDesc}",
             ]);
         }
     }
