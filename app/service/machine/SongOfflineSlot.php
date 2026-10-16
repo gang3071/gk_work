@@ -164,6 +164,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     // ========================================
     const MAX_SCORE = 99999999;             // 最大分数（4字节BCD = 99,999,999）
     const OPEN_UNIT = 300;                  // 上分单位（固定300分）
+    const PHYSICAL_BUTTON_UNIT = 100;       // 实体按键每次上分的机台分数（与 SongOfflineJackpot 一致）
     const MAX_OPEN_TIMES = 255;             // 最大开分次数（1字节 = 0-255）
 
     public $cacheData = [];
@@ -720,49 +721,35 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // ✅ 使用提取的方法更新状态
         $this->updateAccountData($data, $flags);
 
-        // 处理外部按钮计数器变化（类似SongOfflineJackpot的B5/B7处理）
-        $now = time();
-        $oldOpenTable = $this->open_table ?? 0;  // ⚠️ 读取Redis旧值
-        $oldWashTable = $this->wash_table ?? 0;  // ⚠️ 读取Redis旧值
+        // ⚠️ open_table / wash_table 仅更新 Redis 缓存供 B7 心跳路径使用，不在此处记录游戏日志。
+        // 原因：API 上分（A5 指令）和实体按键都会累加 open_table，EA C4 无法区分来源，
+        // 若在此处记录会产生虚假的"实体按键上分"记录。
+        // 实体按键的记录统一由 B7 心跳 external_open=1 标志触发（processExternalOpen）。
+        $oldOpenTable = $this->open_table ?? 0;
+        $oldWashTable = $this->wash_table ?? 0;
 
-        // 处理开分码表变化
         if ($data['open_table'] != $oldOpenTable) {
-            // 保存上一次的值，供 processExternalOpen 计算差值（避免调用 queryDetailSync 阻塞事件循环）
+            // 保存前值，供 processExternalOpen 计算 B7 路径的差值
             $this->prev_open_table = $oldOpenTable;
-            $result = $this->processCounterChange('open', $oldOpenTable, $data['open_table'], $now);
-            if ($result['should_update']) {
-                $this->open_table = $data['open_table'];              // ⚠️ 新字段
-                $this->external_open_count = $data['open_table'];     // 旧字段（兼容性）
-            }
-
-            if ($result['recorded']) {
-                $this->log->info('[收账小卡-开分码表] 变化已记录', [
-                    'machine_code' => $this->machine->code,
-                    'old' => $oldOpenTable,
-                    'new' => $data['open_table'],
-                    'reason' => $result['reason'] ?? '',
-                ]);
-            }
+            $this->open_table = $data['open_table'];
+            $this->external_open_count = $data['open_table'];  // 旧字段兼容性
+            $this->log->info('[收账小卡-开分码表] 值已更新（不记录日志，防止API上分误报）', [
+                'machine_code' => $this->machine->code,
+                'old' => $oldOpenTable,
+                'new' => $data['open_table'],
+            ]);
         }
 
-        // 处理洗分码表变化
         if ($data['wash_table'] != $oldWashTable) {
-            // 保存上一次的值，与 prev_open_table 对称，供未来洗分逻辑使用
+            // 保存前值，供洗分差值计算
             $this->prev_wash_table = $oldWashTable;
-            $result = $this->processCounterChange('wash', $oldWashTable, $data['wash_table'], $now);
-            if ($result['should_update']) {
-                $this->wash_table = $data['wash_table'];              // ⚠️ 新字段
-                $this->external_wash_count = $data['wash_table'];     // 旧字段（兼容性）
-            }
-
-            if ($result['recorded']) {
-                $this->log->info('[收账小卡-洗分码表] 变化已记录', [
-                    'machine_code' => $this->machine->code,
-                    'old' => $oldWashTable,
-                    'new' => $data['wash_table'],
-                    'reason' => $result['reason'] ?? '',
-                ]);
-            }
+            $this->wash_table = $data['wash_table'];
+            $this->external_wash_count = $data['wash_table'];  // 旧字段兼容性
+            $this->log->info('[收账小卡-洗分码表] 值已更新（不记录日志，防止API洗分误报）', [
+                'machine_code' => $this->machine->code,
+                'old' => $oldWashTable,
+                'new' => $data['wash_table'],
+            ]);
         }
 
         // ✅ 更新版本号，表示收到回复
@@ -2841,14 +2828,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 return;
             }
 
-            // 4. 转换成金额（用于记录，不扣减余额）
-            $openAmount = floor(
-                bcmul(
-                    bcdiv($openIncrement, $this->machine->odds_y ?? 1, 4),
-                    $this->machine->odds_x ?? 1,
-                    2
-                )
-            );
+            // 4. 换算金额（与 SongOfflineJackpot 保持一致）
+            // open_table 记录次数，1次 = PHYSICAL_BUTTON_UNIT 机台分
+            // 玩家余额等值 = 机台分 / odds_y * odds_x
+            $openedScore = $openIncrement * self::PHYSICAL_BUTTON_UNIT;  // 本次机台分
+            $openAmount = (int)floor(
+                $openedScore / ($this->machine->odds_y ?? 1) * ($this->machine->odds_x ?? 1)
+            );  // 等值余额（用于记录，不扣减）
 
             $this->log->info('[线下开分] 检测到开分码表增加', [
                 'machine_id' => $this->machine->id,
@@ -2856,6 +2842,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 'old_open_table' => $oldOpenTable,
                 'new_open_table' => $newOpenTable,
                 'open_increment' => $openIncrement,
+                'opened_score' => $openedScore,
                 'open_amount' => $openAmount,
                 'odds_x' => $this->machine->odds_x,
                 'odds_y' => $this->machine->odds_y,
@@ -2865,10 +2852,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 5. 记录开分操作（不扣减余额）
             if ($gamingUserId > 0) {
                 // 有玩家：记录玩家开分
-                $this->recordExternalOpenForPlayer($gamingUserId, $openIncrement, $openAmount);
+                $this->recordExternalOpenForPlayer($gamingUserId, $openedScore, $openAmount);
             } else {
                 // 无玩家：记录系统开分
-                $this->recordExternalOpenWithoutPlayer($openIncrement, $openAmount);
+                $this->recordExternalOpenWithoutPlayer($openedScore, $openAmount);
             }
 
             // 6. 更新前值，防止下次 B7 重复处理同一次开分事件
