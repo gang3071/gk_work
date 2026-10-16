@@ -3216,6 +3216,11 @@ if (!function_exists('machineOpenAnyFree')) {
             // 如果硬件指令失败，通过锁机台 + 人工补偿处理
             DB::commit();
 
+            // ✅ DB commit 后立即更新 Redis gaming 状态，防止 PlayOutMachine cron 在硬件等待期间
+            // 读到 Redis gaming_user_id=0 而误将 DB 重置（Race condition fix）
+            $services->gaming = 1;
+            $services->gaming_user_id = $player->id;
+
             // 发送开分指令（包含赠送分）
             // ⚠️ 玩家扣款只扣 openScore 的金额，但硬件要给 totalOpenScore = openScore + giftScore
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
