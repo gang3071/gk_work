@@ -1752,7 +1752,33 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
         }
 
-        // 10 次重试全部失败，才锁机台
+        // 10 次 CA 全部超时：机台可能已执行 A5 但 CA 丢包（网络瞬断）。
+        // 发 EA D4 做最终确认，若 open_status=d2 则视为成功，避免误锁机台 + 误重置 gaming_user_id。
+        try {
+            $this->log->warning('[收账小卡-上分] CA全部超时，发EA D4最终确认', [
+                'machine_code' => $this->machine->code,
+                'data'         => $data,
+                'times'        => $times,
+            ]);
+            $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+            $raw    = \support\Cache::get($this->cacheDataKey . '_last_status_fields');
+            $fields = $raw ? json_decode($raw, true) : [];
+            if (($fields['open_status'] ?? '') === 'd2') {
+                // 机台已完成开分，CA 只是丢包，当作成功处理
+                $this->log->warning('[收账小卡-上分] EA D4 确认 d2，CA丢包但开分成功，跳过锁机台', [
+                    'machine_code' => $this->machine->code,
+                    'retry_count'  => $fields['retry_count'] ?? 0,
+                ]);
+                return;
+            }
+        } catch (\Exception $statusEx) {
+            $this->log->warning('[收账小卡-上分] EA D4 最终确认也失败', [
+                'machine_code' => $this->machine->code,
+                'error'        => $statusEx->getMessage(),
+            ]);
+        }
+
+        // CA 全部超时 + EA D4 无法确认 → 锁机台
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
         throw new Exception("上分失败：{$maxAttempts}次重试（每次0.3s）后仍无CA回复，机台已锁定，已退还玩家余额");
