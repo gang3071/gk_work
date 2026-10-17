@@ -2897,7 +2897,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function recordExternalOpenForPlayer(int $playerId, int $openedScore, int $openAmount): void
     {
-        DB::beginTransaction();
+        \support\Db::beginTransaction();
 
         try {
             $player = \app\model\Player::find($playerId);
@@ -2944,7 +2944,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->last_point_at = time();
             $this->player_open_point = bcadd($this->player_open_point ?? '0', $openedScore, 2);
 
-            DB::commit();
+            \support\Db::commit();
 
             $this->log->info('[线下开分] 玩家开分记录创建成功', [
                 'player_id' => $playerId,
@@ -2956,7 +2956,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             ]);
 
         } catch (Exception $e) {
-            DB::rollback();
+            \support\Db::rollback();
             throw $e;
         }
     }
@@ -2968,7 +2968,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function recordExternalOpenWithoutPlayer(int $openedScore, int $openAmount): void
     {
-        DB::beginTransaction();
+        \support\Db::beginTransaction();
 
         try {
             // 创建系统开分记录（player_id = 0）
@@ -2986,7 +2986,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->remark = '线下实体按键开分（无玩家，现金投币）';
             $playerGameLog->save();
 
-            DB::commit();
+            \support\Db::commit();
 
             $this->log->info('[线下开分] 无玩家游戏，已记录开分操作', [
                 'opened_score' => $openedScore,
@@ -2997,7 +2997,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             ]);
 
         } catch (Exception $e) {
-            DB::rollback();
+            \support\Db::rollback();
             throw $e;
         }
     }
@@ -3014,7 +3014,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function returnBalanceToPlayer(int $playerId, int $washedScore, string $washedAmount): void
     {
-        DB::beginTransaction();
+        \support\Db::beginTransaction();
 
         try {
             $player = \app\model\Player::find($playerId);
@@ -3111,7 +3111,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->last_point_at = time();
             $this->player_wash_point = bcadd($this->player_wash_point ?? '0', $washedScore, 2);
 
-            DB::commit();
+            \support\Db::commit();
 
             // 6.5 ✅ 清理玩家游戏数据（洗分后归零）
             // now_turn 仅在 reward_status 切换时归零，洗分不会触发切换，
@@ -3188,7 +3188,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
         } catch (Exception $e) {
-            DB::rollback();
+            \support\Db::rollback();
             throw $e;
         }
     }
@@ -3200,7 +3200,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function recordExternalWashWithoutPlayer(int $washedScore, string $washedAmount): void
     {
-        DB::beginTransaction();
+        \support\Db::beginTransaction();
 
         try {
             // 创建系统下分记录（player_id = 0）
@@ -3237,7 +3237,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerDeliveryRecord->remark = '线下实体按键洗分（无玩家）';
             $playerDeliveryRecord->save();
 
-            DB::commit();
+            \support\Db::commit();
 
             $this->log->info('[线下洗分] 无玩家游戏，已记录下分操作', [
                 'washed_score' => $washedScore,
@@ -3248,7 +3248,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             ]);
 
         } catch (Exception $e) {
-            DB::rollback();
+            \support\Db::rollback();
             throw $e;
         }
     }
