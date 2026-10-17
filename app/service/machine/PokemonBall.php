@@ -44,6 +44,7 @@ use Webman\Push\PushException;
  * @property int $game_enabled 游戏使能状态
  * @property int $last_point_at 最后上分时间
  * @property int $action_time 操作时间
+ * @property string $level_progress 三关过关进度JSON
  *
  * @package app\service\machine
  */
@@ -125,6 +126,10 @@ class PokemonBall extends MachineServices implements BaseMachine
     const GAME_ENABLE_VALUE = 0x01;     // 可进行游戏
     const GAME_DISABLE_VALUE = 0x00;    // 不可进行游戏
 
+    // ==================== 三关玩法 ====================
+    const LEVEL_TOTAL = 3;              // 三关玩法总关数
+    const LEVEL_PASS_COUNT = 3;         // 三关玩法要求连续过关次数（入洞亮灯）
+
     /**
      * @var array 缓存数据Key数组
      */
@@ -185,6 +190,7 @@ class PokemonBall extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_game_enabled',
             $this->cacheDataKey . '_last_point_at',
             $this->cacheDataKey . '_action_time',
+            $this->cacheDataKey . '_level_progress',
         ];
         $this->machineInfo = [
             'point',
@@ -584,6 +590,8 @@ class PokemonBall extends MachineServices implements BaseMachine
             case substr(self::CMD_GAME_START, 2, 2): // 游戏开始
                 $this->gaming = 1;
                 $this->log->info('[PokemonBall] 游戏开始', $baseLog);
+                // 三关玩法：重置关卡进度
+                $this->resetLevelProgress();
                 return true;
 
             case substr(self::CMD_BET_AMOUNT, 2, 2): // 本次压分
@@ -610,6 +618,8 @@ class PokemonBall extends MachineServices implements BaseMachine
                     'light_holes_binary' => $this->hexToBinaryString($actualData),
                     'light_holes_grid' => $this->formatHoleGrid($holes),
                 ]));
+                // 三关玩法：记录本关亮灯洞口
+                $this->handleLevelLightHoles($holes);
                 return true;
 
             case substr(self::CMD_FALL_HOLES, 2, 2): // 落入洞口
@@ -624,6 +634,8 @@ class PokemonBall extends MachineServices implements BaseMachine
                     'fall_hole_text' => $fallHole > 0 ? $fallHole . '号洞' : '未知',
                     'fall_holes_binary' => $this->hexToBinaryString($actualData),
                 ]));
+                // 三关玩法：判断本关是否入洞亮灯并推送
+                $this->handleLevelFallHole($fallHole);
                 return true;
 
             case substr(self::CMD_GAME_RESULT, 2, 2): // 游戏结果 (0x01 0x09)
@@ -890,6 +902,256 @@ class PokemonBall extends MachineServices implements BaseMachine
         $result['light3_full'] = (hexdec(substr($hex, 6, 2)) === 1);
 
         return $result;
+    }
+
+    /**
+     * 判断当前机台是否为「三关」玩法
+     *
+     * 以 machine.play_type 为准，兜底查 pokemon_ball_play_rule 表。
+     * 暂时只处理三关玩法，其它玩法返回 false 不做关卡判断。
+     *
+     * @return bool
+     */
+    protected function isThreeLevelPlay(): bool
+    {
+        $playType = (int)($this->machine->play_type ?? 0);
+        if ($playType === \app\model\PokemonBallPlayRule::PLAY_TYPE_THREE_LEVEL) {
+            return true;
+        }
+
+        // 兜底：规则表里存在三关规则也算三关玩法
+        try {
+            $rules = \app\model\PokemonBallPlayRule::getByMachineId((int)$this->machine->id);
+            return $rules->contains('play_type', \app\model\PokemonBallPlayRule::PLAY_TYPE_THREE_LEVEL);
+        } catch (\Exception $e) {
+            $this->log->warning('[PokemonBall] 读取玩法规则失败', [
+                'machine_id' => $this->machine->id,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * 获取三关过关进度
+     *
+     * @return array
+     */
+    protected function getLevelProgress(): array
+    {
+        $raw = $this->level_progress;
+        if (is_string($raw) && $raw !== '') {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+        return [
+            'play_type' => \app\model\PokemonBallPlayRule::PLAY_TYPE_THREE_LEVEL,
+            'current_level' => 1,
+            'passed_count' => 0,
+            'light_holes' => [],
+            'results' => [],
+            'started_at' => 0,
+        ];
+    }
+
+    /**
+     * 保存三关过关进度
+     *
+     * @param array $progress
+     * @return void
+     */
+    protected function saveLevelProgress(array $progress): void
+    {
+        $this->level_progress = json_encode($progress, JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * 游戏开始时重置三关进度
+     *
+     * @return void
+     */
+    protected function resetLevelProgress(): void
+    {
+        $this->saveLevelProgress([
+            'play_type' => \app\model\PokemonBallPlayRule::PLAY_TYPE_THREE_LEVEL,
+            'current_level' => 1,
+            'passed_count' => 0,
+            'light_holes' => [],
+            'results' => [],
+            'started_at' => time(),
+        ]);
+
+        $this->log->info('[PokemonBall] 三关进度已重置', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+        ]);
+    }
+
+    /**
+     * 判断当前关卡是否过关（纯函数）
+     *
+     * 入洞亮灯：落入洞口 ∈ 当前亮灯洞口集合。
+     *
+     * @param int $fallHole 落入洞口号（1-9），0=未知
+     * @param array $lightHoles 亮灯洞口号数组
+     * @return bool
+     */
+    public static function judgeLevelPass(int $fallHole, array $lightHoles): bool
+    {
+        if ($fallHole <= 0 || empty($lightHoles)) {
+            return false;
+        }
+        return in_array($fallHole, $lightHoles, true);
+    }
+
+    /**
+     * 构造关卡结果推送消息（纯函数）
+     *
+     * @param int $level 当前关卡（1-3）
+     * @param bool $isPassed 是否过关
+     * @param int $fallHole 落入洞口
+     * @param array $lightHoles 亮灯洞口
+     * @param int $passedCount 已过关次数
+     * @return array
+     */
+    public static function buildLevelResultMessage(
+        int  $level,
+        bool $isPassed,
+        int  $fallHole,
+        array $lightHoles,
+        int  $passedCount
+    ): array {
+        return [
+            'msg_type' => 'pokemon_ball_level_result',
+            'is_passed' => $isPassed,
+            'level' => $level,
+            'fall_hole' => $fallHole,
+            'light_holes' => $lightHoles,
+            'passed_count' => $passedCount,
+            'total_level' => self::LEVEL_TOTAL,
+            'message' => $isPassed
+                ? sprintf('第%d关过关', $level)
+                : sprintf('第%d关未过关', $level),
+        ];
+    }
+
+    /**
+     * 记录亮灯洞口到当前关卡进度
+     *
+     * @param array $holes 亮灯洞口号数组
+     * @return void
+     */
+    protected function handleLevelLightHoles(array $holes): void
+    {
+        if (!$this->isThreeLevelPlay()) {
+            return;
+        }
+
+        $progress = $this->getLevelProgress();
+        if (($progress['started_at'] ?? 0) <= 0) {
+            // 未收到 GAME_START，不开启关卡判断
+            return;
+        }
+
+        $progress['light_holes'] = array_values($holes);
+        $this->saveLevelProgress($progress);
+
+        $this->log->info('[PokemonBall] 三关亮灯洞口已记录', [
+            'machine_id' => $this->machine->id,
+            'level' => $progress['current_level'] ?? 1,
+            'light_holes' => $holes,
+        ]);
+    }
+
+    /**
+     * 判断落入洞口是否过关，过关/未过关都推送
+     *
+     * @param int $fallHole 落入洞口号（1-9）
+     * @return void
+     */
+    protected function handleLevelFallHole(int $fallHole): void
+    {
+        if (!$this->isThreeLevelPlay()) {
+            return;
+        }
+
+        $progress = $this->getLevelProgress();
+        if (($progress['started_at'] ?? 0) <= 0) {
+            return;
+        }
+
+        $level = (int)($progress['current_level'] ?? 1);
+        if ($level > self::LEVEL_TOTAL) {
+            return;
+        }
+
+        $lightHoles = is_array($progress['light_holes'] ?? null) ? $progress['light_holes'] : [];
+        $isPassed = self::judgeLevelPass($fallHole, $lightHoles);
+
+        $progress['results'][] = [
+            'level' => $level,
+            'is_passed' => $isPassed,
+            'fall_hole' => $fallHole,
+            'light_holes' => $lightHoles,
+            'at' => date('Y-m-d H:i:s'),
+        ];
+
+        if ($isPassed) {
+            $progress['passed_count'] = (int)($progress['passed_count'] ?? 0) + 1;
+            $progress['current_level'] = $level + 1;
+        } else {
+            // 未过关停在当前关，等下一次 GAME_START 重开
+            $progress['current_level'] = $level;
+        }
+        $progress['light_holes'] = [];
+
+        $this->saveLevelProgress($progress);
+
+        $passedCount = (int)($progress['passed_count'] ?? 0);
+        $message = self::buildLevelResultMessage($level, $isPassed, $fallHole, $lightHoles, $passedCount);
+
+        $this->log->info('[PokemonBall] 三关关卡判定', array_merge([
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'gaming_user_id' => $this->gaming_user_id,
+        ], $message));
+
+        $this->pushLevelResult($message, $passedCount);
+    }
+
+    /**
+     * 推送关卡结果给当前游玩玩家
+     *
+     * @param array $message buildLevelResultMessage() 返回的消息
+     * @param int $passedCount 已过关次数
+     * @return void
+     */
+    protected function pushLevelResult(array $message, int $passedCount): void
+    {
+        $playerId = (int)$this->gaming_user_id;
+        if ($playerId <= 0) {
+            $this->log->warning('[PokemonBall] 关卡结果推送跳过：无游玩玩家', [
+                'machine_id' => $this->machine->id,
+                'message' => $message,
+            ]);
+            return;
+        }
+
+        $message['player_id'] = $playerId;
+        $message['machine_id'] = $this->machine->id;
+        $message['machine_code'] = $this->machine->code;
+
+        // 三关全过补一个总结果标记
+        if ($passedCount >= self::LEVEL_PASS_COUNT) {
+            $message['is_all_passed'] = true;
+        }
+
+        sendSocketMessage('player-' . $playerId . '-' . $this->machine->id, $message);
+
+        // 兼容只订阅 player-{id} 的客户端
+        sendSocketMessage('player-' . $playerId, $message);
     }
 
     /**
