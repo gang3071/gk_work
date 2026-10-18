@@ -1562,6 +1562,16 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'turn_delta' => $turnDelta
             ]);
         }
+
+        // 累加彩池：win_number 增加时投递 lottery-machine 队列（对齐 SongJackpot 在线版）
+        if ($nowWinNumber > $orgWinNumber) {
+            Client::send('lottery-machine', [
+                'num' => $nowWinNumber,
+                'last_num' => $orgWinNumber,
+                'machine_id' => $this->machine->id,
+                'player_id' => $gamingUserId,
+            ]);
+        }
     }
 
     /**
