@@ -1953,13 +1953,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
     /**
      * CA确认后轮询EA D4直到D6（洗分完成）。
-     * admin 路径：最多25次（无 card_score 验证，EA D4 是唯一状态确认）。
-     * player 路径：最多3次（machineWash 已有 card_score 轮询作权威确认，少轮询减少 DB 事务持锁时间）。
+     * 统一使用50次（50 × ~400ms ≈ 20秒），EA D4 是协议层权威确认。
+     * machineWash 侧的 card_score 轮询仅在 D6 未确认时作兜底。
      */
     private function confirmWashPointWithStatus(string $uid, string $source, int $source_id): void
     {
-        // admin 路径需完整轮询；player 路径由 machineWash card_score 验证兜底，3次够用
-        $maxChecks = $source === 'admin' ? 25 : 3;
+        $maxChecks = 50; // 50 × ~400ms ≈ 20 秒
         $replyTimeout = 300000;   // 0.3s 等回复
         $pollInterval = 100000;   // 100ms 轮询间隔
         $d7Wait = 300000;   // D7洗分中：等0.3s再次查询

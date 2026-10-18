@@ -1404,30 +1404,38 @@ function machineWash(
                     ]);
                     $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
 
-                    // 离线小淞：轮询等待机台物理出分完成（card_score 降到 0 才确认）
-                    // 物理出分需要 1-3 秒，B7 心跳每秒上报一次，最多等 10 秒
-                    // 若超时说明机台未执行 WASH_POINT（如 L1162 第一次洗分静默失败），
-                    // 抛出异常 → DB::rollBack() → 钱包不加款，防止重复给款
+                    // 离线小淞：EA D4 已在 handleWashPoint 内轮询 D6（最长20秒）。
+                    // 若 EA D4 未确认 D6，再用 card_score 心跳兜底（最多10秒）。
                     if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                         && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
-                        $maxAttempts = 25; // 25 × 400ms = 10 秒
-                        $confirmed = false;
-                        for ($i = 0; $i < $maxAttempts; $i++) {
-                            usleep(400000); // 400ms
-                            if ($services->card_score == 0) {
-                                $confirmed = true;
-                                break;
+                        $statusFields = $services->getLastStatusFields();
+                        $washDoneByD4 = ($statusFields['wash_status'] ?? '') === 'd6';
+
+                        if (!$washDoneByD4) {
+                            // EA D4 未确认 D6，card_score 心跳兜底
+                            $maxAttempts = 25; // 25 × 400ms = 10 秒
+                            $confirmed = false;
+                            for ($i = 0; $i < $maxAttempts; $i++) {
+                                usleep(400000); // 400ms
+                                if ($services->card_score == 0) {
+                                    $confirmed = true;
+                                    break;
+                                }
                             }
-                        }
-                        $cardScoreAfterWash = $services->card_score;
-                        Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO 执行完成（离线小淞）', [
-                            'machine_code' => $machine->code,
-                            'confirmed' => $confirmed,
-                            'card_score_after_wash' => $cardScoreAfterWash,
-                            'attempts' => $i + 1,
-                        ]);
-                        if (!$confirmed) {
-                            throw new Exception("洗分失败：机台未在10秒内确认出分（card_score={$cardScoreAfterWash}），请重试");
+                            $cardScoreAfterWash = $services->card_score;
+                            Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO card_score 兜底确认（离线小淞）', [
+                                'machine_code' => $machine->code,
+                                'confirmed' => $confirmed,
+                                'card_score_after_wash' => $cardScoreAfterWash,
+                                'attempts' => $i + 1,
+                            ]);
+                            if (!$confirmed) {
+                                throw new Exception("洗分失败：机台未确认出分（EA D4 非D6，card_score={$cardScoreAfterWash}），请重试");
+                            }
+                        } else {
+                            Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO EA D4 已确认D6，跳过card_score轮询', [
+                                'machine_code' => $machine->code,
+                            ]);
                         }
                     } else {
                         // 在线 Slot：短暂延迟，确保硬件完全清零
