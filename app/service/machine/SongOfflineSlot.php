@@ -1960,7 +1960,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     {
         $cmdData = self::WASH_POINT;
         $maxAttempts = 10;
-        $replyTimeout = 300000;  // 0.3s 等待CA回复，10次×0.3s=3s
+        $replyTimeout = 1000000; // 1s 等待CA回复，10次×1s=10s
         $pollInterval = 100000;  // 100ms 轮询间隔
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
@@ -1994,9 +1994,48 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                $this->log->warning('[收账小卡-下分] 等待CA回复超时，重试', [
+                // 等待 1s 仍无 CA，查 EA D4 确认机台状态
+                $beforeStatusVersion = $this->getActionVersion(self::READ_STATUS);
+                Cache::delete($this->cacheDataKey . '_last_status_fields');
+                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                $statusWaited  = 0;
+                $statusReplied = false;
+                while ($statusWaited < $replyTimeout) {
+                    usleep($pollInterval);
+                    $statusWaited += $pollInterval;
+                    if ($this->getActionVersion(self::READ_STATUS) > $beforeStatusVersion) {
+                        $statusReplied = true;
+                        break;
+                    }
+                }
+
+                if ($statusReplied) {
+                    $statusRaw    = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    $statusFields = $statusRaw ? json_decode($statusRaw, true) : [];
+                    $washStatus   = $statusFields['wash_status'] ?? '';
+
+                    $this->log->info('[收账小卡-下分] CA超时，EA D4查询机台状态', [
+                        'machine_code' => $this->machine->code,
+                        'attempt'      => "$attempt/$maxAttempts",
+                        'wash_status'  => $washStatus,
+                    ]);
+
+                    if ($washStatus === 'd7' || $washStatus === 'd6') {
+                        $this->log->warning('[收账小卡-下分] CA丢包但机台已执行，等待D6完成，跳过重试', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'wash_status'  => $washStatus,
+                        ]);
+                        $this->confirmWashPointWithStatus($uid, $source, $source_id);
+                        return;
+                    }
+                }
+
+                // EA D4 无回复或 D7/D6 以外状态：机台确认未执行，安全重试 A5
+                $this->log->warning('[收账小卡-下分] 机台未执行，重试', [
                     'machine_code' => $this->machine->code,
-                    'attempt' => "$attempt/$maxAttempts",
+                    'attempt'      => "$attempt/$maxAttempts",
                 ]);
                 continue;
             }
@@ -2018,17 +2057,56 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     'attempt' => "$attempt/$maxAttempts",
                 ]);
             } else {
-                $this->log->warning('[收账小卡-下分] 回复结果未知（非 CA/C5），重试', [
+                // null：Redis 故障，结果未知，先查 EA D4 确认是否在洗分中
+                $this->log->warning('[收账小卡-下分] 回复结果未知（非 CA/C5），先查EA D4再决定', [
                     'machine_code' => $this->machine->code,
                     'last_result' => $lastResult,
                     'attempt' => "$attempt/$maxAttempts",
                 ]);
+
+                $beforeNullStatusVersion = $this->getActionVersion(self::READ_STATUS);
+                Cache::delete($this->cacheDataKey . '_last_status_fields');
+                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                $nullStatusWaited  = 0;
+                $nullStatusReplied = false;
+                while ($nullStatusWaited < $replyTimeout) {
+                    usleep($pollInterval);
+                    $nullStatusWaited += $pollInterval;
+                    if ($this->getActionVersion(self::READ_STATUS) > $beforeNullStatusVersion) {
+                        $nullStatusReplied = true;
+                        break;
+                    }
+                }
+
+                if ($nullStatusReplied) {
+                    $nullRaw        = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    $nullFields     = $nullRaw ? json_decode($nullRaw, true) : [];
+                    $nullWashStatus = $nullFields['wash_status'] ?? '';
+
+                    $this->log->info('[收账小卡-下分] 结果未知，EA D4查询机台状态', [
+                        'machine_code' => $this->machine->code,
+                        'attempt'      => "$attempt/$maxAttempts",
+                        'wash_status'  => $nullWashStatus,
+                    ]);
+
+                    if ($nullWashStatus === 'd7' || $nullWashStatus === 'd6') {
+                        $this->log->warning('[收账小卡-下分] 结果未知但机台已执行（D7/D6），跳过重试直接确认', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'wash_status'  => $nullWashStatus,
+                        ]);
+                        $this->confirmWashPointWithStatus($uid, $source, $source_id);
+                        return;
+                    }
+                }
+                // EA D4 无回复或非D7/D6，机台未执行，安全重试A5
             }
         }
 
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
-        throw new Exception("下分失败：{$maxAttempts}次重试（每次0.3s）后仍无CA回复，机台已锁定");
+        throw new Exception("下分失败：{$maxAttempts}次重试（每次1s）后仍无CA回复，机台已锁定");
     }
 
     /**
@@ -2074,8 +2152,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             $raw = Cache::get($this->cacheDataKey . '_last_status_fields');
             $fields = $raw ? json_decode($raw, true) : [];
-            $openStatus = $fields['open_status'] ?? 'd2';
-            $washStatus = $fields['wash_status'] ?? 'd6';
+            $openStatus = $fields['open_status'] ?? '';
+            $washStatus = $fields['wash_status'] ?? '';
 
             $this->log->info('[收账小卡-下分] EA D4 查询', [
                 'machine_code' => $this->machine->code,
