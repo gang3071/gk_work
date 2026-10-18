@@ -438,6 +438,21 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // ⚠️ 第二步：判断并处理心跳消息（B7前缀，46字符）
             if (preg_match('/^(b7[0-9a-f]{44})/', $buffer, $matches)) {
                 $heartbeat = $matches[0];
+
+                // 粘包预检：B7(46字符)+CA(a5ca??)在同一TCP buffer，
+                // handleHeartbeat 约需1s，CA handler 被阻塞。
+                // 在 handleHeartbeat 执行前，提前写入 CA 标记，
+                // 让 HTTP worker 的 CA poll 无需等待 B7 处理完毕即可感知。
+                $bufferedRemaining = substr($buffer, 46);
+                if (strlen($buffer) > 46 && str_starts_with($bufferedRemaining, 'a5ca33')) {
+                    Cache::set($this->cacheDataKey . '_last_open_result', 'ca', 10);
+                    $this->setActionVersion(self::OPEN_ANY_POINT);
+                    $this->log->info('[TCP粘包] B7+CA粘包，提前标记CA', [
+                        'machine_code' => $this->machine->code,
+                        'ca_hex'       => strtoupper(substr($bufferedRemaining, 0, 6)),
+                    ]);
+                }
+
                 // ✅ 直接处理，删除冗余的 isHeartbeat() 检查（消除死锁风险）
                 $processed = $this->handleHeartbeat($heartbeat);
 
@@ -1646,8 +1661,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *   回复：A5 CA VV = 开分开始（成功）
      *         A5 C5 VV = 开分失败（未登入）
      *
-     * 重试策略：机台回复 C5 或超时时重新登入后重发，最多 10 次，
-     * 10 次全部失败才锁机台（不在第一次失败时就锁）。
+     * 重试策略：重试前先查 EA D4 确认机台未在执行，最多 3 次，
+     * 3 次全部失败才锁机台（不在第一次失败时就锁）。
      */
     private function handleOpenPoint(string $uid, int $data, string $source, int $source_id): void
     {
@@ -1663,11 +1678,49 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         $timesHex  = str_pad(dechex($times), 2, '0', STR_PAD_LEFT);
         $cmdData   = self::OPEN_ANY_POINT . $timesHex . 'c0';
-        $maxAttempts = 10;
-        $replyTimeout = 1000000; // 1s 等待CA回复，10次×1s=10s
-        $pollInterval = 100000;  // 100ms 轮询间隔
+        $maxAttempts = 3;
+        $replyTimeout = 2000000;       // 2s 等待CA回复
+        $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
+        $pollInterval = 100000;        // 100ms 轮询间隔
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            // 重试前先查 EA D4，确认机台未在开分中才允许重发 A5
+            // 防止上一轮 CA 因粘包延迟被漏判，机台已执行但被误判为未执行后重发导致重复上分
+            if ($attempt > 1) {
+                Cache::delete($this->cacheDataKey . '_last_status_fields');
+                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                $preWaited = 0;
+                $preRaw    = null;
+                while ($preWaited < $statusReplyTimeout) {
+                    usleep($pollInterval);
+                    $preWaited += $pollInterval;
+                    $preRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    if ($preRaw !== null && $preRaw !== false) break;
+                }
+
+                if ($preRaw !== null && $preRaw !== false) {
+                    $preFields = json_decode($preRaw, true) ?: [];
+                    $preStatus = $preFields['open_status'] ?? '';
+
+                    $this->log->info('[收账小卡-上分] 重试前EA D4预检', [
+                        'machine_code' => $this->machine->code,
+                        'attempt'      => "$attempt/$maxAttempts",
+                        'open_status'  => $preStatus,
+                    ]);
+
+                    if ($preStatus === 'd3' || $preStatus === 'd2') {
+                        $this->log->warning('[收账小卡-上分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'open_status'  => $preStatus,
+                        ]);
+                        $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                        return;
+                    }
+                }
+            }
+
             // 每次发送前确保已登入
             $this->ensureLoggedIn();
 
@@ -1704,15 +1757,15 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                // 等待 1s 仍无 CA，查 EA D4 确认机台状态
-                // 先删除旧缓存，再发送 EA D4，然后 poll 缓存是否重新出现（比版本号更可靠：
-                // setActionVersion 在 updateMachineStatus DB写入之后才调用，可能因MySQL锁延迟超过1s）
+                // 等待 5s 仍无 CA（含 B7+CA 粘包延迟场景），查 EA D4 确认机台状态
+                // poll _last_status_fields 存在性比版本号更可靠：
+                // setActionVersion 在 updateMachineStatus DB写入之后才调用，可能因MySQL锁延迟被跳过
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
                 $statusWaited = 0;
                 $statusRaw    = null;
-                while ($statusWaited < $replyTimeout) {
+                while ($statusWaited < $statusReplyTimeout) {
                     usleep($pollInterval);
                     $statusWaited += $pollInterval;
                     $statusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
@@ -1784,7 +1837,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
                 $nullStatusWaited = 0;
                 $nullStatusRaw    = null;
-                while ($nullStatusWaited < $replyTimeout) {
+                while ($nullStatusWaited < $statusReplyTimeout) {
                     usleep($pollInterval);
                     $nullStatusWaited += $pollInterval;
                     $nullStatusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
@@ -1817,7 +1870,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
         }
 
-        // 10 次 CA 全部超时：机台可能已执行 A5 但 CA 丢包（网络瞬断）。
+        // 3 次 CA 全部超时：机台可能已执行 A5 但 CA 丢包（网络瞬断）。
         // 发 EA D4 做最终确认，若 open_status=d2 则视为成功，避免误锁机台 + 误重置 gaming_user_id。
         try {
             $this->log->warning('[收账小卡-上分] CA全部超时，发EA D4最终确认', [
@@ -1846,7 +1899,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // CA 全部超时 + EA D4 无法确认 → 锁机台
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
-        throw new Exception("上分失败：{$maxAttempts}次重试（每次1s）后仍无CA回复，机台已锁定，已退还玩家余额");
+        throw new Exception("上分失败：{$maxAttempts}次重试（每次2s）后仍无CA回复，机台已锁定，已退还玩家余额");
     }
 
     /**
@@ -1963,11 +2016,48 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function handleWashPoint(string $uid, int $data, string $source, int $source_id): void
     {
         $cmdData = self::WASH_POINT;
-        $maxAttempts = 10;
-        $replyTimeout = 1000000; // 1s 等待CA回复，10次×1s=10s
-        $pollInterval = 100000;  // 100ms 轮询间隔
+        $maxAttempts = 3;
+        $replyTimeout = 2000000;       // 2s 等待CA回复
+        $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
+        $pollInterval = 100000;        // 100ms 轮询间隔
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            // 重试前先查 EA D4，确认机台未在洗分中才允许重发 A5
+            if ($attempt > 1) {
+                Cache::delete($this->cacheDataKey . '_last_status_fields');
+                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                $preWaited = 0;
+                $preRaw    = null;
+                while ($preWaited < $statusReplyTimeout) {
+                    usleep($pollInterval);
+                    $preWaited += $pollInterval;
+                    $preRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    if ($preRaw !== null && $preRaw !== false) break;
+                }
+
+                if ($preRaw !== null && $preRaw !== false) {
+                    $preFields = json_decode($preRaw, true) ?: [];
+                    $preStatus = $preFields['wash_status'] ?? '';
+
+                    $this->log->info('[收账小卡-下分] 重试前EA D4预检', [
+                        'machine_code' => $this->machine->code,
+                        'attempt'      => "$attempt/$maxAttempts",
+                        'wash_status'  => $preStatus,
+                    ]);
+
+                    if ($preStatus === 'd7' || $preStatus === 'd6') {
+                        $this->log->warning('[收账小卡-下分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'wash_status'  => $preStatus,
+                        ]);
+                        $this->confirmWashPointWithStatus($uid, $source, $source_id);
+                        return;
+                    }
+                }
+            }
+
             $this->ensureLoggedIn();
             $sum1 = $this->calculateSUM1($cmdData);
             $sum2 = $this->calculateSUM2($cmdData, $sum1);
@@ -1998,14 +2088,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                // 等待 1s 仍无 CA，查 EA D4 确认机台状态
+                // 等待 5s 仍无 CA，查 EA D4 确认机台状态
                 // poll _last_status_fields 直接存在性，避免 setActionVersion 因 DB 锁延迟导致误判
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
                 $statusWaited = 0;
                 $statusRaw    = null;
-                while ($statusWaited < $replyTimeout) {
+                while ($statusWaited < $statusReplyTimeout) {
                     usleep($pollInterval);
                     $statusWaited += $pollInterval;
                     $statusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
@@ -2072,7 +2162,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
                 $nullStatusWaited = 0;
                 $nullStatusRaw    = null;
-                while ($nullStatusWaited < $replyTimeout) {
+                while ($nullStatusWaited < $statusReplyTimeout) {
                     usleep($pollInterval);
                     $nullStatusWaited += $pollInterval;
                     $nullStatusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
@@ -2105,7 +2195,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
         }
 
-        // 10 次 CA 全部超时：机台可能已执行 A5 但 CA 丢包。
+        // 3 次 CA 全部超时：机台可能已执行 A5 但 CA 丢包。
         // 发 EA D4 做最终确认，若 wash_status=d6 则视为成功，避免误锁机台。
         try {
             $this->log->warning('[收账小卡-下分] CA全部超时，发EA D4最终确认', [
@@ -2130,7 +2220,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
-        throw new Exception("下分失败：{$maxAttempts}次重试（每次1s）后仍无CA回复，机台已锁定");
+        throw new Exception("下分失败：{$maxAttempts}次重试（每次2s）后仍无CA回复，机台已锁定");
     }
 
     /**
