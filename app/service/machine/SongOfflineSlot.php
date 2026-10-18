@@ -2104,6 +2104,29 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
         }
 
+        // 10 次 CA 全部超时：机台可能已执行 A5 但 CA 丢包。
+        // 发 EA D4 做最终确认，若 wash_status=d6 则视为成功，避免误锁机台。
+        try {
+            $this->log->warning('[收账小卡-下分] CA全部超时，发EA D4最终确认', [
+                'machine_code' => $this->machine->code,
+                'data'         => $data,
+            ]);
+            $this->confirmWashPointWithStatus($uid, $source, $source_id);
+            $raw    = \support\Cache::get($this->cacheDataKey . '_last_status_fields');
+            $fields = $raw ? json_decode($raw, true) : [];
+            if (($fields['wash_status'] ?? '') === 'd6') {
+                $this->log->warning('[收账小卡-下分] EA D4 确认 d6，CA丢包但洗分成功，跳过锁机台', [
+                    'machine_code' => $this->machine->code,
+                ]);
+                return;
+            }
+        } catch (\Exception $statusEx) {
+            $this->log->warning('[收账小卡-下分] EA D4 最终确认也失败', [
+                'machine_code' => $this->machine->code,
+                'error'        => $statusEx->getMessage(),
+            ]);
+        }
+
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
         throw new Exception("下分失败：{$maxAttempts}次重试（每次1s）后仍无CA回复，机台已锁定");
@@ -2396,7 +2419,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             $this->card_score = $cardScore;           // 开分卡分数（心跳B1字段）
-            $this->point = $cardScore;                // 同步别名（_point = _card_score，避免machineWash读到陈旧值）
             $this->machine_score = $machineScore;     // 机台分数（心跳B2字段）
             $this->total_bet = $totalBet;             // 总押分数（心跳BA字段）
             $this->total_win = $totalWin;             // 总得分数（心跳BB字段）
