@@ -1646,8 +1646,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *   回复：A5 CA VV = 开分开始（成功）
      *         A5 C5 VV = 开分失败（未登入）
      *
-     * 重试策略：机台回复 C5 或超时时重新登入后重发，最多 5 次，
-     * 5 次全部失败才锁机台（不在第一次失败时就锁）。
+     * 重试策略：机台回复 C5 或超时时重新登入后重发，最多 10 次，
+     * 10 次全部失败才锁机台（不在第一次失败时就锁）。
      */
     private function handleOpenPoint(string $uid, int $data, string $source, int $source_id): void
     {
@@ -2199,7 +2199,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->point = 0;
 
         if (!$confirmed) {
-            $this->log->warning('[收账小卡-下分] EA D4 轮询结束仍为D7或无回复，以CA确认为准', [
+            $this->log->warning('[收账小卡-下分] EA D4 轮询结束仍为D7或无回复，card_score已清零，等待A6兜底', [
                 'machine_code' => $this->machine->code,
                 'wash_status' => $washStatus,
                 'checks' => $maxChecks,

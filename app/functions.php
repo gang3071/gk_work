@@ -1148,7 +1148,7 @@ function machineWash(
 ): PlayerLotteryRecord|bool|array
 {
     // 分布式锁：防止上下分并发
-    // TTL=70s：SongOfflineSlot 洗分最长 handleWashPoint 48s + card_score 轮询 10s = 58s，留有余量
+    // TTL=70s：SongOfflineSlot 洗分最长 handleWashPoint 50s + card_score 轮询 10s = 60s，留有余量
     $actionLockerKey = 'machine_operation_lock_' . $machine->id;
     $lock = Locker::lock($actionLockerKey, 70, true);
 
