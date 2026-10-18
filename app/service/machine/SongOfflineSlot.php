@@ -2064,6 +2064,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             if ($washStatus === 'd6') {
                 $confirmed = true;
+                // D6确认洗分完成，立即清零Redis中的 card_score / point，
+                // 防止buffer overflow丢失A6回复导致后续读到陈旧值而再次触发洗分
+                $this->card_score = 0;
+                $this->point = 0;
                 break;
             }
 
