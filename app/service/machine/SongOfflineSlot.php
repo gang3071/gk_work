@@ -1848,7 +1848,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // CA 全部超时 + EA D4 无法确认 → 锁机台
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
-        throw new Exception("上分失败：{$maxAttempts}次重试（每次0.3s）后仍无CA回复，机台已锁定，已退还玩家余额");
+        throw new Exception("上分失败：{$maxAttempts}次重试（每次1s）后仍无CA回复，机台已锁定，已退还玩家余额");
     }
 
     /**
@@ -1896,8 +1896,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             $raw        = Cache::get($this->cacheDataKey . '_last_status_fields');
             $fields     = $raw ? json_decode($raw, true) : [];
-            $openStatus = $fields['open_status'] ?? 'd2';
-            $washStatus = $fields['wash_status'] ?? 'd6';
+            $openStatus = $fields['open_status'] ?? '';
+            $washStatus = $fields['wash_status'] ?? '';
             $retryCount = (int)($fields['retry_count'] ?? 0);
 
             $this->log->info('[收账小卡-上分] EA D4 查询', [
