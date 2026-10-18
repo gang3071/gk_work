@@ -2295,6 +2295,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             $this->card_score = $cardScore;           // 开分卡分数（心跳B1字段）
+            $this->point = $cardScore;                // 同步别名（_point = _card_score，避免machineWash读到陈旧值）
             $this->machine_score = $machineScore;     // 机台分数（心跳B2字段）
             $this->total_bet = $totalBet;             // 总押分数（心跳BA字段）
             $this->total_win = $totalWin;             // 总得分数（心跳BB字段）
