@@ -2860,12 +2860,12 @@ if (!function_exists('machineOpenAnyFree')) {
                 ? intdiv($totalOpenScore, $machine->odds_x)
                 : $totalOpenScore;
 
-            // SongOfflineSlot：card_score（B1）+ machine_score（B2）换算后相加作为当前持有量
-            // card_score 记录开分卡累积，machine_score 含中大奖后的实际机台分，两者叠加才完整
+            // SongOfflineSlot：card_score（B1）+ machine_score（B2）直接叠加作为当前持有量
+            // 两者均为心跳返回的原始机台分（同单位），无需换算，叠加后才完整反映机台总持有分
             // 其他机台：直接用 $services->point（机台当前分数）
             $currentPointForCheck = $services->point;
-            if ($isSongOfflineSlot && $machine->odds_x > 0) {
-                $currentPointForCheck += intdiv((int) ($services->machine_score ?? 0), $machine->odds_x);
+            if ($isSongOfflineSlot) {
+                $currentPointForCheck += (int) ($services->machine_score ?? 0);
             }
 
             if ($machine->min_point != 0 && $machine->min_point > $totalOpenScoreForCheck) {
