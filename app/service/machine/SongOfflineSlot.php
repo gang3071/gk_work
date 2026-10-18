@@ -1705,9 +1705,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             if (!$replied) {
                 // CA 超时：机台可能已收到 A5 但尚未将状态更新为 D3（存在时序窗口）。
-                // 先等待 800ms，让机台有足够时间处理 A5 并更新状态，同时兼顾迟到的 CA。
+                // 先等待 1s，让机台有足够时间处理 A5 并更新状态，同时兼顾迟到的 CA。
                 $earlyWaited = 0;
-                while ($earlyWaited < 800000) {
+                while ($earlyWaited < 1000000) {
                     usleep($pollInterval);
                     $earlyWaited += $pollInterval;
                     // CA 迟到到达，直接确认，无需重发
