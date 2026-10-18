@@ -1664,7 +1664,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $timesHex  = str_pad(dechex($times), 2, '0', STR_PAD_LEFT);
         $cmdData   = self::OPEN_ANY_POINT . $timesHex . 'c0';
         $maxAttempts = 10;
-        $replyTimeout = 300000;  // 0.3s 等待CA回复，10次×0.3s=3s
+        $replyTimeout = 1000000; // 1s 等待CA回复，10次×1s=10s
         $pollInterval = 100000;  // 100ms 轮询间隔
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
@@ -1704,25 +1704,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                // CA 超时：机台可能已收到 A5 但尚未将状态更新为 D3（存在时序窗口）。
-                // 先等待 1s，让机台有足够时间处理 A5 并更新状态，同时兼顾迟到的 CA。
-                $earlyWaited = 0;
-                while ($earlyWaited < 1000000) {
-                    usleep($pollInterval);
-                    $earlyWaited += $pollInterval;
-                    // CA 迟到到达，直接确认，无需重发
-                    if ($this->getActionVersion(self::OPEN_ANY_POINT) > $beforeVersion) {
-                        $this->log->info('[收账小卡-上分] CA迟到（超时后到达），直接确认', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'waited_ms'    => intdiv($earlyWaited, 1000),
-                        ]);
-                        $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
-                        return;
-                    }
-                }
-
-                // 等待 800ms 后仍无 CA，再查 EA D4 确认机台状态
+                // 等待 1s 仍无 CA，查 EA D4 确认机台状态
                 $beforeStatusVersion = $this->getActionVersion(self::READ_STATUS);
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
