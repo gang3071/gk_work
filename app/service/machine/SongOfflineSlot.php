@@ -1788,12 +1788,52 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     'attempt'      => "$attempt/$maxAttempts",
                 ]);
             } else {
-                // null：_last_open_result TTL 过期或 Redis 故障，结果未知，安全重试
-                $this->log->warning('[收账小卡-上分] 回复结果未知（非 CA/C5），重试', [
+                // null：_last_open_result TTL 过期或 Redis 故障，结果未知。
+                // 版本号已变说明机台发过回复（CA或C5），必须先查 EA D4 确认是否在开分中，
+                // 若D3/D2则机台已执行，不能重发A5（否则重复上分）。
+                $this->log->warning('[收账小卡-上分] 回复结果未知（非 CA/C5），先查EA D4再决定', [
                     'machine_code' => $this->machine->code,
                     'last_result'  => $lastResult,
                     'attempt'      => "$attempt/$maxAttempts",
                 ]);
+
+                $beforeNullStatusVersion = $this->getActionVersion(self::READ_STATUS);
+                Cache::delete($this->cacheDataKey . '_last_status_fields');
+                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                $nullStatusWaited  = 0;
+                $nullStatusReplied = false;
+                while ($nullStatusWaited < $replyTimeout) {
+                    usleep($pollInterval);
+                    $nullStatusWaited += $pollInterval;
+                    if ($this->getActionVersion(self::READ_STATUS) > $beforeNullStatusVersion) {
+                        $nullStatusReplied = true;
+                        break;
+                    }
+                }
+
+                if ($nullStatusReplied) {
+                    $nullRaw        = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    $nullFields     = $nullRaw ? json_decode($nullRaw, true) : [];
+                    $nullOpenStatus = $nullFields['open_status'] ?? '';
+
+                    $this->log->info('[收账小卡-上分] 结果未知，EA D4查询机台状态', [
+                        'machine_code' => $this->machine->code,
+                        'attempt'      => "$attempt/$maxAttempts",
+                        'open_status'  => $nullOpenStatus,
+                    ]);
+
+                    if ($nullOpenStatus === 'd3' || $nullOpenStatus === 'd2') {
+                        $this->log->warning('[收账小卡-上分] 结果未知但机台已执行（D3/D2），跳过重试直接确认', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'open_status'  => $nullOpenStatus,
+                        ]);
+                        $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                        return;
+                    }
+                }
+                // EA D4 无回复或非D3/D2，机台未执行，安全重试A5
             }
         }
 
