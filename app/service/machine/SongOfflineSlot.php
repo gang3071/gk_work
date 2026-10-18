@@ -1704,7 +1704,47 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                $this->log->warning('[收账小卡-上分] 等待回复超时，重试', [
+                // CA 超时：先查 EA D4 确认机台是否已在执行，防止重发 A5 造成多分
+                $beforeStatusVersion = $this->getActionVersion(self::READ_STATUS);
+                Cache::delete($this->cacheDataKey . '_last_status_fields');
+                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                $statusWaited = 0;
+                $statusReplied = false;
+                while ($statusWaited < $replyTimeout) {
+                    usleep($pollInterval);
+                    $statusWaited += $pollInterval;
+                    if ($this->getActionVersion(self::READ_STATUS) > $beforeStatusVersion) {
+                        $statusReplied = true;
+                        break;
+                    }
+                }
+
+                if ($statusReplied) {
+                    $statusRaw    = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    $statusFields = $statusRaw ? json_decode($statusRaw, true) : [];
+                    $openStatus   = $statusFields['open_status'] ?? '';
+
+                    $this->log->info('[收账小卡-上分] CA超时，EA D4查询机台状态', [
+                        'machine_code' => $this->machine->code,
+                        'attempt'      => "$attempt/$maxAttempts",
+                        'open_status'  => $openStatus,
+                    ]);
+
+                    if ($openStatus === 'd3' || $openStatus === 'd2') {
+                        // 机台已在执行或已完成（CA丢包），等待D2，不重发A5
+                        $this->log->warning('[收账小卡-上分] CA丢包但机台已执行，等待D2完成，跳过重试', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'open_status'  => $openStatus,
+                        ]);
+                        $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                        return;
+                    }
+                }
+
+                // EA D4 无回复或 D2/D3 以外状态：机台未执行，安全重试 A5
+                $this->log->warning('[收账小卡-上分] 机台未执行，重试', [
                     'machine_code' => $this->machine->code,
                     'attempt'      => "$attempt/$maxAttempts",
                 ]);
