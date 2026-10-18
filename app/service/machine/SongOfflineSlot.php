@@ -1911,6 +1911,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if ($openStatus === 'd2') {
                 // 开分完成，退出轮询
                 $confirmed = true;
+                // 新开分成功，清除洗分保护标记（允许B7正常写入新分数）
+                \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
                 break;
             }
 
@@ -2195,6 +2197,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // CA已收到 = 洗分已执行，无论D6是否在50次内确认，立即清零card_score/point，
         // 防止machineWash在A6到达前读到陈旧值而再次触发洗分
+        // 同时设置保护标记，防止B7心跳在机台硬件更新B1寄存器前用陈旧600覆盖_point
+        \support\Cache::set($this->cacheDataKey . '_wash_confirmed', 1, 30);
         $this->card_score = 0;
         $this->point = 0;
 
@@ -2418,7 +2422,22 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->last_card_score = $oldCardScore;
             }
 
-            $this->card_score = $cardScore;           // 开分卡分数（心跳B1字段）
+            // 洗分保护：D6确认后，机台硬件B1寄存器可能延迟更新，B7仍上报旧分数
+            // 若_wash_confirmed标记存在且cardScore>0，说明是陈旧心跳，跳过写入防止覆盖归零值
+            $washConfirmed = \support\Cache::get($this->cacheDataKey . '_wash_confirmed');
+            $suppressStaleHeartbeat = $washConfirmed && $cardScore > 0;
+            if ($suppressStaleHeartbeat) {
+                $this->log->info('[心跳-洗分保护] 跳过陈旧B7写入，等待机台B1归零', [
+                    'machine_code'   => $this->machine->code,
+                    'stale_card_score' => $cardScore,
+                ]);
+            } else {
+                if ($washConfirmed && $cardScore == 0) {
+                    // 机台硬件已确认归零，清除保护标记
+                    \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
+                }
+                $this->card_score = $cardScore;           // 开分卡分数（心跳B1字段）
+            }
             $this->machine_score = $machineScore;     // 机台分数（心跳B2字段）
             $this->total_bet = $totalBet;             // 总押分数（心跳BA字段）
             $this->total_win = $totalWin;             // 总得分数（心跳BB字段）
@@ -2548,7 +2567,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // ========== 同步更新兼容字段（与线上版保持一致） ==========
             // ✅ 修正：point应该指向开分卡分数，因为洗分时退的是开分卡上的分数
-            $this->point = $cardScore;                // point = card_score（开分卡分数）
+            // 洗分保护：与card_score写入判断一致，suppress时跳过，避免二次洗分
+            if (!$suppressStaleHeartbeat) {
+                $this->point = $cardScore;                // point = card_score（开分卡分数）
+            }
             $this->score = $machineScore;             // score = machine_score（机台分数）
             $this->win = $totalWin;                   // win = total_win（兼容线上版）
             $this->bet = $totalBet;                   // bet = total_bet（兼容客户端 WS machineInfo）
