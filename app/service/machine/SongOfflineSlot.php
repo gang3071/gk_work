@@ -7,6 +7,7 @@ use app\model\Machine;
 use app\model\MachineLotteryRecord;
 use app\model\Notice;
 use app\model\PlayerGameRecord;
+use app\support\MachineLogger;
 use Exception;
 use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
@@ -524,16 +525,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // ✅ Bug #16修复：E1错误识别（可能是连续的E1，如e1e1e1e1e1e1）
             if (preg_match('/^(e1)+$/i', $msg)) {
-                $this->log->error('[收账小卡-锁定] 记忆体异常需归0，机台已锁定', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'msg' => strtoupper($msg),
-                    'e1_count' => strlen($msg) / 2,
-                    'old_has_lock' => $this->has_lock ?? 0,
-                    'new_has_lock' => 1,
-                    'gaming_user_id' => $this->gaming_user_id ?? null,
-                    'reason' => 'E1错误-记忆体异常',
-                ]);
+                MachineLogger::error($this->machine->toArray(), 'machine_lock', 'E1记忆体异常-机台已锁定 count=' . (strlen($msg) / 2), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 $this->has_lock = 1;
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
                 $processed = true;
@@ -546,22 +538,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 // ✅ 归0成功后自动解锁机台
                 if ($oldHasLock == 1) {
                     $this->has_lock = 0;
-                    $this->log->info('[收账小卡-解锁] 归0成功，机台已自动解锁', [
-                        'machine_id' => $this->machine->id,
-                        'machine_code' => $this->machine->code,
-                        'reset_type' => $resetType,
-                        'old_has_lock' => $oldHasLock,
-                        'new_has_lock' => 0,
-                        'msg' => strtoupper($msg),
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_UNLOCK, '归0成功-机台已自动解锁', $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 } else {
-                    $this->log->info('[收账小卡-归0] 归0完成', [
-                        'machine_id' => $this->machine->id,
-                        'machine_code' => $this->machine->code,
-                        'reset_type' => $resetType,
-                        'has_lock' => $oldHasLock,
-                        'msg' => strtoupper($msg),
-                    ]);
+                    MachineLogger::receiveResponse($this->machine->toArray(), self::ALL_DOWN, '归0完成 type=' . $resetType, $this->getMachineCache(), $msg);
                 }
 
                 // ✅ 更新版本号，让 sendRawCmdWithReply 等待循环能感知到回复
@@ -733,11 +712,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->prev_open_table = $oldOpenTable;
             $this->open_table = $data['open_table'];
             $this->external_open_count = $data['open_table'];  // 旧字段兼容性
-            $this->log->info('[收账小卡-开分码表] 值已更新（不记录日志，防止API上分误报）', [
-                'machine_code' => $this->machine->code,
-                'old' => $oldOpenTable,
-                'new' => $data['open_table'],
-            ]);
+            MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '开分码表更新 old=' . $oldOpenTable . ' new=' . $data['open_table'], $this->getMachineCache());
         }
 
         if ($data['wash_table'] != $oldWashTable) {
@@ -745,11 +720,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->prev_wash_table = $oldWashTable;
             $this->wash_table = $data['wash_table'];
             $this->external_wash_count = $data['wash_table'];  // 旧字段兼容性
-            $this->log->info('[收账小卡-洗分码表] 值已更新（不记录日志，防止API洗分误报）', [
-                'machine_code' => $this->machine->code,
-                'old' => $oldWashTable,
-                'new' => $data['wash_table'],
-            ]);
+            MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '洗分码表更新 old=' . $oldWashTable . ' new=' . $data['wash_table'], $this->getMachineCache());
         }
 
         // ✅ 更新版本号，表示收到回复
@@ -817,9 +788,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $this->login_status = 0;
 
                     $this->logOperation('登出', '登出操作', ['result' => 'A7 C5'], true);
-                    $this->log->info('[收账小卡-登出] 登出成功（A7 C5）', [
-                        'machine_code' => $this->machine->code,
-                    ]);
+                    MachineLogger::receiveResponse($this->machine->toArray(), self::LOGOUT, '收账小卡登出成功', $this->getMachineCache());
                     $this->setActionVersion(self::LOGOUT);
                 }
                 break;
@@ -863,10 +832,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $version = substr($msg, 4, 2);
 
         if ($status === 'f8') {
-            $this->log->info('[收账小卡-归0] 归0指令已收到', [
-                'machine_code' => $this->machine->code,
-                'version' => $version,
-            ]);
+            MachineLogger::receiveResponse($this->machine->toArray(), self::ALL_DOWN, '归0指令已收到 version=' . $version, $this->getMachineCache(), $msg);
 
             // ✅ 更新版本号，表示收到回复
             $this->setActionVersion(self::CHECK);
@@ -2481,14 +2447,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->handleExternalButton($status);
             }
 
-            $this->log->info('[心跳] 机台状态更新', [
-                'machine_code' => $this->machine->code,
-                'card_score' => $cardScore,
-                'machine_score' => $machineScore,
-                'total_bet' => $totalBet,
-                'total_win' => $totalWin,
-                'status' => $status,
-            ]);
+            MachineLogger::heartbeat($this->machine->toArray(), $this->getMachineCache());
 
             return true;
 

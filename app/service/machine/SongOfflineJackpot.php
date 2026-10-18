@@ -9,6 +9,7 @@ use app\model\MachineLotteryRecord;
 use app\model\Notice;
 use app\model\Player;
 use app\service\LotteryServices;
+use app\support\MachineLogger;
 use Exception;
 use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
@@ -962,15 +963,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // ⚠️ P0-6修复：如果失败会抛出异常，不再吞掉
         $this->createExternalButtonGameLog($type, $totalMachinePoint, $walletAmount, $player);
 
-        $this->log->info('[外部按钮] 记录开洗分操作', [
-            'machine_code' => $this->machine->code,
-            'type' => $type,
-            'times' => $times,
-            'machine_point' => $totalMachinePoint,
-            'wallet_amount' => $walletAmount,
-            'player_id' => $gamingUserId,
-            'has_player' => !empty($player),
-        ]);
+        MachineLogger::playerEvent(
+            $this->machine->toArray(),
+            $player ? ['id' => $player->id, 'uuid' => $player->uuid ?? ''] : ['id' => 0, 'uuid' => ''],
+            $type === 'open' ? MachineLogger::ACTION_OPEN : MachineLogger::ACTION_WASH,
+            "[外部按钮]{$type} times={$times} machine_point={$totalMachinePoint} wallet_amount={$walletAmount}",
+            $this->getMachineCache()
+        );
     }
 
     /**
@@ -1262,10 +1261,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         if ($healthCode == 'da') {
             // ✅ 正常状态：清除故障锁定
             if ($this->has_lock == 1) {
-                $this->log->info('[机台健康] 故障已恢复', [
-                    'machine_code' => $this->machine->code,
-                    'health_code' => $healthCode,
-                ]);
+                MachineLogger::warning($this->machine->toArray(), 'machine_health', '机台健康故障已恢复', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             }
             $this->has_lock = 0;
         } elseif ($healthCode == 'db' || $healthCode == 'dc') {
@@ -1273,11 +1269,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $faultType = $healthCode == 'db' ? '故障1' : '机台故障';
 
             if ($this->has_lock != 1) {
-                $this->log->error('[机台健康] 检测到故障', [
-                    'machine_code' => $this->machine->code,
-                    'health_code' => $healthCode,
-                    'fault_type' => $faultType,
-                ]);
+                MachineLogger::error($this->machine->toArray(), 'machine_health', '机台健康检测到故障', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             }
 
             $this->has_lock = 1;
@@ -1342,30 +1334,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function logMachineStatus(int $gamingUserId, int $nowAuto, int $nowRewardStatus, $nowPoint, $nowScore, $nowTurn, $nowWinNumber, $nowRatio, float $orgTurn, int $orgWinNumber, string $msg): void
     {
-        $this->log->info('[机台实时状态] 心跳数据解析', [
-            'machine_code' => $this->machine->code,
-            'player_id' => $gamingUserId,
-            'status' => [
-                '自动状态' => $nowAuto ? '启动中' : '停止中',
-                '开奖状态' => $nowRewardStatus ? '开奖中' : '未开奖',
-                '分数' => $nowPoint,
-                '得分(WIN)' => $nowScore,
-                '剩余转数' => $nowTurn,
-                '累积转数' => $nowWinNumber,
-                '扣趴比例' => $nowRatio . '%',
-            ],
-            'changes' => [
-                '分数变化' => ($nowPoint - ($this->point ?? 0)),
-                '得分变化' => ($nowScore - ($this->score ?? 0)),
-                '转数变化' => ($nowTurn - $orgTurn),
-                '累积转数变化' => ($nowWinNumber - $orgWinNumber),
-            ],
-            'external_buttons' => [
-                '开分次数' => $this->external_open_count ?? 0,
-                '洗分次数' => $this->external_wash_count ?? 0,
-            ],
-            'raw_data' => $msg,
-        ]);
+        MachineLogger::heartbeat($this->machine->toArray(), $this->getMachineCache());
     }
 
     /**
@@ -1393,12 +1362,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     {
         if ($orgWinNumber > 0 && $orgWinNumber > $nowWinNumber &&
             $nowRewardStatus == 0 && $orgRewardStatus == 0) {
-            $this->log->error('[win_number异常] 累积转数异常减少', [
-                'machine_code' => $this->machine->code,
-                'old_win_number' => $orgWinNumber,
-                'new_win_number' => $nowWinNumber,
-                'delta' => $nowWinNumber - $orgWinNumber,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', "累积转数异常减少 old={$orgWinNumber} new={$nowWinNumber}", $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             sendMachineException($this->machine, Notice::TYPE_MACHINE_WIN_NUMBER);
             $this->win_number = $nowWinNumber;
             return true;
@@ -1449,20 +1413,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
         if (!Gateway::isUidOnline($uid)) {
-            $this->log->error('[SCORE_TO_POINT] 机台离线，跳过', [
-                'machine_code' => $this->machine->code, 'attempt' => $attempts,
-            ]);
+            MachineLogger::error($this->machine->toArray(), self::SCORE_TO_POINT, '机台离线跳过SCORE_TO_POINT', $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             return;
         }
 
         $sentVersion = $this->setActionVersion(self::SCORE_TO_POINT);
         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::SCORE_TO_POINT)));
 
-        $this->log->info('[SCORE_TO_POINT] 异步发送', [
-            'machine_code' => $this->machine->code,
-            'attempt'      => $attempts + 1,
-            'sent_version' => $sentVersion,
-        ]);
+        MachineLogger::sendCommand($this->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 异步发送 attempt=' . ($attempts + 1), $this->getMachineCache());
 
         $machineId = $this->machine->id;
 
@@ -1737,13 +1695,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             case self::FAULT_MACHINE_SCORE:
                 $this->has_lock = 1;
                 $faultCode = ($action == self::FAULT1_MACHINE_SCORE) ? 'FAULT1' : 'FAULT2';
-                Log::channel('machine_operations')->error('[SongOfflineJackpot-MachineLock] 机台被锁', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'lock_reason' => '机台报告故障',
-                    'fault_code' => $faultCode,
-                    'msg' => $msg,
-                ]);
+            MachineLogger::error($this->machine->toArray(), 'machine_lock', "机台被锁-故障码 {$faultCode}", $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
                 throw new Exception('机台故障');
 
@@ -1752,14 +1704,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 Redis::publish($this->machine->domain . ':' . $this->machine->port, '设备返回的消息');
                 $cmd = substr($msg, 0, 6);
 
-                // ✅ 调试日志：记录下分回复
-                $this->log->info('[下分回复] 收到机台下分回复', [
-                    'machine_code' => $this->machine->code,
-                    'full_msg' => $msg,
-                    'msg_length' => strlen($msg),
-                    'extracted_cmd' => $cmd,
-                    'action' => 'WASH_ZERO',
-                ]);
+                MachineLogger::receiveResponse($this->machine->toArray(), self::WASH_ZERO, '收到下分回复', $this->getMachineCache(), $msg);
 
                 $this->setActionVersion($cmd);
                 $s1 = substr($msg, -4, 2);
