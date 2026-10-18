@@ -1926,6 +1926,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             ]);
         }
 
+        // 上分流程结束（无论D2是否确认），清除洗分保护标记，
+        // 防止B7心跳因 _wash_confirmed 持续suppress _point 导致后续下分读到0
+        \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
+
         if ($source === 'admin') {
             $openDesc = $openStatus === 'd2' ? '开分完成' : ($openStatus === 'd3' ? '开分中' : '状态未知');
             $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '状态未知');
