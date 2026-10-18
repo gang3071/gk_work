@@ -1705,24 +1705,24 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             if (!$replied) {
                 // 等待 1s 仍无 CA，查 EA D4 确认机台状态
-                $beforeStatusVersion = $this->getActionVersion(self::READ_STATUS);
+                // 先删除旧缓存，再发送 EA D4，然后 poll 缓存是否重新出现（比版本号更可靠：
+                // setActionVersion 在 updateMachineStatus DB写入之后才调用，可能因MySQL锁延迟超过1s）
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
                 $statusWaited = 0;
-                $statusReplied = false;
+                $statusRaw    = null;
                 while ($statusWaited < $replyTimeout) {
                     usleep($pollInterval);
                     $statusWaited += $pollInterval;
-                    if ($this->getActionVersion(self::READ_STATUS) > $beforeStatusVersion) {
-                        $statusReplied = true;
+                    $statusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    if ($statusRaw !== null && $statusRaw !== false) {
                         break;
                     }
                 }
 
-                if ($statusReplied) {
-                    $statusRaw    = Cache::get($this->cacheDataKey . '_last_status_fields');
-                    $statusFields = $statusRaw ? json_decode($statusRaw, true) : [];
+                if ($statusRaw !== null && $statusRaw !== false) {
+                    $statusFields = json_decode($statusRaw, true) ?: [];
                     $openStatus   = $statusFields['open_status'] ?? '';
 
                     $this->log->info('[收账小卡-上分] CA超时，EA D4查询机台状态', [
@@ -1779,24 +1779,22 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     'attempt'      => "$attempt/$maxAttempts",
                 ]);
 
-                $beforeNullStatusVersion = $this->getActionVersion(self::READ_STATUS);
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
-                $nullStatusWaited  = 0;
-                $nullStatusReplied = false;
+                $nullStatusWaited = 0;
+                $nullStatusRaw    = null;
                 while ($nullStatusWaited < $replyTimeout) {
                     usleep($pollInterval);
                     $nullStatusWaited += $pollInterval;
-                    if ($this->getActionVersion(self::READ_STATUS) > $beforeNullStatusVersion) {
-                        $nullStatusReplied = true;
+                    $nullStatusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    if ($nullStatusRaw !== null && $nullStatusRaw !== false) {
                         break;
                     }
                 }
 
-                if ($nullStatusReplied) {
-                    $nullRaw        = Cache::get($this->cacheDataKey . '_last_status_fields');
-                    $nullFields     = $nullRaw ? json_decode($nullRaw, true) : [];
+                if ($nullStatusRaw !== null && $nullStatusRaw !== false) {
+                    $nullFields     = json_decode($nullStatusRaw, true) ?: [];
                     $nullOpenStatus = $nullFields['open_status'] ?? '';
 
                     $this->log->info('[收账小卡-上分] 结果未知，EA D4查询机台状态', [
@@ -1997,24 +1995,23 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             if (!$replied) {
                 // 等待 1s 仍无 CA，查 EA D4 确认机台状态
-                $beforeStatusVersion = $this->getActionVersion(self::READ_STATUS);
+                // poll _last_status_fields 直接存在性，避免 setActionVersion 因 DB 锁延迟导致误判
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
-                $statusWaited  = 0;
-                $statusReplied = false;
+                $statusWaited = 0;
+                $statusRaw    = null;
                 while ($statusWaited < $replyTimeout) {
                     usleep($pollInterval);
                     $statusWaited += $pollInterval;
-                    if ($this->getActionVersion(self::READ_STATUS) > $beforeStatusVersion) {
-                        $statusReplied = true;
+                    $statusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    if ($statusRaw !== null && $statusRaw !== false) {
                         break;
                     }
                 }
 
-                if ($statusReplied) {
-                    $statusRaw    = Cache::get($this->cacheDataKey . '_last_status_fields');
-                    $statusFields = $statusRaw ? json_decode($statusRaw, true) : [];
+                if ($statusRaw !== null && $statusRaw !== false) {
+                    $statusFields = json_decode($statusRaw, true) ?: [];
                     $washStatus   = $statusFields['wash_status'] ?? '';
 
                     $this->log->info('[收账小卡-下分] CA超时，EA D4查询机台状态', [
@@ -2066,24 +2063,22 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     'attempt' => "$attempt/$maxAttempts",
                 ]);
 
-                $beforeNullStatusVersion = $this->getActionVersion(self::READ_STATUS);
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
-                $nullStatusWaited  = 0;
-                $nullStatusReplied = false;
+                $nullStatusWaited = 0;
+                $nullStatusRaw    = null;
                 while ($nullStatusWaited < $replyTimeout) {
                     usleep($pollInterval);
                     $nullStatusWaited += $pollInterval;
-                    if ($this->getActionVersion(self::READ_STATUS) > $beforeNullStatusVersion) {
-                        $nullStatusReplied = true;
+                    $nullStatusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    if ($nullStatusRaw !== null && $nullStatusRaw !== false) {
                         break;
                     }
                 }
 
-                if ($nullStatusReplied) {
-                    $nullRaw        = Cache::get($this->cacheDataKey . '_last_status_fields');
-                    $nullFields     = $nullRaw ? json_decode($nullRaw, true) : [];
+                if ($nullStatusRaw !== null && $nullStatusRaw !== false) {
+                    $nullFields     = json_decode($nullStatusRaw, true) ?: [];
                     $nullWashStatus = $nullFields['wash_status'] ?? '';
 
                     $this->log->info('[收账小卡-下分] 结果未知，EA D4查询机台状态', [
