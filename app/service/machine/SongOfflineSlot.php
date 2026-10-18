@@ -1743,11 +1743,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     }
                 }
 
-                // EA D4 无回复或 D2/D3 以外状态：机台未执行，安全重试 A5
-                $this->log->warning('[收账小卡-上分] 机台未执行，重试', [
+                // EA D4 无回复或 D2/D3 以外状态：机台未执行，等待500ms后安全重试 A5
+                $this->log->warning('[收账小卡-上分] 机台未执行，等待后重试', [
                     'machine_code' => $this->machine->code,
                     'attempt'      => "$attempt/$maxAttempts",
                 ]);
+                usleep(500000); // 500ms，避免机台来不及处理上一条指令
                 continue;
             }
 
