@@ -2164,15 +2164,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             if ($washStatus === 'd6') {
                 $confirmed = true;
-                // D6确认洗分完成，立即清零Redis中的 card_score / point，
-                // 防止buffer overflow丢失A6回复导致后续读到陈旧值而再次触发洗分
-                $this->card_score = 0;
-                $this->point = 0;
                 break;
             }
 
             usleep($d7Wait);
         }
+
+        // CA已收到 = 洗分已执行，无论D6是否在50次内确认，立即清零card_score/point，
+        // 防止machineWash在A6到达前读到陈旧值而再次触发洗分
+        $this->card_score = 0;
+        $this->point = 0;
 
         if (!$confirmed) {
             $this->log->warning('[收账小卡-下分] EA D4 轮询结束仍为D7或无回复，以CA确认为准', [
