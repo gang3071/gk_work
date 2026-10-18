@@ -1704,7 +1704,25 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                // CA 超时：先查 EA D4 确认机台是否已在执行，防止重发 A5 造成多分
+                // CA 超时：机台可能已收到 A5 但尚未将状态更新为 D3（存在时序窗口）。
+                // 先等待 800ms，让机台有足够时间处理 A5 并更新状态，同时兼顾迟到的 CA。
+                $earlyWaited = 0;
+                while ($earlyWaited < 800000) {
+                    usleep($pollInterval);
+                    $earlyWaited += $pollInterval;
+                    // CA 迟到到达，直接确认，无需重发
+                    if ($this->getActionVersion(self::OPEN_ANY_POINT) > $beforeVersion) {
+                        $this->log->info('[收账小卡-上分] CA迟到（超时后到达），直接确认', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'waited_ms'    => intdiv($earlyWaited, 1000),
+                        ]);
+                        $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                        return;
+                    }
+                }
+
+                // 等待 800ms 后仍无 CA，再查 EA D4 确认机台状态
                 $beforeStatusVersion = $this->getActionVersion(self::READ_STATUS);
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
@@ -1743,12 +1761,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     }
                 }
 
-                // EA D4 无回复或 D2/D3 以外状态：机台未执行，等待500ms后安全重试 A5
-                $this->log->warning('[收账小卡-上分] 机台未执行，等待后重试', [
+                // EA D4 无回复或 D2/D3 以外状态：机台确认未执行，安全重试 A5
+                $this->log->warning('[收账小卡-上分] 机台未执行，重试', [
                     'machine_code' => $this->machine->code,
                     'attempt'      => "$attempt/$maxAttempts",
                 ]);
-                usleep(500000); // 500ms，避免机台来不及处理上一条指令
                 continue;
             }
 
