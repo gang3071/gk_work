@@ -110,7 +110,7 @@ class MachineOperationController
                 return json(['code' => 0, 'msg' => $result['message'], 'data' => []]);
             }
 
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             Log::channel('machine_operations')->error('[MachineOperationController] 机台操作失败', [
                 'machine_id' => $machineId,
                 'action' => $action,
@@ -179,7 +179,7 @@ class MachineOperationController
                 return json(['code' => 400, 'msg' => $result['message'], 'data' => []]);
             }
 
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             Log::channel('machine_operations')->error('[MachineOperationController::executeAdmin] 机台操作失败', [
                 'machine_id' => $machineId,
                 'action' => $action,
