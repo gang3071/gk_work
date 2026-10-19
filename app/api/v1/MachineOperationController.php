@@ -448,7 +448,14 @@ class MachineOperationController
      */
     private function setLanguage(Request $request): string
     {
-        return $request->header('accept-language', 'zh_CN');
+        $lang = $request->header('accept-language', 'zh_TW');
+        $lang = str_replace('-', '_', $lang);
+        // 系統僅在台灣使用，zh_CN 統一對應繁體
+        if ($lang === 'zh_CN') {
+            $lang = 'zh_TW';
+        }
+        locale($lang);
+        return $lang;
     }
 
     /**
