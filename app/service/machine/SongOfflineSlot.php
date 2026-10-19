@@ -1689,7 +1689,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if ($attempt > 1) {
                 // 多次查询EA D4确认机台状态，防止单次查询因机台状态切换或响应延迟导致误判
                 // 每0.5s查询一次，共3次，最长等待1.5s
-                $preCheckMax      = 3;
+                $preCheckMax      = 4;
                 $preCheckInterval = 500000; // 0.5s
                 for ($preCheck = 1; $preCheck <= $preCheckMax; $preCheck++) {
                     Cache::delete($this->cacheDataKey . '_last_status_fields');
@@ -2040,7 +2040,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if ($attempt > 1) {
                 // 多次查询EA D4确认机台状态，防止单次查询因机台状态切换或响应延迟导致误判
                 // 每0.5s查询一次，共3次，最长等待1.5s
-                $preCheckMax      = 3;
+                $preCheckMax      = 4;
                 $preCheckInterval = 500000; // 0.5s
                 for ($preCheck = 1; $preCheck <= $preCheckMax; $preCheck++) {
                     Cache::delete($this->cacheDataKey . '_last_status_fields');
