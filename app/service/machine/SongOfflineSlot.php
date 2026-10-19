@@ -1687,36 +1687,48 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 重试前先查 EA D4，确认机台未在开分中才允许重发 A5
             // 防止上一轮 CA 因粘包延迟被漏判，机台已执行但被误判为未执行后重发导致重复上分
             if ($attempt > 1) {
-                Cache::delete($this->cacheDataKey . '_last_status_fields');
-                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+                // 多次查询EA D4确认机台状态，防止单次查询因机台状态切换或响应延迟导致误判
+                $preCheckMax = 3;
+                for ($preCheck = 1; $preCheck <= $preCheckMax; $preCheck++) {
+                    Cache::delete($this->cacheDataKey . '_last_status_fields');
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
-                $preWaited = 0;
-                $preRaw    = null;
-                while ($preWaited < $statusReplyTimeout) {
-                    usleep($pollInterval);
-                    $preWaited += $pollInterval;
-                    $preRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
-                    if ($preRaw !== null && $preRaw !== false) break;
-                }
+                    $preWaited = 0;
+                    $preRaw    = null;
+                    while ($preWaited < $statusReplyTimeout) {
+                        usleep($pollInterval);
+                        $preWaited += $pollInterval;
+                        $preRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                        if ($preRaw !== null && $preRaw !== false) break;
+                    }
 
-                if ($preRaw !== null && $preRaw !== false) {
-                    $preFields = json_decode($preRaw, true) ?: [];
-                    $preStatus = $preFields['open_status'] ?? '';
+                    if ($preRaw !== null && $preRaw !== false) {
+                        $preFields = json_decode($preRaw, true) ?: [];
+                        $preStatus = $preFields['open_status'] ?? '';
 
-                    $this->log->info('[收账小卡-上分] 重试前EA D4预检', [
-                        'machine_code' => $this->machine->code,
-                        'attempt'      => "$attempt/$maxAttempts",
-                        'open_status'  => $preStatus,
-                    ]);
-
-                    if ($preStatus === 'd3' || $preStatus === 'd2') {
-                        $this->log->warning('[收账小卡-上分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
+                        $this->log->info('[收账小卡-上分] 重试前EA D4预检', [
                             'machine_code' => $this->machine->code,
                             'attempt'      => "$attempt/$maxAttempts",
+                            'pre_check'    => "$preCheck/$preCheckMax",
                             'open_status'  => $preStatus,
                         ]);
-                        $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
-                        return;
+
+                        if ($preStatus === 'd3' || $preStatus === 'd2') {
+                            $this->log->warning('[收账小卡-上分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
+                                'machine_code' => $this->machine->code,
+                                'attempt'      => "$attempt/$maxAttempts",
+                                'pre_check'    => "$preCheck/$preCheckMax",
+                                'open_status'  => $preStatus,
+                            ]);
+                            $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                            return;
+                        }
+                    } else {
+                        $this->log->warning('[收账小卡-上分] 重试前EA D4预检无响应', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'pre_check'    => "$preCheck/$preCheckMax",
+                        ]);
                     }
                 }
             }
@@ -2024,36 +2036,48 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             // 重试前先查 EA D4，确认机台未在洗分中才允许重发 A5
             if ($attempt > 1) {
-                Cache::delete($this->cacheDataKey . '_last_status_fields');
-                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+                // 多次查询EA D4确认机台状态，防止单次查询因机台状态切换或响应延迟导致误判
+                $preCheckMax = 3;
+                for ($preCheck = 1; $preCheck <= $preCheckMax; $preCheck++) {
+                    Cache::delete($this->cacheDataKey . '_last_status_fields');
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
-                $preWaited = 0;
-                $preRaw    = null;
-                while ($preWaited < $statusReplyTimeout) {
-                    usleep($pollInterval);
-                    $preWaited += $pollInterval;
-                    $preRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
-                    if ($preRaw !== null && $preRaw !== false) break;
-                }
+                    $preWaited = 0;
+                    $preRaw    = null;
+                    while ($preWaited < $statusReplyTimeout) {
+                        usleep($pollInterval);
+                        $preWaited += $pollInterval;
+                        $preRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                        if ($preRaw !== null && $preRaw !== false) break;
+                    }
 
-                if ($preRaw !== null && $preRaw !== false) {
-                    $preFields = json_decode($preRaw, true) ?: [];
-                    $preStatus = $preFields['wash_status'] ?? '';
+                    if ($preRaw !== null && $preRaw !== false) {
+                        $preFields = json_decode($preRaw, true) ?: [];
+                        $preStatus = $preFields['wash_status'] ?? '';
 
-                    $this->log->info('[收账小卡-下分] 重试前EA D4预检', [
-                        'machine_code' => $this->machine->code,
-                        'attempt'      => "$attempt/$maxAttempts",
-                        'wash_status'  => $preStatus,
-                    ]);
-
-                    if ($preStatus === 'd7' || $preStatus === 'd6') {
-                        $this->log->warning('[收账小卡-下分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
+                        $this->log->info('[收账小卡-下分] 重试前EA D4预检', [
                             'machine_code' => $this->machine->code,
                             'attempt'      => "$attempt/$maxAttempts",
+                            'pre_check'    => "$preCheck/$preCheckMax",
                             'wash_status'  => $preStatus,
                         ]);
-                        $this->confirmWashPointWithStatus($uid, $source, $source_id);
-                        return;
+
+                        if ($preStatus === 'd7' || $preStatus === 'd6') {
+                            $this->log->warning('[收账小卡-下分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
+                                'machine_code' => $this->machine->code,
+                                'attempt'      => "$attempt/$maxAttempts",
+                                'pre_check'    => "$preCheck/$preCheckMax",
+                                'wash_status'  => $preStatus,
+                            ]);
+                            $this->confirmWashPointWithStatus($uid, $source, $source_id);
+                            return;
+                        }
+                    } else {
+                        $this->log->warning('[收账小卡-下分] 重试前EA D4预检无响应', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'pre_check'    => "$preCheck/$preCheckMax",
+                        ]);
                     }
                 }
             }
