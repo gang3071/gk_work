@@ -1678,7 +1678,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         $timesHex  = str_pad(dechex($times), 2, '0', STR_PAD_LEFT);
         $cmdData   = self::OPEN_ANY_POINT . $timesHex . 'c0';
-        $maxAttempts = 3;
+        $maxAttempts = 8;
         $replyTimeout = 2000000;       // 2s 等待CA回复
         $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
         $pollInterval = 100000;        // 100ms 轮询间隔
@@ -2016,7 +2016,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function handleWashPoint(string $uid, int $data, string $source, int $source_id): void
     {
         $cmdData = self::WASH_POINT;
-        $maxAttempts = 3;
+        $maxAttempts = 8;
         $replyTimeout = 2000000;       // 2s 等待CA回复
         $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
         $pollInterval = 100000;        // 100ms 轮询间隔
