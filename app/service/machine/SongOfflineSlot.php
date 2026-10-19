@@ -1688,14 +1688,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 防止上一轮 CA 因粘包延迟被漏判，机台已执行但被误判为未执行后重发导致重复上分
             if ($attempt > 1) {
                 // 多次查询EA D4确认机台状态，防止单次查询因机台状态切换或响应延迟导致误判
-                $preCheckMax = 3;
+                // 每0.5s查询一次，共3次，最长等待1.5s
+                $preCheckMax      = 3;
+                $preCheckInterval = 500000; // 0.5s
                 for ($preCheck = 1; $preCheck <= $preCheckMax; $preCheck++) {
                     Cache::delete($this->cacheDataKey . '_last_status_fields');
                     Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
                     $preWaited = 0;
                     $preRaw    = null;
-                    while ($preWaited < $statusReplyTimeout) {
+                    while ($preWaited < $preCheckInterval) {
                         usleep($pollInterval);
                         $preWaited += $pollInterval;
                         $preRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
@@ -2037,14 +2039,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 重试前先查 EA D4，确认机台未在洗分中才允许重发 A5
             if ($attempt > 1) {
                 // 多次查询EA D4确认机台状态，防止单次查询因机台状态切换或响应延迟导致误判
-                $preCheckMax = 3;
+                // 每0.5s查询一次，共3次，最长等待1.5s
+                $preCheckMax      = 3;
+                $preCheckInterval = 500000; // 0.5s
                 for ($preCheck = 1; $preCheck <= $preCheckMax; $preCheck++) {
                     Cache::delete($this->cacheDataKey . '_last_status_fields');
                     Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
                     $preWaited = 0;
                     $preRaw    = null;
-                    while ($preWaited < $statusReplyTimeout) {
+                    while ($preWaited < $preCheckInterval) {
                         usleep($pollInterval);
                         $preWaited += $pollInterval;
                         $preRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
