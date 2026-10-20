@@ -1083,8 +1083,20 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         }
 
         // 2. 僅處理本次新增的失敗次數，防止 READ_STATUS 重複上報同一 retry_count 時重複退款
-        $prevRetryCount = $this->return_count ?? 0;
-        $newRetries     = $retryCount - $prevRetryCount;
+        $prevRetryCount = (int)($this->return_count ?? 0);
+
+        // 若 retryCount < prevRetryCount，機台可能已重啟（累計值歸零後重新累加）
+        // 此時重置 prevRetryCount 以正確處理新失敗，避免 newRetries 為負而漏退款
+        if ($retryCount < $prevRetryCount) {
+            $this->log->warning('[收帳小卡-回補] 偵測到 retry_count 小於已處理值，疑似機台重啟，重置基準', [
+                'machine_code'      => $this->machine->code,
+                'retry_count'       => $retryCount,
+                'old_prev_retry_count' => $prevRetryCount,
+            ]);
+            $prevRetryCount = 0;
+        }
+
+        $newRetries = $retryCount - $prevRetryCount;
 
         if ($newRetries <= 0) {
             $this->log->info('[收帳小卡-回補] 回補次數未增加，略過（非新增失敗）', [
@@ -1181,7 +1193,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $delivery                   = new \app\model\PlayerDeliveryRecord();
             $delivery->player_id        = $gamingUserId;
             $delivery->department_id    = $player->department_id;
-            $delivery->store_agent_id   = $player->agent_admin_id ?? null;
             $delivery->target           = $playerGameLog->getTable();
             $delivery->target_id        = $playerGameLog->id;
             $delivery->machine_id       = $this->machine->id;

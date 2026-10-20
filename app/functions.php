@@ -3264,6 +3264,10 @@ if (!function_exists('machineOpenAnyFree')) {
                     $statusFields   = $services->getLastStatusFields();
                     $retryCount     = (int)($statusFields['retry_count'] ?? 0);
                     $prevRetryCount = (int)($services->return_count ?? 0);
+                    // 機台重啟後 retry_count 可能小於 return_count（累計值歸零），重置基準
+                    if ($retryCount < $prevRetryCount) {
+                        $prevRetryCount = 0;
+                    }
                     $newRetries     = max(0, $retryCount - $prevRetryCount);
                     if ($newRetries > 0 && $openScore > 0) {
                         $paidTimes  = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
@@ -3284,8 +3288,10 @@ if (!function_exists('machineOpenAnyFree')) {
                                 'refund_ok'       => $refundResult['success'] ?? false,
                             ]);
                             // 加款成功後同步 return_count，防止心跳（B7/EA D4 A7）以相同 retry_count 再次觸發 handleRetryRefund 重複退款
+                            // 注意：使用 $prevRetryCount + $newRetries 而非 $retryCount
+                            // 若 min(newRetries, paidTimes) 截斷了部分失敗，剩餘量留給心跳的 handleRetryRefund 補足
                             if ($refundResult['success'] ?? false) {
-                                $services->return_count = $retryCount;
+                                $services->return_count = $prevRetryCount + $newRetries;
                             }
                         }
                     }
