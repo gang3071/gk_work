@@ -1133,20 +1133,18 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // 4. 事務：記錄日誌 + 金流（僅包含 DB 操作）
         // 若上次 wallet add 失敗（return false），return_count 未更新，下次心跳仍會觸發重試。
-        // 此時 DB 記錄已存在，需跳過建立直接重試加款，避免重複記錄。
-        $existingDelivery = \app\model\PlayerDeliveryRecord::query()
-            ->where('player_id', $gamingUserId)
-            ->where('machine_id', $this->machine->id)
-            ->where('source', 'retry_refund')
-            ->where('amount', $refundAmount)
-            ->where('created_at', '>=', date('Y-m-d H:i:s', time() - 600))
-            ->first();
+        // 用 Redis 精確追蹤待重試的 delivery_id，避免模糊 DB 查詢在同金額時 false-match 新失敗事件。
+        $pendingRefundKey = $this->cacheDataKey . '_pending_refund_delivery';
+        $pendingDeliveryId = (int)\support\Cache::get($pendingRefundKey, 0);
+        $existingDelivery = $pendingDeliveryId > 0
+            ? \app\model\PlayerDeliveryRecord::find($pendingDeliveryId)
+            : null;
 
         $beforeBalance = 0;
         if ($existingDelivery) {
             // DB 記錄已存在（上次加款失敗），跳過建立，直接重試錢包加款
             $beforeBalance = $existingDelivery->amount_before;
-            $this->log->warning('[收帳小卡-回補] 偵測到已存在 DB 記錄，跳過重複建立，直接重試加款', [
+            $this->log->warning('[收帳小卡-回補] 偵測到待重試退款記錄，跳過重複建立，直接重試加款', [
                 'machine_code'   => $this->machine->code,
                 'player_id'      => $gamingUserId,
                 'delivery_id'    => $existingDelivery->id,
@@ -1227,6 +1225,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $addResult = \app\service\WalletService::add($gamingUserId, $refundAmount);
 
         if (!$addResult['success']) {
+            // 記錄 delivery_id 到 Redis，下次重試時直接找到此筆記錄跳過重複建立
+            if (!$existingDelivery && isset($delivery)) {
+                \support\Cache::set($pendingRefundKey, $delivery->id, 3600);
+            }
             $this->log->critical('[收帳小卡-回補] 錢包加款失敗，需人工介入', [
                 'machine_code'  => $this->machine->code,
                 'player_id'     => $gamingUserId,
@@ -1237,6 +1239,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 回傳 false：呼叫端不更新 return_count，下次 READ_STATUS 可自動重試加款
             return false;
         }
+
+        // 加款成功，清除待重試標記
+        \support\Cache::delete($pendingRefundKey);
 
         $this->log->info('[收帳小卡-回補] 退款成功', [
             'machine_code'   => $this->machine->code,
