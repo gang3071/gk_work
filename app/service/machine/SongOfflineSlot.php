@@ -1087,60 +1087,146 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'unit' => self::OPEN_UNIT,
         ]);
 
-        // 3. TODO: 调用钱包API退款
-        // ⚠️ 预留接口，当有玩家实际使用时再实现
-        //
-        // 实现思路：
-        // - 调用玩家钱包服务，将 $refundAmount 退回到玩家账户
-        // - 记录退款日志到数据库（player_game_log 或 player_wallet_log）
-        // - 可能需要发送WebSocket推送通知玩家
-        //
-        // 示例代码（需要根据实际钱包API调整）：
-        // try {
-        //     // 调用钱包API
-        //     $result = PlayerWalletService::refund([
-        //         'player_id' => $gamingUserId,
-        //         'amount' => $refundAmount,
-        //         'reason' => '机台开分失败回补',
-        //         'machine_id' => $this->machine->id,
-        //         'machine_code' => $this->machine->code,
-        //         'retry_count' => $retryCount,
-        //     ]);
-        //
-        //     if ($result['success']) {
-        //         $this->log->info('[收账小卡-回补] 退款成功', [
-        //             'machine_code' => $this->machine->code,
-        //             'player_id' => $gamingUserId,
-        //             'refund_amount' => $refundAmount,
-        //             'result' => $result,
-        //         ]);
-        //         return true;
-        //     } else {
-        //         $this->log->error('[收账小卡-回补] 退款失败', [
-        //             'machine_code' => $this->machine->code,
-        //             'player_id' => $gamingUserId,
-        //             'refund_amount' => $refundAmount,
-        //             'error' => $result['error'] ?? '未知错误',
-        //         ]);
-        //         return false;
-        //     }
-        // } catch (Exception $e) {
-        //     $this->log->error('[收账小卡-回补] 退款异常', [
-        //         'machine_code' => $this->machine->code,
-        //         'player_id' => $gamingUserId,
-        //         'refund_amount' => $refundAmount,
-        //         'error' => $e->getMessage(),
-        //     ]);
-        //     return false;
-        // }
+        // 3. 仅处理本次新增的失败次数，防止 READ_STATUS 重复上报同一 retry_count 时重复退款
+        $prevRetryCount = $this->return_count ?? 0;
+        $newRetries     = $retryCount - $prevRetryCount;
 
-        // ⚠️ 当前仅记录日志，实际退款逻辑需要根据钱包API实现
-        $this->log->warning('[收账小卡-回补] 退款接口未实现，仅记录日志', [
-            'machine_code' => $this->machine->code,
-            'player_id' => $gamingUserId,
+        if ($newRetries <= 0) {
+            $this->log->info('[收账小卡-回补] 回补次数未增加，跳过（非新增失败）', [
+                'machine_code'    => $this->machine->code,
+                'retry_count'     => $retryCount,
+                'prev_retry_count' => $prevRetryCount,
+            ]);
+            return;
+        }
+
+        // 4. 换算退款金额：分 × (odds_x / odds_y) = 元
+        $refundScore  = $newRetries * self::OPEN_UNIT;
+        $refundAmount = bcmul(
+            (string) $refundScore,
+            bcdiv(
+                (string) ($this->machine->odds_x ?? 1),
+                (string) ($this->machine->odds_y ?? 1),
+                8
+            ),
+            2
+        );
+
+        if ((float) $refundAmount <= 0) {
+            $this->log->warning('[收账小卡-回补] 退款金额换算为0，跳过', [
+                'machine_code' => $this->machine->code,
+                'refund_score' => $refundScore,
+                'odds_x'       => $this->machine->odds_x,
+                'odds_y'       => $this->machine->odds_y,
+            ]);
+            return;
+        }
+
+        $this->log->warning('[收账小卡-回补] 执行退款', [
+            'machine_code'  => $this->machine->code,
+            'player_id'     => $gamingUserId,
+            'new_retries'   => $newRetries,
+            'refund_score'  => $refundScore,
             'refund_amount' => $refundAmount,
-            'note' => '需要根据实际钱包API实现退款逻辑',
         ]);
+
+        // 5. 事务：记录日志 + 金流，事务外执行钱包加款
+        \support\Db::beginTransaction();
+        try {
+            $player = \app\model\Player::find($gamingUserId);
+            if (!$player) {
+                throw new Exception("玩家不存在: {$gamingUserId}");
+            }
+
+            $gameRecord = \app\model\PlayerGameRecord::query()
+                ->where('machine_id', $this->machine->id)
+                ->where('player_id', $gamingUserId)
+                ->where('status', \app\model\PlayerGameRecord::STATUS_START)
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            $beforeBalance = \app\service\WalletService::getBalance($gamingUserId);
+            $afterBalance  = bcadd($beforeBalance, $refundAmount, 2);
+
+            // 游戏日志（退款按下分记录）
+            $playerGameLog = addPlayerGameLog(
+                $player,
+                $this->machine,
+                $gameRecord,
+                $this->machine->control_open_point ?? 0
+            );
+            $playerGameLog->wash_point         = $refundScore;
+            $playerGameLog->game_amount        = $refundAmount;
+            $playerGameLog->before_game_amount = $beforeBalance;
+            $playerGameLog->after_game_amount  = $afterBalance;
+            $playerGameLog->action             = \app\model\PlayerGameLog::ACTION_DOWN;
+            $playerGameLog->is_system          = 1;
+            $playerGameLog->remark             = "开分失败回补（{$newRetries}次×" . self::OPEN_UNIT . "分）";
+            $playerGameLog->save();
+
+            // 金流记录
+            $delivery                   = new \app\model\PlayerDeliveryRecord();
+            $delivery->player_id        = $gamingUserId;
+            $delivery->department_id    = $player->department_id;
+            $delivery->target           = $playerGameLog->getTable();
+            $delivery->target_id        = $playerGameLog->id;
+            $delivery->machine_id       = $this->machine->id;
+            $delivery->machine_name     = $this->machine->name;
+            $delivery->machine_type     = $this->machine->type;
+            $delivery->code             = $this->machine->code;
+            $delivery->type             = \app\model\PlayerDeliveryRecord::TYPE_REFUND;
+            $delivery->source           = 'retry_refund';
+            $delivery->amount           = $refundAmount;
+            $delivery->amount_before    = $beforeBalance;
+            $delivery->amount_after     = $afterBalance;
+            $delivery->tradeno          = $playerGameLog->tradeno ?? '';
+            $delivery->remark           = "开分失败回补（{$newRetries}次）";
+            $delivery->save();
+
+            \support\Db::commit();
+
+            // 6. 钱包加款（事务外执行，与 returnBalanceToPlayer 保持一致）
+            try {
+                $addResult = \app\service\WalletService::add($gamingUserId, $refundAmount);
+
+                $this->log->info('[收账小卡-回补] 退款成功', [
+                    'machine_code'   => $this->machine->code,
+                    'player_id'      => $gamingUserId,
+                    'refund_score'   => $refundScore,
+                    'refund_amount'  => $refundAmount,
+                    'before_balance' => $beforeBalance,
+                    'after_balance'  => $addResult['balance'],
+                ]);
+
+                \app\service\BalancePushService::pushBalanceChange(
+                    $gamingUserId,
+                    $beforeBalance,
+                    $addResult['balance'],
+                    'settle',
+                    [
+                        'platform'   => $this->machine->name ?? $this->machine->code,
+                        'machine_id' => $this->machine->id,
+                        'type'       => 'retry_refund',
+                    ]
+                );
+            } catch (Exception $walletError) {
+                $this->log->critical('[收账小卡-回补] 钱包加款失败，需要人工介入', [
+                    'machine_code'  => $this->machine->code,
+                    'player_id'     => $gamingUserId,
+                    'refund_amount' => $refundAmount,
+                    'error'         => $walletError->getMessage(),
+                    'action'        => '已记录退款日志，但钱包未加款，请立即手动给玩家加款',
+                ]);
+            }
+        } catch (Exception $e) {
+            \support\Db::rollback();
+            $this->log->critical('[收账小卡-回补] 退款事务失败，需要人工介入', [
+                'machine_code'  => $this->machine->code,
+                'player_id'     => $gamingUserId,
+                'refund_amount' => $refundAmount,
+                'error'         => $e->getMessage(),
+            ]);
+        }
 
     }
 
