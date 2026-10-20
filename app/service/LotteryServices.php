@@ -936,6 +936,10 @@ LUA;
                 return false;
             }
 
+            // 記錄中獎前彩池快照（用於後續日誌對比）
+            $poolDbBefore = (float)$lottery->amount;
+            $redisPendingBefore = floatval(\support\Redis::connection()->client()->get(self::REDIS_KEY_LOTTERY_AMOUNT . $lottery->id) ?? 0);
+
             // 验证玩家钱包存在
             $machineWallet = $this->player->machine_wallet()->first();
             if (!$machineWallet) {
@@ -973,6 +977,19 @@ LUA;
             $playerDeliveryRecord->user_name = '';
             $playerDeliveryRecord->save();
 
+            \support\Log::channel('lottery_machine')->info('[彩池中獎-前]', [
+                'lottery_id'       => $lottery->id,
+                'lottery_name'     => $lottery->name,
+                'lottery_type'     => 'random',
+                'player_id'        => $this->player->id,
+                'machine_id'       => $this->machine->id,
+                'machine_code'     => $this->machine->code,
+                'pool_db_before'   => $poolDbBefore,
+                'redis_pending'    => $redisPendingBefore,
+                'real_total_before'=> round($poolDbBefore + $redisPendingBefore, 4),
+                'prize_amount'     => $amount,
+            ]);
+
             // 扣减彩金池（从lottery.amount扣减）
             // 根据rate计算实际扣减金额
             $rate = $lottery->rate > 0 ? $lottery->rate : 100;
@@ -997,6 +1014,20 @@ LUA;
 
             // ✅ 提交数据库事务（此时所有数据库操作成功）
             DB::commit();
+
+            \support\Log::channel('lottery_machine')->info('[彩池中獎-後]', [
+                'lottery_id'      => $lottery->id,
+                'lottery_name'    => $lottery->name,
+                'lottery_type'    => 'random',
+                'player_id'       => $this->player->id,
+                'machine_id'      => $this->machine->id,
+                'machine_code'    => $this->machine->code,
+                'pool_db_before'  => $poolDbBefore,
+                'deduct_amount'   => (float)$baseDeductAmount,
+                'prize_amount'    => $amount,
+                'pool_db_after'   => (float)$lottery->amount,
+                'auto_refill'     => $lottery->auto_refill_status == 1 ? (float)$lottery->auto_refill_amount : 0,
+            ]);
 
             // ✅ 事务提交后，更新 Redis 余额（两阶段提交）
             // 优势：数据库操作失败时 Redis 不会被修改，保证数据一致性
@@ -1531,6 +1562,10 @@ LUA;
                         return null;
                     }
 
+                    // 記錄中獎前彩池快照
+                    $poolDbBefore = (float)$lotteryModel->amount;
+                    $redisPendingBefore = floatval(\support\Redis::connection()->client()->get(self::REDIS_KEY_LOTTERY_AMOUNT . $lotteryModel->id) ?? 0);
+
                     // 验证玩家钱包存在
                     $machineWallet = $this->player->machine_wallet()->first();
                     if (!$machineWallet) {
@@ -1603,6 +1638,19 @@ LUA;
                     $playerDeliveryRecord->user_name = '';
                     $playerDeliveryRecord->save();
 
+                    \support\Log::channel('lottery_machine')->info('[彩池中獎-前]', [
+                        'lottery_id'       => $lotteryModel->id,
+                        'lottery_name'     => $lotteryModel->name,
+                        'lottery_type'     => 'fixed',
+                        'player_id'        => $this->player->id,
+                        'machine_id'       => $this->machine->id,
+                        'machine_code'     => $this->machine->code,
+                        'pool_db_before'   => $poolDbBefore,
+                        'redis_pending'    => $redisPendingBefore,
+                        'real_total_before'=> round($poolDbBefore + $redisPendingBefore, 4),
+                        'prize_amount'     => $fixedAllowLottery['amount'],
+                    ]);
+
                     // 扣减彩金池：直接用实际派彩金额，保证扣除 = 派出，避免因池值变化导致账目不平
                     $baseDeductAmount = $fixedAllowLottery['amount'];
                     $lotteryModel->amount = bcsub($lotteryModel->amount, $baseDeductAmount, 2);
@@ -1628,6 +1676,20 @@ LUA;
 
                     // ✅ 提交数据库事务（此时所有数据库操作成功）
                     DB::commit();
+
+                    \support\Log::channel('lottery_machine')->info('[彩池中獎-後]', [
+                        'lottery_id'     => $lotteryModel->id,
+                        'lottery_name'   => $lotteryModel->name,
+                        'lottery_type'   => 'fixed',
+                        'player_id'      => $this->player->id,
+                        'machine_id'     => $this->machine->id,
+                        'machine_code'   => $this->machine->code,
+                        'pool_db_before' => $poolDbBefore,
+                        'deduct_amount'  => (float)$baseDeductAmount,
+                        'prize_amount'   => (float)$fixedAllowLottery['amount'],
+                        'pool_db_after'  => (float)$lotteryModel->amount,
+                        'auto_refill'    => $lotteryModel->auto_refill_status == 1 ? (float)$lotteryModel->auto_refill_amount : 0,
+                    ]);
 
                     // ✅ 事务提交后，更新 Redis 余额（两阶段提交）
                     // 优势：数据库操作失败时 Redis 不会被修改，保证数据一致性
