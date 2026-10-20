@@ -1068,7 +1068,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * @return bool 回傳 true 表示可更新 return_count（成功或正常略過）；
      *              回傳 false 表示錢包加款失敗，下次 READ_STATUS 應重試
      */
-    private function handleRetryRefund(int $retryCount): bool
+    /**
+     * @param int      $retryCount 機台回補次數
+     * @param int|null $prevBase   呼叫端指定基準值；null 表示使用 return_count 差值（心跳路徑）
+     *                             inline EA D4 路徑傳入 0，直接以本批次次數退款，不做累積差值
+     */
+    public function handleRetryRefund(int $retryCount, ?int $prevBase = null): bool
     {
         // 1. 檢查是否有玩家在使用機台
         $gamingUserId = $this->gaming_user_id ?? 0;
@@ -1082,18 +1087,23 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             return true;
         }
 
-        // 2. 僅處理本次新增的失敗次數，防止 READ_STATUS 重複上報同一 retry_count 時重複退款
-        $prevRetryCount = (int)($this->return_count ?? 0);
+        // 2. 計算本次應退款的失敗次數
+        if ($prevBase !== null) {
+            // EA D4 inline 路徑：呼叫端已確認本批次失敗次數，直接使用（不做 return_count 差值）
+            $prevRetryCount = $prevBase;
+        } else {
+            // 心跳路徑：使用 return_count 差值，追蹤跨心跳的累積變化
+            $prevRetryCount = (int)($this->return_count ?? 0);
 
-        // 若 retryCount < prevRetryCount，機台可能已重啟（累計值歸零後重新累加）
-        // 此時重置 prevRetryCount 以正確處理新失敗，避免 newRetries 為負而漏退款
-        if ($retryCount < $prevRetryCount) {
-            $this->log->warning('[收帳小卡-回補] 偵測到 retry_count 小於已處理值，疑似機台重啟，重置基準', [
-                'machine_code'      => $this->machine->code,
-                'retry_count'       => $retryCount,
-                'old_prev_retry_count' => $prevRetryCount,
-            ]);
-            $prevRetryCount = 0;
+            // 若 retryCount < prevRetryCount，機台可能已重啟（累計值歸零後重新累加）
+            if ($retryCount < $prevRetryCount) {
+                $this->log->warning('[收帳小卡-回補] 偵測到 retry_count 小於已處理值，疑似機台重啟，重置基準', [
+                    'machine_code'         => $this->machine->code,
+                    'retry_count'          => $retryCount,
+                    'old_prev_retry_count' => $prevRetryCount,
+                ]);
+                $prevRetryCount = 0;
+            }
         }
 
         $newRetries = $retryCount - $prevRetryCount;

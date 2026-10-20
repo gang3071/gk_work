@@ -3258,43 +3258,29 @@ if (!function_exists('machineOpenAnyFree')) {
                     $cmdSourceId = $adminId > 0 ? $adminId : $player->id;
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, $cmdSource, $cmdSourceId);
 
-                    // ── EA D4 回補退款處理 ──
-                    // retry_count 是機台累計值；必須減去本次上分前已處理的 return_count（同 handleRetryRefund 邏輯）
-                    // 若不取差值，殘留的舊 retry_count 會在每次新開分時錯誤地再次退款
-                    $statusFields   = $services->getLastStatusFields();
-                    $retryCount     = (int)($statusFields['retry_count'] ?? 0);
-                    $prevRetryCount = (int)($services->return_count ?? 0);
-                    // 機台重啟後 retry_count 可能小於 return_count（累計值歸零），重置基準
-                    if ($retryCount < $prevRetryCount) {
-                        $prevRetryCount = 0;
-                    }
-                    $newRetries     = max(0, $retryCount - $prevRetryCount);
-                    if ($newRetries > 0 && $openScore > 0) {
-                        $paidTimes  = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
-                        // 防禦：機台異常上報值不應超過實際次數，超出則按全額退款處理
-                        $newRetries  = min($newRetries, $paidTimes);
-                        $refundMoney = $paidTimes > 0
-                            ? bcdiv(bcmul($newRetries, $money, 6), $paidTimes, 2)
-                            : '0.00';
-                        if (bccomp($refundMoney, '0', 2) > 0) {
-                            $refundResult = \app\service\WalletService::add($player->id, $refundMoney);
-                            Log::channel('slot_machine')->warning('[machineOpenAnyFree] 回補退款', [
-                                'machine_code'    => $machine->code,
-                                'player_id'       => $player->id,
-                                'retry_count'     => $retryCount,
-                                'prev_retry_count' => $prevRetryCount,
-                                'new_retries'     => $newRetries,
-                                'refund_money'    => $refundMoney,
-                                'refund_ok'       => $refundResult['success'] ?? false,
+                    // ── EA D4 回補退款處理（唯一合法觸發點：CA 確認後）──
+                    // EA D4 的 retry_count 是本批次 A5 指令的失敗次數（非累積值）
+                    // 直接使用，不與 return_count 做差值，避免上次上分的失敗次數混入本次計算
+                    $statusFields    = $services->getLastStatusFields();
+                    $batchRetryCount = (int)($statusFields['retry_count'] ?? 0);
+                    $paidTimes       = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
+                    // 防禦：本批次失敗次數不應超過本次付款開分次數
+                    $refundRetries   = min($batchRetryCount, $paidTimes);
+
+                    if ($refundRetries > 0) {
+                        // 以 prevBase=0 呼叫：告知 handleRetryRefund 這是本批次絕對次數，不做 return_count 差值
+                        $refundHandled = $services->handleRetryRefund($refundRetries, 0);
+                        if ($refundHandled) {
+                            Log::channel('slot_machine')->info('[machineOpenAnyFree] EA D4 批次回補完成', [
+                                'machine_code'   => $machine->code,
+                                'player_id'      => $player->id,
+                                'batch_retries'  => $refundRetries,
+                                'paid_times'     => $paidTimes,
                             ]);
-                            // 加款成功後同步 return_count，防止心跳（B7/EA D4 A7）以相同 retry_count 再次觸發 handleRetryRefund 重複退款
-                            // 注意：使用 $prevRetryCount + $newRetries 而非 $retryCount
-                            // 若 min(newRetries, paidTimes) 截斷了部分失敗，剩餘量留給心跳的 handleRetryRefund 補足
-                            if ($refundResult['success'] ?? false) {
-                                $services->return_count = $prevRetryCount + $newRetries;
-                            }
                         }
                     }
+                    // 同步 return_count = 本批次的 EA D4 值，供心跳路徑差值計算
+                    $services->return_count = $batchRetryCount;
                 } else {
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
                 }
