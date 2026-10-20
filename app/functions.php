@@ -1353,7 +1353,7 @@ function machineWash(
             }
             /** TODO 计算打码量 */
         }
-        // 斯洛离开机台或弃台下分重置活动 检查彩金中奖情况
+            // 斯洛离开机台或弃台下分重置活动
         if ($machine->type == GameType::TYPE_SLOT) {
             // 离开机台参与活动结束（只有线上机台）
             if ($machine->machine_source == Machine::MACHINE_SOURCE_ONLINE) {
@@ -1365,11 +1365,7 @@ function machineWash(
             // 玩家离开机台时，清除所有彩金的累计打码量
             \app\service\LotteryServices::clearPlayerAccumulatedBet($player->id, $machine->type);
 
-            // 下分检查彩金获奖情况
-            if ($money > 0) {
-                $playerLotteryRecord = (new LotteryServices())->setMachine($machine)->setPlayer($player)->fixedPotCheckLottery($money,
-                    false, $path == 'leave');
-            }
+            // ⚠️ 固定彩金检查已移至 DB::commit() 之后执行，见下方注释
         }
 
         // ✅ 硬件清零指令（在事务内执行，失败可回滚）
@@ -1476,6 +1472,30 @@ function machineWash(
 
         // ✅ 硬件指令成功后才提交数据库
         DB::commit();
+
+            // ✅ 固定彩金检查：必须在 DB::commit() 之后执行
+            // 原因：若在外层事务内调用，fixedPotCheckLottery 的 DB::beginTransaction() 会退化为
+            // SAVEPOINT，commit() 只释放 SAVEPOINT 而非真正提交。此时业务锁已释放，但
+            // lockForUpdate 的行锁仍由外层事务持有。addLotteryPool sync 获得业务锁后读到
+            // MVCC 快照（扣款前旧值），其 UPDATE 被行锁阻塞；外层事务 commit 后行锁释放，
+            // sync 的 UPDATE 以旧值覆盖正确扣款结果 → 彩池永远不被扣减。
+            // 移到 commit() 之后：fixedPotCheckLottery 拥有独立事务，lockForUpdate 行锁在
+            // 自身 commit 后立即释放，sync 读到已提交的扣款值，不会覆盖。
+            if ($machine->type == GameType::TYPE_SLOT && $money > 0) {
+                try {
+                    $playerLotteryRecord = (new LotteryServices())
+                        ->setMachine($machine)
+                        ->setPlayer($player)
+                        ->fixedPotCheckLottery($money, false, $path == 'leave');
+                } catch (\Exception $e) {
+                    \support\Log::error('[machineWash] 固定彩金检查失败（洗分已完成）', [
+                        'machine_id' => $machine->id,
+                        'player_id' => $player->id,
+                        'money' => $money,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
 
         // ✅ 立即更新 Redis 状态（保证 DB/Redis 一致性）
         // 优化：在钱包操作之前更新 Redis，缩小不一致时间窗口
