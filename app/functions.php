@@ -3283,6 +3283,10 @@ if (!function_exists('machineOpenAnyFree')) {
                                 'refund_money'    => $refundMoney,
                                 'refund_ok'       => $refundResult['success'] ?? false,
                             ]);
+                            // 加款成功後同步 return_count，防止心跳（B7/EA D4 A7）以相同 retry_count 再次觸發 handleRetryRefund 重複退款
+                            if ($refundResult['success'] ?? false) {
+                                $services->return_count = $retryCount;
+                            }
                         }
                     }
                 } else {

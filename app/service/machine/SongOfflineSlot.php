@@ -1120,7 +1120,27 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         ]);
 
         // 4. 事務：記錄日誌 + 金流（僅包含 DB 操作）
+        // 若上次 wallet add 失敗（return false），return_count 未更新，下次心跳仍會觸發重試。
+        // 此時 DB 記錄已存在，需跳過建立直接重試加款，避免重複記錄。
+        $existingDelivery = \app\model\PlayerDeliveryRecord::query()
+            ->where('player_id', $gamingUserId)
+            ->where('machine_id', $this->machine->id)
+            ->where('source', 'retry_refund')
+            ->where('amount', $refundAmount)
+            ->where('created_at', '>=', date('Y-m-d H:i:s', time() - 600))
+            ->first();
+
         $beforeBalance = 0;
+        if ($existingDelivery) {
+            // DB 記錄已存在（上次加款失敗），跳過建立，直接重試錢包加款
+            $beforeBalance = $existingDelivery->amount_before;
+            $this->log->warning('[收帳小卡-回補] 偵測到已存在 DB 記錄，跳過重複建立，直接重試加款', [
+                'machine_code'   => $this->machine->code,
+                'player_id'      => $gamingUserId,
+                'delivery_id'    => $existingDelivery->id,
+                'refund_amount'  => $refundAmount,
+            ]);
+        } else {
         \support\Db::beginTransaction();
         try {
             $player = \app\model\Player::find($gamingUserId);
@@ -1161,6 +1181,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $delivery                   = new \app\model\PlayerDeliveryRecord();
             $delivery->player_id        = $gamingUserId;
             $delivery->department_id    = $player->department_id;
+            $delivery->store_agent_id   = $player->agent_admin_id ?? null;
             $delivery->target           = $playerGameLog->getTable();
             $delivery->target_id        = $playerGameLog->id;
             $delivery->machine_id       = $this->machine->id;
@@ -1187,6 +1208,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             ]);
             return true; // DB 失敗通常是永久性錯誤（如玩家不存在），不重試
         }
+        } // end else（非重試路徑）
 
         // 5. 錢包加款（事務外執行，與 returnBalanceToPlayer 一致）
         // WalletService::add 內部 catch 所有 Throwable，永遠回傳 array，不拋例外，
