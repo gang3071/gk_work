@@ -1095,18 +1095,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             return true;
         }
 
-        // 3. 換算退款金額：新增失敗次數 × OPEN_UNIT分 × (odds_x / odds_y) = 元
-        // 用 ?: 替代 ??，同時防止 null 和 0 造成 DivisionByZeroError
+        // 3. 換算退款金額：新增失敗次數 × OPEN_UNIT分 = 元（1:1，不乘 odds）
+        // machineOpenAnyFree 對 SongOfflineSlot 的扣款：$money = (int) $openScore（不乘 odds）
+        // 退款必須採相同比例；若誤用 × (odds_x/odds_y)，當 odds_x > odds_y 時退款會超過原本扣款
         $refundScore  = $newRetries * self::OPEN_UNIT;
-        $refundAmount = bcmul(
-            (string) $refundScore,
-            bcdiv(
-                (string) ($this->machine->odds_x ?: 1),
-                (string) ($this->machine->odds_y ?: 1),
-                8
-            ),
-            2
-        );
+        $refundAmount = (string)$refundScore;
 
         if ((float) $refundAmount <= 0) {
             $this->log->warning('[收帳小卡-回補] 退款金額換算為0，略過', [
