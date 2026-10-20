@@ -944,12 +944,15 @@ LUA;
                 return false;
             }
 
-            // 用 lockForUpdate 的即時彩池重算獎金，避免 TOCTOU（prize ≠ deductAmount）：
-            // checkLottery 用舊 pool 算出 $amount，若此時 pool 已增長，
-            // 扣款額 > 派獎額，差額憑空消失；重算讓兩者一致。
-            $freshRate   = $lottery->rate > 0 ? $lottery->rate : 100;
+            // 用 lockForUpdate 的即時彩池重算獎金（解決 TOCTOU：checkLottery 用舊 pool 算出 $amount）
+            // deductAmount 仍維持 pool×rate%（彩池扣的），
+            // prize 另加 double/cateRate（莊家補貼部分），兩者刻意不同，不改變原設計。
+            $freshRate     = $lottery->rate > 0 ? $lottery->rate : 100;
             $freshCateRate = (float)($this->machine->machineCategory->lottery_rate ?? 0);
-            $freshAmount = bcmul((string)$lottery->amount, bcdiv((string)$freshRate, '100', 4), 2);
+            $freshAmount   = bcmul((string)$lottery->amount, bcdiv((string)$freshRate, '100', 4), 2);
+            if ($isDoubled) {
+                $freshAmount = bcmul($freshAmount, '2', 2);
+            }
             if ($freshCateRate > 0) {
                 $freshAmount = bcmul($freshAmount, (string)$freshCateRate, 2);
             }
@@ -1018,9 +1021,10 @@ LUA;
                 'prize_amount'     => $amount,
             ]);
 
-            // 扣減彩池（deductAmount = $amount，兩者已在 lockForUpdate 後對齊）
-            $baseDeductAmount = $amount;
-            $lottery->amount = bcsub($lottery->amount, (string)$baseDeductAmount, 2);
+            // 扣減彩池（pool × rate%）；prize 含 double/cateRate 補貼，兩者刻意不同
+            $rate = $lottery->rate > 0 ? $lottery->rate : 100;
+            $baseDeductAmount = bcmul($lottery->amount, bcdiv($rate, 100, 4), 2);
+            $lottery->amount = bcsub($lottery->amount, $baseDeductAmount, 2);
 
             // 派彩成功后补充到目标金额（如果启用了自动补充）
             if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
