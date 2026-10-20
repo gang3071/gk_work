@@ -363,13 +363,6 @@ class LotteryServices
                 continue;
             }
 
-            // 累加前检查保底金额：如果启用了保底金额且当前彩池低于保底金额，先补充到保底金额
-            if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
-                if ($lottery->amount < $lottery->auto_refill_amount) {
-                    $lottery->amount = $lottery->auto_refill_amount;
-                }
-            }
-
             $newAmount = bcadd($realAmount, $addAmount, 4);
 
             // 检查是否超过最大彩池限制（以真實金額為基準）
@@ -411,47 +404,66 @@ class LotteryServices
 
                 // 如果需要同步到数据库
                 if ($shouldSyncToDB) {
-                    // 从 Redis 获取累积的总金额并同步到数据库
-                    $accumulatedAmount = $redis->get($redisKey);
+                    // 先抢锁，再原子 GET+DEL，防止两类竞态：
+                    // 1. 与派彩路径（tryDistributeLottery/fixedPotCheckLottery）的 refresh+save 竞争
+                    // 2. TOCTOU：GET 和 DEL 之间 addLotteryPool 的 incrByFloat 插入新值被 DEL 丢弃
+                    $lockPrefix = $lottery->lottery_type == \app\model\Lottery::LOTTERY_TYPE_FIXED
+                        ? 'machine_lottery_pool_fixed_locker_'
+                        : 'machine_lottery_pool_random_locker_';
+                    $syncLockKey = $lockPrefix . $lottery->id;
+                    $syncLock = Locker::lock($syncLockKey, 2, true);
+                    if (!$syncLock->acquire()) {
+                        // 派彩正在进行，跳过本次同步，等待下一次
+                        continue;
+                    }
+                    try {
+                        // 原子 GET+DEL：消除 GET 与 DEL 之间 incrByFloat 插入新值被丢弃的问题
+                        $luaGetDel = "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v";
+                        $accumulatedAmount = $redis->eval($luaGetDel, [$redisKey], 1);
 
-                    if ($accumulatedAmount > 0) {
-                        // 重新从数据库读取最新值，避免内存值覆盖导致数据丢失
-                        $lottery->refresh();
+                        if ($accumulatedAmount > 0) {
+                            // 重新从数据库读取最新值，避免内存值覆盖导致数据丢失
+                            $lottery->refresh();
 
-                        // 累加Redis中的金额到数据库金额
-                        $lottery->amount = bcadd($lottery->amount, $accumulatedAmount, 4);
+                            // 累加Redis中的金额到数据库金额
+                            $lottery->amount = bcadd($lottery->amount, $accumulatedAmount, 4);
 
-                        // ✅ 同步时也要检查保底金额（自动补充机制）
-                        // 如果启用了保底金额且当前彩池低于保底金额，补充到保底金额
-                        if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
-                            if ($lottery->amount < $lottery->auto_refill_amount) {
-                                $lottery->amount = $lottery->auto_refill_amount;
+                            // 同步时检查保底金额
+                            if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
+                                if ($lottery->amount < $lottery->auto_refill_amount) {
+                                    $lottery->amount = $lottery->auto_refill_amount;
+                                }
                             }
+
+                            // 更新数据库（Redis key 已在 Lua 中原子删除）
+                            $lottery->save();
+
+                            // 更新最后同步时间
+                            $lastSyncKey = 'machine_lottery_last_sync:' . $lottery->id;
+                            $redis->setex($lastSyncKey, 86400 * 7, time());
+
+                            // 清除彩金缓存
+                            self::clearLotteryListCache($machineType);
                         }
-
-                        // 更新数据库
-                        $lottery->save();
-
-                        // 清除 Redis 累积计数（重置为0）
-                        $redis->del($redisKey);
-
-                        // 更新最后同步时间（✅ 使用 setex 原子操作）
-                        $lastSyncKey = 'machine_lottery_last_sync:' . $lottery->id;
-                        $redis->setex($lastSyncKey, 86400 * 7, time());
-
-                        // 清除彩金缓存
-                        self::clearLotteryListCache($machineType);
-                        // 注意：推送已在Redis累积时触发，这里不需要重复推送
+                    } finally {
+                        $syncLock->release();
                     }
                 }
             } catch (\Exception $e) {
-                // 更新内存中的金额
-                $lottery->amount = $newAmount;
-
-                // 直接保存到数据库
-                $lottery->save();
-
-                // 清除彩金缓存
+                // Redis 故障兜底：直接写 DB，同样需要加锁防止与派彩路径竞争
+                $fallbackLockPrefix = $lottery->lottery_type == \app\model\Lottery::LOTTERY_TYPE_FIXED
+                    ? 'machine_lottery_pool_fixed_locker_'
+                    : 'machine_lottery_pool_random_locker_';
+                $fallbackLock = Locker::lock($fallbackLockPrefix . $lottery->id, 2, true);
+                if ($fallbackLock->acquire()) {
+                    try {
+                        $lottery->refresh();
+                        $lottery->amount = bcadd($lottery->amount, $addAmount, 4);
+                        $lottery->save();
+                    } finally {
+                        $fallbackLock->release();
+                    }
+                }
                 self::clearLotteryListCache($machineType);
             }
 
@@ -895,9 +907,9 @@ LUA;
 
         DB::beginTransaction();
         try {
-            // 重新加载彩金数据，检查余额
-            $lottery->refresh();
-            if ($lottery->amount < $amount) {
+            // lockForUpdate 提供 DB 行锁，即使 Redis 锁因 TTL 到期也能防止并发派彩
+            $lottery = Lottery::query()->where('id', $lottery->id)->lockForUpdate()->first();
+            if (!$lottery || $lottery->amount < $amount) {
                 DB::rollback();
                 return false;
             }
@@ -1004,6 +1016,17 @@ LUA;
 
             // 清除彩金缓存（事务提交后）
             self::clearLotteryListCache($this->machine->type);
+
+            // 清除彩池 Redis pending key，防止 DB sync 时把派彩前的残留值叠加到 auto_refill 后的金额上
+            try {
+                $pendingRedis = \support\Redis::connection()->client();
+                $pendingRedis->del(self::REDIS_KEY_LOTTERY_AMOUNT . $lottery->id);
+            } catch (\Exception $e) {
+                \support\Log::warning('清除彩池 Redis pending key 失败', [
+                    'lottery_id' => $lottery->id,
+                    'error'      => $e->getMessage(),
+                ]);
+            }
 
             // 实时推送已禁用，改用定时任务推送（LotteryPoolSocket）
             // self::pushLotteryPoolData();
@@ -1477,6 +1500,12 @@ LUA;
 
                     if ($lotteryModel->amount < $fixedAllowLottery['amount']) {
                         DB::rollback();
+                        \support\Log::warning('固定彩金：彩池余额不足，中奖触发被放弃（可能因并发派彩）', [
+                            'lottery_id'   => $lotteryModel->id,
+                            'pool_amount'  => $lotteryModel->amount,
+                            'prize_amount' => $fixedAllowLottery['amount'],
+                            'player_id'    => $this->player->id,
+                        ]);
                         return null;
                     }
 
@@ -1619,6 +1648,17 @@ LUA;
 
                     // 清除彩金缓存（事务提交后）
                     self::clearLotteryListCache($this->machine->type);
+
+                    // 清除彩池 Redis pending key，防止 DB sync 把派彩前残留叠加到扣款后金额上
+                    try {
+                        $pendingRedis = \support\Redis::connection()->client();
+                        $pendingRedis->del(self::REDIS_KEY_LOTTERY_AMOUNT . $lotteryModel->id);
+                    } catch (\Exception $e) {
+                        \support\Log::warning('固定彩金：清除彩池 Redis pending key 失败', [
+                            'lottery_id' => $lotteryModel->id,
+                            'error'      => $e->getMessage(),
+                        ]);
+                    }
 
                     // 实时推送已禁用，改用定时任务推送（LotteryPoolSocket）
                     // self::pushLotteryPoolData();
@@ -2035,31 +2075,42 @@ LUA;
 
             foreach ($lotteryList as $lottery) {
                 try {
-                    $redisKey = self::REDIS_KEY_LOTTERY_AMOUNT . $lottery->id;
-                    $accumulatedAmount = $redis->get($redisKey);
+                    // 使用与派彩相同的锁，防止与 tryDistributeLottery/fixedPotCheckLottery 并发写入
+                    $lockPrefix = $lottery->lottery_type == Lottery::LOTTERY_TYPE_FIXED
+                        ? 'machine_lottery_pool_fixed_locker_'
+                        : 'machine_lottery_pool_random_locker_';
+                    $syncLock = Locker::lock($lockPrefix . $lottery->id, 3, true);
+                    if (!$syncLock->acquire()) {
+                        continue; // 彩金派彩进行中，跳过此次强制同步
+                    }
+                    try {
+                        $redisKey = self::REDIS_KEY_LOTTERY_AMOUNT . $lottery->id;
+                        $luaGetDel = "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v";
+                        $accumulatedAmount = $redis->eval($luaGetDel, [$redisKey], 1);
 
-                    // 如果 Redis 中有累积金额
-                    if ($accumulatedAmount !== false && $accumulatedAmount > 0) {
-                        // 更新数据库中的金额
-                        $oldAmount = $lottery->amount;
-                        $lottery->amount = bcadd($lottery->amount, $accumulatedAmount, 4);
-                        $lottery->save();
+                        // 如果 Redis 中有累积金额
+                        if ($accumulatedAmount !== false && $accumulatedAmount > 0) {
+                            // refresh 保证拿到最新 DB 值，避免覆盖派彩后的扣款
+                            $lottery->refresh();
+                            $oldAmount = $lottery->amount;
+                            $lottery->amount = bcadd($lottery->amount, $accumulatedAmount, 4);
+                            $lottery->save();
 
-                        // 清除 Redis 累积计数
-                        $redis->del($redisKey);
+                            // 更新最后同步时间（✅ 使用 setex 原子操作）
+                            $lastSyncKey = 'machine_lottery_last_sync:' . $lottery->id;
+                            $redis->setex($lastSyncKey, 86400 * 7, time());
 
-                        // 更新最后同步时间（✅ 使用 setex 原子操作）
-                        $lastSyncKey = 'machine_lottery_last_sync:' . $lottery->id;
-                        $redis->setex($lastSyncKey, 86400 * 7, time());
-
-                        $result['synced_count']++;
-                        $result['details'][] = [
-                            'lottery_id' => $lottery->id,
-                            'name' => $lottery->name,
-                            'old_amount' => $oldAmount,
-                            'accumulated' => $accumulatedAmount,
-                            'new_amount' => $lottery->amount,
-                        ];
+                            $result['synced_count']++;
+                            $result['details'][] = [
+                                'lottery_id' => $lottery->id,
+                                'name' => $lottery->name,
+                                'old_amount' => $oldAmount,
+                                'accumulated' => $accumulatedAmount,
+                                'new_amount' => $lottery->amount,
+                            ];
+                        }
+                    } finally {
+                        $syncLock->release();
                     }
                 } catch (\Exception $e) {
                     $result['errors'][] = [
