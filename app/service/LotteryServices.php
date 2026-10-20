@@ -935,12 +935,31 @@ LUA;
         if (!$lock->acquire()) {
             return false;
         }
-
         DB::beginTransaction();
         try {
             // lockForUpdate 提供 DB 行锁，即使 Redis 锁因 TTL 到期也能防止并发派彩
             $lottery = Lottery::query()->where('id', $lottery->id)->lockForUpdate()->first();
-            if (!$lottery || $lottery->amount < $amount) {
+            if (!$lottery) {
+                DB::rollback();
+                return false;
+            }
+
+            // 用 lockForUpdate 的即時彩池重算獎金，避免 TOCTOU（prize ≠ deductAmount）：
+            // checkLottery 用舊 pool 算出 $amount，若此時 pool 已增長，
+            // 扣款額 > 派獎額，差額憑空消失；重算讓兩者一致。
+            $freshRate   = $lottery->rate > 0 ? $lottery->rate : 100;
+            $freshCateRate = (float)($this->machine->machineCategory->lottery_rate ?? 0);
+            $freshAmount = bcmul((string)$lottery->amount, bcdiv((string)$freshRate, '100', 4), 2);
+            if ($freshCateRate > 0) {
+                $freshAmount = bcmul($freshAmount, (string)$freshCateRate, 2);
+            }
+            $freshAmount = floor($freshAmount);
+            if ($lottery->max_status == 1 && $lottery->max_amount > 0 && $freshAmount > $lottery->max_amount) {
+                $freshAmount = (float)$lottery->max_amount;
+            }
+            $amount = $freshAmount;
+
+            if ($lottery->amount < $amount) {
                 DB::rollback();
                 return false;
             }
@@ -999,11 +1018,9 @@ LUA;
                 'prize_amount'     => $amount,
             ]);
 
-            // 扣减彩金池（从lottery.amount扣减）
-            // 根据rate计算实际扣减金额
-            $rate = $lottery->rate > 0 ? $lottery->rate : 100;
-            $baseDeductAmount = bcmul($lottery->amount, bcdiv($rate, 100, 4), 2);
-            $lottery->amount = bcsub($lottery->amount, $baseDeductAmount, 2);
+            // 扣減彩池（deductAmount = $amount，兩者已在 lockForUpdate 後對齊）
+            $baseDeductAmount = $amount;
+            $lottery->amount = bcsub($lottery->amount, (string)$baseDeductAmount, 2);
 
             // 派彩成功后补充到目标金额（如果启用了自动补充）
             if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
@@ -1057,11 +1074,15 @@ LUA;
                     ]);
                 }
             } catch (\Exception $e) {
-                // 尝试回滚彩池扣减（尽力而为，可能失败）
+                // 加款失敗：原子 SQL 回滾彩池，然後中止後續通知和 Redis 清除
                 try {
-                    $lottery->amount = bcadd($lottery->amount, $baseDeductAmount, 2);
-                    $lottery->lottery_times = $lottery->lottery_times - 1;
-                    $lottery->save();
+                    \support\Db::table($lottery->getTable())
+                        ->where('id', $lottery->id)
+                        ->update([
+                            'amount'        => \support\Db::raw("amount + {$baseDeductAmount}"),
+                            'lottery_times' => \support\Db::raw('lottery_times - 1'),
+                            'updated_at'    => date('Y-m-d H:i:s'),
+                        ]);
                 } catch (\Exception $rollbackException) {
                     \support\Log::critical('彩池回滚失败', [
                         'lottery_id' => $lottery->id,
@@ -1069,8 +1090,14 @@ LUA;
                     ]);
                 }
 
-                // 不抛出异常，避免影响后续流程
-                // return false;  // 可选：返回 false 表示失败
+                // 加款失敗：停止後續冷卻、socket 通知、Redis 清除（保留累積的押注）
+                \support\Log::warning('随机彩金：錢包加款失敗，彩池已回滾，中止後續通知', [
+                    'lottery_id'   => $lottery->id,
+                    'player_id'    => $this->player->id,
+                    'prize_amount' => $amount,
+                    'error'        => $e->getMessage(),
+                ]);
+                return false;
             }
 
             // 设置冷却期：中奖后30分钟内不再触发中奖
@@ -1100,6 +1127,8 @@ LUA;
         } catch (\Exception $e) {
             DB::rollback();
             throw new Exception($e->getMessage());
+        } finally {
+            $lock->release();
         }
     }
 
