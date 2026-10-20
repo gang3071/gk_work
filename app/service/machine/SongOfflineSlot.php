@@ -1145,13 +1145,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $gameRecord,
                 $this->machine->control_open_point ?? 0
             );
-            $playerGameLog->wash_point         = $refundScore;
-            $playerGameLog->game_amount        = $refundAmount;
+            // wash_point / game_amount 設為 0，避免觸發 PlayerGameLog booted created 事件
+            // 將退款誤計入 MachineReport.wash_point / wash_amount；
+            // 實際金額由 PlayerDeliveryRecord 承載，餘額變化由 before/after_game_amount 記錄。
+            $playerGameLog->wash_point         = 0;
+            $playerGameLog->game_amount        = 0;
             $playerGameLog->before_game_amount = $beforeBalance;
             $playerGameLog->after_game_amount  = $afterBalance;
             $playerGameLog->action             = \app\model\PlayerGameLog::ACTION_DOWN;
             $playerGameLog->is_system          = 1;
-            $playerGameLog->remark             = "開分部分失敗回補（{$newRetries}次×" . self::OPEN_UNIT . "分）";
+            $playerGameLog->remark             = "開分部分失敗回補（{$newRetries}次×" . self::OPEN_UNIT . "分，退款金額 {$refundAmount}）";
             $playerGameLog->save();
 
             // 金流記錄
