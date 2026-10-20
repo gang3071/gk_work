@@ -444,27 +444,25 @@ class LotteryServices
                         $accumulatedAmount = $redis->eval($luaGetDel, [$redisKey], 1);
 
                         if ($accumulatedAmount > 0) {
-                            // 重新从数据库读取最新值，避免内存值覆盖导致数据丢失
-                            $lottery->refresh();
+                            // 使用原子 SQL 遞增讀取 current row data，繞過 MVCC 快照問題：
+                            // refresh()+save() 在 Locker 持有 MySQL 事務時讀到扣款前舊快照，
+                            // 導致 jackpot 扣款後被 sync 覆蓋。float 強制轉型防止注入。
+                            $accumulated = (float)$accumulatedAmount;
+                            $autoRefill  = (float)$lottery->auto_refill_amount;
+                            $useRefill   = $lottery->auto_refill_status == 1 && $autoRefill > 0;
 
-                            // 累加Redis中的金额到数据库金额
-                            $lottery->amount = bcadd($lottery->amount, $accumulatedAmount, 4);
+                            \support\Db::table($lottery->getTable())
+                                ->where('id', $lottery->id)
+                                ->update([
+                                    'amount'     => \support\Db::raw(
+                                        $useRefill
+                                            ? "GREATEST(amount + {$accumulated}, {$autoRefill})"
+                                            : "amount + {$accumulated}"
+                                    ),
+                                    'updated_at' => date('Y-m-d H:i:s'),
+                                ]);
 
-                            // 同步时检查保底金额
-                            if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
-                                if ($lottery->amount < $lottery->auto_refill_amount) {
-                                    $lottery->amount = $lottery->auto_refill_amount;
-                                }
-                            }
-
-                            // 更新数据库（Redis key 已在 Lua 中原子删除）
-                            $lottery->save();
-
-                            // 更新最后同步时间
-                            $lastSyncKey = 'machine_lottery_last_sync:' . $lottery->id;
-                            $redis->setex($lastSyncKey, 86400 * 7, time());
-
-                            // 清除彩金缓存
+                            $redis->setex('machine_lottery_last_sync:' . $lottery->id, 86400 * 7, time());
                             self::clearLotteryListCache($machineType);
                         }
                     } finally {
@@ -479,9 +477,20 @@ class LotteryServices
                 $fallbackLock = Locker::lock($fallbackLockPrefix . $lottery->id, 2, true);
                 if ($fallbackLock->acquire()) {
                     try {
-                        $lottery->refresh();
-                        $lottery->amount = bcadd($lottery->amount, $addAmount, 4);
-                        $lottery->save();
+                        $fallbackAccumulated = (float)$addAmount;
+                        $fallbackAutoRefill  = (float)$lottery->auto_refill_amount;
+                        $fallbackUseRefill   = $lottery->auto_refill_status == 1 && $fallbackAutoRefill > 0;
+
+                        \support\Db::table($lottery->getTable())
+                            ->where('id', $lottery->id)
+                            ->update([
+                                'amount'     => \support\Db::raw(
+                                    $fallbackUseRefill
+                                        ? "GREATEST(amount + {$fallbackAccumulated}, {$fallbackAutoRefill})"
+                                        : "amount + {$fallbackAccumulated}"
+                                ),
+                                'updated_at' => date('Y-m-d H:i:s'),
+                            ]);
                     } finally {
                         $fallbackLock->release();
                     }
@@ -1540,7 +1549,6 @@ LUA;
                 if (!$lock->acquire()) {
                     return null;
                 }
-
                 DB::beginTransaction();
                 try {
                     // 重新加载彩金数据，检查余额（参考随机彩金逻辑）
@@ -1550,6 +1558,20 @@ LUA;
                         DB::rollback();
                         return null;
                     }
+
+                    // 用 lockForUpdate 的即時彩池重算獎金，避免快取舊值導致少付。
+                    // lottery_rate 已含雙倍系數（= rate * double_multiplier），cateRate 為機台分類倍率。
+                    $freshLotteryRate = $fixedAllowLottery['lottery_rate'] > 0 ? (float)$fixedAllowLottery['lottery_rate'] : 100.0;
+                    $freshCateRate    = (float)($this->machine->machineCategory->lottery_rate ?? 0);
+                    $freshAmount      = bcmul((string)$lotteryModel->amount, bcdiv((string)$freshLotteryRate, '100', 4), 2);
+                    if ($freshCateRate > 0) {
+                        $freshAmount = bcmul($freshAmount, (string)$freshCateRate, 2);
+                    }
+                    $freshAmount = floor($freshAmount);
+                    if ($fixedAllowLottery['max_amount'] > 0 && $freshAmount > $fixedAllowLottery['max_amount']) {
+                        $freshAmount = floatval($fixedAllowLottery['max_amount']);
+                    }
+                    $fixedAllowLottery['amount'] = $freshAmount;
 
                     if ($lotteryModel->amount < $fixedAllowLottery['amount']) {
                         DB::rollback();
@@ -1716,10 +1738,13 @@ LUA;
                     } catch (\Exception $e) {
                         // 尝试回滚彩池扣减（尽力而为，可能失败）
                         try {
-                            $lotteryModel->refresh();  // 重新加载最新数据
-                            $lotteryModel->amount = bcadd($lotteryModel->amount, $baseDeductAmount, 2);
-                            $lotteryModel->lottery_times = $lotteryModel->lottery_times - 1;
-                            $lotteryModel->save();
+                            \support\Db::table($lotteryModel->getTable())
+                                ->where('id', $lotteryModel->id)
+                                ->update([
+                                    'amount'        => \support\Db::raw("amount + {$baseDeductAmount}"),
+                                    'lottery_times' => \support\Db::raw('lottery_times - 1'),
+                                    'updated_at'    => date('Y-m-d H:i:s'),
+                                ]);
                         } catch (\Exception $rollbackException) {
                             \support\Log::critical('固定彩金彩池回滚失败', [
                                 'lottery_id' => $fixedAllowLottery['lottery_id'],
@@ -1727,7 +1752,15 @@ LUA;
                             ]);
                         }
 
-                        // 不抛出异常，避免影响后续流程
+                        // 加款失敗：停止後續 socket 通知，不清除 Redis pending key（保留累積的押注）
+                        \support\Log::warning('固定彩金：錢包加款失敗，彩池已回滾，中止後續通知', [
+                            'lottery_id'   => $fixedAllowLottery['lottery_id'],
+                            'player_id'    => $this->player->id,
+                            'prize_amount' => $fixedAllowLottery['amount'],
+                            'error'        => $e->getMessage(),
+                        ]);
+                        $playerLotteryRecord = null;
+                        return null;
                     }
 
                     // 清除彩金缓存（事务提交后）
@@ -1804,6 +1837,8 @@ LUA;
                 } catch (\Exception $e) {
                     DB::rollback();
                     throw new Exception($e->getMessage());
+                } finally {
+                    $lock->release();
                 }
             }
         }
