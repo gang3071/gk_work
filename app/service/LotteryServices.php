@@ -382,6 +382,28 @@ class LotteryServices
                 // 使用 Redis 的 INCRBYFLOAT 原子操作累积
                 $currentRedisAmount = $redis->incrByFloat($redisKey, (float)$addAmount);
 
+                \support\Log::channel('lottery_machine')->info('[彩池累加]', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'machine_type' => $machineType == GameType::TYPE_SLOT ? 'slot' : 'steel_ball',
+                    'lottery_id' => $lottery->id,
+                    'lottery_name' => $lottery->name ?? '',
+                    // 计算规则
+                    'new_num' => $newNum,
+                    'last_num' => $lastNum,
+                    'increment' => $num,
+                    'unit_point' => (float)$this->machine->machineCategory->lottery_point,
+                    'base_amount' => (float)$baseAmount,   // increment × unit_point
+                    'pool_ratio' => (float)$lottery->pool_ratio . '%',
+                    'add_amount' => (float)$addAmount,    // base_amount × pool_ratio/100
+                    // 累积状态
+                    'db_amount' => (float)$lottery->amount,
+                    'redis_before' => (float)$beforeRedisAmount,
+                    'redis_after' => (float)$currentRedisAmount,
+                    'real_total' => (float)bcadd($lottery->amount, $currentRedisAmount, 4),
+                    'max_pool' => (float)$lottery->max_pool_amount,
+                ]);
+
                 // 计算总彩池（DB + Redis）
                 // 注意：不要更新内存中的 lottery.amount，同步时会从数据库 refresh() 重新读取
                 // 避免内存值覆盖导致数据丢失（Redis累积金额会在同步时叠加到数据库值）
