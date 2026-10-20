@@ -1219,13 +1219,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             \support\Db::commit();
         } catch (Exception $e) {
             \support\Db::rollback();
-            $this->log->critical('[收帳小卡-回補] 退款事務失敗，需人工介入', [
+            // 玩家不存在是永久性錯誤，回 true 讓 return_count 更新以停止重試
+            // 其他 DB 錯誤（Deadlock、連線中斷）屬暫時性，回 false 讓心跳路徑自動重試
+            $isPermanent = str_contains($e->getMessage(), '玩家不存在');
+            $this->log->critical('[收帳小卡-回補] 退款事務失敗', [
                 'machine_code'  => $this->machine->code,
                 'player_id'     => $gamingUserId,
                 'refund_amount' => $refundAmount,
                 'error'         => $e->getMessage(),
+                'will_retry'    => !$isPermanent,
             ]);
-            return true; // DB 失敗通常是永久性錯誤（如玩家不存在），不重試
+            return $isPermanent;
         }
         } // end else（非重試路徑）
 
@@ -1235,9 +1239,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $addResult = \app\service\WalletService::add($gamingUserId, $refundAmount);
 
         if (!$addResult['success']) {
-            // 記錄 delivery_id 到 Redis，下次重試時直接找到此筆記錄跳過重複建立
-            if (!$existingDelivery && isset($delivery)) {
-                \support\Cache::set($pendingRefundKey, $delivery->id, 3600);
+            // 記錄（或刷新）delivery_id 到 Redis，下次重試時直接找到此筆記錄跳過重複建立
+            // 每次失敗都刷新 TTL，避免長時間重試中 key 過期後建立重複 DB 記錄
+            $deliveryIdToStore = $existingDelivery ? $existingDelivery->id : ($delivery->id ?? 0);
+            if ($deliveryIdToStore > 0) {
+                \support\Cache::set($pendingRefundKey, $deliveryIdToStore, 3600);
             }
             $this->log->critical('[收帳小卡-回補] 錢包加款失敗，需人工介入', [
                 'machine_code'  => $this->machine->code,

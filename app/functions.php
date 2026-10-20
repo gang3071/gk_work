@@ -3260,27 +3260,53 @@ if (!function_exists('machineOpenAnyFree')) {
 
                     // ── EA D4 回補退款處理（唯一合法觸發點：CA 確認後）──
                     // EA D4 的 retry_count 是本批次 A5 指令的失敗次數（非累積值）
-                    // 直接使用，不與 return_count 做差值，避免上次上分的失敗次數混入本次計算
-                    $statusFields    = $services->getLastStatusFields();
-                    $batchRetryCount = (int)($statusFields['retry_count'] ?? 0);
-                    $paidTimes       = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
+                    // sendCmd 最多輪詢 EA D4 25 次，每次 A7 都會觸發心跳路徑的 handleRetryRefund。
+                    // 若心跳已在輪詢期間處理完（return_count >= batchRetryCount），inline 直接跳過，
+                    // 避免「重複查詢 EA D4 → 心跳先退 → inline 再退」的雙重退款。
+                    $statusFields      = $services->getLastStatusFields();
+                    $batchRetryCount   = (int)($statusFields['retry_count'] ?? 0);
+                    $currentReturnCount = (int)($services->return_count ?? 0);
+                    $paidTimes         = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
                     // 防禦：本批次失敗次數不應超過本次付款開分次數
-                    $refundRetries   = min($batchRetryCount, $paidTimes);
+                    $refundRetries     = min($batchRetryCount, $paidTimes);
 
-                    if ($refundRetries > 0) {
+                    // 只有當心跳路徑尚未處理本批次（return_count < batchRetryCount）才由 inline 退款
+                    if ($refundRetries > 0 && $batchRetryCount > $currentReturnCount) {
                         // 以 prevBase=0 呼叫：告知 handleRetryRefund 這是本批次絕對次數，不做 return_count 差值
                         $refundHandled = $services->handleRetryRefund($refundRetries, 0);
                         if ($refundHandled) {
-                            Log::channel('slot_machine')->info('[machineOpenAnyFree] EA D4 批次回補完成', [
-                                'machine_code'   => $machine->code,
-                                'player_id'      => $player->id,
-                                'batch_retries'  => $refundRetries,
-                                'paid_times'     => $paidTimes,
+                            Log::channel('slot_machine')->info('[machineOpenAnyFree] EA D4 批次回補完成（inline）', [
+                                'machine_code'      => $machine->code,
+                                'player_id'         => $player->id,
+                                'batch_retries'     => $refundRetries,
+                                'paid_times'        => $paidTimes,
+                                'prev_return_count' => $currentReturnCount,
+                            ]);
+                            // 加款成功才同步 return_count，與 updateMachineStatus 邏輯一致：
+                            // 失敗時保留舊值，讓下次心跳路徑見到相同 retry_count 時可自動重試
+                            $services->return_count = $batchRetryCount;
+                        } else {
+                            Log::channel('slot_machine')->critical('[machineOpenAnyFree] EA D4 批次回補錢包加款失敗，等待心跳路徑重試', [
+                                'machine_code'  => $machine->code,
+                                'player_id'     => $player->id,
+                                'batch_retries' => $refundRetries,
+                            ]);
+                            // 不更新 return_count，確保心跳路徑能重試 pendingRefundKey 中的記錄
+                        }
+                    } else {
+                        // 無需 inline 退款（batchRetryCount=0 或心跳已先處理）
+                        if ($refundRetries > 0) {
+                            Log::channel('slot_machine')->info('[machineOpenAnyFree] EA D4 批次回補已由心跳路徑處理，inline 跳過', [
+                                'machine_code'  => $machine->code,
+                                'player_id'     => $player->id,
+                                'batch_retries' => $refundRetries,
+                                'return_count'  => $currentReturnCount,
                             ]);
                         }
+                        // 同步 return_count：無失敗時重置為 0 供下次開分使用；
+                        // 心跳已處理時此行通常為 no-op（TCP 早已寫入相同值）
+                        $services->return_count = $batchRetryCount;
                     }
-                    // 同步 return_count = 本批次的 EA D4 值，供心跳路徑差值計算
-                    $services->return_count = $batchRetryCount;
                 } else {
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
                 }
