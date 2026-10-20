@@ -3258,26 +3258,30 @@ if (!function_exists('machineOpenAnyFree')) {
                     $cmdSourceId = $adminId > 0 ? $adminId : $player->id;
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, $cmdSource, $cmdSourceId);
 
-                    // ── EA D4 回补退款处理 ──
-                    // sendCmd 内部已发 EA D4 并将结果存入 Redis（_last_status_fields）。
-                    // retry_count > 0 表示机台有开分失败次数（如到达积分上限），需退还对应金额。
-                    $statusFields = $services->getLastStatusFields();
-                    $retryCount   = (int)($statusFields['retry_count'] ?? 0);
-                    if ($retryCount > 0 && $openScore > 0) {
-                        $paidTimes = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
-                        // 防御：机台异常上报值不应超过实际次数，超出则按全额退款处理
-                        $retryCount = min($retryCount, $paidTimes);
+                    // ── EA D4 回補退款處理 ──
+                    // retry_count 是機台累計值；必須減去本次上分前已處理的 return_count（同 handleRetryRefund 邏輯）
+                    // 若不取差值，殘留的舊 retry_count 會在每次新開分時錯誤地再次退款
+                    $statusFields   = $services->getLastStatusFields();
+                    $retryCount     = (int)($statusFields['retry_count'] ?? 0);
+                    $prevRetryCount = (int)($services->return_count ?? 0);
+                    $newRetries     = max(0, $retryCount - $prevRetryCount);
+                    if ($newRetries > 0 && $openScore > 0) {
+                        $paidTimes  = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
+                        // 防禦：機台異常上報值不應超過實際次數，超出則按全額退款處理
+                        $newRetries  = min($newRetries, $paidTimes);
                         $refundMoney = $paidTimes > 0
-                            ? bcdiv(bcmul($retryCount, $money, 6), $paidTimes, 2)
+                            ? bcdiv(bcmul($newRetries, $money, 6), $paidTimes, 2)
                             : '0.00';
                         if (bccomp($refundMoney, '0', 2) > 0) {
                             $refundResult = \app\service\WalletService::add($player->id, $refundMoney);
-                            Log::channel('slot_machine')->warning('[machineOpenAnyFree] 回补退款', [
-                                'machine_code'  => $machine->code,
-                                'player_id'     => $player->id,
-                                'retry_count'   => $retryCount,
-                                'refund_money'  => $refundMoney,
-                                'refund_ok'     => $refundResult['success'] ?? false,
+                            Log::channel('slot_machine')->warning('[machineOpenAnyFree] 回補退款', [
+                                'machine_code'    => $machine->code,
+                                'player_id'       => $player->id,
+                                'retry_count'     => $retryCount,
+                                'prev_retry_count' => $prevRetryCount,
+                                'new_retries'     => $newRetries,
+                                'refund_money'    => $refundMoney,
+                                'refund_ok'       => $refundResult['success'] ?? false,
                             ]);
                         }
                     }
