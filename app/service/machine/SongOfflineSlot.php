@@ -1051,45 +1051,46 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     }
 
     /**
-     * 处理回补（开分失败时退款给玩家）
+     * 處理回補（開分部分失敗時退款給玩家）
      *
-     * ⚠️ 回补机制说明：
-     * - 当开分指令发送后，机台可能因为到达上限或其他原因导致部分开分失败
-     * - READ_STATUS查询时会返回"回补次数"，表示有多少次开分失败
-     * - 需要将失败的金额（回补次数 × 100分）退回给玩家钱包
+     * ⚠️ 回補機制說明：
+     * - A5 XX C0 指令一次可開 XX 次分（每次 OPEN_UNIT 分），機台逐次執行
+     * - READ_STATUS 回傳的 retry_count 代表本批次中「部分失敗」的次數，
+     *   並非全部失敗：例如發送 5 次開分而 1 次失敗，retry_count=1
+     * - 需將失敗次數 × OPEN_UNIT 分換算為金額，退回玩家錢包
+     * - 每次 READ_STATUS 只處理新增的失敗次數（retry_count - prev），
+     *   防止重複上報同一值時重複退款
      *
-     * @param int $retryCount 回补次数（开分失败次数）
-     * @return void 是否处理成功
+     * @param int $retryCount READ_STATUS 回傳的累計回補次數
      */
     private function handleRetryRefund(int $retryCount): void
     {
-        // 1. 检查是否有玩家在使用机台
+        // 1. 檢查是否有玩家在使用機台
         $gamingUserId = $this->gaming_user_id ?? 0;
 
         if ($gamingUserId <= 0) {
-            // 没有玩家在使用，不需要退款（可能是管理员测试）
-            $this->log->info('[收账小卡-回补] 检测到回补次数，但无玩家使用，跳过退款', [
-                'machine_code' => $this->machine->code,
-                'retry_count' => $retryCount,
-                'refund_amount' => $retryCount * self::OPEN_UNIT,
+            $this->log->info('[收帳小卡-回補] 偵測到回補次數，但無玩家使用，略過退款', [
+                'machine_code'      => $this->machine->code,
+                'retry_count'       => $retryCount,
+                'retry_score_points' => $retryCount * self::OPEN_UNIT,
             ]);
             return;
         }
 
-        // 2. 仅处理本次新增的失败次数，防止 READ_STATUS 重复上报同一 retry_count 时重复退款
+        // 2. 僅處理本次新增的失敗次數，防止 READ_STATUS 重複上報同一 retry_count 時重複退款
         $prevRetryCount = $this->return_count ?? 0;
         $newRetries     = $retryCount - $prevRetryCount;
 
         if ($newRetries <= 0) {
-            $this->log->info('[收账小卡-回补] 回补次数未增加，跳过（非新增失败）', [
-                'machine_code'    => $this->machine->code,
-                'retry_count'     => $retryCount,
+            $this->log->info('[收帳小卡-回補] 回補次數未增加，略過（非新增失敗）', [
+                'machine_code'     => $this->machine->code,
+                'retry_count'      => $retryCount,
                 'prev_retry_count' => $prevRetryCount,
             ]);
             return;
         }
 
-        // 3. 换算退款金额：分 × (odds_x / odds_y) = 元
+        // 3. 換算退款金額：新增失敗次數 × OPEN_UNIT分 × (odds_x / odds_y) = 元
         $refundScore  = $newRetries * self::OPEN_UNIT;
         $refundAmount = bcmul(
             (string) $refundScore,
@@ -1102,7 +1103,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         );
 
         if ((float) $refundAmount <= 0) {
-            $this->log->warning('[收账小卡-回补] 退款金额换算为0，跳过', [
+            $this->log->warning('[收帳小卡-回補] 退款金額換算為0，略過', [
                 'machine_code' => $this->machine->code,
                 'refund_score' => $refundScore,
                 'odds_x'       => $this->machine->odds_x,
@@ -1111,7 +1112,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             return;
         }
 
-        $this->log->warning('[收账小卡-回补] 执行退款', [
+        $this->log->warning('[收帳小卡-回補] 執行部分開分失敗退款', [
             'machine_code'  => $this->machine->code,
             'player_id'     => $gamingUserId,
             'new_retries'   => $newRetries,
@@ -1119,7 +1120,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'refund_amount' => $refundAmount,
         ]);
 
-        // 4. 事务：记录日志 + 金流，事务外执行钱包加款
+        // 4. 事務：記錄日誌 + 金流，事務外執行錢包加款
         \support\Db::beginTransaction();
         try {
             $player = \app\model\Player::find($gamingUserId);
@@ -1137,7 +1138,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeBalance = \app\service\WalletService::getBalance($gamingUserId);
             $afterBalance  = bcadd($beforeBalance, $refundAmount, 2);
 
-            // 游戏日志（退款按下分记录）
+            // 遊戲日誌（退款按下分記錄）
             $playerGameLog = addPlayerGameLog(
                 $player,
                 $this->machine,
@@ -1150,10 +1151,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->after_game_amount  = $afterBalance;
             $playerGameLog->action             = \app\model\PlayerGameLog::ACTION_DOWN;
             $playerGameLog->is_system          = 1;
-            $playerGameLog->remark             = "开分失败回补（{$newRetries}次×" . self::OPEN_UNIT . "分）";
+            $playerGameLog->remark             = "開分部分失敗回補（{$newRetries}次×" . self::OPEN_UNIT . "分）";
             $playerGameLog->save();
 
-            // 金流记录
+            // 金流記錄
             $delivery                   = new \app\model\PlayerDeliveryRecord();
             $delivery->player_id        = $gamingUserId;
             $delivery->department_id    = $player->department_id;
@@ -1169,16 +1170,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $delivery->amount_before    = $beforeBalance;
             $delivery->amount_after     = $afterBalance;
             $delivery->tradeno          = $playerGameLog->tradeno ?? '';
-            $delivery->remark           = "开分失败回补（{$newRetries}次）";
+            $delivery->remark           = "開分部分失敗回補（{$newRetries}次）";
             $delivery->save();
 
             \support\Db::commit();
 
-            // 5. 钱包加款（事务外执行，与 returnBalanceToPlayer 保持一致）
+            // 5. 錢包加款（事務外執行，與 returnBalanceToPlayer 一致）
             try {
                 $addResult = \app\service\WalletService::add($gamingUserId, $refundAmount);
 
-                $this->log->info('[收账小卡-回补] 退款成功', [
+                $this->log->info('[收帳小卡-回補] 退款成功', [
                     'machine_code'   => $this->machine->code,
                     'player_id'      => $gamingUserId,
                     'refund_score'   => $refundScore,
@@ -1199,37 +1200,36 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     ]
                 );
 
-                // 通知玩家退款原因（余额推送只更新数字，此消息提供操作说明）
+                // 通知玩家退款原因（餘額推送只更新數字，此訊息說明退款來源）
                 $notifyMsg = [
                     'msg_type'      => 'machine_refund',
                     'machine_id'    => $this->machine->id,
                     'machine_name'  => $this->machine->name ?? $this->machine->code,
                     'refund_amount' => $refundAmount,
                     'retry_count'   => $newRetries,
-                    'message'       => "本次上分有 {$newRetries} 次失敗，已退款 \${$refundAmount} 至您的帳戶",
+                    'message'       => "本次上分有 {$newRetries} 次部分失敗，已退款 \${$refundAmount} 至您的帳戶",
                     'timestamp'     => time(),
                 ];
                 sendSocketMessage('player-' . $gamingUserId . '-' . $this->machine->id, $notifyMsg);
                 sendSocketMessage('player-' . $gamingUserId, $notifyMsg);
             } catch (Exception $walletError) {
-                $this->log->critical('[收账小卡-回补] 钱包加款失败，需要人工介入', [
+                $this->log->critical('[收帳小卡-回補] 錢包加款失敗，需人工介入', [
                     'machine_code'  => $this->machine->code,
                     'player_id'     => $gamingUserId,
                     'refund_amount' => $refundAmount,
                     'error'         => $walletError->getMessage(),
-                    'action'        => '已记录退款日志，但钱包未加款，请立即手动给玩家加款',
+                    'action'        => '已記錄退款日誌，但錢包未加款，請立即手動給玩家加款',
                 ]);
             }
         } catch (Exception $e) {
             \support\Db::rollback();
-            $this->log->critical('[收账小卡-回补] 退款事务失败，需要人工介入', [
+            $this->log->critical('[收帳小卡-回補] 退款事務失敗，需人工介入', [
                 'machine_code'  => $this->machine->code,
                 'player_id'     => $gamingUserId,
                 'refund_amount' => $refundAmount,
                 'error'         => $e->getMessage(),
             ]);
         }
-
     }
 
     /**
