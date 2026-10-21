@@ -2282,8 +2282,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                // 等待 5s 仍无 CA，查 EA D4 确认机台状态
+                // 等待 2s 仍无 CA，查 EA D4 确认机台状态
                 // poll _last_status_fields 直接存在性，避免 setActionVersion 因 DB 锁延迟导致误判
+                $washStatus = '';
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
 
@@ -2334,10 +2335,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     }
                 }
 
-                // EA D4 无回复或 D7/D6 以外状态：机台确认未执行，安全重试 A5
-                $this->log->warning('[收账小卡-下分] 机台未执行，重试', [
+                $this->log->warning('[收账小卡-下分] 继续重试A5', [
                     'machine_code' => $this->machine->code,
                     'attempt'      => "$attempt/$maxAttempts",
+                    'wash_status'  => $washStatus ?? '',
                 ]);
                 continue;
             }
