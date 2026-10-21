@@ -405,29 +405,52 @@ class AdminMachineController
 
             // ✅ 特殊处理：小淞机器解锁时自动发送故障排除指令
             if ($field === 'has_lock' && $value == 0 && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
-                try {
-                    // 根据机台类型获取故障排除指令
-                    $checkCmd = match($machine->type) {
-                        GameType::TYPE_SLOT => SongSlot::CHECK,        // 斯洛：afcfb4
-                        GameType::TYPE_STEEL_BALL => SongJackpot::CHECK, // 钢珠：46cfb4
-                        default => null,
-                    };
+                Log::channel('machine_operations')->info('[机台解锁] 执行解锁操作', [
+                    'machine_id' => $machineIdInt,
+                    'machine_code' => $machine->code,
+                    'machine_type' => $machine->type,
+                    'control_type' => $machine->control_type,
+                    'machine_source' => $machine->machine_source ?? 'online',
+                    'service_class' => get_class($services),
+                    'old_has_lock' => $services->has_lock ?? 1,
+                    'new_has_lock' => 0,
+                    'operator_type' => 'admin',
+                    'operator_id' => $adminId ?? null,
+                ]);
 
-                    if ($checkCmd) {
+                try {
+                    // ✅ 修复：使用服务实例的 CHECK 常量，自动适配线上/线下版
+                    // 线上版：SongSlot::CHECK = 'afcfb4', SongJackpot::CHECK = '46cfb4'
+                    // 线下版：SongOfflineSlot::CHECK = 'a37005e0f8ce', SongOfflineJackpot::CHECK = '46ccb4'
+                    if (defined(get_class($services) . '::CHECK')) {
+                        $checkCmd = $services::CHECK;
+
                         // 发送故障排除指令
                         $result = $services->sendCmd($checkCmd, 0, 'admin');
-                        Log::info('Song machine unlock: CHECK command sent', [
+
+                        Log::channel('machine_operations')->info('[机台解锁] 故障排除指令发送成功', [
                             'machine_id' => $machineIdInt,
-                            'type' => $machine->type,
+                            'machine_code' => $machine->code,
+                            'machine_source' => $machine->machine_source ?? 'online',
+                            'service_class' => get_class($services),
                             'cmd' => $checkCmd,
                             'result' => $result,
+                        ]);
+                    } else {
+                        Log::channel('machine_operations')->warning('[机台解锁] CHECK 常量未定义', [
+                            'machine_id' => $machineIdInt,
+                            'machine_code' => $machine->code,
+                            'service_class' => get_class($services),
                         ]);
                     }
                 } catch (Exception $e) {
                     // 故障排除失败不阻断主流程
-                    Log::warning('Failed to send CHECK command for SONG machine unlock', [
+                    Log::channel('machine_operations')->error('[机台解锁] 故障排除指令发送失败', [
                         'machine_id' => $machineIdInt,
+                        'machine_code' => $machine->code,
+                        'service_class' => get_class($services),
                         'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString(),
                     ]);
                 }
             }
@@ -822,6 +845,71 @@ class AdminMachineController
             return $this->handleException($e, '【管理员操作】获取机台状态失败', [
                 'operator_type' => 'admin',
                 'machine_id' => $machineId ?? null
+            ]);
+        }
+    }
+
+    /**
+     * 批量获取机台状态
+     * POST /api/admin/machine/batch-status
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function batchGetMachineStatus(Request $request): Response
+    {
+        try {
+            $lang = $this->setLanguage($request);
+            $machineIds = $request->post('machine_ids', []);
+
+            if (empty($machineIds) || !is_array($machineIds)) {
+                return $this->fail('machine_ids 参数无效', 400);
+            }
+
+            $machines = Machine::whereIn('id', $machineIds)->get();
+            $results = [];
+
+            foreach ($machines as $machine) {
+                $services = MachineServices::createServices($machine, $lang);
+                $cacheData = [];
+                if ($services && isset($services->cacheData) && is_array($services->cacheData)) {
+                    $cacheData = $services->cacheData;
+                }
+
+                $results[] = [
+                    'machine_id'   => $machine->id,
+                    'machine_info' => [
+                        'id'              => $machine->id,
+                        'name'            => $machine->name,
+                        'code'            => $machine->code,
+                        'type'            => $machine->type,
+                        'control_type'    => $machine->control_type,
+                        'status'          => $machine->status,
+                        'is_use'          => $machine->is_use,
+                        'maintaining'     => $machine->maintaining,
+                        'domain'          => $machine->domain,
+                        'port'            => $machine->port,
+                        'odds_x'          => $machine->odds_x,
+                        'odds_y'          => $machine->odds_y,
+                        'min_point'       => $machine->min_point,
+                        'max_point'       => $machine->max_point,
+                        'seat'            => $machine->seat,
+                        'gaming'          => $machine->gaming,
+                        'gaming_user_id'  => $machine->gaming_user_id,
+                        'keeping'         => $machine->keeping,
+                        'keeping_user_id' => $machine->keeping_user_id,
+                        'last_keep_at'    => $machine->last_keep_at,
+                        'last_play_time'  => $machine->last_play_time,
+                    ],
+                    'cache_data' => $cacheData,
+                ];
+            }
+
+            return $this->success($results);
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '批量获取机台状态失败', [
+                'machine_ids' => $machineIds ?? []
             ]);
         }
     }

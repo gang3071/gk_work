@@ -565,13 +565,6 @@ class GameRecordSyncWorker
         // 理由：PlayGameRecord 已记录完整余额快照，不需要重复写入 PlayerDeliveryRecord
         // 性能收益：减少不必要的数据库查询和循环操作
 
-        // 8. ✅ 批量投递打码量统计（2026-07-31）
-        // ⚠️ 因为批量插入（insert）不会触发模型的 created 事件
-        // 所以需要手动调用 sendBetStatistics 方法
-        if (!empty($insertData)) {
-            $this->batchSendBetStatistics($insertData, $existingRecords);
-        }
-
         return count($insertData);
     }
 
@@ -598,6 +591,12 @@ class GameRecordSyncWorker
 
             foreach ($insertedRecords as $insertData) {
                 $orderNo = $insertData['order_no'];
+
+                // betKind=3 (Free Spin) 不计入打码量（玩家未实际下注，业务规则）
+                // 其他平台无 bet_kind 字段，默认值 1 不过滤
+                if (($insertData['bet_kind'] ?? 1) == 3) {
+                    continue;
+                }
 
                 if (!isset($existingRecords[$orderNo])) {
                     continue;
@@ -631,6 +630,7 @@ class GameRecordSyncWorker
                         'created_at' => $record->created_at,  // 使用第一条记录的时间
                         'game_codes' => [],
                         'record_ids' => [],  // ✅ 记录所有涉及的 record ID（用于生成唯一批次ID）
+                        'platform_amounts' => [],  // 按 platform_id 拆分的打码量，用于积分计算
                     ];
                 }
 
@@ -638,6 +638,9 @@ class GameRecordSyncWorker
                 $grouped[$groupKey]['count']++;
                 $grouped[$groupKey]['game_codes'][] = $record->game_code ?? 'unknown';
                 $grouped[$groupKey]['record_ids'][] = $record->id;  // ✅ 收集 record ID
+                $platformId = $record->platform_id;
+                $grouped[$groupKey]['platform_amounts'][$platformId] =
+                    ($grouped[$groupKey]['platform_amounts'][$platformId] ?? 0) + $record->bet;
             }
 
             // ✅ 批量投递（每组一条消息）
@@ -652,6 +655,7 @@ class GameRecordSyncWorker
                     substr(md5(implode(',', $groupData['record_ids'])), 0, 8)
                 );
 
+                // 发送打码量统计队列
                 \Webman\RedisQueue\Client::send('bet-statistics', [
                     'player_id' => $groupData['player_id'],
                     'stat_type' => 'game',
@@ -661,12 +665,25 @@ class GameRecordSyncWorker
                     'batch_count' => $groupData['count'],  // 记录合并的记录数
                     'batch_id' => $batchId,  // ✅ 批次唯一标识（用于去重）
                 ]);
+
+                // ✅ 新增：同时发送积分队列（跨项目投递到 gk_api）
+                // 注意：gk_api 和 gk_work 共用同一个 Redis，队列可以跨项目
+                // platform_amounts: { platform_id => bet_amount }，消费者按各平台积分基数分别计算
+                \Webman\RedisQueue\Client::send('player-points', [
+                    'player_id'        => $groupData['player_id'],
+                    'platform_amounts' => $groupData['platform_amounts'],
+                    'source'           => 'betting',
+                    'created_at'       => $groupData['created_at'],
+                    'batch_id'         => $batchId,
+                    'record_ids'       => $groupData['record_ids'],
+                ]);
             }
 
             if (!empty($grouped)) {
-                $this->log->info('[BetStats] 批量投递打码量统计（分组优化）', [
+                $this->log->info('[BetStats] 批量投递打码量统计+积分队列（分组优化）', [
                     'total_records' => count($insertedRecords),
                     'grouped_messages' => count($grouped),
+                    'queues_sent' => ['bet-statistics', 'player-points'],
                     'reduction' => count($insertedRecords) > 0
                         ? round((1 - count($grouped) / count($insertedRecords)) * 100, 1) . '%'
                         : '0%',
@@ -798,6 +815,12 @@ class GameRecordSyncWorker
         // 1. 检查新插入的已结算记录
         // ✅ 直接从 $existingRecords 获取完整信息（已在 syncBatchRecords 中统一查询）
         foreach ($insertedRecords as $record) {
+            // betKind=3 (Free Spin) 不参与彩金（玩家未实际下注，业务规则）
+            // 其他平台无 bet_kind 字段，默认值 1 不过滤
+            if (($record['bet_kind'] ?? 1) == 3) {
+                continue;
+            }
+
             // ✅ 只处理正常结算的记录，排除取消记录
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
                 $orderNo = $record['order_no'];
@@ -819,6 +842,11 @@ class GameRecordSyncWorker
 
         // 2. 检查更新后的已结算记录
         foreach ($updatedRecords as $record) {
+            // betKind=3 (Free Spin) 不参与彩金（玩家未实际下注，业务规则）
+            if (($record['bet_kind'] ?? 1) == 3) {
+                continue;
+            }
+
             // ✅ 只处理正常结算的记录，排除取消记录
             if (($record['settlement_status'] ?? 0) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
                 /** @var PlayGameRecord $existing */

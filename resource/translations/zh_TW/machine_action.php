@@ -5,6 +5,7 @@ use app\model\Machine;
 use app\service\machine\Jackpot;
 use app\service\machine\Slot;
 use app\service\machine\SongJackpot;
+use app\service\machine\SongOfflineSlot;
 use app\service\machine\SongSlot;
 
 return [
@@ -105,6 +106,7 @@ return [
             SongJackpot::TURN_UP_ALL => '全部上轉',
             SongJackpot::TURN_DOWN_ALL => '全部下轉',
             SongJackpot::AUTO_UP_TURN => '自動上轉（開始遊戲）',
+            SongJackpot::AUTO_STOP => '停止機台',
             SongJackpot::TURN_TO_POINT => '轉數>>分數',
             SongJackpot::POINT_TO_TURN => '分數>>轉數',
             SongJackpot::SCORE_TO_POINT => '得分>>分數',
@@ -113,12 +115,18 @@ return [
             SongJackpot::MACHINE_SCORE => '當前得分',
             SongJackpot::MACHINE_TURN => '當前轉數',
             SongJackpot::WIN_NUMBER => '讀取中洞兌獎次數',
-            SongJackpot::CLEAR_LOG => '清除日誌',
-            SongJackpot::CHECK => '故排',
+            SongJackpot::CLEAR_LOG => '清除押得數值',
+            SongJackpot::CHECK => '故障排除',
             SongJackpot::MACHINE_OPEN => '開機',
             SongJackpot::MACHINE_CLOSE => '關機',
             SongJackpot::PUSH_THREE => '連發PUSH',
             SongJackpot::PUSH_ONE => '單發PUSH',
+
+            // ✅ 小淞線下鋼珠（SongOfflineJackpot）專用指令 - 協議不同
+            '46ceac' => '查詢外部碼表',      // SongOfflineJackpot::EXTERNAL_BUTTON_QUERY
+            '46ccb3' => '清除外部按鈕碼表',  // SongOfflineJackpot::CLEAR_EXTERNAL_BUTTON
+            '46ccb4' => '故障排除',          // SongOfflineJackpot::CHECK
+            '46ccba' => '清除押得數值',      // SongOfflineJackpot::CLEAR_LOG
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_MEI => [
             Slot::ALL => '機台狀態',
@@ -170,8 +178,20 @@ return [
             SongSlot::STOP_TWO => '中停',
             SongSlot::STOP_THREE => '右停',
             SongSlot::MACHINE_OPEN => '開機',
-            SongSlot::MACHINE_CLOSE => '关机',
-            SongSlot::ALL_DOWN => '清理历史数据',
+            SongSlot::MACHINE_CLOSE => '關機',
+            SongSlot::ALL_DOWN => '清理歷史數據',
+
+            // ✅ 小淞線下Slot（SongOfflineSlot）專用指令 - 收賬小卡協議（重構後常量）
+            SongOfflineSlot::READ_SCORE => '查詢賬目',       // 重構前：QUERY_ACCOUNT
+            SongOfflineSlot::READ_BET => '查詢總玩總贏',     // 重構前：QUERY_TOTAL
+            SongOfflineSlot::READ_STATUS => '查詢機台情況',   // 重構前：QUERY_STATUS
+            SongOfflineSlot::LOGIN => '登入',
+            SongOfflineSlot::LOGOUT => '登出',
+            'a5xxc0' => '上分',             // 指令測試用（特殊格式，無常量）
+            'a500c1' => '下分',             // 指令測試用（特殊格式，無常量）
+            SongOfflineSlot::ALL_DOWN => '清除歷史記錄',     // 重構前：CLEAR_ACCOUNT
+            SongOfflineSlot::CHECK => '歸0機板',            // 重構前：RESET_BOARD
+            SongOfflineSlot::SSR_SIGNAL => 'SSR訊號10秒',
         ],
     ]
 ];

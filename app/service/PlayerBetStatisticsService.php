@@ -39,10 +39,10 @@ class PlayerBetStatisticsService
 
     // 过期时间（秒）
     // ✅ 优化策略：
-    // - daily: 仅保留当天（凌晨2点清理，给跨天统计留缓冲）
+    // - daily: 業務日（08:00分界）+ 緩衝，保留3天確保跨日數據完整
     // - weekly: 保留当周+1周（最多14天）
     // - monthly: 保留当月+1个月（最多62天）
-    const TTL_DAILY = 86400 * 2;      // 2天（当天+缓冲）
+    const TTL_DAILY = 86400 * 3;      // 3天（業務日跨日+緩冲）
     const TTL_WEEKLY = 86400 * 14;    // 14天（当周+上周）
     const TTL_MONTHLY = 86400 * 62;   // 62天（当月+上月）
 
@@ -79,11 +79,17 @@ class PlayerBetStatisticsService
 
         $dateTime = $dateTime ?? Carbon::now();
 
-        // 计算三个维度的日期键
+        // daily 以 08:00 為業務日分界（與 gk_api 券領取邏輯對齊）
+        $businessDate = $dateTime->copy();
+        if ((int)$dateTime->format('H') < 8) {
+            $businessDate->subDay();
+        }
+
+        // 计算三个维度的日期键（均以业务日为准）
         $dimensions = [
-            self::DIMENSION_DAILY => $dateTime->format('Y-m-d'),      // 2026-07-31
-            self::DIMENSION_WEEKLY => $dateTime->format('o-\WW'),     // 2026-W31
-            self::DIMENSION_MONTHLY => $dateTime->format('Y-m'),      // 2026-07
+            self::DIMENSION_DAILY => $businessDate->format('Y-m-d'),  // 2026-07-31
+            self::DIMENSION_WEEKLY => $businessDate->format('o-\WW'), // 2026-W31
+            self::DIMENSION_MONTHLY => $businessDate->format('Y-m'),  // 2026-07
         ];
 
         $results = [];

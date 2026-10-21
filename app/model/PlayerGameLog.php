@@ -15,6 +15,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int agent_player_id 代理玩家id
  * @property int parent_player_id 上级玩家id
  * @property int department_id 部门/渠道id
+ * @property int|null store_id 门店ID（关联admin_users.id，仅门店机台）
+ * @property int|null store_agent_id 门店代理ID（关联admin_users.id）
  * @property int game_id 游戏id
  * @property int machine_id 机台id
  * @property int game_record_id 游戏记录id
@@ -40,14 +42,18 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int user_id 管理员id
  * @property string user_name 管理员名称
  * @property int is_system 系統踢除 0=否 1=是
+ * @property int source_type 来源类型 1=线上系统 2=线下实体按键
  * @property string deleted_at 删除时间
  * @property string created_at 创建时间
  * @property string updated_at 最后一次修改时间
+ * @property string remark 备注
  * @property int is_test 是否为测试数据 0否 1是
  *
  * @property Player player 玩家信息
  * @property MachineRecording machine_recording 录制记录
  * @property Machine machine 机台信息
+ * @property AdminUser storeAdmin 门店信息
+ * @property AdminUser storeAgent 门店代理信息
  * @package app\model
  */
 class PlayerGameLog extends Model
@@ -60,6 +66,10 @@ class PlayerGameLog extends Model
     const ACTION_OPEN = 1; // 开分
     const ACTION_LEAVE = 2; // 弃台
     const ACTION_DOWN = 3; // 下分
+
+    // 来源类型常量
+    const SOURCE_TYPE_ONLINE = 1;  // 线上系统（通过界面操作）
+    const SOURCE_TYPE_OFFLINE_BUTTON = 2;  // 线下实体按键（B5/B7协议）
 
     /**
      * 时间转换
@@ -99,6 +109,24 @@ class PlayerGameLog extends Model
     public function machine(): BelongsTo
     {
         return $this->belongsTo(Machine::class, 'machine_id')->withTrashed();
+    }
+
+    /**
+     * 门店信息（仅线下机台记录）
+     * @return BelongsTo
+     */
+    public function storeAdmin(): BelongsTo
+    {
+        return $this->belongsTo(\app\model\AdminUser::class, 'store_id')->withTrashed();
+    }
+
+    /**
+     * 门店代理信息（仅线下机台记录）
+     * @return BelongsTo
+     */
+    public function storeAgent(): BelongsTo
+    {
+        return $this->belongsTo(\app\model\AdminUser::class, 'store_agent_id')->withTrashed();
     }
 
     /**

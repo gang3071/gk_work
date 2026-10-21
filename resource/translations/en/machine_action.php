@@ -5,6 +5,7 @@ use app\model\Machine;
 use app\service\machine\Jackpot;
 use app\service\machine\Slot;
 use app\service\machine\SongJackpot;
+use app\service\machine\SongOfflineSlot;
 use app\service\machine\SongSlot;
 
 return [
@@ -105,6 +106,7 @@ return [
             SongJackpot::TURN_UP_ALL => 'All Upward',
             SongJackpot::TURN_DOWN_ALL => 'All Down',
             SongJackpot::AUTO_UP_TURN => 'Auto Up (Start Game)',
+            SongJackpot::AUTO_STOP => 'Stop Machine',
             SongJackpot::TURN_TO_POINT => 'Spins>>Score',
             SongJackpot::POINT_TO_TURN => 'Score>>Spins',
             SongJackpot::SCORE_TO_POINT => 'Win Score>>Score',
@@ -119,6 +121,10 @@ return [
             SongJackpot::MACHINE_CLOSE => 'Power Off',
             SongJackpot::PUSH_THREE => 'Continuous PUSH',
             SongJackpot::PUSH_ONE => 'Single PUSH',
+            // ✅ SongOfflineJackpot-specific commands - different protocol
+            '46ceac' => 'Query External Button Counter',  // SongOfflineJackpot::EXTERNAL_BUTTON_QUERY
+            '46ccb3' => 'Clear External Button Counter',  // SongOfflineJackpot::CLEAR_EXTERNAL_BUTTON
+            '46ccb4' => 'Fault Troubleshooting',  // SongOfflineJackpot::CHECK
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_MEI => [
             Slot::ALL => 'Machine Status',
@@ -172,6 +178,18 @@ return [
             SongSlot::MACHINE_OPEN => 'Power on',
             SongSlot::MACHINE_CLOSE => 'Shutdown',
             SongSlot::ALL_DOWN => 'Clean up historical data',
+
+            // ✅ SongOfflineSlot-specific commands - Accounting Card Protocol (Refactored constants)
+            SongOfflineSlot::READ_SCORE => 'Query Account',       // Was: QUERY_ACCOUNT
+            SongOfflineSlot::READ_BET => 'Query Total Bet/Win',   // Was: QUERY_TOTAL
+            SongOfflineSlot::READ_STATUS => 'Query Machine Status', // Was: QUERY_STATUS
+            SongOfflineSlot::LOGIN => 'Login',
+            SongOfflineSlot::LOGOUT => 'Logout',
+            'a5xxc0' => 'Add Credit',            // For testing (special format, no constant)
+            'a500c1' => 'Cash Out',              // For testing (special format, no constant)
+            SongOfflineSlot::ALL_DOWN => 'Clear History',         // Was: CLEAR_ACCOUNT
+            SongOfflineSlot::CHECK => 'Reset Board',              // Was: RESET_BOARD
+            SongOfflineSlot::SSR_SIGNAL => 'SSR Signal 10s',
         ],
     ]
 ];

@@ -5,6 +5,7 @@ use app\model\Machine;
 use app\service\machine\Jackpot;
 use app\service\machine\Slot;
 use app\service\machine\SongJackpot;
+use app\service\machine\SongOfflineSlot;
 use app\service\machine\SongSlot;
 
 return [
@@ -105,6 +106,7 @@ return [
             SongJackpot::TURN_UP_ALL => '全部上转',
             SongJackpot::TURN_DOWN_ALL => '全部下转',
             SongJackpot::AUTO_UP_TURN => '自动上转（开始游戏）',
+            SongJackpot::AUTO_STOP => '停止机台',
             SongJackpot::TURN_TO_POINT => '转数>>分数',
             SongJackpot::POINT_TO_TURN => '分数>>转数',
             SongJackpot::SCORE_TO_POINT => '得分>>分数',
@@ -119,6 +121,10 @@ return [
             SongJackpot::MACHINE_CLOSE => '关机',
             SongJackpot::PUSH_THREE => '连发PUSH',
             SongJackpot::PUSH_ONE => '单发PUSH',
+            // ✅ 小淞線下鋼珠（SongOfflineJackpot）專用指令 - 協議不同
+            '46ceac' => '查询外部码表',      // SongOfflineJackpot::EXTERNAL_BUTTON_QUERY
+            '46ccb3' => '清除外部按钮码表',  // SongOfflineJackpot::CLEAR_EXTERNAL_BUTTON
+            '46ccb4' => '故障排除',  // SongOfflineJackpot::CHECK
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_MEI => [
             Slot::ALL => '机台状态',
@@ -172,6 +178,18 @@ return [
             SongSlot::MACHINE_OPEN => '开机',
             SongSlot::MACHINE_CLOSE => '关机',
             SongSlot::ALL_DOWN => '清理历史数据',
+
+            // ✅ 小淞线下Slot（SongOfflineSlot）专用指令 - 收账小卡协议（重构后常量）
+            SongOfflineSlot::READ_SCORE => '查询账目',      // 重构前：QUERY_ACCOUNT
+            SongOfflineSlot::READ_BET => '查询总玩总赢',    // 重构前：QUERY_TOTAL
+            SongOfflineSlot::READ_STATUS => '查询机台情况',  // 重构前：QUERY_STATUS
+            SongOfflineSlot::LOGIN => '登入',
+            SongOfflineSlot::LOGOUT => '登出',
+            'a5xxc0' => '上分',             // 指令测试用（特殊格式，无常量）
+            'a500c1' => '下分',             // 指令测试用（特殊格式，无常量）
+            SongOfflineSlot::ALL_DOWN => '清除历史记录',    // 重构前：CLEAR_ACCOUNT
+            SongOfflineSlot::CHECK => '归0机板',            // 重构前：RESET_BOARD
+            SongOfflineSlot::SSR_SIGNAL => 'SSR讯号10秒',
         ],
     ]
 ];

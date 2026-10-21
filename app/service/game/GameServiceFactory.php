@@ -41,7 +41,7 @@ class GameServiceFactory
     const TYPE_O8_STM = 'STM'; // O8_STM
     const TYPE_O8_HS = 'HS'; // O8_HS
     const TYPE_TNINE = 'TNINE'; // T9
-    const TYPE_TNINE_SLOT = 'TNINE_SLOT'; // T9电子
+    const TYPE_TNINE_SLOT = 'TNINE_SLOT'; // T9电子 V1
     const TYPE_KT = 'KT'; // T9
 
     /** @var Player $player */
@@ -108,7 +108,7 @@ class GameServiceFactory
             case self::TYPE_TNINE:
                 return new TNineServiceInterface($player);
             case self::TYPE_TNINE_SLOT:
-                return new TNineSlotServiceInterface($player);
+                return new TNineSlotV2ServiceInterface($player);
             case self::TYPE_KT:
                 return new KTServiceInterface($player);
             default:

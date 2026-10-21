@@ -83,13 +83,18 @@ class Events
      */
     public static function onConnect($client_id): bool
     {
-        $log = Log::channel('machine');
         $domain = $_SERVER['REMOTE_ADDR'];
         $port = $_SERVER['REMOTE_PORT'];
+        $log = Log::channel('machine');
 
         if (!in_array($domain, config('gateway_worker.whitelist'))) {
             return Gateway::closeClient($client_id);
         }
+        $log->error('设备连接', [
+            'domain' => $domain,
+            'port' => $port,
+            'GATEWAY_PORT' => $_SERVER['GATEWAY_PORT']
+        ]);
         $machine = self::getMachine($_SERVER['GATEWAY_PORT'], $domain, $port, $client_id);
         if (!empty($machine) && $machine->status == 1 && $machine->deleted_at == null) {
             Gateway::bindUid($client_id, $domain . ':' . $port);
@@ -112,6 +117,10 @@ class Events
                 }
             }
         } else {
+            $log->error('设备不存在', [
+                'domain' => $domain,
+                'port' => $port,
+            ]);
             return Gateway::closeClient($client_id);
         }
         return true;
@@ -131,34 +140,46 @@ class Events
         $port = $_SERVER['REMOTE_PORT'];
         $gatewayPort = $_SERVER['GATEWAY_PORT'];
         if (empty($message)) {
+            $log->error('空包消息', [
+                'domain' => $domain,
+                'port' => $port,
+            ]);
             return Gateway::closeClient($client_id);
         }
         $machine = self::getMachine($gatewayPort, $domain, $port, $client_id);
         if (empty($machine) || $machine->status == 0 || $machine->deleted_at != null) {
-            $log->warning('机台不存在', [
-                'remote_addr' => $domain,
-                'remote_port' => $port,
-                'gateway_port' => $_SERVER['GATEWAY_PORT'],
+            $log->error('设备不存在', [
+                'domain' => $domain,
+                'port' => $port,
+                'message' => strtoupper(bin2hex($message)),
             ]);
             return Gateway::closeClient($client_id);
         }
-
-        // 兜底：确保 UID 已绑定（防止 onConnect 事件丢失的情况）
-        $uid = $domain . ':' . $port;
-        if (!Gateway::isUidOnline($uid)) {
-            Gateway::bindUid($client_id, $uid);
-            $log->info('机台UID补绑', [
+        try {
+            $service = MachineServices::createServices($machine);
+        } catch (\Throwable $e) {
+            $log->error('onMessage createServices失败', [
                 'code' => $machine->code,
-                'uid' => $uid,
-                'client_id' => $client_id,
+                'type' => $machine->type,
+                'control_type' => $machine->control_type,
+                'domain' => $domain,
+                'port' => $port,
+                'error' => $e->getMessage(),
             ]);
+            return true;
         }
-        $service = MachineServices::createServices($machine);
+        $isOffline = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE);
         switch ($gatewayPort) {
             case config('gateway_worker.slot_port'):
                 switch ($machine->control_type) {
                     case Machine::CONTROL_TYPE_MEI:
                         $msg = strtoupper(bin2hex($message));
+                        Log::channel('slot_machine')->info('收到双美Slot消息', [
+                            'code' => $machine->code,
+                            'remote_addr' => $domain,
+                            'remote_port' => $port,
+                            'hex' => $msg,
+                        ]);
                         $chunkSize = 32;
                         for ($i = 0; $i < strlen($msg); $i += $chunkSize) {
                             $chunk = substr($msg, $i, $chunkSize);
@@ -166,24 +187,40 @@ class Events
                         }
                         return true;
                     case Machine::CONTROL_TYPE_SONG:
-                        return $service->slotCmd(bin2hex($message));
+                        $hex = bin2hex($message);
+                        $channel = $isOffline ? 'song_offline_slot_machine' : 'song_slot_machine';
+                        Log::channel($channel)->info($isOffline ? '收到小淞线下Slot消息' : '收到小淞Slot消息', [
+                            'code' => $machine->code,
+                            'remote_addr' => $domain,
+                            'remote_port' => $port,
+                            'hex' => $hex,
+                        ]);
+                        return $service->slotCmd($hex);
                     default:
                         return true;
                 }
             case config('gateway_worker.slot_auto_port'):
-                return $service->slotAutoCmd(strtoupper(bin2hex($message)));
+                $hexAuto = strtoupper(bin2hex($message));
+                return $service->slotAutoCmd($hexAuto);
             case config('gateway_worker.jackpot_port'):
                 switch ($machine->control_type) {
                     case Machine::CONTROL_TYPE_MEI:
-                        return $service->jackPotCmd(strtoupper(bin2hex($message)));
+                        $hexMei = strtoupper(bin2hex($message));
+                        return $service->jackPotCmd($hexMei);
                     case Machine::CONTROL_TYPE_SONG:
-                        return $service->jackPotCmd(bin2hex($message));
+                        $hexSong = bin2hex($message);
+                        return $service->jackPotCmd($hexSong);
                     default:
                         return true;
                 }
             case config('gateway_worker.pokemon_ball_port'):
                 return $service->pokemonBallCmd(strtoupper(bin2hex($message)));
             default:
+                $log->error('设备连接port错误', [
+                    'domain' => $domain,
+                    'port' => $port,
+                    'message' => strtoupper(bin2hex($message)),
+                ]);
                 return Gateway::closeClient($client_id);
         }
     }

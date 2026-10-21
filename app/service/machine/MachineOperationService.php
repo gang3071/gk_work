@@ -76,15 +76,28 @@ class MachineOperationService
     /**
      * 初始化硬件服务类
      *
-     * 根据机台类型和控制类型选择对应的服务类：
+     * 根据机台类型、控制类型和机器来源选择对应的服务类：
      * - 斯洛机 + 双美 → Slot
      * - 斯洛机 + 小淞 → SongSlot
      * - 钢珠机 + 双美 → Jackpot
      * - 钢珠机 + 小淞 → SongJackpot
      * - 精灵球 → PokemonBall
+     * - 钢珠机 + 小淞 + 线上 → SongJackpot
+     * - 钢珠机 + 小淞 + 线下 → SongOfflineJackpot
      */
     private function initServices(): void
     {
+        // 🔍 调试日志：记录机台配置
+        Log::channel('machine_operations')->debug('[MachineOperationService] 初始化服务', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'type' => $this->machine->type,
+            'control_type' => $this->machine->control_type,
+            'machine_source' => $this->machine->machine_source,
+            'CONTROL_TYPE_MEI' => Machine::CONTROL_TYPE_MEI,
+            'CONTROL_TYPE_SONG' => Machine::CONTROL_TYPE_SONG,
+        ]);
+
         if ($this->machine->type == GameType::TYPE_SLOT) {
             // 斯洛机
             $serviceClass = ($this->machine->control_type === Machine::CONTROL_TYPE_MEI)
@@ -93,12 +106,34 @@ class MachineOperationService
         } elseif ($this->machine->type == GameType::TYPE_POKEMON_BALL) {
             // 精灵球：单一实现，不区分 control_type
             $serviceClass = \app\service\machine\PokemonBall::class;
+            // ✅ Bug #17修复：Slot机也需要区分线上/线下
+            if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
+                // 双美工控
+                $serviceClass = \app\service\machine\Slot::class;
+            } else {
+                // 小淞工控：区分线上/线下
+                $serviceClass = ($this->machine->machine_source === Machine::MACHINE_SOURCE_OFFLINE)
+                    ? \app\service\machine\SongOfflineSlot::class  // ✅ 新增：线下版Slot
+                    : \app\service\machine\SongSlot::class;         // 线上版Slot
+            }
         } else {
             // 钢珠机 (TYPE_STEEL_BALL) 或其他类型
-            $serviceClass = ($this->machine->control_type === Machine::CONTROL_TYPE_MEI)
-                ? \app\service\machine\Jackpot::class
-                : \app\service\machine\SongJackpot::class;
+            if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
+                // 双美工控
+                $serviceClass = \app\service\machine\Jackpot::class;
+            } else {
+                // 小淞工控：区分线上/线下
+                $serviceClass = ($this->machine->machine_source === Machine::MACHINE_SOURCE_OFFLINE)
+                    ? \app\service\machine\SongOfflineJackpot::class
+                    : \app\service\machine\SongJackpot::class;
+            }
         }
+
+        // 🔍 调试日志：记录选择的服务类
+        Log::channel('machine_operations')->debug('[MachineOperationService] 服务类选择', [
+            'machine_id' => $this->machine->id,
+            'service_class' => $serviceClass,
+        ]);
 
         $this->services = new $serviceClass($this->machine, $this->lang);
     }
@@ -145,6 +180,16 @@ class MachineOperationService
      */
     private function dispatch(string $action, array $params): array
     {
+        // 纯查询操作不依赖硬件连接，跳过在线检查
+        $skipOnlineCheck = in_array($action, ['query_status', 'check_online', 'get_description']);
+
+        if (!$skipOnlineCheck) {
+            $onlineInfo = $this->checkOnline();
+            if (!$onlineInfo['online']) {
+                throw new Exception(trans('machine_connect_timeout', [], 'message', $this->lang));
+            }
+        }
+
         // 基础操作（查询）
         if ($this->isBasicOperation($action)) {
             return $this->executeBasicOperation($action, $params);
@@ -180,6 +225,7 @@ class MachineOperationService
             'check_online',      // 检查在线状态
             'get_description',   // 获取操作描述
             'send_raw_cmd',      // 发送原始硬件指令
+            'send_raw_cmd_with_reply', // 发送原始硬件指令并等待解析回复
         ]);
     }
 
@@ -208,6 +254,8 @@ class MachineOperationService
                 return $this->getDescription();
             case 'send_raw_cmd':
                 return $this->sendRawCmd($params);
+            case 'send_raw_cmd_with_reply':
+                return $this->sendRawCmdWithReply($params);
             default:
                 throw new Exception(trans('unknown_basic_operation', ['{action}' => $action], 'message', $this->lang));
         }
@@ -384,6 +432,7 @@ class MachineOperationService
      * 发送原始硬件指令（底层接口）
      *
      * 用于直接发送 TCP 指令码，不经过业务逻辑封装
+     * 发送后会读取机台的最新状态数据并返回
      *
      * @param array $params ['cmd' => string, 'data' => int, 'is_system' => int]
      * @return array
@@ -403,17 +452,628 @@ class MachineOperationService
         $result = $this->services->sendCmd(
             $cmd,
             $data,
-            $isSystem,
-            $this->operatorId
+            $this->operatorType,  // source: 'player' | 'admin' | 'system'
+            $this->operatorId,
+            $isSystem
         );
+
+        // 等待机台响应（给机台和Redis一点处理时间）
+        usleep(800000); // 0.8秒
+
+        // 读取机台当前状态数据（从Redis缓存中获取）
+        $machineData = $this->getMachineCurrentData();
 
         return [
             'success' => $result,
             'cmd' => $cmd,
-            'data' => $data,
+            'cmd_data' => $data,
             'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'timestamp' => date('Y-m-d H:i:s'),
+            // 机台实时数据
+            'machine_status' => $machineData,
         ];
     }
+
+    /**
+     * 获取机台当前状态数据
+     *
+     * 从Redis缓存中读取机台的实时状态
+     *
+     * @return array
+     */
+    private function getMachineCurrentData(): array
+    {
+        // 通过服务类对象直接读取属性值
+        $service = $this->services;
+        $machineType = $this->machine->type;
+
+        if ($machineType == GameType::TYPE_SLOT) {
+            // 斯洛机数据（双美/小淞）
+            return [
+                'login_status' => (int)($service->login_status ?? 0),
+                'machine_score' => (int)($service->machine_score ?? 0),
+                'point' => (int)($service->point ?? 0),              // ✅ 开分卡分数（A2 21 READ_SCORE）
+                'card_score' => (int)($service->point ?? 0),         // 别名：开分卡分数
+                'score' => (int)($service->score ?? 0),              // ✅ CREDIT2（A2 22 READ_CREDIT2）
+                'credit2' => (int)($service->score ?? 0),            // 别名：CREDIT2
+                'open_table' => (int)($service->open_table ?? $service->open_point ?? 0),
+                'wash_table' => (int)($service->wash_table ?? $service->wash_point ?? 0),
+                'total_bet' => (int)($service->total_bet ?? 0),
+                'total_win' => (int)($service->total_win ?? 0),
+                'bet' => (int)($service->bet ?? 0),
+                'win' => (int)($service->win ?? 0),
+                'bb' => (int)($service->bb ?? 0),
+                'rb' => (int)($service->rb ?? 0),
+            ];
+        } else {
+            // 钢珠机数据（Jackpot）
+            return [
+                'point' => (int)($service->point ?? 0),          // 当前分数
+                'turn' => (int)($service->turn ?? 0),            // 当前转数
+                'score' => (int)($service->score ?? 0),          // 当前珠数
+                'win_number' => (int)($service->win_number ?? 0),// 中洞对奖次数
+                'open_point' => (int)($service->open_point ?? 0),// 开分次数
+                'wash_point' => (int)($service->wash_point ?? 0),// 洗分次数
+                'push_auto' => (int)($service->push_auto ?? 0),  // PUSH auto状态
+            ];
+        }
+    }
+
+    /**
+     * 发送原始硬件指令并等待解析回复（新增方法）
+     *
+     * 此方法会：
+     * 1. 发送指令到机台
+     * 2. 等待机台回复（监听Redis版本变化）
+     * 3. 读取Events.php解析后的数据
+     * 4. 返回解析结果
+     *
+     * 参考：support/test_song_offline_slot_machine.php
+     *
+     * @param array $params ['cmd' => string, 'data' => int, 'is_system' => int, 'timeout' => int]
+     * @return array
+     * @throws Exception
+     */
+    private function sendRawCmdWithReply(array $params): array
+    {
+        $cmd = $params['cmd'] ?? '';
+        $data = (int)($params['data'] ?? 0);
+        $isSystem = (int)($params['is_system'] ?? 0);
+        $timeout = (int)($params['timeout'] ?? 5); // 默认超时5秒
+
+        if (empty($cmd)) {
+            throw new Exception(trans('missing_required_parameter', ['{param}' => 'cmd'], 'message', $this->lang));
+        }
+
+        // ✅ 统一去除空格并转大写
+        $cmdNormalized = strtoupper(str_replace(' ', '', $cmd));
+
+        // ✅ 处理双美机台（Slot/Jackpot）的A2前缀
+        // 双美机台的sendCmd会自动添加A2前缀，但Redis存储的actionKey不包含A2
+        // 如果$cmd已经包含A2前缀（例如 "A221" 或 "a2 21"），需要去掉
+        if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
+            // 检查是否以A2开头
+            if (substr($cmdNormalized, 0, 2) === 'A2') {
+                // 去掉A2前缀
+                $cmdNormalized = substr($cmdNormalized, 2);
+            }
+        }
+
+        // 提取 actionKey（指令码，用于版本控制和数据映射）
+        // 不同机台的指令长度不同：
+        // - 小淞Slot: 4字符（eac4, ead8）
+        // - 双美机台: 2-4字符（21, 23, 2E00）
+        // - 小淞钢珠: 4-6字符（46cc, 46cea2, 46cebe）
+        // ✅ 使用完整指令码，不截断
+        // ⚠️ 注意：必须转为小写，因为服务类常量定义都是小写
+        $actionKey = strtolower($cmdNormalized);
+
+        $machineId = $this->machine->id;
+
+        // ✅ 使用服务类的方法获取发送前的版本号（而不是直接访问Redis）
+        $beforeVersion = (int)($this->services->getActionVersion($actionKey) ?: 0);
+
+        Log::channel('machine_operations')->info('[sendRawCmdWithReply] 准备发送指令', [
+            'machine_id' => $machineId,
+            'cmd' => $cmd,
+            'cmd_normalized' => $cmdNormalized,
+            'action_key' => $actionKey,
+            'before_version' => $beforeVersion,
+            'machine_type' => $this->machine->type,
+            'control_type' => $this->machine->control_type,
+        ]);
+
+        // ✅ 重要：发送指令时使用处理后的指令码（去掉前缀、统一大小写）
+        // 这样 Slot::sendCmd() 中的 $cmd 参数才能正确匹配常量定义
+        $sendResult = $this->services->sendCmd(
+            $actionKey,  // ✅ 使用 actionKey 而不是原始 $cmd
+            $data,
+            $this->operatorType,
+            $this->operatorId,
+            $isSystem
+        );
+
+        Log::channel('machine_operations')->info('[sendRawCmdWithReply] 指令已发送', [
+            'machine_id' => $machineId,
+            'original_cmd' => $cmd,
+            'send_cmd' => $actionKey,
+            'action_key' => $actionKey,
+            'send_result' => $sendResult,
+        ]);
+
+        if (!$sendResult) {
+            throw new Exception(trans('send_cmd_failed', [], 'message', $this->lang));
+        }
+
+        // ✅ 等待回复（监听版本变化）- 使用服务类方法而不是直接访问Redis
+        $startTime = time();
+        $replied = false;
+
+        while (time() - $startTime < $timeout) {
+            // 使用服务类的 getActionVersion 方法获取当前版本号
+            $currentVersion = (int)($this->services->getActionVersion($actionKey) ?: 0);
+
+            if ($currentVersion > $beforeVersion) {
+                $replied = true;
+                Log::channel('machine_operations')->info('[sendRawCmdWithReply] 收到回复', [
+                    'machine_id' => $machineId,
+                    'cmd' => $cmd,
+                    'action_key' => $actionKey,
+                    'before_version' => $beforeVersion,
+                    'current_version' => $currentVersion,
+                    'elapsed_time' => time() - $startTime,
+                ]);
+                break;
+            }
+
+            usleep(200000); // 等待 200ms
+        }
+
+        if (!$replied) {
+            Log::channel('machine_operations')->warning('[sendRawCmdWithReply] 等待回复超时', [
+                'machine_id' => $machineId,
+                'cmd' => $cmd,
+                'action_key' => $actionKey,
+                'timeout' => $timeout,
+            ]);
+
+            return [
+                'success' => false,
+                'replied' => false,
+                'timeout' => true,
+                'cmd' => $cmd,
+                'action_key' => $actionKey,
+                'machine_id' => $machineId,
+                'machine_code' => $this->machine->code,
+                'message' => '等待机台回复超时',
+            ];
+        }
+
+        // 读取解析后的数据
+        $parsedData = $this->getReplyData($actionKey);
+
+        return [
+            'success' => true,
+            'replied' => true,
+            'timeout' => false,
+            'cmd' => $cmd,
+            'cmd_data' => $data,
+            'action_key' => $actionKey,
+            'machine_id' => $machineId,
+            'machine_code' => $this->machine->code,
+            'timestamp' => date('Y-m-d H:i:s'),
+            'elapsed_time' => time() - $startTime,
+            // 解析后的回复数据
+            'reply_data' => $parsedData,
+        ];
+    }
+
+    /**
+     * 根据 actionKey 读取解析后的回复数据
+     *
+     * 不同的指令会解析出不同的数据字段
+     *
+     * @param string $actionKey 指令键（如 eac3, eac5, a5 等）
+     * @return array
+     */
+    private function getReplyData(string $actionKey): array
+    {
+        // 通过服务类对象直接读取属性值（服务类会自动处理 Redis key）
+        $service = $this->services;
+        $machineType = $this->machine->type;  // ✅ 获取机台类型用于区分
+
+        // 根据不同的指令读取不同的数据
+        switch ($actionKey) {
+            // ========== 小淞线下机台指令 ==========
+            case 'eac3': // 登入指令
+            case 'eac5': // 查询登入状态
+                $loginStatus = (int)($service->login_status ?? 0);
+                return [
+                    'login_status' => $loginStatus,
+                    'login_status_text' => $loginStatus == 1 ? '已登入' : '未登入',
+                ];
+
+            case 'eac4': // 查询详细账目
+                return [
+                    'open_table' => (int)($service->open_table ?? 0),
+                    'wash_table' => (int)($service->wash_table ?? 0),
+                    'card_score' => (int)($service->card_score ?? 0),
+                    'machine_score' => (int)($service->machine_score ?? 0),
+                ];
+
+            case 'ead8': // 查询总押总赢
+                return [
+                    'total_bet' => (int)($service->total_bet ?? 0),
+                    'total_win' => (int)($service->total_win ?? 0),
+                ];
+
+            case 'a5': // 小淞上分/下分指令
+                return [
+                    'machine_score' => (int)($service->machine_score ?? 0),
+                    'card_score' => (int)($service->card_score ?? 0),
+                    'open_table' => (int)($service->open_table ?? 0),
+                    'wash_table' => (int)($service->wash_table ?? 0),
+                ];
+
+            case 'ead4': // 查询机台情况
+                return $this->getMachineCurrentData();
+
+            case 'eade': // 清除账目
+                return [
+                    'open_table' => (int)($service->open_table ?? 0),
+                    'wash_table' => (int)($service->wash_table ?? 0),
+                    'message' => '账目已清除',
+                ];
+
+            // ========== 双美机台指令（去掉A2前缀后的指令码）==========
+            case '21': // A2 21 - 读取开分卡分数（READ_SCORE）
+                return [
+                    'point' => (int)($service->point ?? 0), // ✅ 开分卡分数存储在 point 字段
+                    'card_score' => (int)($service->point ?? 0), // 别名
+                ];
+
+            case '22': // A2 22 - 读取 CREDIT2
+                return [
+                    'score' => (int)($service->score ?? 0), // CREDIT2 存储在 score 字段
+                    'credit2' => (int)($service->score ?? 0), // 别名
+                ];
+
+            case '23': // A2 23
+                if ($machineType == GameType::TYPE_SLOT) {
+                    // Slot: 读取 BET（押分）
+                    return [
+                        'bet' => (int)($service->bet ?? 0),
+                        'pressure' => (int)($service->bet ?? 0), // 别名
+                    ];
+                } else {
+                    // Jackpot: 读取机台当前转数
+                    return [
+                        'turn' => (int)($service->turn ?? 0),
+                    ];
+                }
+
+            case '24': // A2 24
+                if ($machineType == GameType::TYPE_SLOT) {
+                    // Slot: 读取 WIN
+                    return [
+                        'win' => (int)($service->win ?? 0),
+                    ];
+                } else {
+                    // Jackpot: 读取中洞对奖次数
+                    return [
+                        'win_number' => (int)($service->win_number ?? 0),
+                    ];
+                }
+
+            case '25': // A2 25
+                if ($machineType == GameType::TYPE_SLOT) {
+                    // Slot: 读取 BB
+                    return [
+                        'bb' => (int)($service->bb ?? 0),
+                    ];
+                } else {
+                    // Jackpot: 读取总开分
+                    return [
+                        'open_point' => (int)($service->open_point ?? 0),
+                        'total_open' => (int)($service->open_point ?? 0), // 别名
+                    ];
+                }
+
+            case '26': // A2 26
+                if ($machineType == GameType::TYPE_SLOT) {
+                    // Slot: 读取 RB
+                    return [
+                        'rb' => (int)($service->rb ?? 0),
+                    ];
+                } else {
+                    // Jackpot: 读取总下分
+                    return [
+                        'wash_point' => (int)($service->wash_point ?? 0),
+                        'total_wash' => (int)($service->wash_point ?? 0), // 别名
+                    ];
+                }
+
+            case '20': // A2 20 - 测试连接
+                return [
+                    'connection' => 'ok',
+                    'message' => '连接测试成功',
+                ];
+
+            case '27': // A2 27 - 读取开分表（仅Slot）
+                return [
+                    'open_table' => (int)($service->open_point ?? 0),
+                ];
+
+            case '28': // A2 28 - 读取洗分表（仅Slot）
+                return [
+                    'wash_table' => (int)($service->wash_point ?? 0),
+                ];
+
+            case '2B': // A2 2B - 读取BB Rush（仅Jackpot）
+                return [
+                    'bb_status' => (int)($service->bb_status ?? 0),
+                    'rush_status' => (int)($service->rush_status ?? 0),
+                ];
+
+            case '2D': // A2 2D - 大赏灯切换（仅Jackpot）
+                return [
+                    'reward_status' => (int)($service->reward_status ?? 0),
+                ];
+
+            case '2E00': // A2 2E 00 - PUSH停止
+            case '2E01': // A2 2E 01 - PUSH 1下
+            case '2E02': // A2 2E 02 - PUSH 2Hz
+            case '2E03': // A2 2E 03 - PUSH 5Hz
+                return [
+                    'push_auto' => (int)($service->push_auto ?? 0),
+                ];
+
+            case '41': // A2 41 - 开分一次
+            case '42': // A2 42 - 开分10次
+            case '4A': // A2 4A - 开任意数
+                return [
+                    'point' => (int)($service->point ?? 0),
+                    'card_score' => (int)($service->score ?? 0),
+                ];
+
+            case '43': // A2 43 - 洗分&清零
+            case '44': // A2 44 - 洗分（Slot）/ 洗分留余数（Jackpot）
+                return [
+                    'point' => (int)($service->point ?? 0),
+                    'wash_point' => (int)($service->wash_point ?? 0),
+                ];
+
+            case '45': // A2 45 - 移分ON（Slot）/ 自动上转（Jackpot）
+                if ($machineType == GameType::TYPE_SLOT) {
+                    return [
+                        'move_point' => (int)($service->move_point ?? 0),
+                    ];
+                } else {
+                    return [
+                        'auto' => (int)($service->auto ?? 0),
+                        'turn' => (int)($service->turn ?? 0),
+                    ];
+                }
+
+            case '46': // A2 46 - 移分OFF（Slot）/ 重置预备转数（Jackpot）
+                if ($machineType == GameType::TYPE_SLOT) {
+                    return [
+                        'move_point' => (int)($service->move_point ?? 0),
+                    ];
+                } else {
+                    return [
+                        'turn' => (int)($service->turn ?? 0),
+                        'message' => '预备转数已重置',
+                    ];
+                }
+
+            case '47': // A2 47 - 清除统计（Slot）/ 全部下转（Jackpot）
+                if ($machineType == GameType::TYPE_SLOT) {
+                    return [
+                        'bet' => (int)($service->bet ?? 0),
+                        'win' => (int)($service->win ?? 0),
+                        'bb' => (int)($service->bb ?? 0),
+                        'rb' => (int)($service->rb ?? 0),
+                    ];
+                } else {
+                    return [
+                        'turn' => (int)($service->turn ?? 0),
+                        'point' => (int)($service->point ?? 0),
+                    ];
+                }
+
+            case '48': // A2 48 - 转数转分数（下转一次，仅Jackpot）
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                ];
+
+            case '49': // A2 49
+                if ($machineType == GameType::TYPE_SLOT) {
+                    // Slot: 开分5次
+                    return [
+                        'point' => (int)($service->point ?? 0),
+                    ];
+                } else {
+                    // Jackpot: 分数转转数（上转一次）
+                    return [
+                        'turn' => (int)($service->turn ?? 0),
+                        'point' => (int)($service->point ?? 0),
+                    ];
+                }
+
+            case '4B': // A2 4B - 得分转分数（仅Jackpot）
+                return [
+                    'score' => (int)($service->score ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                ];
+
+            case '4C': // A2 4C - 全部上转（仅Jackpot）
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                ];
+
+            case '4D': // A2 4D - 开保转（仅Jackpot）
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'message' => 'OP_3保转已开启',
+                ];
+
+            case '4E': // A2 4E - 清除开赠要求（仅Jackpot）
+                return [
+                    'message' => '开赠要求已清除',
+                ];
+
+            case '4F': // A2 4F - 清除历史记录（仅Jackpot）
+                return [
+                    'message' => '历史记录已清除',
+                ];
+
+            // ========== 小淞线下钢珠指令（46协议）==========
+            case '46cea2': // 46 CE A2 - 查询机台目前分数
+                return [
+                    'point' => (int)($service->point ?? 0),
+                    'current_point' => (int)($service->point ?? 0), // 别名
+                ];
+
+            case '46cea5': // 46 CE A5 - 查询机台目前得分WIN
+                return [
+                    'score' => (int)($service->score ?? 0),
+                    'win' => (int)($service->score ?? 0), // 别名
+                ];
+
+            case '46cea6': // 46 CE A6 - 查询机台目前剩余转数
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'remaining_turn' => (int)($service->turn ?? 0), // 别名
+                ];
+
+            case '46cea9': // 46 CE A9 - 查询机台累积转数
+                return [
+                    'win_number' => (int)($service->win_number ?? 0),
+                    'accumulated_turn' => (int)($service->win_number ?? 0), // 别名
+                ];
+
+            case '46ceac': // 46 CE AC - 查询外部开洗分码表
+                return [
+                    'open_table' => (int)($service->open_table ?? 0),
+                    'wash_table' => (int)($service->wash_table ?? 0),
+                    'external_button' => [
+                        'open' => (int)($service->open_table ?? 0),
+                        'wash' => (int)($service->wash_table ?? 0),
+                    ],
+                ];
+
+            case '46ceb8': // 46 CE B8 - 查询大赏灯状态
+                return [
+                    'reward_light' => (int)($service->reward_status ?? 0),
+                    'reward_status' => (int)($service->reward_status ?? 0), // 别名
+                ];
+
+            case '46ca': // 46 CA - 开任意分
+                return [
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '开分成功',
+                ];
+
+            case '46cc': // 46 CC - 洗分清零
+                return [
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '洗分清零成功',
+                ];
+
+            case '46cec1': // 46 CE C1 - 分数变转数1次（上转）
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '上转成功',
+                ];
+
+            case '46cecb': // 46 CE CB - 分数全变转数
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '全部上转成功',
+                ];
+
+            case '46ceca': // 46 CE CA - 转数转分1次（下转）
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '下转成功',
+                ];
+
+            case '46cec9': // 46 CE C9 - 转数全换分数
+                return [
+                    'turn' => (int)($service->turn ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                    'message' => '全部下转成功',
+                ];
+
+            case '46cec8': // 46 CE C8 - WIN换回分数
+                return [
+                    'score' => (int)($service->score ?? 0),
+                    'point' => (int)($service->point ?? 0),
+                    'message' => 'WIN转分成功',
+                ];
+
+            case '46cecd': // 46 CE CD - 启动机台
+                return [
+                    'auto' => (int)($service->auto ?? 0),
+                    'message' => '机台已启动',
+                ];
+
+            case '46cece': // 46 CE CE - 停止机台
+                return [
+                    'auto' => (int)($service->auto ?? 0),
+                    'message' => '机台已停止',
+                ];
+
+            case '46ceb6': // 46 CE B6 - 连发PUSH
+                return [
+                    'message' => '连发PUSH成功',
+                ];
+
+            case '46ceb2': // 46 CE B2 - 单发PUSH
+                return [
+                    'message' => '单发PUSH成功',
+                ];
+
+            case '46cebe': // 46 CE BE - 开机
+                return [
+                    'message' => '开机成功',
+                ];
+
+            case '46cebc': // 46 CE BC - 关机
+                return [
+                    'message' => '关机成功',
+                ];
+
+            case '46ccb4': // 46 CC B4 - 故障排除
+                return [
+                    'message' => '故障排除成功',
+                ];
+
+            case '46ccb3': // 46 CC B3 - 清除外部按钮码表
+                return [
+                    'open_table' => (int)($service->open_table ?? 0),
+                    'wash_table' => (int)($service->wash_table ?? 0),
+                    'message' => '外部码表已清除',
+                ];
+
+            case '46ccba': // 46 CC BA - 清除押得数值
+                return [
+                    'message' => '押得数值已清除',
+                ];
+
+            default:
+                // 未知指令，返回所有状态数据
+                return $this->getMachineCurrentData();
+        }
+    }
+
 
     // ==================== 控制指令 ====================
 
@@ -506,12 +1166,22 @@ class MachineOperationService
                     ]);
                 }
 
-                // 条件3: 开始指令（所有斯洛机）
-                $this->sendCmd($this->services::START);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 START', [
-                    'machine_id' => $this->machine->id,
-                    'control_type' => $controlType === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞',
-                ]);
+                // 条件3: 开始指令（除线下小淞外的斯洛机）
+                // ✅ 线下小淞机台不支持 START 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::START);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 START', [
+                        'machine_id' => $this->machine->id,
+                        'control_type' => $controlType === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞',
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 START 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             case 'auto':
@@ -523,20 +1193,40 @@ class MachineOperationService
                     ]);
                 }
 
-                // 条件2: 开启自动出分（所有斯洛机）
-                $this->sendCmd($this->services::OUT_ON);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 OUT_ON', [
-                    'machine_id' => $this->machine->id,
-                    'control_type' => $controlType === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞',
-                ]);
+                // 条件2: 开启自动出分（除线下小淞外的斯洛机）
+                // ✅ 线下小淞机台不支持 OUT_ON 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::OUT_ON);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 OUT_ON', [
+                        'machine_id' => $this->machine->id,
+                        'control_type' => $controlType === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞',
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 OUT_ON 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             case 'stop_auto':
-                // 关闭自动出分（所有斯洛机）
-                $this->sendCmd($this->services::OUT_OFF);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 OUT_OFF', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                // 关闭自动出分（除线下小淞外的所有斯洛机）
+                // ✅ 线下小淞机台不支持 OUT_OFF 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::OUT_OFF);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 OUT_OFF', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 OUT_OFF 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             case 'out_1_pulse':
@@ -557,27 +1247,57 @@ class MachineOperationService
                 break;
 
             case 'stop_1':
-                // 停止转轴1（所有斯洛机）
-                $this->sendCmd($this->services::STOP_ONE);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_ONE', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                // 停止转轴1（除线下小淞外的所有斯洛机）
+                // ✅ 线下小淞机台不支持 STOP_ONE 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::STOP_ONE);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_ONE', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 STOP_ONE 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             case 'stop_2':
-                // 停止转轴2（所有斯洛机）
-                $this->sendCmd($this->services::STOP_TWO);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_TWO', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                // 停止转轴2（除线下小淞外的所有斯洛机）
+                // ✅ 线下小淞机台不支持 STOP_TWO 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::STOP_TWO);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_TWO', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 STOP_TWO 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             case 'stop_3':
-                // 停止转轴3（所有斯洛机）
-                $this->sendCmd($this->services::STOP_THREE);
-                Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_THREE', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                // 停止转轴3（除线下小淞外的所有斯洛机）
+                // ✅ 线下小淞机台不支持 STOP_THREE 指令
+                $isOfflineSong = ($this->machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $this->machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                if (!$isOfflineSong) {
+                    $this->sendCmd($this->services::STOP_THREE);
+                    Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_THREE', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                } else {
+                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 STOP_THREE 指令', [
+                        'machine_id' => $this->machine->id,
+                    ]);
+                }
                 break;
 
             default:
@@ -702,6 +1422,8 @@ class MachineOperationService
             'kick_player',        // 踢出玩家（洗分）
             'force_kick_player',  // 强制踢出（不返还分数）
             'custom_open_score',  // 自定义开分
+            'unlock',             // ✅ 新增：解锁机台
+            'reset',              // ✅ 新增：归0机板（小淞线下专用）
         ]);
     }
 
@@ -724,6 +1446,10 @@ class MachineOperationService
                 return $this->forceKickPlayer($params);
             case 'custom_open_score':
                 return $this->customOpenScore($params);
+            case 'unlock':  // ✅ 新增：解锁机台
+                return $this->unlockMachine($params);
+            case 'reset':   // ✅ 新增：归0机板
+                return $this->resetMachine($params);
             default:
                 throw new Exception(trans('unknown_advanced_operation', ['{action}' => $action], 'message', $this->lang));
         }
@@ -775,6 +1501,96 @@ class MachineOperationService
         ]);
 
         throw new Exception(trans('custom_open_score_not_migrated', [], 'message', $this->lang));
+    }
+
+    /**
+     * ✅ 新增：解锁机台
+     *
+     * 清除锁定状态，允许玩家继续使用机台
+     */
+    private function unlockMachine(array $params): array
+    {
+        // 更新Redis缓存
+        $this->services->has_lock = 0;
+
+        // 更新数据库（只更新单个字段，减少锁竞争）
+        Machine::where('id', $this->machine->id)->update(['has_lock' => 0]);
+
+        Log::channel('machine_operations')->info('[AdvancedOperation] 机台解锁成功', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'operator_type' => $this->operatorType,
+            'operator_id' => $this->operatorId,
+        ]);
+
+        return [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'has_lock' => 0,
+            'message' => '机台已解锁',
+        ];
+    }
+
+    /**
+     * ✅ 新增：归0机板（故障排除）
+     *
+     * 发送归0指令（A3 70 05 E0 F8 CE），清除机台内存错误
+     *
+     * ⚠️ 注意：
+     * - 仅支持小淞线下版（SongOfflineSlot/SongOfflineJackpot）
+     * - 会清除开分码表和洗分码表
+     * - 自动解除锁定状态
+     */
+    private function resetMachine(array $params): array
+    {
+        // 检查是否支持reset操作
+        $supportedClasses = [
+            \app\service\machine\SongOfflineSlot::class,
+            \app\service\machine\SongOfflineJackpot::class,
+        ];
+
+        if (!in_array(get_class($this->services), $supportedClasses)) {
+            throw new Exception('归0操作仅支持小淞线下版机台（收账小卡协议）');
+        }
+
+        // 发送归0指令（通过sendCmd调用handleCheckCommand）
+        // ✅ 修复：重构后使用 CHECK 常量代替 RESET_BOARD
+        Log::channel('machine_operations')->info('[AdvancedOperation] 准备发送归0指令', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'operator_type' => $this->operatorType,
+            'operator_id' => $this->operatorId,
+            'cmd' => $this->services::CHECK,
+            'has_lock' => $this->machine->has_lock,
+        ]);
+
+        $this->services->sendCmd(
+            $this->services::CHECK,
+            0,
+            $this->operatorType,
+            $this->operatorId
+        );
+
+        // 自动解锁机台
+        $this->services->has_lock = 0;
+        $this->machine->has_lock = 0;
+        $this->machine->save();
+
+        Log::channel('machine_operations')->info('[AdvancedOperation] 机台归0成功', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'operator_type' => $this->operatorType,
+            'operator_id' => $this->operatorId,
+            'note' => '已发送归0指令并解锁机台',
+        ]);
+
+        return [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'has_lock' => 0,
+            'message' => '归0指令已发送，机台已解锁',
+            'command' => 'RESET_BOARD (A3 70 05 E0 F8 CE)',
+        ];
     }
 
     // ==================== 辅助方法 ====================

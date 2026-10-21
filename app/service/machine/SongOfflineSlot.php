@@ -1,0 +1,4654 @@
+<?php
+
+namespace app\service\machine;
+
+use app\model\AdminUser;
+use app\model\Machine;
+use app\model\MachineLotteryRecord;
+use app\model\Notice;
+use app\model\PlayerGameRecord;
+use Exception;
+use GatewayWorker\Lib\Gateway;
+use Illuminate\Support\Str;
+use support\Cache;
+use support\Log;
+use Webman\RedisQueue\Client;
+use Workerman\Timer;
+use yzh52521\WebmanLock\Locker;
+
+/**
+ * 线下版老虎机（收账小卡）
+ *
+ * 基于 GD 收账小卡协议（2026-07-30）
+ *
+ * 协议要点：
+ * - 波特率: 9600，停止位: 2
+ * - 数据格式: 4字节BCD（每字节hex值转dec代表2位数字）
+ * - 校验算法: SUM1=ADD, SUM2=XOR
+ *
+ * 主要指令：
+ * - 读取分数: EA C4 → 回复开分码表、洗分码表、开分卡分数、机台分数
+ * - 读取押分: EA D8 → 回复总押分数、总赢分数
+ * - 读取状态: EA D4 → 回复开分状态、洗分状态、转数
+ * - 登入: EA C3 → 回复A7 C3（表示登入中，必须登入才能上下分）
+ * - 登出: EA C5 → 回复A7 C5（表示登出中）
+ * - 上分: A5 XX C0 SUM1 SUM2（XX=开分次数，固定300分为单位）
+ * - 下分: A5 00 C1 SUM1 SUM2（固定00表示全部洗分）
+ * - 清除历史记录: EA DE
+ * - 故排: A3 70 05 E0 F8 CE → 回复A3 F8 33 → EF/EE
+ * - SSR讯号10秒: EA EC（预留给smart-slot移出按钮用）
+ *
+ * 线下版特有功能：
+ * - 开分码表: 外部开分累计金额（4字节BCD）
+ * - 洗分码表: 外部洗分累计金额（4字节BCD）
+ * - 登入机制: 必须先登入才能操作上下分
+ * - 开机信号: FAH（机版刚开机时主动发送）
+ *
+ * 状态码：
+ * - C9: 开分码表（开奖中时为CB）
+ * - CA: 洗分码表
+ * - E9: 开分卡分数（故障时为EE）
+ * - D2: 开分完成（D3=开分中）
+ * - D6: 洗分完成（D7=洗分中）
+ * - D8: 总押分数（开奖中时为D7）
+ * - D9: 总赢分数
+ * - DC: 转数标志
+ *
+ * ========== 基础字段（与线上版一致） ==========
+ * @property int $auto 自动状态（0=停止 1=启动）
+ * @property int $reward_status 开奖状态（0=未开奖 1=开奖中）
+ * @property int $play_start_time 开始游戏时间
+ * @property int $gaming_user_id 游戏中玩家ID
+ * @property int $gaming 是否游戏中
+ * @property int $point 当前分数（= card_score，开分卡上的分数，洗分时退还此分数）
+ * @property int $score 当前得分（= machine_score，机台上的分数，游戏中使用）
+ * @property int $bet 当前押分
+ * @property int $win 总赢分数（= total_win）
+ * @property int $last_play_time 最后游戏时间
+ * @property int $action_time 操作时间
+ * @property int $now_turn 当前累积转数
+ * @property int $has_lock 机台锁定状态
+ * @property int $keep_seconds 保留剩余时长
+ * @property int $keeping 保留状态（0=未保留 1=保留中）
+ * @property int $keeping_user_id 保留玩家ID
+ * @property int $last_keep_at 最后进入保留时间
+ *
+ * ========== 线下版特有字段（GD收账小卡协议） ==========
+ * @property int $login_status 登入状态（0=未登入 1=已登入，心跳BD.b7取反）
+ * @property int $card_score 开分卡分数（心跳B1字段，3字节BCD）
+ * @property int $machine_score 机台分数（心跳B2字段，3字节BCD）
+ * @property int $last_card_score 上一次心跳的开分卡分数（用于计算线下洗分金额）
+ * @property int $total_bet 总押分数（心跳BA字段，4字节BCD）
+ * @property int $total_win 总得分数（心跳BB字段，4字节BCD）
+ * @property int $open_table 开分码表（外部开分累计金额，查询账目EA C4回复）
+ * @property int $wash_table 洗分码表（外部洗分累计金额，查询账目EA C4回复）
+ * @property int $prev_open_table 上一次EA C4更新前的开分码表值（用于B7外部开分差值计算）
+ * @property int $prev_wash_table 上一次EA C4更新前的洗分码表值（用于B7外部洗分差值计算）
+ * @property int $big_win 大当状态（心跳BD.b0）
+ * @property int $high_prob 高确状态（心跳BD.b1）
+ * @property int $small_win 小当状态（心跳BD.b2）
+ * @property int $external_open 现场跳开分表（心跳BD.b5）
+ * @property int $external_wash 现场跳洗分表（心跳BD.b4）
+ * @property int $turn 当前转数（查询机台情况EA D4回复）
+ * @property int $return_count 回补次数（查询机台情况EA D4回复）
+ * @property int $table_miss 码表少跳数（查询机台情况EA D4回复）
+ *
+ * ========== 兼容性字段（已废弃，保留映射） ==========
+ * @property int $is_login （废弃→login_status）
+ * @property int $external_open_count （废弃→open_table）
+ * @property int $external_wash_count （废弃→wash_table）
+ * @property int $open_card_point （废弃→card_score）
+ *
+ * @package app\service\machine
+ * @author Claude Code
+ * @date 2026-09-05
+ */
+class SongOfflineSlot extends MachineServices implements BaseMachine
+{
+    // ========================================
+    // 查询指令（统一命名规范：READ_*）
+    // ========================================
+    const READ_SCORE = 'eac4';              // 读取分数（查询账目：开分码表、洗分码表、开分卡分数、机台分数）
+    const READ_BET = 'ead8';                // 读取押分（查询总押分+总得分）
+    const READ_STATUS = 'ead4';             // 读取状态（查询机台情况：开分状态、洗分状态、转数）
+
+    // ========================================
+    // 登入/登出指令（线下版特有）
+    // ========================================
+    const LOGIN = 'eac3';                   // 登入（機板回傳 A7 C3 表示登入中）
+    const LOGOUT = 'eac5';                  // 登出（機板回傳 A7 C5 表示登出中）
+
+    // ========================================
+    // 资金操作指令
+    // ========================================
+    const OPEN_ANY_POINT = 'a5';                // 上分前缀（需拼接次数：A5 XX C0 SUM1 SUM2）
+    const WASH_POINT = 'a500c1';            // 下分（全部洗分：A5 00 C1 SUM1 SUM2）
+    const WASH_ZERO   = self::WASH_POINT;   // functions.php 统一接口别名
+
+    // ========================================
+    // 管理指令（统一命名：ALL_DOWN/CHECK）
+    // ========================================
+    const ALL_DOWN = 'eade';                // 清除历史记录（清除开洗分账+回补数）
+    const CHECK = 'a37005e0f8ce';           // 故排（归0机板，固定指令）
+    const SSR_SIGNAL = 'eaec';              // SSR讯号10秒（线下特有：预留给smart-slot移出按钮）
+
+    // ========================================
+    // 心跳和开机（线下版特有）
+    // ========================================
+    const TESTING = 'b7';                   // 心跳标识
+    const BOOT = 'fa';                      // 开机标识
+    const POWER_ON = 'fah';                 // 开机信号（机版主动发送）
+
+    // ========================================
+    // 回复头部（内部识别用）
+    // ========================================
+    const REPLY_A3 = 'a3';                  // 归0回复头部
+    const REPLY_A5 = 'a5';                  // 操作回复头部
+    const REPLY_A6 = 'a6';                  // 账目回复头部
+    const REPLY_A7 = 'a7';                  // 状态回复头部
+
+    // ========================================
+    // 回复状态
+    // ========================================
+    const RESET_COMPLETE = 'ef';            // 完整归0完成（E1时发归0指令）
+    const RESET_CLEAR = 'ee';               // 清除账目完成（未有E1时发归0指令）
+
+    // ========================================
+    // 状态标志（异常状态检测用）
+    // ========================================
+    const FLAG_REWARDING = 'cb';            // 开奖中（开分码表异常，正常时为C9）
+    const FLAG_FAULT = 'ee';                // 故障（开分卡分数异常，正常时为E9）
+
+    // ========================================
+    // 业务限制常量
+    // ========================================
+    const MAX_SCORE = 99999999;             // 最大分数（4字节BCD = 99,999,999）
+    const OPEN_UNIT = 300;                  // 上分单位（固定300分）
+    const PHYSICAL_BUTTON_UNIT = 100;       // 实体按键每次上分的机台分数（与 SongOfflineJackpot 一致）
+    const MAX_OPEN_TIMES = 255;             // 最大开分次数（1字节 = 0-255）
+
+    public $cacheData = [];
+    public $expirationTime = 5000000;  // 5秒超时
+    public $log = null;
+
+    // ✅ 指令测试支持：记录原始指令码（用于设置正确的 actionVersion）
+    private $originalCmd = null;
+
+    // ✅ TCP分包处理：消息缓冲区（静态，所有实例共享）
+    private static $msgBuffer = [];
+    private static $bufferLastClearTime = [];
+
+    public function __construct(Machine $machine, $lang = 'zh_CN')
+    {
+        $this->machine = $machine;
+        $this->cacheKey = self::CACHE_PREFIX . $this->machine->id;
+        $this->cacheDataKey = self::MACHINE_DATA_PREFIX . $this->machine->id;
+
+        // Redis缓存字段列表
+        $this->cacheDataKeyArr = [
+            // ========== 基础字段（与线上版一致） ==========
+            $this->cacheDataKey . '_auto',                 // 自动状态
+            $this->cacheDataKey . '_reward_status',        // 开奖状态
+            $this->cacheDataKey . '_play_start_time',      // 开始游戏时间
+            $this->cacheDataKey . '_gaming_user_id',       // 游戏中玩家ID
+            $this->cacheDataKey . '_gaming',               // 是否游戏中
+            $this->cacheDataKey . '_point',                // 当前分数（= card_score，开分卡分数）
+            $this->cacheDataKey . '_score',                // 当前得分（= machine_score，机台分数）
+            $this->cacheDataKey . '_bet',                  // 当前押分
+            $this->cacheDataKey . '_win',                  // 总赢分数（= total_win）
+            $this->cacheDataKey . '_last_play_time',       // 最后游戏时间
+            $this->cacheDataKey . '_action_time',          // 操作时间
+            $this->cacheDataKey . '_now_turn',             // 当前累积转数（= turn）
+            $this->cacheDataKey . '_has_lock',             // 机台锁定状态
+            $this->cacheDataKey . '_keep_seconds',         // 保留剩余时长
+            $this->cacheDataKey . '_keeping',              // 保留状态
+            $this->cacheDataKey . '_keeping_user_id',      // 保留玩家ID
+            $this->cacheDataKey . '_last_keep_at',         // 最后进入保留时间
+
+            // ========== 线下版特有字段（GD收账小卡协议） ==========
+            $this->cacheDataKey . '_login_status',         // 登入状态（心跳BD.b7取反）
+            $this->cacheDataKey . '_card_score',           // 开分卡分数（心跳B1字段）
+            $this->cacheDataKey . '_last_card_score',      // 上一次心跳的开分卡分数（用于计算线下洗分金额）
+            $this->cacheDataKey . '_machine_score',        // 机台分数（心跳B2字段）
+            $this->cacheDataKey . '_total_bet',            // 总押分数（心跳BA字段）
+            $this->cacheDataKey . '_total_win',            // 总得分数（心跳BB字段）
+            $this->cacheDataKey . '_open_table',           // 开分码表（查询账目回复）
+            $this->cacheDataKey . '_wash_table',           // 洗分码表（查询账目回复）
+            $this->cacheDataKey . '_prev_open_table',      // 上一次EA C4更新前的开分码表值（外部开分差值计算用）
+            $this->cacheDataKey . '_prev_wash_table',      // 上一次EA C4更新前的洗分码表值（外部洗分差值计算用）
+            $this->cacheDataKey . '_big_win',              // 大当状态（心跳BD.b0）
+            $this->cacheDataKey . '_high_prob',            // 高确状态（心跳BD.b1）
+            $this->cacheDataKey . '_small_win',            // 小当状态（心跳BD.b2）
+            $this->cacheDataKey . '_external_open',        // 现场跳开分表（心跳BD.b5）
+            $this->cacheDataKey . '_external_wash',        // 现场跳洗分表（心跳BD.b4）
+            $this->cacheDataKey . '_turn',                 // 转数（查询机台情况回复）
+            $this->cacheDataKey . '_return_count',         // 回补次数（查询机台情况回复）
+            $this->cacheDataKey . '_table_miss',           // 码表少跳数（查询机台情况回复）
+        ];
+
+        // 推送到前端的关键字段（WebSocket实时同步）
+        $this->machineInfo = [
+            'auto',                // 自动状态
+            'reward_status',       // 开奖状态
+            'point',               // 当前分数（= card_score，开分卡分数）
+            'bet',                 // 当前押分
+            'win',                 // 总赢分数（= total_win）
+            'has_lock',            // 机台锁定状态
+            'is_login',            // 登入状态（兼容旧字段，推荐使用login_status）
+            'login_status',        // 登入状态（新字段）
+            'big_win',             // 大当状态（线下版特有）
+            'high_prob',           // 高确状态（线下版特有）
+            'small_win',           // 小当状态（线下版特有）
+        ];
+
+        $this->lang = $lang;
+        $this->cacheData = $this->getMachineCache();
+        $this->log = Log::channel('song_offline_slot_machine');
+    }
+
+    /**
+     * 获取属性（从Redis读取）
+     */
+    public function __get($name)
+    {
+        $key = $this->cacheDataKey . '_' . $name;
+        if (in_array($key, $this->cacheDataKeyArr)) {
+            try {
+                $value = Cache::get($key, 0);
+                return $value;
+            } catch (\Exception $e) {
+                try {
+                    $value = Cache::get($key, 0);
+                    return $value;
+                } catch (\Exception $e2) {
+                    return 0;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 设置属性（保存到Redis）
+     */
+    public function __set($name, $value)
+    {
+        $key = $this->cacheDataKey . '_' . $name;
+        if (in_array($key, $this->cacheDataKeyArr)) {
+            // 上分成功时更新活动时间
+            if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
+                Cache::set($this->cacheDataKey . '_last_play_time', time());
+            }
+            // 玩家离开时重置转数（新玩家从0开始），走 __set 路径保证有重试逻辑
+            if ($name === 'gaming_user_id' && empty($value) && !empty($this->gaming_user_id)) {
+                $this->now_turn = 0;
+            }
+
+            try {
+                $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
+                if (!$saveResult) {
+                    $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
+                }
+            } catch (\Exception $e) {
+                try {
+                    $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
+                    \support\Log::warning('Redis缓存保存异常后重试成功', [
+                        'machine_id' => $this->machine->id,
+                        'field' => $name,
+                        'error' => $e->getMessage()
+                    ]);
+                } catch (\Exception $e2) {
+                    $saveResult = false;
+                    \support\Log::error('Redis缓存保存异常（重试1次后仍失败）', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'field' => $name,
+                        'value' => $value,
+                        'error' => $e2->getMessage()
+                    ]);
+                }
+            }
+
+            // 关键字段保存失败时抛出异常
+            if (!$saveResult) {
+                $mustSuccessFields = ['has_lock', 'gaming', 'gaming_user_id', 'is_login'];
+                if (in_array($name, $mustSuccessFields)) {
+                    \support\Log::critical('关键字段Redis保存失败，抛出异常', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'field' => $name,
+                        'value' => $value
+                    ]);
+                    throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
+                }
+            }
+
+            // 自动推送机制
+            $machineCacheInfo = $this->getAllData() ?? [];
+            if (!empty($machineCacheInfo)) {
+                // ✅ Bug #15修复：所有字段添加默认值，防止Undefined array key错误
+                $info = [
+                    'id' => $this->machine->id,
+                    'last_game_at' => $this->machine->last_game_at,
+                    'type' => $this->machine->type,
+                    'gaming_user_id' => $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0,
+                    'gaming' => $machineCacheInfo[$this->cacheDataKey . '_gaming'] ?? 0,
+                    'auto' => $machineCacheInfo[$this->cacheDataKey . '_auto'] ?? 0,
+                    'reward_status' => $machineCacheInfo[$this->cacheDataKey . '_reward_status'] ?? 0,
+                    'point' => $machineCacheInfo[$this->cacheDataKey . '_point'] ?? 0,
+                    'bet' => $machineCacheInfo[$this->cacheDataKey . '_bet'] ?? 0,
+                    'win' => $machineCacheInfo[$this->cacheDataKey . '_win'] ?? 0,
+                    'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'] ?? 0,
+                    'is_login' => $machineCacheInfo[$this->cacheDataKey . '_is_login'] ?? 0,
+                    // chip_amount：bet(分) × (odds_x/odds_y) 换算为金额，与在线版Slot.php一致
+                    // player_pressure 恒为0（CHECK每局归零），故直接用 bet
+                    'chip_amount' => bcmul(
+                        (string) max(0, (int) ($machineCacheInfo[$this->cacheDataKey . '_bet'] ?? 0)),
+                        bcdiv(
+                            (string) ($this->machine->odds_x ?? 1),
+                            (string) ($this->machine->odds_y ?? 1),
+                            8
+                        ),
+                        2
+                    ),
+                ];
+
+                $currentGamingUserId = $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0;
+                if (in_array($name, $this->machineInfo) && !empty($currentGamingUserId)) {
+                    $this->sendMachineNowInfoMessage($currentGamingUserId, $this->machine->id, $name, $info);
+                }
+            }
+        }
+    }
+
+    /**
+     * Gateway Worker 入口方法
+     *
+     * Events.php 会调用此方法处理来自机台的消息
+     *
+     * @param string $msg 收到的消息（十六进制）
+     * @return bool
+     */
+    public function slotCmd(string $msg): bool
+    {
+        // 转换为小写并调用 handleMsg
+        $this->log->info('[收账小卡-开机] 收到指令', [
+            'msg' => $msg,
+        ]);
+        return $this->handleMsg(strtolower($msg));
+    }
+
+    /**
+     * 处理消息（心跳/查询回复）
+     *
+     * ✅ 支持TCP分包：消息可能被拆分成多个TCP包，需要缓冲拼接
+     *
+     * @param string $msg 收到的消息（小写十六进制）
+     * @return bool
+     */
+    public function handleMsg(string $msg): bool
+    {
+
+        try {
+            $msg = strtolower(trim($msg));
+            $machineId = $this->machine->id;
+
+            // ✅ 步骤0：TCP分包处理 - 拼接到缓冲区
+            if (!isset(self::$msgBuffer[$machineId])) {
+                self::$msgBuffer[$machineId] = '';
+                self::$bufferLastClearTime[$machineId] = time();
+            }
+            self::$msgBuffer[$machineId] .= $msg;
+            $buffer = self::$msgBuffer[$machineId];
+
+            // ✅ 尝试从缓冲区提取并处理完整消息
+            $processed = false;
+
+            // ⚠️ 第一步：检查机板开机标识（FAH）
+            // ✅ 修复：fah 在前（长的优先匹配），避免 "fah" 被识别为 "fa"
+            if (preg_match('/^(fah|fa)/', $buffer, $matches)) {
+                $bootMsg = $matches[0];
+                $this->log->info('[收账小卡-开机] 机版开机', [
+                    'machine_code' => $this->machine->code,
+                    'msg' => strtoupper($bootMsg),
+                ]);
+                // 开机后应该重新登入
+                $this->is_login = 0;
+                $this->login_status = 0;
+
+                // ✅ 修复：检查残留数据合法性，防止脏数据污染
+                $remaining = substr($buffer, strlen($bootMsg));
+                if (strlen($remaining) > 0) {
+                    $remainingHeader = substr($remaining, 0, 2);
+                    // 检查是否是合法的消息头
+                    if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                        // 非法消息头 → 可能是脏数据 → 清空
+                        $this->log->warning('[TCP分包] 清除非法残留数据', [
+                            'machine_code' => $this->machine->code,
+                            'remaining' => strtoupper($remaining),
+                            'remaining_size' => strlen($remaining),
+                        ]);
+                        $remaining = '';
+                    }
+                }
+                self::$msgBuffer[$machineId] = $remaining;
+                return true;
+            }
+
+            // ⚠️ 第二步：判断并处理心跳消息（B7前缀，46字符）
+            if (preg_match('/^(b7[0-9a-f]{44})/', $buffer, $matches)) {
+                $heartbeat = $matches[0];
+
+                // 粘包预检：B7(46字符)+CA(a5ca??)在同一TCP buffer，
+                // handleHeartbeat 约需1s，CA handler 被阻塞。
+                // 在 handleHeartbeat 执行前，提前写入 CA 标记，
+                // 让 HTTP worker 的 CA poll 无需等待 B7 处理完毕即可感知。
+                $bufferedRemaining = substr($buffer, 46);
+                if (strlen($buffer) > 46 && str_starts_with($bufferedRemaining, 'a5ca33')) {
+                    Cache::set($this->cacheDataKey . '_last_open_result', 'ca', 10);
+                    $this->setActionVersion(self::OPEN_ANY_POINT);
+                    $this->log->info('[TCP粘包] B7+CA粘包，提前标记CA', [
+                        'machine_code' => $this->machine->code,
+                        'ca_hex'       => strtoupper(substr($bufferedRemaining, 0, 6)),
+                    ]);
+                }
+
+                // ✅ 直接处理，删除冗余的 isHeartbeat() 检查（消除死锁风险）
+                $processed = $this->handleHeartbeat($heartbeat);
+
+                // ✅ 只有处理成功才更新缓冲区（防止消息丢失）
+                if ($processed) {
+                    // ✅ P0修复：检查残留数据合法性，防止脏数据污染
+                    $remaining = substr($buffer, 46);
+                    if (strlen($remaining) > 0) {
+                        $remainingHeader = substr($remaining, 0, 2);
+                        // 检查是否是合法的消息头
+                        if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                            // 非法消息头 → 可能是脏数据 → 清空
+                            $this->log->warning('[TCP分包] 清除非法残留数据', [
+                                'machine_code' => $this->machine->code,
+                                'remaining' => strtoupper($remaining),
+                                'remaining_size' => strlen($remaining),
+                            ]);
+                            $remaining = '';
+                        }
+                    }
+                    self::$msgBuffer[$machineId] = $remaining;
+                } else {
+                    // ⚠️ 处理失败，保留消息在缓冲区待重试
+                    $this->log->warning('[TCP分包] 心跳处理失败，保留在缓冲区', [
+                        'machine_code' => $this->machine->code,
+                        'heartbeat' => strtoupper(substr($heartbeat, 0, 20)) . '...',
+                    ]);
+                }
+                return $processed;
+            }
+
+            // ⚠️ 第2.5步：判断并处理账目查询回复（A6前缀，44字符）
+            if (preg_match('/^(a6[0-9a-f]{42})/', $buffer, $matches)) {
+                $accountMsg = $matches[0];
+                $processed = $this->handleAccountReply($accountMsg);
+
+                // ✅ 只有处理成功才更新缓冲区（防止消息丢失）
+                if ($processed) {
+                    // ✅ P1修复：检查残留数据合法性
+                    $remaining = substr($buffer, 44);
+                    if (strlen($remaining) > 0) {
+                        $remainingHeader = substr($remaining, 0, 2);
+                        if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                            $this->log->warning('[TCP分包] 清除非法残留数据', [
+                                'machine_code' => $this->machine->code,
+                                'remaining' => strtoupper($remaining),
+                                'remaining_size' => strlen($remaining),
+                            ]);
+                            $remaining = '';
+                        }
+                    }
+                    self::$msgBuffer[$machineId] = $remaining;
+                } else {
+                    // ⚠️ 处理失败，保留消息在缓冲区待重试
+                    $this->log->warning('[TCP分包] 账目查询回复处理失败，保留在缓冲区', [
+                        'machine_code' => $this->machine->code,
+                        'account_msg' => strtoupper(substr($accountMsg, 0, 20)) . '...',
+                    ]);
+                }
+                return $processed;
+            }
+
+            // ⚠️ 第三步：如果缓冲区不是心跳或A6，尝试处理其他消息
+            // 如果缓冲区开头不是B7或A6，说明可能是其他回复消息
+            if (substr($buffer, 0, 2) !== 'b7' && substr($buffer, 0, 2) !== 'a6') {
+                // ✅ P2修复：检测消息长度，处理粘包
+                $header = substr($buffer, 0, 2);
+                $msgLength = $this->getMessageLength($header, $buffer);
+
+                if ($msgLength > 0 && strlen($buffer) >= $msgLength) {
+                    // 提取完整消息（暂不更新缓冲区）
+                    $msg = substr($buffer, 0, $msgLength);
+                } else {
+                    // 不完整，等待更多数据
+                    return false;
+                }
+            } else {
+                // 等待更多数据（心跳或A6不完整）
+                return false;
+            }
+
+            // 识别消息类型
+            $header = substr($msg, 0, 2);
+
+            // ✅ Bug #16修复：E1错误识别（可能是连续的E1，如e1e1e1e1e1e1）
+            if (preg_match('/^(e1)+$/i', $msg)) {
+                $this->log->error('[收账小卡-锁定] 记忆体异常需归0，机台已锁定', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'msg' => strtoupper($msg),
+                    'e1_count' => strlen($msg) / 2,
+                    'old_has_lock' => $this->has_lock ?? 0,
+                    'new_has_lock' => 1,
+                    'gaming_user_id' => $this->gaming_user_id ?? null,
+                    'reason' => 'E1错误-记忆体异常',
+                ]);
+                $this->has_lock = 1;
+                sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+                $processed = true;
+            }
+            // 归0回复（EF=完整归0，EE=清除账目）
+            elseif ($msg === self::RESET_COMPLETE || $msg === self::RESET_CLEAR) {
+                $resetType = $msg === self::RESET_COMPLETE ? '完整归0' : '清除账目';
+                $oldHasLock = $this->has_lock ?? 0;
+
+                // ✅ 归0成功后自动解锁机台
+                if ($oldHasLock == 1) {
+                    $this->has_lock = 0;
+                    $this->log->info('[收账小卡-解锁] 归0成功，机台已自动解锁', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'reset_type' => $resetType,
+                        'old_has_lock' => $oldHasLock,
+                        'new_has_lock' => 0,
+                        'msg' => strtoupper($msg),
+                    ]);
+                } else {
+                    $this->log->info('[收账小卡-归0] 归0完成', [
+                        'machine_id' => $this->machine->id,
+                        'machine_code' => $this->machine->code,
+                        'reset_type' => $resetType,
+                        'has_lock' => $oldHasLock,
+                        'msg' => strtoupper($msg),
+                    ]);
+                }
+
+                // ✅ 更新版本号，让 sendRawCmdWithReply 等待循环能感知到回复
+                $this->setActionVersion(self::ALL_DOWN);
+
+                $processed = true;
+            }
+            // 根据头部识别消息类型
+            else {
+                switch ($header) {
+                    case self::REPLY_A6:
+                        $processed = $this->handleAccountReply($msg);
+                        break;
+                    case self::REPLY_A7:
+                        $processed = $this->handleStatusReply($msg);
+                        break;
+                    case self::REPLY_A5:
+                        $processed = $this->handleActionReply($msg);
+                        break;
+                    case self::REPLY_A3:
+                        $processed = $this->handleResetReply($msg);
+                        break;
+                    default:
+                        $this->log->warning('[收账小卡] 未识别的消息类型', [
+                            'machine_code' => $this->machine->code,
+                            'msg' => $msg,
+                            'header' => $header,
+                        ]);
+                        $processed = false;
+                        break;
+                }
+            }
+
+            // ✅ 只有处理成功才更新缓冲区（防止消息丢失）
+            if ($processed) {
+                $remaining = substr($buffer, $msgLength);
+                // 检查残留数据合法性
+                if (strlen($remaining) > 0) {
+                    $remainingHeader = substr($remaining, 0, 2);
+                    if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
+                        $this->log->warning('[TCP分包] 清除非法残留数据', [
+                            'machine_code' => $this->machine->code,
+                            'remaining' => strtoupper($remaining),
+                            'remaining_size' => strlen($remaining),
+                        ]);
+                        $remaining = '';
+                    }
+                }
+                self::$msgBuffer[$machineId] = $remaining;
+            } else {
+                // ⚠️ 处理失败，保留消息在缓冲区待重试
+                $this->log->warning('[TCP分包] 消息处理失败，保留在缓冲区', [
+                    'machine_code' => $this->machine->code,
+                    'msg_type' => strtoupper($header),
+                    'msg' => strtoupper(substr($msg, 0, 20)) . '...',
+                ]);
+            }
+
+            return $processed;
+
+        } catch (\Exception $e) {
+            $this->log->error('[收账小卡] 消息处理错误', [
+                'machine_code' => $this->machine->code,
+                'msg' => $msg ?? 'unknown',
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        } finally {
+            // ✅ 定期清理缓冲区（防止内存泄漏）
+            if (isset(self::$msgBuffer[$machineId])) {
+                $now = time();
+                $bufferSize = strlen(self::$msgBuffer[$machineId]);
+
+                // 条件1：缓冲区超过200字符（异常情况）
+                if ($bufferSize > 200) {
+                    $this->log->warning('[TCP分包] 缓冲区过大，清空', [
+                        'machine_code' => $this->machine->code,
+                        'buffer_size' => $bufferSize,
+                        'buffer_content' => strtoupper(substr(self::$msgBuffer[$machineId], 0, 50)) . '...',
+                    ]);
+                    self::$msgBuffer[$machineId] = '';
+                    self::$bufferLastClearTime[$machineId] = $now;
+                }
+
+                // 条件2：超过10秒未清理（可能有残留数据）
+                if (isset(self::$bufferLastClearTime[$machineId])
+                    && ($now - self::$bufferLastClearTime[$machineId]) > 10) {
+                    if ($bufferSize > 0) {
+                        $this->log->debug('[TCP分包] 定期清理缓冲区', [
+                            'machine_code' => $this->machine->code,
+                            'buffer_size' => $bufferSize,
+                        ]);
+                    }
+                    self::$msgBuffer[$machineId] = '';
+                    self::$bufferLastClearTime[$machineId] = $now;
+                }
+            }
+        }
+    }
+
+    /**
+     * 处理账目查询回复（A6 C9 ... CA ... E9 ... SUM1 SUM2）
+     */
+    private function handleAccountReply(string $msg): bool
+    {
+        // ✅ 入口日志
+        $this->log->info('[账目查询] 处理开始', [
+            'machine_code' => $this->machine->code,
+            'msg_len' => strlen($msg),
+        ]);
+
+        // A6 C9 05 14 31 0B CA 10 00 63 1E E9 00 04 03 02 00 07 28 00 SUM1 SUM2
+        // 最小长度：2 + 2 + 8 + 2 + 8 + 2 + 8 + 8 + 2 + 2 = 44字符
+
+        if (strlen($msg) < 44) {
+            $this->log->error('[账目查询] 回复长度不足', [
+                'machine_code' => $this->machine->code,
+                'msg' => strtoupper($msg),
+                'len' => strlen($msg),
+                'expected_min' => 44,
+            ]);
+            return false;
+        }
+
+        // ✅ 使用公共方法校验和验证
+        if (!$this->validateMessageChecksum($msg, '账目查询')) {
+            return false;
+        }
+
+        // ✅ 使用提取的方法解析数据
+        $data = $this->parseAccountData($msg);
+
+        // ✅ 使用提取的方法检测标志
+        $flags = $this->detectAccountFlags($data['open_flag'], $data['card_flag']);
+
+        // 记录解析结果
+        $this->log->info('[收账小卡-账目] 查询回复', [
+            'machine_code' => $this->machine->code,
+            'open_table' => $data['open_table'],
+            'wash_table' => $data['wash_table'],
+            'card_score' => $data['card_score'],
+            'machine_score' => $data['machine_score'],
+            'is_rewarding' => $flags['is_rewarding'],
+            'has_fault' => $flags['has_fault'],
+            'card_flag' => $data['card_flag'],
+        ]);
+
+        // ✅ 检测Smart卡通讯故障（card_flag="EE"）
+        if ($flags['has_fault']) {
+            return $this->handleSmartCardCommunicationFault($data);
+        }
+
+        // ✅ 通讯正常，清除重试计数
+        $retryKey = $this->cacheDataKey . '_account_retry_count';
+        Cache::delete($retryKey);
+
+        // ✅ 使用提取的方法更新状态
+        $this->updateAccountData($data, $flags);
+
+        // ⚠️ open_table / wash_table 仅更新 Redis 缓存供 B7 心跳路径使用，不在此处记录游戏日志。
+        // 原因：API 上分（A5 指令）和实体按键都会累加 open_table，EA C4 无法区分来源，
+        // 若在此处记录会产生虚假的"实体按键上分"记录。
+        // 实体按键的记录统一由 B7 心跳 external_open=1 标志触发（processExternalOpen）。
+        $oldOpenTable = $this->open_table ?? 0;
+        $oldWashTable = $this->wash_table ?? 0;
+
+        if ($data['open_table'] != $oldOpenTable) {
+            // 保存前值，供 processExternalOpen 计算 B7 路径的差值
+            $this->prev_open_table = $oldOpenTable;
+            $this->open_table = $data['open_table'];
+            $this->external_open_count = $data['open_table'];  // 旧字段兼容性
+            $this->log->info('[收账小卡-开分码表] 值已更新（不记录日志，防止API上分误报）', [
+                'machine_code' => $this->machine->code,
+                'old' => $oldOpenTable,
+                'new' => $data['open_table'],
+            ]);
+        }
+
+        if ($data['wash_table'] != $oldWashTable) {
+            // 保存前值，供洗分差值计算
+            $this->prev_wash_table = $oldWashTable;
+            $this->wash_table = $data['wash_table'];
+            $this->external_wash_count = $data['wash_table'];  // 旧字段兼容性
+            $this->log->info('[收账小卡-洗分码表] 值已更新（不记录日志，防止API洗分误报）', [
+                'machine_code' => $this->machine->code,
+                'old' => $oldWashTable,
+                'new' => $data['wash_table'],
+            ]);
+        }
+
+        // ✅ 更新版本号，表示收到回复
+        $this->setActionVersion(self::READ_SCORE);
+
+        return true;
+    }
+
+    /**
+     * 处理状态查询回复（A7 ...）
+     */
+    private function handleStatusReply(string $msg): bool
+    {
+        // ✅ 入口日志
+        $this->log->info('[状态查询] 处理开始', [
+            'machine_code' => $this->machine->code,
+            'msg_len' => strlen($msg),
+        ]);
+
+        // ✅ 修复：先检查最小长度（A7 + 类型 = 4字符）
+        if (strlen($msg) < 4) {
+            $this->log->error('[状态查询] 回复长度不足', [
+                'machine_code' => $this->machine->code,
+                'msg' => strtoupper($msg),
+                'len' => strlen($msg),
+                'expected_min' => 4,
+            ]);
+            return false;
+        }
+
+        $type = substr($msg, 2, 2);
+
+        switch ($type) {
+            case 'c3': // A7 C3 登入回复（简短回复，无校验和，只有4字节）
+            case 'c5': // A7 C5 登出回复（简短回复，无校验和，只有4字节）
+                // ✅ 修复：登入/登出回复只有 4 字节，不包含 SUM1/SUM2
+                // 协议说明：EA C3 → 回复 A7 C3（表示登入中）
+                if (strlen($msg) !== 4) {
+                    $this->log->error('[登入登出] 回复长度异常', [
+                        'machine_code' => $this->machine->code,
+                        'msg' => strtoupper($msg),
+                        'len' => strlen($msg),
+                        'expected' => 4,
+                    ]);
+                    return false;
+                }
+
+                // 更新状态
+                if ($type === 'c3') {
+                    // 登入成功
+                    $oldLoginStatus = $this->login_status ?? 0;
+                    $this->logFieldChange('登入', 'login_status', $oldLoginStatus, 1, '登入成功');
+
+                    $this->is_login = 1;
+                    $this->login_status = 1;
+                    // 機台重啟後 retry_count 從 0 重新累計，此處同步重置避免 Redis 殘留舊值
+                    // 導致 handleRetryRefund 計算 newRetries 為負（合法失敗被吞）或錯誤退款
+                    $this->return_count = 0;
+
+                    $this->logOperation('登入', '登入操作', ['result' => 'A7 C3'], true);
+                    $this->setActionVersion(self::LOGIN);
+                } else {
+                    // 登出成功
+                    $oldLoginStatus = $this->login_status ?? 1;
+                    $this->logFieldChange('登出', 'login_status', $oldLoginStatus, 0, '登出成功');
+
+                    $this->is_login = 0;
+                    $this->login_status = 0;
+
+                    $this->logOperation('登出', '登出操作', ['result' => 'A7 C5'], true);
+                    $this->log->info('[收账小卡-登出] 登出成功（A7 C5）', [
+                        'machine_code' => $this->machine->code,
+                    ]);
+                    $this->setActionVersion(self::LOGOUT);
+                }
+                break;
+
+            case 'd8': // 读取押分回复
+                return $this->handleTotalReply($msg);
+
+            case 'd2':  // 开分完成
+            case 'd3':  // 开分中
+            case 'd6':  // 洗分完成
+            case 'd7':  // 洗分中
+                // 读取状态回复（⚠️ 当前简化处理，未解析具体状态）
+                return $this->handleMachineStatusReply($msg);
+
+            default:
+                $this->log->warning('[收账小卡] 未识别的A7状态回复', [
+                    'machine_code' => $this->machine->code,
+                    'msg' => $msg,
+                    'type' => $type,
+                ]);
+                return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * 处理归0回复（A3 F8 33）
+     */
+    private function handleResetReply(string $msg): bool
+    {
+        if (strlen($msg) < 6) {
+            $this->log->error('[收账小卡] 归0回复长度不足', [
+                'machine_code' => $this->machine->code,
+                'msg' => $msg,
+            ]);
+            return false;
+        }
+
+        $status = substr($msg, 2, 2);
+        $version = substr($msg, 4, 2);
+
+        if ($status === 'f8') {
+            $this->log->info('[收账小卡-归0] 归0指令已收到', [
+                'machine_code' => $this->machine->code,
+                'version' => $version,
+            ]);
+
+            // ✅ 更新版本号，表示收到回复
+            $this->setActionVersion(self::CHECK);
+            return true;
+        }
+
+        $this->log->warning('[收账小卡] 未识别的A3归0回复', [
+            'machine_code' => $this->machine->code,
+            'msg' => $msg,
+            'status' => $status,
+        ]);
+        return false;
+    }
+
+    /**
+     * 处理总玩+总赢回复（A7 D8 00 00 00 00 D9 00 00 00 00 SUM1 SUM2）
+     *
+     * ⚠️ 协议说明：
+     * - D8 = 一般状态的总押分
+     * - D7 = 开奖中状态的总押分
+     */
+    private function handleTotalReply(string $msg): bool
+    {
+        // A7 D8 00 00 00 00 D9 00 00 00 00 SUM1 SUM2
+        // 最小长度：2 + 2 + 8 + 2 + 8 + 2 + 2 = 26字符
+
+        if (strlen($msg) < 26) {
+            $this->log->error('[收账小卡] 总押总赢回复长度不足', [
+                'machine_code' => $this->machine->code,
+                'msg' => $msg,
+                'len' => strlen($msg),
+            ]);
+            return false;
+        }
+
+        // ✅ 修复：添加校验SUM1和SUM2
+        $dataWithoutSum = substr($msg, 0, -4);
+        $receivedSum1 = substr($msg, -4, 2);
+        $receivedSum2 = substr($msg, -2, 2);
+
+        $calculatedSum1 = $this->calculateSUM1($dataWithoutSum);
+        $calculatedSum2 = $this->calculateSUM2($dataWithoutSum, $calculatedSum1);
+
+        if ($receivedSum1 !== $calculatedSum1 || $receivedSum2 !== $calculatedSum2) {
+            $this->log->error('[收账小卡] 总押总赢回复校验失败', [
+                'machine_code' => $this->machine->code,
+                'msg' => $msg,
+                'expected_sum1' => $calculatedSum1,
+                'received_sum1' => $receivedSum1,
+                'expected_sum2' => $calculatedSum2,
+                'received_sum2' => $receivedSum2,
+            ]);
+            return false;
+        }
+
+        // ✅ 修复：检查总押分标志（D8一般/D7开奖中）
+        $betFlag = substr($msg, 2, 2);
+        $isRewarding = ($betFlag === 'd7');  // D7表示开奖中
+
+        // 解析数据
+        // 格式：A7 D8/D7 [总押4B] D9 [总赢4B] SUM1 SUM2
+        $pos = 4; // 跳过 A7 D8/D7
+
+        $totalBet = $this->parseScore4Byte(substr($msg, $pos, 8));
+        $pos += 8;
+
+        $pos += 2; // 跳过 D9
+
+        $totalWin = $this->parseScore4Byte(substr($msg, $pos, 8));
+
+        $this->log->info('[收账小卡-总押总赢] 查询回复', [
+            'machine_code' => $this->machine->code,
+            'total_bet' => $totalBet,
+            'total_win' => $totalWin,
+            'is_rewarding' => $isRewarding,
+            'bet_flag' => strtoupper($betFlag),
+        ]);
+
+        // 更新数据
+        $this->total_bet = $totalBet;
+        $this->total_win = $totalWin;
+
+        // ✅ 修复：更新开奖状态（与READ_SCORE保持一致）
+        if ($isRewarding) {
+            $this->reward_status = 1;
+        }
+
+        // ✅ 更新版本号，表示收到回复
+        $this->setActionVersion(self::READ_BET);
+
+        return true;
+    }
+
+    /**
+     * 处理机台情况回复（A7 D2 ... D6 ... DC ... SUM1 SUM2）
+     *
+     * ⚠️ 完整格式（44字符）：
+     * A7 D2 00 01 00 00 D6 10 00 63 1E DC 1E 14 00 00 AC xx xx xx SUM1 SUM2
+     *
+     * 字段说明：
+     * - D2/D3: 开分状态（D2=完成，D3=开分中）
+     * - 回补次数: 开分失败次数
+     * - 码表少跳: 高位+低位（正常00 00）
+     * - D6/D7: 洗分状态（D6=完成，D7=洗分中）
+     * - 洗分数据: 4字节BCD
+     * - 转数: 2字节BCD
+     * - 状态字节: 8x=登出状态
+     */
+    private function handleMachineStatusReply(string $msg): bool
+    {
+        // ✅ 入口日志
+        $this->log->info('[机台情况] 处理开始', [
+            'machine_code' => $this->machine->code,
+            'msg_len' => strlen($msg),
+        ]);
+
+        // A7 D2 00 01 00 00 D6 10 00 63 1E DC 1E 14 00 00 AC xx xx xx SUM1 SUM2
+        // 最小长度：44字符（22字节）
+        if (strlen($msg) < 44) {
+            $this->log->error('[机台情况] 回复长度不足', [
+                'machine_code' => $this->machine->code,
+                'msg' => strtoupper($msg),
+                'len' => strlen($msg),
+                'expected_min' => 44,
+            ]);
+            return false;
+        }
+
+        // ✅ 使用公共方法校验和验证
+        if (!$this->validateMessageChecksum($msg, '机台情况')) {
+            return false;
+        }
+
+        // ✅ 使用提取的方法解析字段
+        $fields = $this->parseMachineStatusFields($msg);
+
+        // 存入 Redis 供 HTTP worker（handleOpenPoint/confirmOpenPointWithStatus）读取
+        Cache::set($this->cacheDataKey . '_last_status_fields', json_encode($fields), 10);
+
+        // ✅ 使用提取的方法检测标志
+        $flags = $this->detectMachineStatusFlags($fields['status_value']);
+
+        // 记录解析结果
+        $this->log->info('[收账小卡-机台情况] 查询回复', [
+            'machine_code' => $this->machine->code,
+            'open_status' => strtoupper($fields['open_status']),
+            'open_ing' => ($fields['open_status'] === 'd3'),
+            'retry_count' => $fields['retry_count'],
+            'counter_skip' => strtoupper($fields['counter_skip_high'] . $fields['counter_skip_low']),
+            'wash_status' => strtoupper($fields['wash_status']),
+            'wash_ing' => ($fields['wash_status'] === 'd7'),
+            'wash_score' => $fields['wash_score'],
+            'turn_count' => $fields['turn_count'],
+            'status_byte' => strtoupper($fields['status_byte']),
+            'is_logout' => $flags['is_logout'],
+            'has_fault1' => $flags['has_fault1'],
+            'has_fault2' => $flags['has_fault2'],
+        ]);
+
+        // ✅ 使用提取的方法更新状态
+        $this->updateMachineStatus($fields, $flags);
+
+        // ✅ 更新版本号，表示收到回复
+        $this->setActionVersion(self::READ_STATUS);
+
+        return true;
+    }
+
+    /**
+     * 處理回補（開分部分失敗時退款給玩家）
+     *
+     * ⚠️ 回補機制說明：
+     * - A5 XX C0 指令一次可開 XX 次分（每次 OPEN_UNIT 分），機台逐次執行
+     * - READ_STATUS 回傳的 retry_count 代表本批次中「部分失敗」的次數，
+     *   並非全部失敗：例如發送 5 次開分而 1 次失敗，retry_count=1
+     * - 需將失敗次數 × OPEN_UNIT 分換算為金額，退回玩家錢包
+     * - 每次 READ_STATUS 只處理新增的失敗次數（retry_count - prev），
+     *   防止重複上報同一值時重複退款
+     *
+     * @param int $retryCount READ_STATUS 回傳的累計回補次數
+     * @return bool 回傳 true 表示可更新 return_count（成功或正常略過）；
+     *              回傳 false 表示錢包加款失敗，下次 READ_STATUS 應重試
+     */
+    /**
+     * @param int      $retryCount 機台回補次數
+     * @param int|null $prevBase   呼叫端指定基準值；null 表示使用 return_count 差值（心跳路徑）
+     *                             inline EA D4 路徑傳入 0，直接以本批次次數退款，不做累積差值
+     */
+    public function handleRetryRefund(int $retryCount, ?int $prevBase = null): bool
+    {
+        // 1. 檢查是否有玩家在使用機台
+        $gamingUserId = $this->gaming_user_id ?? 0;
+
+        if ($gamingUserId <= 0) {
+            $this->log->info('[收帳小卡-回補] 偵測到回補次數，但無玩家使用，略過退款', [
+                'machine_code'       => $this->machine->code,
+                'retry_count'        => $retryCount,
+                'retry_score_points' => $retryCount * self::OPEN_UNIT,
+            ]);
+            return true;
+        }
+
+        // 2. 計算本次應退款的失敗次數
+        if ($prevBase !== null) {
+            // EA D4 inline 路徑：呼叫端已確認本批次失敗次數，直接使用（不做 return_count 差值）
+            $prevRetryCount = $prevBase;
+        } else {
+            // 心跳路徑：使用 return_count 差值，追蹤跨心跳的累積變化
+            $prevRetryCount = (int)($this->return_count ?? 0);
+
+            // 若 retryCount < prevRetryCount，機台可能已重啟（累計值歸零後重新累加）
+            if ($retryCount < $prevRetryCount) {
+                $this->log->warning('[收帳小卡-回補] 偵測到 retry_count 小於已處理值，疑似機台重啟，重置基準', [
+                    'machine_code'         => $this->machine->code,
+                    'retry_count'          => $retryCount,
+                    'old_prev_retry_count' => $prevRetryCount,
+                ]);
+                $prevRetryCount = 0;
+            }
+        }
+
+        $newRetries = $retryCount - $prevRetryCount;
+
+        if ($newRetries <= 0) {
+            $this->log->info('[收帳小卡-回補] 回補次數未增加，略過（非新增失敗）', [
+                'machine_code'     => $this->machine->code,
+                'retry_count'      => $retryCount,
+                'prev_retry_count' => $prevRetryCount,
+            ]);
+            return true;
+        }
+
+        // 3. 換算退款金額：新增失敗次數 × OPEN_UNIT分 = 元（1:1，不乘 odds）
+        // machineOpenAnyFree 對 SongOfflineSlot 的扣款：$money = (int) $openScore（不乘 odds）
+        // 退款必須採相同比例；若誤用 × (odds_x/odds_y)，當 odds_x > odds_y 時退款會超過原本扣款
+        $refundScore  = $newRetries * self::OPEN_UNIT;
+        $refundAmount = (string)$refundScore;
+
+        if ((float) $refundAmount <= 0) {
+            $this->log->warning('[收帳小卡-回補] 退款金額換算為0，略過', [
+                'machine_code' => $this->machine->code,
+                'refund_score' => $refundScore,
+                'odds_x'       => $this->machine->odds_x,
+                'odds_y'       => $this->machine->odds_y,
+            ]);
+            return true;
+        }
+
+        $this->log->warning('[收帳小卡-回補] 執行部分開分失敗退款', [
+            'machine_code'  => $this->machine->code,
+            'player_id'     => $gamingUserId,
+            'new_retries'   => $newRetries,
+            'refund_score'  => $refundScore,
+            'refund_amount' => $refundAmount,
+        ]);
+
+        // 4. 事務：記錄日誌 + 金流（僅包含 DB 操作）
+        // 若上次 wallet add 失敗（return false），return_count 未更新，下次心跳仍會觸發重試。
+        // 用 Redis 精確追蹤待重試的 delivery_id，避免模糊 DB 查詢在同金額時 false-match 新失敗事件。
+        $pendingRefundKey = $this->cacheDataKey . '_pending_refund_delivery';
+        $pendingDeliveryId = (int)\support\Cache::get($pendingRefundKey, 0);
+        $existingDelivery = $pendingDeliveryId > 0
+            ? \app\model\PlayerDeliveryRecord::find($pendingDeliveryId)
+            : null;
+
+        $beforeBalance = 0;
+        if ($existingDelivery) {
+            // DB 記錄已存在（上次加款失敗），跳過建立，直接重試錢包加款
+            $beforeBalance = $existingDelivery->amount_before;
+            $this->log->warning('[收帳小卡-回補] 偵測到待重試退款記錄，跳過重複建立，直接重試加款', [
+                'machine_code'   => $this->machine->code,
+                'player_id'      => $gamingUserId,
+                'delivery_id'    => $existingDelivery->id,
+                'refund_amount'  => $refundAmount,
+            ]);
+        } else {
+        \support\Db::beginTransaction();
+        try {
+            $player = \app\model\Player::find($gamingUserId);
+            if (!$player) {
+                throw new Exception("玩家不存在: {$gamingUserId}");
+            }
+
+            $gameRecord = \app\model\PlayerGameRecord::query()
+                ->where('machine_id', $this->machine->id)
+                ->where('player_id', $gamingUserId)
+                ->where('status', \app\model\PlayerGameRecord::STATUS_START)
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            $beforeBalance = \app\service\WalletService::getBalance($gamingUserId);
+            $afterBalance  = bcadd($beforeBalance, $refundAmount, 2);
+
+            // 遊戲日誌（退款按下分記錄）
+            $playerGameLog = addPlayerGameLog(
+                $player,
+                $this->machine,
+                $gameRecord,
+                $this->machine->control_open_point ?? 0
+            );
+            // wash_point / game_amount 設為 0，避免觸發 PlayerGameLog booted created 事件
+            // 將退款誤計入 MachineReport.wash_point / wash_amount；
+            // 實際金額由 PlayerDeliveryRecord 承載，餘額變化由 before/after_game_amount 記錄。
+            $playerGameLog->wash_point         = 0;
+            $playerGameLog->game_amount        = 0;
+            $playerGameLog->before_game_amount = $beforeBalance;
+            $playerGameLog->after_game_amount  = $afterBalance;
+            $playerGameLog->action             = \app\model\PlayerGameLog::ACTION_DOWN;
+            $playerGameLog->is_system          = 1;
+            $playerGameLog->remark             = "開分部分失敗回補（{$newRetries}次×" . self::OPEN_UNIT . "分，退款金額 {$refundAmount}）";
+            $playerGameLog->save();
+
+            // 金流記錄
+            $delivery                   = new \app\model\PlayerDeliveryRecord();
+            $delivery->player_id        = $gamingUserId;
+            $delivery->department_id    = $player->department_id;
+            $delivery->target           = $playerGameLog->getTable();
+            $delivery->target_id        = $playerGameLog->id;
+            $delivery->machine_id       = $this->machine->id;
+            $delivery->machine_name     = $this->machine->name;
+            $delivery->machine_type     = $this->machine->type;
+            $delivery->code             = $this->machine->code;
+            $delivery->type             = \app\model\PlayerDeliveryRecord::TYPE_REFUND;
+            $delivery->source           = 'retry_refund';
+            $delivery->amount           = $refundAmount;
+            $delivery->amount_before    = $beforeBalance;
+            $delivery->amount_after     = $afterBalance;
+            $delivery->tradeno          = $playerGameLog->tradeno ?? '';
+            $delivery->remark           = "開分部分失敗回補（{$newRetries}次）";
+            $delivery->save();
+
+            \support\Db::commit();
+        } catch (Exception $e) {
+            \support\Db::rollback();
+            // 玩家不存在是永久性錯誤，回 true 讓 return_count 更新以停止重試
+            // 其他 DB 錯誤（Deadlock、連線中斷）屬暫時性，回 false 讓心跳路徑自動重試
+            $isPermanent = str_contains($e->getMessage(), '玩家不存在');
+            $this->log->critical('[收帳小卡-回補] 退款事務失敗', [
+                'machine_code'  => $this->machine->code,
+                'player_id'     => $gamingUserId,
+                'refund_amount' => $refundAmount,
+                'error'         => $e->getMessage(),
+                'will_retry'    => !$isPermanent,
+            ]);
+            return $isPermanent;
+        }
+        } // end else（非重試路徑）
+
+        // 5. 錢包加款（事務外執行，與 returnBalanceToPlayer 一致）
+        // WalletService::add 內部 catch 所有 Throwable，永遠回傳 array，不拋例外，
+        // 必須檢查 success 欄位，否則失敗時不會有任何警示。
+        $addResult = \app\service\WalletService::add($gamingUserId, $refundAmount);
+
+        if (!$addResult['success']) {
+            // 記錄（或刷新）delivery_id 到 Redis，下次重試時直接找到此筆記錄跳過重複建立
+            // 每次失敗都刷新 TTL，避免長時間重試中 key 過期後建立重複 DB 記錄
+            $deliveryIdToStore = $existingDelivery ? $existingDelivery->id : ($delivery->id ?? 0);
+            if ($deliveryIdToStore > 0) {
+                \support\Cache::set($pendingRefundKey, $deliveryIdToStore, 3600);
+            }
+            $this->log->critical('[收帳小卡-回補] 錢包加款失敗，需人工介入', [
+                'machine_code'  => $this->machine->code,
+                'player_id'     => $gamingUserId,
+                'refund_amount' => $refundAmount,
+                'error'         => $addResult['error'] ?? '未知錯誤',
+                'action'        => '已記錄退款日誌，但錢包未加款，請立即手動給玩家加款',
+            ]);
+            // 回傳 false：呼叫端不更新 return_count，下次 READ_STATUS 可自動重試加款
+            return false;
+        }
+
+        // 加款成功，清除待重試標記
+        \support\Cache::delete($pendingRefundKey);
+
+        $this->log->info('[收帳小卡-回補] 退款成功', [
+            'machine_code'   => $this->machine->code,
+            'player_id'      => $gamingUserId,
+            'refund_score'   => $refundScore,
+            'refund_amount'  => $refundAmount,
+            'before_balance' => $beforeBalance,
+            'after_balance'  => $addResult['balance'],
+        ]);
+
+        \app\service\BalancePushService::pushBalanceChange(
+            $gamingUserId,
+            $beforeBalance,
+            $addResult['balance'],
+            'refund',
+            [
+                'platform'   => $this->machine->name ?? $this->machine->code,
+                'machine_id' => $this->machine->id,
+                'type'       => 'retry_refund',
+            ]
+        );
+
+        // 通知玩家退款原因（餘額推送只更新數字，此訊息說明退款來源）
+        $notifyMsg = [
+            'msg_type'      => 'machine_refund',
+            'machine_id'    => $this->machine->id,
+            'machine_name'  => $this->machine->name ?? $this->machine->code,
+            'refund_amount' => $refundAmount,
+            'retry_count'   => $newRetries,
+            'message'       => "本次上分有 {$newRetries} 次部分失敗，已退款 \${$refundAmount} 至您的帳戶",
+            'timestamp'     => time(),
+        ];
+        sendSocketMessage('player-' . $gamingUserId . '-' . $this->machine->id, $notifyMsg);
+        sendSocketMessage('player-' . $gamingUserId, $notifyMsg);
+
+        return true;
+    }
+
+    /**
+     * 处理操作回复（A5 CA/C5 33）
+     */
+    private function handleActionReply(string $msg): bool
+    {
+        if (strlen($msg) < 6) {
+            $this->log->error('[收账小卡] 操作回复长度不足', [
+                'machine_code' => $this->machine->code,
+                'msg' => $msg,
+            ]);
+            return false;
+        }
+
+        $status = substr($msg, 2, 2);
+        $version = substr($msg, 4, 2);
+
+        switch ($status) {
+            case 'ca': // 操作成功
+                $this->log->info('[收账小卡-操作] 操作成功', [
+                    'machine_code' => $this->machine->code,
+                    'version' => $version,
+                ]);
+                Cache::set($this->cacheDataKey . '_last_open_result', 'ca', 10);
+                break;
+
+            case 'c5': // 操作失败（未登入）
+                $this->log->error('[收账小卡-操作] 操作失败（未登入）', [
+                    'machine_code' => $this->machine->code,
+                    'version' => $version,
+                ]);
+                $this->login_status = 0;
+                Cache::set($this->cacheDataKey . '_last_open_result', 'c5', 10);
+                break;
+
+            default:
+                $this->log->warning('[收账小卡] 未识别的A5操作回复', [
+                    'machine_code' => $this->machine->code,
+                    'msg' => $msg,
+                    'status' => $status,
+                ]);
+                return false;
+        }
+
+        // ✅ 更新版本号，表示收到回复（A5用于上分和下分）
+        $this->setActionVersion('a5');
+
+        // ✅ 指令测试支持：如果有原始指令码，也为其设置版本号
+        // 这样前端发送 'a500c0' 时，等待的 actionKey 也能收到版本更新
+        // ⚠️ 跨请求场景：从 Redis 读取原始指令（因为 sendCmd 和 handleMsg 是不同对象实例）
+        if (!$this->originalCmd) {
+            $this->originalCmd = Cache::get($this->cacheDataKey . '_pending_cmd');
+        }
+
+        if ($this->originalCmd) {
+            $this->setActionVersion($this->originalCmd);
+            // 删除临时数据（已使用）
+            Cache::delete($this->cacheDataKey . '_pending_cmd');
+
+            $this->log->info('[收账小卡-操作] 同时更新原始指令版本号', [
+                'machine_code' => $this->machine->code,
+                'original_cmd' => $this->originalCmd,
+            ]);
+        }
+
+        return true;
+    }
+
+    /**
+     * 处理计数器变化（类似SongOfflineJackpot的processCounterChange）
+     *
+     * @param string $type 类型（open/wash）
+     * @param int $oldCount 旧值
+     * @param int $newCount 新值
+     * @param int $timestamp 时间戳
+     * @return array ['should_update' => bool, 'recorded' => bool, 'reason' => string]
+     */
+    private function processCounterChange(string $type, int $oldCount, int $newCount, int $timestamp): array
+    {
+        // ✅ 去重检查
+        if ($this->shouldSkipCounterChange($type, $timestamp)) {
+            return ['should_update' => false, 'recorded' => false, 'reason' => '去重窗口内'];
+        }
+
+        // ✅ 检测异常（减少情况）
+        $anomaly = $this->detectCounterAnomaly($type, $oldCount, $newCount);
+
+        // 如果是故障排除后归零，更新计数但不记录
+        if ($anomaly['is_check_reset']) {
+            return ['should_update' => true, 'recorded' => false, 'reason' => $anomaly['reason']];
+        }
+
+        // 如果有异常减少，更新计数但不记录（已发送异常通知）
+        if ($anomaly['has_anomaly']) {
+            return ['should_update' => true, 'recorded' => false, 'reason' => $anomaly['reason']];
+        }
+
+        // ✅ 正常增加 - 记录游戏数据
+        $increment = $newCount - $oldCount;
+
+        if ($increment > 0) {
+            $recorded = $this->decideCounterRecord($type, $increment, $timestamp);
+            return ['should_update' => true, 'recorded' => $recorded, 'reason' => '正常增加'];
+        }
+
+        // 无变化
+        return ['should_update' => true, 'recorded' => false, 'reason' => '无变化'];
+    }
+
+    /**
+     * 记录外部按钮操作
+     *
+     * @param string $type 类型（open/wash）
+     * @param int $amount 金额（线下Slot是金额，不是次数）
+     * @param int $timestamp 时间戳
+     */
+    private function recordExternalButtonOperation(string $type, int $amount, int $timestamp): void
+    {
+        try {
+            // 金额换算：分 × (odds_x/odds_y) = 元，与其他日志保持一致
+            $betAmount = bcmul(
+                (string) max(0, $amount),
+                bcdiv(
+                    (string) ($this->machine->odds_x ?? 1),
+                    (string) ($this->machine->odds_y ?? 1),
+                    8
+                ),
+                2
+            );
+
+            $this->log->info('[收账小卡-记录] 外部按钮操作', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'type' => $type,
+                'amount' => $amount,
+                'odds_x' => $this->machine->odds_x,
+                'odds_y' => $this->machine->odds_y,
+                'bet_amount' => floatval($betAmount),
+            ]);
+
+            // 创建游戏日志
+            $this->createExternalButtonGameLog($type, $amount, $betAmount, $timestamp);
+
+        } catch (\Exception $e) {
+            $this->log->error('[收账小卡-记录] 记录失败', [
+                'machine_id' => $this->machine->id,
+                'type' => $type,
+                'amount' => $amount,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * 创建外部按钮游戏日志
+     *
+     * @param string $type 类型（open/wash）
+     * @param int $amount 金额
+     * @param float $betAmount 打码量
+     * @param int $timestamp 时间戳
+     * @throws Exception
+     */
+    private function createExternalButtonGameLog(string $type, int $amount, float $betAmount, int $timestamp): void
+    {
+        // ✅ Bug #8修复：添加事务保护和完整字段（对比钢珠机实现）
+        \support\Db::beginTransaction();
+
+        try {
+            $playerGameLog = new \app\model\PlayerGameLog();
+
+            // 玩家信息（外部按钮固定为0）
+            $playerGameLog->player_id = 0;
+            $playerGameLog->parent_player_id = 0;
+
+            // ✅ 修复：从机台绑定获取渠道信息（外部按钮无玩家，但需要渠道/门店信息）
+            $channelMachine = \app\model\ChannelMachine::where('machine_id', $this->machine->id)->first();
+            if ($channelMachine) {
+                $playerGameLog->department_id = $channelMachine->department_id;
+                $playerGameLog->store_id = $channelMachine->store_admin_id;
+
+                // 门店代理ID：从门店的上级获取
+                if ($channelMachine->store_admin_id) {
+                    $storeAdmin = AdminUser::find($channelMachine->store_admin_id);
+                    // ✅ Bug #13修复：检查AdminUser是否存在，避免访问null的属性
+                    if ($storeAdmin) {
+                        $playerGameLog->store_agent_id = $storeAdmin->parent_admin_id ?? null;
+                    }
+                }
+            }
+
+            // 代理信息（外部按钮无代理）
+            $playerGameLog->agent_player_id = 0;
+
+            // 机台信息
+            $playerGameLog->game_id = $this->machine->machineCategory?->game_id ?? 0;
+            $playerGameLog->machine_id = $this->machine->id;
+            $playerGameLog->type = $this->machine->type;
+            $playerGameLog->odds = $this->machine->odds_x . ':' . $this->machine->odds_y;
+            $playerGameLog->control_open_point = $this->machine->control_open_point ?? 0;
+
+            // 操作类型和分数
+            $playerGameLog->action = $type === 'open' ?
+                \app\model\PlayerGameLog::ACTION_OPEN :
+                \app\model\PlayerGameLog::ACTION_DOWN;
+            $playerGameLog->open_point = $type === 'open' ? $amount : 0;
+            $playerGameLog->wash_point = $type === 'wash' ? $amount : 0;
+
+            // 金额信息
+            $playerGameLog->gift_point = 0;
+            $playerGameLog->game_amount = $amount / 100;
+            $playerGameLog->before_game_amount = 0;  // 外部按钮不涉及玩家余额
+            $playerGameLog->after_game_amount = 0;
+
+            // 其他信息
+            $playerGameLog->source_type = \app\model\PlayerGameLog::SOURCE_TYPE_OFFLINE_BUTTON;
+            $playerGameLog->is_test = 0;
+            $playerGameLog->created_at = date('Y-m-d H:i:s', $timestamp);
+
+            $playerGameLog->save();
+            \support\Db::commit();
+
+            $this->log->info('[收账小卡-日志] 游戏日志已创建', [
+                'game_log_id' => $playerGameLog->id,
+                'machine_id' => $this->machine->id,
+                'type' => $type,
+                'amount' => $amount,
+                'bet_amount' => $betAmount,
+                'department_id' => $playerGameLog->department_id ?? 'NULL',
+                'store_id' => $playerGameLog->store_id ?? 'NULL',
+            ]);
+
+        } catch (\Exception $e) {
+            \support\Db::rollBack();
+            $this->log->error('[收账小卡-日志] 创建失败', [
+                'machine_id' => $this->machine->id,
+                'type' => $type,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * 解析计数器（4字节BCD）
+     *
+     * 格式：每个字节的十六进制值转十进制后代表2位数字
+     * 例：[0x05, 0x14, 0x31, 0x0B]
+     *     → 5, 20, 49, 11
+     *     → "05" + "20" + "49" + "11"
+     *     → 5204911
+     *
+     * @param array $bytes 4个字节的数组（十六进制字符串）
+     * @return int 计数器值
+     */
+    private function parseCounter(array $bytes): int
+    {
+        if (count($bytes) < 4) {
+            return 0;
+        }
+
+        $result = 0;
+        foreach ($bytes as $byte) {
+            $decimal = hexdec($byte);  // 十六进制转十进制
+            $result = $result * 100 + $decimal;  // 每个字节代表2位数字
+        }
+
+        return $result;
+    }
+
+    /**
+     * 计数器转字节（4字节BCD）
+     *
+     * 例：5204911
+     *     → "05204911"
+     *     → [05, 20, 49, 11]
+     *     → [0x05, 0x14, 0x31, 0x0B]
+     *
+     * @param int $count 计数器值
+     * @return array 4个字节的数组（十六进制字符串）
+     */
+    private function counterToBytes(int $count): array
+    {
+        // 补齐8位
+        $str = str_pad((string)$count, 8, '0', STR_PAD_LEFT);
+
+        // 每2位转一个字节
+        $bytes = [];
+        for ($i = 0; $i < 8; $i += 2) {
+            $twoDigits = substr($str, $i, 2);
+            $decimal = (int)$twoDigits;
+            $bytes[] = str_pad(dechex($decimal), 2, '0', STR_PAD_LEFT);
+        }
+
+        return $bytes;
+    }
+
+    /**
+     * 计算SUM1校验（ADD累加）
+     *
+     * @param string $data 数据（十六进制字符串，不含SUM1和SUM2）
+     * @return string 2位十六进制SUM1
+     */
+    private function calculateSUM1(string $data): string
+    {
+        $bytes = str_split($data, 2);
+        $sum = 0;
+
+        foreach ($bytes as $byte) {
+            $sum += hexdec($byte);
+        }
+
+        // 取最后2位
+        $result = $sum & 0xFF;
+        return str_pad(dechex($result), 2, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * 计算SUM2校验（XOR异或）
+     *
+     * @param string $data 数据（十六进制字符串，不含SUM1和SUM2）
+     * @param string $sum1 计算出的SUM1
+     * @return string 2位十六进制SUM2
+     */
+    private function calculateSUM2(string $data, string $sum1): string
+    {
+        $bytes = str_split($data, 2);
+        $xor = 0;
+
+        foreach ($bytes as $byte) {
+            $xor ^= hexdec($byte);
+        }
+
+        // XOR with SUM1
+        $xor ^= hexdec($sum1);
+
+        // 取最后2位
+        $result = $xor & 0xFF;
+        return str_pad(dechex($result), 2, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * 发送指令
+     *
+     * @param string $cmd 指令
+     * @param int $data 数据
+     * @param string $source 来源（player/admin）
+     * @param int $source_id 来源ID
+     * @param int $isSystem 是否系统指令
+     * @return bool
+     * @throws Exception
+     */
+    public function sendCmd(
+        string $cmd,
+        int    $data = 0,
+        string $source = 'player',
+        int    $source_id = 0,
+        int    $isSystem = 0
+    ): bool
+    {
+        $uid = $this->machine->domain . ':' . $this->machine->port;
+
+        try {
+            if (!Gateway::isUidOnline($uid)) {
+                throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
+            }
+            $this->log->warning('[收账小卡-发送] 发送指令', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'has_lock' => $this->has_lock,
+                'cmd' => $cmd,
+            ]);
+            // 锁定时仅允许归0指令（E1错误/上分5次失败后需 CHECK 归0解锁）
+            if ($this->has_lock == 1 && $cmd !== self::CHECK) {
+                throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
+            }
+
+            // 玩家操作时更新活动时间
+            if ($source == 'player') {
+                $currentGamingUserId = $this->gaming_user_id;
+                if (!empty($currentGamingUserId)) {
+                    $this->last_play_time = time();
+                    // 投递保留状态队列：累加保留时间 + 若在保留中则解除
+                    Client::send('play-keep-machine', [
+                        'change_amount' => 1,
+                        'machine_id' => $this->machine->id,
+                        'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                            $this->machine->domain, $this->machine->port, $this->machine->type
+                        ),
+                        'player_id' => $currentGamingUserId,
+                        'gaming_user_id' => $currentGamingUserId,
+                        'keep_seconds' => $this->keep_seconds,
+                        'keeping' => $this->keeping,
+                    ]);
+                }
+            }
+
+            // ✅ 指令测试支持：识别特殊格式的上分/下分指令
+            // 前端可能发送 'a5xxc0'（上分）或 'a500c1'（下分）
+            $this->originalCmd = null;  // 重置
+            if (preg_match('/^a5[0-9a-f]{2}c0$/i', $cmd)) {
+                // 上分指令格式：a5xxc0
+                $this->originalCmd = strtolower($cmd);  // 保存原始指令（小写）
+                $cmd = self::OPEN_ANY_POINT;
+
+                // ✅ 保存到 Redis（跨请求传递，60秒过期）
+                Cache::set($this->cacheDataKey . '_pending_cmd', $this->originalCmd, 60);
+            } elseif (preg_match('/^a500c1$/i', $cmd)) {
+                // 下分指令格式：a500c1（固定00）
+                $this->originalCmd = strtolower($cmd);  // 保存原始指令（小写）
+                $cmd = self::WASH_POINT;
+
+                // ✅ 保存到 Redis（跨请求传递，60秒过期）
+                Cache::set($this->cacheDataKey . '_pending_cmd', $this->originalCmd, 60);
+            }
+
+            switch ($cmd) {
+                case self::LOGIN:           // 登入（EA C3）
+                case self::LOGOUT:          // 登出（EA C5）
+                case self::READ_SCORE:      // 读取分数（EA C4）
+                case self::READ_BET:        // 读取押分（EA D8）
+                case self::READ_STATUS:     // 读取状态（EA D4）
+                case self::ALL_DOWN:        // 清除历史记录（EA DE）
+                case self::SSR_SIGNAL:      // SSR讯号（EA EC）
+                // ✅ 使用 createCmd 添加校验和
+                    $fullCmd = $this->createCmd($cmd);
+                    $this->log->info('[收账小卡] 发送指令', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => strtoupper($cmd),
+                        'full_cmd' => strtoupper($fullCmd),
+                    ]);
+                    Gateway::sendToUid($uid, hex2bin($fullCmd));
+                    break;
+
+                case self::CHECK:           // 故排（A3 70 05 E0 F8 CE）
+                    $this->handleCheckCommand($uid, $source, $source_id);
+                    break;
+
+                case self::OPEN_ANY_POINT:      // 上分（需拼接次数）
+                    $this->handleOpenPoint($uid, $data, $source, $source_id);
+                    break;
+
+                case self::WASH_POINT:      // 下分（全部洗分）
+                    $this->handleWashPoint($uid, $data, $source, $source_id);
+                    break;
+
+                default:
+                    throw new Exception('未知指令: ' . $cmd);
+            }
+
+        } catch (Exception $e) {
+            $this->log->error('[收账小卡] 发送指令失败', [
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+        $this->log->info('[收账小卡-开机] 发送指令', [
+            'machine_code' => $this->machine->code,
+            'msg' => strtoupper($cmd),
+        ]);
+        return true;
+    }
+
+    /**
+     * 处理故障排除/归0指令
+     *
+     * ⚠️ 会清除开分码表和洗分码表（类似SongOfflineJackpot的B5/B7）
+     */
+    private function handleCheckCommand(string $uid, string $source, int $source_id): void
+    {
+        // 设置check标记（10秒有效）
+        Cache::set('check_flag_' . $this->machine->id, true, 10);
+
+        // 清除外部按钮计数器（同步清除新旧字段）
+        $oldOpenCount = $this->external_open_count ?? 0;
+        $oldWashCount = $this->external_wash_count ?? 0;
+
+        // ✅ Bug #12修复：同步清除新旧字段，确保一致性
+        $this->external_open_count = 0;  // 旧字段（兼容性）
+        $this->external_wash_count = 0;  // 旧字段（兼容性）
+        $this->open_table = 0;           // 新字段：CHECK 会将机台 open_table 硬件计数器清零
+        $this->wash_table = 0;           // 新字段：CHECK 会将机台 wash_table 硬件计数器清零
+        $this->prev_open_table = 0;      // 防止 B7 路径重复记录 CHECK 后的首次开分事件
+        $this->prev_wash_table = 0;      // 防止 B7 路径重复记录 CHECK 后的首次洗分事件
+
+        // CHECK 是管理员洗分流程最后一步：机台物理出分在 CHECK 之后完成，
+        // 硬件 wash_table 会在出分期间自增，导致下次 EAC4 误判为"外部按键"洗分。
+        // 设置 30 秒去重窗口，覆盖管理员洗分和物理按键洗分两条路径。
+        \support\Cache::set('external_counter_wash_last_update_' . $this->machine->id, time(), 30);
+
+        $this->log->info('[收账小卡-故障排除] 清除外部码表', [
+            'machine_code' => $this->machine->code,
+            'old_open_count' => $oldOpenCount,
+            'old_wash_count' => $oldWashCount,
+            'note' => '故障排除会清除开分码表和洗分码表，已同步清零 open_table/wash_table',
+        ]);
+
+        // 发送故排指令（固定指令：A3 70 05 E0 F8 CE）
+        Gateway::sendToUid($uid, hex2bin(self::CHECK));
+
+        if ($source == 'admin') {
+            sendSocketMessage('private-admin-1-' . $source_id, [
+                'msg_type' => 'machine_action_result',
+                'id' => $this->machine->id,
+                'description' => '故障排除指令已发送',
+            ]);
+        }
+    }
+
+    /**
+     * 处理上分指令（A5 XX C0 SUM1 SUM2）
+     *
+     * 协议：
+     *   发送：A5 XX C0 SUM1 SUM2（XX=开分次数，C0=不洗分）
+     *   回复：A5 CA VV = 开分开始（成功）
+     *         A5 C5 VV = 开分失败（未登入）
+     *
+     * 重试策略：重试前先查 EA D4 确认机台未在执行，最多 3 次，
+     * 3 次全部失败才锁机台（不在第一次失败时就锁）。
+     */
+    private function handleOpenPoint(string $uid, int $data, string $source, int $source_id): void
+    {
+        if ($data % self::OPEN_UNIT != 0) {
+            throw new Exception('开分金额必须是' . self::OPEN_UNIT . '的倍数，当前：' . $data);
+        }
+
+        $times = intval($data / self::OPEN_UNIT);
+
+        if ($times <= 0 || $times > self::MAX_OPEN_TIMES) {
+            throw new Exception('开分次数超出范围（1-' . self::MAX_OPEN_TIMES . '），当前：' . $times);
+        }
+
+        $timesHex  = str_pad(dechex($times), 2, '0', STR_PAD_LEFT);
+        $cmdData   = self::OPEN_ANY_POINT . $timesHex . 'c0';
+        $maxAttempts = 8;
+        $replyTimeout = 2000000;       // 2s 等待CA回复
+        $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
+        $pollInterval = 100000;        // 100ms 轮询间隔
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            // 重试前先查 EA D4，确认机台未在开分中才允许重发 A5
+            // 防止上一轮 CA 因粘包延迟被漏判，机台已执行但被误判为未执行后重发导致重复上分
+            if ($attempt > 1) {
+                // 多次查询EA D4确认机台状态，防止单次查询因机台状态切换或响应延迟导致误判
+                // 每0.5s查询一次，共3次，最长等待1.5s
+                $preCheckMax      = 4;
+                $preCheckInterval = 500000; // 0.5s
+                for ($preCheck = 1; $preCheck <= $preCheckMax; $preCheck++) {
+                    Cache::delete($this->cacheDataKey . '_last_status_fields');
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                    $preWaited = 0;
+                    $preRaw    = null;
+                    while ($preWaited < $preCheckInterval) {
+                        usleep($pollInterval);
+                        $preWaited += $pollInterval;
+                        $preRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                        if ($preRaw !== null && $preRaw !== false) break;
+                    }
+
+                    if ($preRaw !== null && $preRaw !== false) {
+                        $preFields = json_decode($preRaw, true) ?: [];
+                        $preStatus = $preFields['open_status'] ?? '';
+
+                        $this->log->info('[收账小卡-上分] 重试前EA D4预检', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'pre_check'    => "$preCheck/$preCheckMax",
+                            'open_status'  => $preStatus,
+                        ]);
+
+                        if ($preStatus === 'd3' || $preStatus === 'd2') {
+                            $this->log->warning('[收账小卡-上分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
+                                'machine_code' => $this->machine->code,
+                                'attempt'      => "$attempt/$maxAttempts",
+                                'pre_check'    => "$preCheck/$preCheckMax",
+                                'open_status'  => $preStatus,
+                            ]);
+                            $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                            return;
+                        }
+                    } else {
+                        $this->log->warning('[收账小卡-上分] 重试前EA D4预检无响应', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'pre_check'    => "$preCheck/$preCheckMax",
+                        ]);
+                    }
+                }
+            }
+
+            // 每次发送前确保已登入
+            $this->ensureLoggedIn();
+
+            $sum1    = $this->calculateSUM1($cmdData);
+            $sum2    = $this->calculateSUM2($cmdData, $sum1);
+            $fullCmd = $cmdData . $sum1 . $sum2;
+
+            // 记录发送前版本号，清除上次结果
+            $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
+            Cache::delete($this->cacheDataKey . '_last_open_result');
+
+            $this->log->info('[收账小卡-上分] 发送上分指令', [
+                'machine_code'  => $this->machine->code,
+                'machine_score' => $data,
+                'times'         => $times,
+                'unit'          => self::OPEN_UNIT,
+                'cmd'           => strtoupper($fullCmd),
+                'attempt'       => "$attempt/$maxAttempts",
+                'current_card_score' => $this->card_score ?? 0,
+            ]);
+
+            Gateway::sendToUid($uid, hex2bin($fullCmd));
+
+            // 等待机台回复（A5 CA / A5 C5）
+            $waited  = 0;
+            $replied = false;
+            while ($waited < $replyTimeout) {
+                usleep($pollInterval);
+                $waited += $pollInterval;
+                if ($this->getActionVersion(self::OPEN_ANY_POINT) > $beforeVersion) {
+                    $replied = true;
+                    break;
+                }
+            }
+
+            if (!$replied) {
+                // 等待 5s 仍无 CA（含 B7+CA 粘包延迟场景），查 EA D4 确认机台状态
+                // poll _last_status_fields 存在性比版本号更可靠：
+                // setActionVersion 在 updateMachineStatus DB写入之后才调用，可能因MySQL锁延迟被跳过
+                Cache::delete($this->cacheDataKey . '_last_status_fields');
+                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                $statusWaited = 0;
+                $statusRaw    = null;
+                while ($statusWaited < $statusReplyTimeout) {
+                    usleep($pollInterval);
+                    $statusWaited += $pollInterval;
+                    $statusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    if ($statusRaw !== null && $statusRaw !== false) {
+                        break;
+                    }
+                }
+
+                if ($statusRaw !== null && $statusRaw !== false) {
+                    $statusFields = json_decode($statusRaw, true) ?: [];
+                    $openStatus   = $statusFields['open_status'] ?? '';
+
+                    $this->log->info('[收账小卡-上分] CA超时，EA D4查询机台状态', [
+                        'machine_code' => $this->machine->code,
+                        'attempt'      => "$attempt/$maxAttempts",
+                        'open_status'  => $openStatus,
+                    ]);
+
+                    if ($openStatus === 'd3' || $openStatus === 'd2') {
+                        // 机台已在执行或已完成（CA丢包），等待D2，不重发A5
+                        $this->log->warning('[收账小卡-上分] CA丢包但机台已执行，等待D2完成，跳过重试', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'open_status'  => $openStatus,
+                        ]);
+                        $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                        return;
+                    }
+                }
+
+                // EA D4 无回复或 D2/D3 以外状态：机台确认未执行，安全重试 A5
+                $this->log->warning('[收账小卡-上分] 机台未执行，重试', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxAttempts",
+                ]);
+                continue;
+            }
+
+            $lastResult = Cache::get($this->cacheDataKey . '_last_open_result');
+
+            if ($lastResult === 'ca') {
+                $this->log->info('[收账小卡-上分] 收到CA确认，主动查询机台执行状态（EA D4）', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxAttempts",
+                    'times'        => $times,
+                    'score'        => $data,
+                ]);
+                $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                return;
+            }
+
+            if ($lastResult === 'c5') {
+                $this->log->warning('[收账小卡-上分] 机台回复未登入（A5 C5），重试', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxAttempts",
+                ]);
+            } else {
+                // null：_last_open_result TTL 过期或 Redis 故障，结果未知。
+                // 版本号已变说明机台发过回复（CA或C5），必须先查 EA D4 确认是否在开分中，
+                // 若D3/D2则机台已执行，不能重发A5（否则重复上分）。
+                $this->log->warning('[收账小卡-上分] 回复结果未知（非 CA/C5），先查EA D4再决定', [
+                    'machine_code' => $this->machine->code,
+                    'last_result'  => $lastResult,
+                    'attempt'      => "$attempt/$maxAttempts",
+                ]);
+
+                Cache::delete($this->cacheDataKey . '_last_status_fields');
+                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                $nullStatusWaited = 0;
+                $nullStatusRaw    = null;
+                while ($nullStatusWaited < $statusReplyTimeout) {
+                    usleep($pollInterval);
+                    $nullStatusWaited += $pollInterval;
+                    $nullStatusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    if ($nullStatusRaw !== null && $nullStatusRaw !== false) {
+                        break;
+                    }
+                }
+
+                if ($nullStatusRaw !== null && $nullStatusRaw !== false) {
+                    $nullFields     = json_decode($nullStatusRaw, true) ?: [];
+                    $nullOpenStatus = $nullFields['open_status'] ?? '';
+
+                    $this->log->info('[收账小卡-上分] 结果未知，EA D4查询机台状态', [
+                        'machine_code' => $this->machine->code,
+                        'attempt'      => "$attempt/$maxAttempts",
+                        'open_status'  => $nullOpenStatus,
+                    ]);
+
+                    if ($nullOpenStatus === 'd3' || $nullOpenStatus === 'd2') {
+                        $this->log->warning('[收账小卡-上分] 结果未知但机台已执行（D3/D2），跳过重试直接确认', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'open_status'  => $nullOpenStatus,
+                        ]);
+                        $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                        return;
+                    }
+                }
+                // EA D4 无回复或非D3/D2，机台未执行，安全重试A5
+            }
+        }
+
+        // 3 次 CA 全部超时：机台可能已执行 A5 但 CA 丢包（网络瞬断）。
+        // 发 EA D4 做最终确认，若 open_status=d2 则视为成功，避免误锁机台 + 误重置 gaming_user_id。
+        try {
+            $this->log->warning('[收账小卡-上分] CA全部超时，发EA D4最终确认', [
+                'machine_code' => $this->machine->code,
+                'data'         => $data,
+                'times'        => $times,
+            ]);
+            $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+            $raw    = \support\Cache::get($this->cacheDataKey . '_last_status_fields');
+            $fields = $raw ? json_decode($raw, true) : [];
+            if (($fields['open_status'] ?? '') === 'd2') {
+                // 机台已完成开分，CA 只是丢包，当作成功处理
+                $this->log->warning('[收账小卡-上分] EA D4 确认 d2，CA丢包但开分成功，跳过锁机台', [
+                    'machine_code' => $this->machine->code,
+                    'retry_count'  => $fields['retry_count'] ?? 0,
+                ]);
+                return;
+            }
+        } catch (\Exception $statusEx) {
+            $this->log->warning('[收账小卡-上分] EA D4 最终确认也失败', [
+                'machine_code' => $this->machine->code,
+                'error'        => $statusEx->getMessage(),
+            ]);
+        }
+
+        // CA 全部超时 + EA D4 无法确认 → 锁机台
+        $this->has_lock = 1;
+        sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+        throw new Exception("上分失败：{$maxAttempts}次重试（每次2s）后仍无CA回复，机台已锁定，已退还玩家余额");
+    }
+
+    /**
+     * CA 确认后主动发 EA D4 查询实际执行状态，并回复客户端。
+     * 解析结果存入 Redis（_last_status_fields），供外层调用者读取 retry_count 做退款。
+     */
+    private function confirmOpenPointWithStatus(string $uid, int $data, int $times, string $source, int $source_id): void
+    {
+        // 最多查询25次（每次：发EA D4→等回复最长0.3s→若D3等0.3s再查），总计最长约15s
+        $maxChecks = 25;
+        $replyTimeout = 300000;   // 0.3s 等回复
+        $pollInterval = 100000;   // 100ms 轮询间隔
+        $d3Wait = 300000;   // D3开分中：等0.3s再次查询
+
+        $openStatus = '';
+        $washStatus = '';
+        $retryCount = 0;
+        $confirmed  = false;
+
+        for ($check = 1; $check <= $maxChecks; $check++) {
+            $beforeVersion = $this->getActionVersion(self::READ_STATUS);
+            Cache::delete($this->cacheDataKey . '_last_status_fields');
+            $cmd = $this->createCmd(self::READ_STATUS);
+            Gateway::sendToUid($uid, hex2bin($cmd));
+
+            // 等待 A7 D2 回复
+            $replied = false;
+            $waited  = 0;
+            while ($waited < $replyTimeout) {
+                usleep($pollInterval);
+                $waited += $pollInterval;
+                if ($this->getActionVersion(self::READ_STATUS) > $beforeVersion) {
+                    $replied = true;
+                    break;
+                }
+            }
+
+            if (!$replied) {
+                $this->log->warning('[收账小卡-上分] EA D4 回复超时，重试', [
+                    'machine_code' => $this->machine->code,
+                    'check'        => "$check/$maxChecks",
+                ]);
+                continue;
+            }
+
+            $raw        = Cache::get($this->cacheDataKey . '_last_status_fields');
+            $fields     = $raw ? json_decode($raw, true) : [];
+            $openStatus = $fields['open_status'] ?? '';
+            $washStatus = $fields['wash_status'] ?? '';
+            $retryCount = (int)($fields['retry_count'] ?? 0);
+
+            $this->log->info('[收账小卡-上分] EA D4 查询', [
+                'machine_code' => $this->machine->code,
+                'check'        => "$check/$maxChecks",
+                'open_status'  => $openStatus === 'd2' ? '开分完成' : '开分中(D3)',
+                'wash_status'  => $washStatus === 'd6' ? '洗分完成' : '洗分中(D7)',
+                'retry_count'  => $retryCount,
+            ]);
+
+            if ($openStatus === 'd2') {
+                // 开分完成，退出轮询
+                $confirmed = true;
+                // 新开分成功，清除洗分保护标记（允许B7正常写入新分数）
+                \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
+                break;
+            }
+
+            // D3 开分中，等0.3s再查
+            usleep($d3Wait);
+        }
+
+        if (!$confirmed) {
+            $this->log->warning('[收账小卡-上分] EA D4 轮询结束仍为D3或无回复，以CA确认为准', [
+                'machine_code' => $this->machine->code,
+                'open_status'  => $openStatus,
+                'checks'       => $maxChecks,
+            ]);
+        }
+
+        // 上分流程结束（无论D2是否确认），清除洗分保护标记，
+        // 防止B7心跳因 _wash_confirmed 持续suppress _point 导致后续下分读到0
+        \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
+
+        if ($source === 'admin') {
+            $openDesc = $openStatus === 'd2' ? '开分完成' : ($openStatus === 'd3' ? '开分中' : '状态未知');
+            $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '状态未知');
+            $retryDesc = $retryCount > 0
+                ? "，回补{$retryCount}次（每次" . self::OPEN_UNIT . "分将退款）"
+                : '';
+            sendSocketMessage('private-admin-1-' . $source_id, [
+                'msg_type'    => 'machine_action_result',
+                'id'          => $this->machine->id,
+                'open_status' => $openStatus,
+                'wash_status' => $washStatus,
+                'retry_count' => $retryCount,
+                'description' => "上分{$openDesc}（{$times}次×" . self::OPEN_UNIT . "分={$data}分）｜{$washDesc}{$retryDesc}",
+            ]);
+        }
+    }
+
+    /**
+     * 读取最近一次 EA D4 查询结果（供外层调用者处理 retry_count 退款）
+     */
+    public function getLastStatusFields(): array
+    {
+        $raw = Cache::get($this->cacheDataKey . '_last_status_fields');
+        return $raw ? json_decode($raw, true) : [];
+    }
+
+    /**
+     * 处理下分指令（A5 00 C1 SUM1 SUM2）
+     * 带CA回复确认 + EA D4轮询D6，流程与上分对称。
+     */
+    private function handleWashPoint(string $uid, int $data, string $source, int $source_id): void
+    {
+        $cmdData = self::WASH_POINT;
+        $maxAttempts = 8;
+        $replyTimeout = 2000000;       // 2s 等待CA回复
+        $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
+        $pollInterval = 100000;        // 100ms 轮询间隔
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            // 重试前先查 EA D4，确认机台未在洗分中才允许重发 A5
+            if ($attempt > 1) {
+                // 多次查询EA D4确认机台状态，防止单次查询因机台状态切换或响应延迟导致误判
+                // 每0.5s查询一次，共3次，最长等待1.5s
+                $preCheckMax      = 4;
+                $preCheckInterval = 500000; // 0.5s
+                for ($preCheck = 1; $preCheck <= $preCheckMax; $preCheck++) {
+                    Cache::delete($this->cacheDataKey . '_last_status_fields');
+                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                    $preWaited = 0;
+                    $preRaw    = null;
+                    while ($preWaited < $preCheckInterval) {
+                        usleep($pollInterval);
+                        $preWaited += $pollInterval;
+                        $preRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                        if ($preRaw !== null && $preRaw !== false) break;
+                    }
+
+                    if ($preRaw !== null && $preRaw !== false) {
+                        $preFields = json_decode($preRaw, true) ?: [];
+                        $preStatus = $preFields['wash_status'] ?? '';
+
+                        $this->log->info('[收账小卡-下分] 重试前EA D4预检', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'pre_check'    => "$preCheck/$preCheckMax",
+                            'wash_status'  => $preStatus,
+                        ]);
+
+                        $preScore = (int)($preFields['wash_score'] ?? 0);
+                        if ($preStatus === 'd7' || ($preStatus === 'd6' && $preScore > 0)) {
+                            $this->log->warning('[收账小卡-下分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
+                                'machine_code' => $this->machine->code,
+                                'attempt'      => "$attempt/$maxAttempts",
+                                'pre_check'    => "$preCheck/$preCheckMax",
+                                'wash_status'  => $preStatus,
+                                'wash_score'   => $preScore,
+                            ]);
+                            if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
+                                return;
+                            }
+                            // confirmWashPointWithStatus 返回 false（异常情况），跳出预检继续发A5
+                            break;
+                        }
+
+                        if ($preStatus === 'd6' && $preScore === 0) {
+                            // 过期D6：机台尚未执行，继续预检或直接发A5
+                            $this->log->warning('[收账小卡-下分] 重试前D6为过期状态(wash_score=0)，继续预检', [
+                                'machine_code' => $this->machine->code,
+                                'attempt'      => "$attempt/$maxAttempts",
+                                'pre_check'    => "$preCheck/$preCheckMax",
+                            ]);
+                        }
+                    } else {
+                        $this->log->warning('[收账小卡-下分] 重试前EA D4预检无响应', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'pre_check'    => "$preCheck/$preCheckMax",
+                        ]);
+                    }
+                }
+            }
+
+            $this->ensureLoggedIn();
+            $sum1 = $this->calculateSUM1($cmdData);
+            $sum2 = $this->calculateSUM2($cmdData, $sum1);
+            $fullCmd = $cmdData . $sum1 . $sum2;
+
+            $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
+            Cache::delete($this->cacheDataKey . '_last_open_result');
+
+            $this->log->info('[收账小卡-下分] 发送下分指令', [
+                'machine_code' => $this->machine->code,
+                'attempt' => "$attempt/$maxAttempts",
+                'cmd' => strtoupper($fullCmd),
+                'current_card_score' => $this->card_score ?? 0,
+                'current_machine_score' => $this->machine_score ?? 0,
+            ]);
+
+            Gateway::sendToUid($uid, hex2bin($fullCmd));
+
+            $replied = false;
+            $waited = 0;
+            while ($waited < $replyTimeout) {
+                usleep($pollInterval);
+                $waited += $pollInterval;
+                if ($this->getActionVersion(self::OPEN_ANY_POINT) > $beforeVersion) {
+                    $replied = true;
+                    break;
+                }
+            }
+
+            if (!$replied) {
+                // 等待 2s 仍无 CA，查 EA D4 确认机台状态
+                // poll _last_status_fields 直接存在性，避免 setActionVersion 因 DB 锁延迟导致误判
+                $washStatus = '';
+                Cache::delete($this->cacheDataKey . '_last_status_fields');
+                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                $statusWaited = 0;
+                $statusRaw    = null;
+                while ($statusWaited < $statusReplyTimeout) {
+                    usleep($pollInterval);
+                    $statusWaited += $pollInterval;
+                    $statusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    if ($statusRaw !== null && $statusRaw !== false) {
+                        break;
+                    }
+                }
+
+                if ($statusRaw !== null && $statusRaw !== false) {
+                    $statusFields = json_decode($statusRaw, true) ?: [];
+                    $washStatus   = $statusFields['wash_status'] ?? '';
+                    $washScore    = (int)($statusFields['wash_score'] ?? 0);
+
+                    $this->log->info('[收账小卡-下分] CA超时，EA D4查询机台状态', [
+                        'machine_code' => $this->machine->code,
+                        'attempt'      => "$attempt/$maxAttempts",
+                        'wash_status'  => $washStatus,
+                        'wash_score'   => $washScore,
+                    ]);
+
+                    if ($washStatus === 'd7' || ($washStatus === 'd6' && $washScore > 0)) {
+                        // D7=洗分中；D6+wash_score>0=本次洗分已完成
+                        $this->log->warning('[收账小卡-下分] CA丢包但机台已执行，等待D6完成，跳过重试', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'wash_status'  => $washStatus,
+                            'wash_score'   => $washScore,
+                        ]);
+                        if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
+                            return;
+                        }
+                        // confirmWashPointWithStatus 返回 false（异常情况），继续重试
+                    }
+
+                    if ($washStatus === 'd6' && $washScore === 0) {
+                        // 过期D6：机台未执行本次A5，立即重试（不进入20s轮询）
+                        $this->log->warning('[收账小卡-下分] D6为过期状态(wash_score=0)，立即重试A5', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'turn_count'   => $statusFields['turn_count'] ?? 0,
+                        ]);
+                    }
+                }
+
+                $this->log->warning('[收账小卡-下分] 继续重试A5', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxAttempts",
+                    'wash_status'  => $washStatus ?? '',
+                ]);
+                continue;
+            }
+
+            $lastResult = Cache::get($this->cacheDataKey . '_last_open_result');
+
+            if ($lastResult === 'ca') {
+                $this->log->info('[收账小卡-下分] 收到CA确认，主动查询机台执行状态（EA D4）', [
+                    'machine_code' => $this->machine->code,
+                    'attempt' => "$attempt/$maxAttempts",
+                ]);
+                if ($this->confirmWashPointWithStatus($uid, $source, $source_id, true)) {
+                    return;
+                }
+                // CA已确认但EA D4 50次内未见D7 → 机台收到指令却未执行，硬件异常，锁机台
+                $this->log->warning('[收账小卡-下分] CA确认但EA D4无D7响应，硬件异常，锁机台', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxAttempts",
+                ]);
+                $this->has_lock = 1;
+                sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+                throw new Exception("下分失败：CA已确认但机台未开始洗分（EA D4无D7），机台已锁定");
+            }
+
+            if ($lastResult === 'c5') {
+                $this->log->warning('[收账小卡-下分] 机台回复未登入（A5 C5），重试', [
+                    'machine_code' => $this->machine->code,
+                    'attempt' => "$attempt/$maxAttempts",
+                ]);
+            } else {
+                // null：Redis 故障，结果未知，先查 EA D4 确认是否在洗分中
+                $this->log->warning('[收账小卡-下分] 回复结果未知（非 CA/C5），先查EA D4再决定', [
+                    'machine_code' => $this->machine->code,
+                    'last_result' => $lastResult,
+                    'attempt' => "$attempt/$maxAttempts",
+                ]);
+
+                Cache::delete($this->cacheDataKey . '_last_status_fields');
+                Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+
+                $nullStatusWaited = 0;
+                $nullStatusRaw    = null;
+                while ($nullStatusWaited < $statusReplyTimeout) {
+                    usleep($pollInterval);
+                    $nullStatusWaited += $pollInterval;
+                    $nullStatusRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                    if ($nullStatusRaw !== null && $nullStatusRaw !== false) {
+                        break;
+                    }
+                }
+
+                if ($nullStatusRaw !== null && $nullStatusRaw !== false) {
+                    $nullFields     = json_decode($nullStatusRaw, true) ?: [];
+                    $nullWashStatus = $nullFields['wash_status'] ?? '';
+                    $nullWashScore  = (int)($nullFields['wash_score'] ?? 0);
+
+                    $this->log->info('[收账小卡-下分] 结果未知，EA D4查询机台状态', [
+                        'machine_code' => $this->machine->code,
+                        'attempt'      => "$attempt/$maxAttempts",
+                        'wash_status'  => $nullWashStatus,
+                        'wash_score'   => $nullWashScore,
+                    ]);
+
+                    if ($nullWashStatus === 'd7' || ($nullWashStatus === 'd6' && $nullWashScore > 0)) {
+                        $this->log->warning('[收账小卡-下分] 结果未知但机台已执行（D7/D6），尝试确认', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'wash_status'  => $nullWashStatus,
+                            'wash_score'   => $nullWashScore,
+                        ]);
+                        if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
+                            return;
+                        }
+                        // confirmWashPointWithStatus 返回 false（异常情况），继续重试
+                    }
+
+                    if ($nullWashStatus === 'd6' && $nullWashScore === 0) {
+                        // 过期D6，立即重试A5
+                        $this->log->warning('[收账小卡-下分] 结果未知但D6为过期状态(wash_score=0)，立即重试A5', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                            'turn_count'   => $nullFields['turn_count'] ?? 0,
+                        ]);
+                    }
+                }
+                // EA D4 无回复或非D7/D6，机台未执行，安全重试A5
+            }
+        }
+
+        // 全部重试耗尽：机台可能已执行 A5 但 CA 丢包，做最终EA D4确认。
+        // confirmWashPointWithStatus 返回 true = 洗分真实完成，跳过锁机台。
+        // 返回 false = 只见过期D6，机台确认未执行，锁机台。
+        try {
+            $this->log->warning('[收账小卡-下分] CA全部超时，发EA D4最终确认', [
+                'machine_code' => $this->machine->code,
+            ]);
+            if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
+                $this->log->warning('[收账小卡-下分] EA D4 最终确认洗分成功，跳过锁机台', [
+                    'machine_code' => $this->machine->code,
+                ]);
+                return;
+            }
+            $this->log->warning('[收账小卡-下分] EA D4 最终确认为过期状态，机台未执行洗分，锁机台', [
+                'machine_code' => $this->machine->code,
+            ]);
+        } catch (\Exception $statusEx) {
+            $this->log->warning('[收账小卡-下分] EA D4 最终确认也失败', [
+                'machine_code' => $this->machine->code,
+                'error'        => $statusEx->getMessage(),
+            ]);
+        }
+
+        $this->has_lock = 1;
+        sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+        throw new Exception("下分失败：{$maxAttempts}次重试（每次2s）后仍无CA回复，机台已锁定");
+    }
+
+    /**
+     * 轮询 EA D4 直到确认洗分真实执行（D7 出现过，或 D6+wash_score>0）。
+     * 返回 true = 洗分已确认并完成余额入账；
+     * 返回 false = 50次轮询内只见到过期D6（wash_score=0 且从未见D7），
+     *              机台未执行本次A5，调用方应继续重试。
+     * 统一使用50次（50 × ~400ms ≈ 20秒），EA D4 是协议层权威确认。
+     * machineWash 侧的 card_score 轮询仅在 D6 未确认时作兜底。
+     */
+    private function confirmWashPointWithStatus(string $uid, string $source, int $source_id, bool $caConfirmed = false): bool
+    {
+        $maxChecks = 50; // 50 × ~400ms ≈ 20 秒
+        $replyTimeout = 300000;   // 0.3s 等回复
+        $pollInterval = 100000;   // 100ms 轮询间隔
+        $d7Wait = 300000;   // D7洗分中：等0.3s再次查询
+
+        $openStatus = '';
+        $washStatus = '';
+        $confirmed  = false;
+        $seenD7     = false; // 是否见过 D7（洗分中），用于区分过期 D6
+
+        for ($check = 1; $check <= $maxChecks; $check++) {
+            $beforeVersion = $this->getActionVersion(self::READ_STATUS);
+            Cache::delete($this->cacheDataKey . '_last_status_fields');
+            $cmd = $this->createCmd(self::READ_STATUS);
+            Gateway::sendToUid($uid, hex2bin($cmd));
+
+            $replied = false;
+            $waited = 0;
+            while ($waited < $replyTimeout) {
+                usleep($pollInterval);
+                $waited += $pollInterval;
+                if ($this->getActionVersion(self::READ_STATUS) > $beforeVersion) {
+                    $replied = true;
+                    break;
+                }
+            }
+
+            if (!$replied) {
+                $this->log->warning('[收账小卡-下分] EA D4 回复超时，重试', [
+                    'machine_code' => $this->machine->code,
+                    'check' => "$check/$maxChecks",
+                ]);
+                continue;
+            }
+
+            $raw = Cache::get($this->cacheDataKey . '_last_status_fields');
+            $fields = $raw ? json_decode($raw, true) : [];
+            $openStatus = $fields['open_status'] ?? '';
+            $washStatus = $fields['wash_status'] ?? '';
+            $washScore  = (int)($fields['wash_score'] ?? 0);
+
+            if ($washStatus === 'd7') {
+                $seenD7 = true;
+            }
+
+            $this->log->info('[收账小卡-下分] EA D4 查询', [
+                'machine_code' => $this->machine->code,
+                'check'        => "$check/$maxChecks",
+                'open_status'  => $openStatus === 'd2' ? '开分完成' : '开分中(D3)',
+                'wash_status'  => $washStatus === 'd6' ? '洗分完成' : '洗分中(D7)',
+                'wash_score'   => $washScore,
+            ]);
+
+            if ($washStatus === 'd6') {
+                if ($washScore > 0 || $seenD7) {
+                    // wash_score>0 = 本次洗分数据；或已见过D7（洗分中）再收到D6 = 真实完成
+                    $confirmed = true;
+                    break;
+                }
+                // wash_score=0 且从未见过D7：疑似过期D6
+                if ($caConfirmed) {
+                    // CA已确认机台收到指令，过期D6是正常的（机台还没开始洗），继续轮询等D7
+                    $this->log->warning('[收账小卡-下分] D6 wash_score=0（CA已确认，继续等D7）', [
+                        'machine_code' => $this->machine->code,
+                        'check'        => "$check/$maxChecks",
+                        'turn_count'   => $fields['turn_count'] ?? 0,
+                    ]);
+                } else {
+                    // CA未确认，过期D6表示机台未执行本次A5，立即返回false供调用方快速重试
+                    $this->log->warning('[收账小卡-下分] D6 wash_score=0（CA未确认，过期状态，立即退出）', [
+                        'machine_code' => $this->machine->code,
+                        'check'        => "$check/$maxChecks",
+                        'turn_count'   => $fields['turn_count'] ?? 0,
+                    ]);
+                    break;
+                }
+            }
+
+            usleep($d7Wait);
+        }
+
+        if (!$confirmed && !$seenD7) {
+            // 50次轮询内既未确认真实D6，也未见过D7 → 机台未执行本次洗分
+            // 返回 false 让调用方决定（继续重试A5 或 锁机台）
+            $this->log->warning('[收账小卡-下分] 确认洗分：50次轮询内无D7/真实D6，视为过期状态未执行', [
+                'machine_code' => $this->machine->code,
+                'wash_status'  => $washStatus,
+            ]);
+            return false;
+        }
+
+        // 见过D7（洗分中）或真实D6（wash_score>0）= 洗分已执行，立即清零card_score/point，
+        // 防止machineWash在A6到达前读到陈旧值而再次触发洗分
+        // 同时设置保护标记，防止B7心跳在机台硬件更新B1寄存器前用陈旧值覆盖_point
+        \support\Cache::set($this->cacheDataKey . '_wash_confirmed', 1, 30);
+        $this->card_score = 0;
+        $this->point = 0;
+
+        if (!$confirmed) {
+            $this->log->warning('[收账小卡-下分] EA D4 轮询结束仍为D7或无回复，card_score已清零，等待A6兜底', [
+                'machine_code' => $this->machine->code,
+                'wash_status' => $washStatus,
+                'checks' => $maxChecks,
+            ]);
+        }
+
+        if ($source === 'admin') {
+            $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '状态未知');
+            $openDesc = $openStatus === 'd2' ? '开分完成' : ($openStatus === 'd3' ? '开分中' : '状态未知');
+            sendSocketMessage('private-admin-1-' . $source_id, [
+                'msg_type' => 'machine_action_result',
+                'id' => $this->machine->id,
+                'open_status' => $openStatus,
+                'wash_status' => $washStatus,
+                'description' => "下分{$washDesc}（EA D4确认）｜{$openDesc}",
+            ]);
+        }
+
+        return true;
+    }
+
+    /**
+     * 获取所有属性
+     */
+    public function getAllData(): iterable
+    {
+        return Cache::getMultiple($this->cacheDataKeyArr, 0);
+    }
+
+    /**
+     * 获取指令描述
+     */
+    public function getDescription(string $fun = '', int $data = 0): string
+    {
+        locale(Str::replace('-', '_', $this->lang));
+
+        $description = '';
+        $autoStatus = $this->auto == 1 ? '启动' : '停止';
+        $loginStatus = $this->is_login == 1 ? '已登入' : '未登入';
+
+        if (empty($fun)) {
+            $description .= '自动状态: ' . $autoStatus . PHP_EOL;
+            $description .= '登入状态: ' . $loginStatus . PHP_EOL;
+            $description .= '机台分数: ' . ($this->point ?? 0) . PHP_EOL;
+            $description .= '押分: ' . ($this->bet ?? 0) . PHP_EOL;
+            $description .= '得分: ' . ($this->win ?? 0) . PHP_EOL;
+        } else {
+            switch ($fun) {
+                case self::LOGIN:
+                    $description = '登入';
+                    break;
+                case self::LOGOUT:
+                    $description = '登出';
+                    break;
+                case self::READ_SCORE:
+                    $description = '读取分数';
+                    break;
+                case self::READ_BET:
+                    $description = '读取押分';
+                    break;
+                case self::READ_STATUS:
+                    $description = '读取状态';
+                    break;
+                case self::ALL_DOWN:
+                    $description = '清除历史记录';
+                    break;
+                case self::CHECK:
+                    $description = '故排';
+                    break;
+                case self::SSR_SIGNAL:
+                    $description = '给SSR讯号10秒';
+                    break;
+                case self::OPEN_ANY_POINT:
+                    $description = "上分（{$data}分）";
+                    break;
+                case self::WASH_POINT:
+                    $description = '下分（全部洗分）';
+                    break;
+                default:
+                    $description = $fun;
+            }
+        }
+
+        return $description;
+    }
+
+    /**
+     * 设置操作版本号
+     */
+    public function setActionVersion($name): float
+    {
+        $version = getMillisecond();
+        Cache::set($this->cacheDataKey . '_' . 'action_' . $name, $version, 60 * 60);
+        return $version;
+    }
+
+    /**
+     * 获取操作版本号
+     */
+    public function getActionVersion($name): float
+    {
+        return (float)Cache::get($this->cacheDataKey . '_' . 'action_' . $name);
+    }
+
+    /**
+     * 判断是否是心跳消息（B7前缀）
+     *
+     * ⚠️ 心跳总长度：46个hex字符（23字节）
+     * B7(1B) B1(1B) 卡分(3B) B2(1B) 机分(3B) BA(1B) 押分(4B) BB(1B) 得分(4B) BD(1B) 状态(1B) SUM1(1B) SUM2(1B)
+     */
+    private function isHeartbeat(string $msg): bool
+    {
+        return substr(strtolower($msg), 0, 2) === self::TESTING && strlen($msg) >= 46;
+    }
+
+    /**
+     * 处理心跳消息（约1秒传一次）
+     *
+     * ⚠️ 格式：B7 B1 [开分卡分数3B] B2 [机台分数3B] BA [总押分4B] BB [总得分4B] BD [状态1B] S1 S2
+     *
+     * 示例：B7 B1 0B1416 B2 02151F BA 00050B0C BB 00033305 BD xx S1(XOR) S2(ADD)
+     *       - B1: 开分卡分数旗标
+     *       - 0B1416: 开分卡分数 = 112030分
+     *       - B2: 机台分数旗标
+     *       - 02151F: 机台分数 = 22131分
+     *       - BA: 总押分旗标
+     *       - 00050B0C: 总押分 = 51112分
+     *       - BB: 总得分旗标
+     *       - 00033305: 总得分 = 35105分
+     *       - BD: 状态字节（详见下方）
+     *       - S1: XOR异或校验
+     *       - S2: ADD累加校验（包含S1）
+     *
+     * BD状态字节（1字节，8位）：
+     *   b7 = 0: 登入中      | b7 = 1: 登出中（无法开洗分）
+     *   b6: 预留
+     *   b5 = 1: 现场跳开分表（未透过后台开分）
+     *   b4 = 1: 现场跳洗分表（未透过后台洗分）
+     *   b3: 空置预留
+     *   b2 = 1: 小当
+     *   b1 = 1: 高确
+     *   b0 = 1: 大当
+     *
+     * 示例：BD80 = 10000000（二进制）= 登出中
+     *
+     * ⚠️ 校验算法：S1 = XOR, S2 = ADD + S1（与收账小卡其他指令的SUM1/SUM2顺序相反）
+     * ⚠️ 注意：心跳中开分卡和机台分数是3字节，总押分和总得分是4字节！
+     */
+    private function handleHeartbeat(string $msg): bool
+    {
+        try {
+            // ✅ 入口日志（DEBUG级别，避免日志过多）
+            $this->log->debug('[心跳] 处理开始', [
+                'machine_code' => $this->machine->code,
+                'msg_len' => strlen($msg),
+            ]);
+
+            // ✅ B7心跳使用特殊的S1/S2校验算法（不是收账小卡标准的SUM1/SUM2）
+            if (!$this->validateHeartbeatChecksum($msg)) {
+                $this->log->error('[心跳] 校验失败', [
+                    'machine_code' => $this->machine->code,
+                    'msg' => strtoupper($msg),
+                ]);
+                return false;
+            }
+
+            // 解析心跳数据
+            [$cardScore, $machineScore, $totalBet, $totalWin, $statusByte] =
+                $this->parseHeartbeatData($msg);
+
+            // ========== 更新线下版特有字段（GD收账小卡协议） ==========
+            // ✅ 记录分数变化（只在有显著变化时记录，避免心跳日志过多）
+            $oldCardScore = $this->card_score ?? 0;
+            $oldMachineScore = $this->machine_score ?? 0;
+            $oldTotalBet = $this->total_bet ?? 0;
+            $oldRewardStatus = $this->reward_status ?? 0;
+
+            // 提前从 statusByte 解析本次心跳的开奖状态（big_win=bit0，small_win=bit2）
+            $statusVal = hexdec($statusByte);
+            $heartbeatRewardStatus = (($statusVal & 0x01) > 0 || ($statusVal & 0x04) > 0) ? 1 : 0;
+
+            // ✅ 诊断日志：详细记录分数变化原因，帮助排查锁机台问题
+            if (abs($cardScore - $oldCardScore) > 0) {
+                $cardScoreChange = $cardScore - $oldCardScore;
+                $changeReason = '未知';
+
+                if ($cardScoreChange > 0) {
+                    $changeReason = '上分操作（期望增加：查看上分日志）';
+                } elseif ($cardScoreChange < 0) {
+                    if ($cardScore === 0) {
+                        $changeReason = '洗分操作（全部洗分，期望变为0）';
+                    } else {
+                        $changeReason = '下分操作（部分洗分）或游戏消耗';
+                    }
+                }
+
+                $this->logFieldChange('心跳', 'card_score', $oldCardScore, $cardScore, $changeReason);
+
+                $this->log->info('[心跳-分数诊断] 卡分变化', [
+                    'machine_code' => $this->machine->code,
+                    'old_card_score' => $oldCardScore,
+                    'new_card_score' => $cardScore,
+                    'change' => $cardScoreChange,
+                    'reason' => $changeReason,
+                    'note' => '如果此变化后出现锁机台，说明分数变化不符合预期',
+                ]);
+            }
+
+            if (abs($machineScore - $oldMachineScore) > 0) {
+                $machineScoreChange = $machineScore - $oldMachineScore;
+                $changeReason = '游戏进行中的分数变化';
+
+                $this->logFieldChange('心跳', 'machine_score', $oldMachineScore, $machineScore, $changeReason);
+            }
+
+            // ✅ 保存上一次心跳的开分卡分数（用于计算线下洗分金额）
+            if ($oldCardScore > 0) {
+                $this->last_card_score = $oldCardScore;
+            }
+
+            // 洗分保护：D6确认后，机台硬件B1寄存器可能延迟更新，B7仍上报旧分数
+            // 若_wash_confirmed标记存在且cardScore>0，说明是陈旧心跳，跳过写入防止覆盖归零值
+            $washConfirmed = \support\Cache::get($this->cacheDataKey . '_wash_confirmed');
+            $suppressStaleHeartbeat = $washConfirmed && $cardScore > 0;
+            if ($suppressStaleHeartbeat) {
+                $this->log->info('[心跳-洗分保护] 跳过陈旧B7写入，等待机台B1归零', [
+                    'machine_code'   => $this->machine->code,
+                    'stale_card_score' => $cardScore,
+                ]);
+            } else {
+                if ($washConfirmed && $cardScore == 0) {
+                    // 机台硬件已确认归零，清除保护标记
+                    \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
+                }
+                $this->card_score = $cardScore;           // 开分卡分数（心跳B1字段）
+            }
+            $this->machine_score = $machineScore;     // 机台分数（心跳B2字段）
+            $this->total_bet = $totalBet;             // 总押分数（心跳BA字段）
+            $this->total_win = $totalWin;             // 总得分数（心跳BB字段）
+
+            // ========== 打码量统计（心跳 BA 押分增量触发） ==========
+            // total_bet 是机台累计押分（单位：分），增加时说明有新押注
+            // 条件：旧值>0（排除EADE后复位）、押分增加、有玩家在游戏
+            $currentGamingUserId = $this->gaming_user_id ?? 0;
+
+            // machine_score 变化说明机台正在处理游戏结果（赢/输），刷新活跃时间防止被判为闲置
+            if ($machineScore !== $oldMachineScore && !empty($currentGamingUserId)) {
+                $this->last_play_time = time();
+            }
+
+            // CHECK 在每次开分前归零 total_bet，每局从 0 开始，直接用增量判断
+            if (!empty($currentGamingUserId) && $totalBet > $oldTotalBet) {
+                $betIncrement = $totalBet - $oldTotalBet;  // 增量（转）
+
+                // 累加机台转数（开奖中不累加，与线上版一致）
+                // total_bet 从机台指令读上来已经是转数，直接使用
+                if ($heartbeatRewardStatus == 0) {
+                    $this->now_turn = bcadd($this->now_turn ?? '0', (string)$betIncrement, 2);
+                }
+
+                // total_bet 已是转数，直接作为 num/last_num 传入彩金队列
+                $numForQueue = $totalBet;
+                $lastNumForQueue = $oldTotalBet;
+
+                // 玩家正在打码，更新活跃时间并累加保留时间
+                $this->last_play_time = time();
+                \Webman\RedisQueue\Client::send('play-keep-machine', [
+                    'change_amount'    => 1,
+                    'machine_id'       => $this->machine->id,
+                    'machine_cache_key' => sprintf('machine:domain:%s:port:%s:type:%s',
+                        $this->machine->domain, $this->machine->port, $this->machine->type
+                    ),
+                    'player_id'        => $currentGamingUserId,
+                    'gaming_user_id'   => $currentGamingUserId,
+                    'keep_seconds'     => $this->keep_seconds,
+                    'keeping'          => $this->keeping,
+                ]);
+
+                $this->log->info('[心跳-打码量] 检测到押分增量', [
+                    'machine_code'  => $this->machine->code,
+                    'player_id'     => $currentGamingUserId,
+                    'old_total_bet' => $oldTotalBet,
+                    'new_total_bet' => $totalBet,
+                    'bet_increment' => $betIncrement,
+                    'num_for_queue' => $numForQueue,
+                    'last_num'      => $lastNumForQueue,
+                ]);
+
+                try {
+                    // 彩金抽奖检查
+                    \Webman\RedisQueue\Client::send('lottery-machine', [
+                        'num' => $numForQueue,
+                        'last_num' => $lastNumForQueue,
+                        'machine_id' => $this->machine->id,
+                        'player_id' => $currentGamingUserId,
+                    ]);
+                    $this->log->info('[心跳-打码量] lottery-machine 已投递', [
+                        'machine_code' => $this->machine->code,
+                        'player_id'    => $currentGamingUserId,
+                        'num'          => $numForQueue,
+                        'last_num'     => $lastNumForQueue,
+                    ]);
+
+                    // 实时打码量统计：转数 × (odds_x/odds_y) = 元，与洗分打码量公式一致
+                    $oddsX = $this->machine->odds_x ?? 1;
+                    $oddsY = $this->machine->odds_y ?? 1;
+                    if ($oddsY > 0) {
+                        $betAmount = bcmul(
+                            (string)$betIncrement,
+                            bcdiv((string)$oddsX, (string)$oddsY, 8),
+                            2
+                        );
+                        $this->log->info('[心跳-打码量] 打码金额计算', [
+                            'machine_code'       => $this->machine->code,
+                            'player_id'          => $currentGamingUserId,
+                            'bet_increment_turn' => $betIncrement,
+                            'odds_x'             => $oddsX,
+                            'odds_y'             => $oddsY,
+                            'bet_amount'         => $betAmount,
+                        ]);
+                        if (bccomp($betAmount, '0', 2) > 0) {
+                            \Webman\RedisQueue\Client::send('bet-statistics', [
+                                'player_id' => $currentGamingUserId,
+                                'stat_type' => 'machine',
+                                'bet_amount' => floatval($betAmount),
+                                'source' => 'song_offline_slot',
+                                'machine_id' => $this->machine->id,
+                                'created_at' => date('Y-m-d H:i:s'),
+                            ]);
+                            $this->log->info('[心跳-打码量] bet-statistics 已投递', [
+                                'machine_code' => $this->machine->code,
+                                'player_id'    => $currentGamingUserId,
+                                'bet_amount'   => $betAmount,
+                            ]);
+                        }
+                    }
+                } catch (\Exception $e) {
+                    $this->log->error('[心跳-打码量] 投递队列失败', [
+                        'machine_code'  => $this->machine->code,
+                        'player_id'     => $currentGamingUserId,
+                        'bet_increment' => $betIncrement,
+                        'error'         => $e->getMessage(),
+                    ]);
+                }
+            } else {
+                $skipReason = [];
+                if ($totalBet <= $oldTotalBet) {
+                    $skipReason[] = "total_bet未增加（old={$oldTotalBet}, new={$totalBet}）";
+                }
+                if (empty($currentGamingUserId)) {
+                    $skipReason[] = 'gaming_user_id为空（无玩家在游戏）';
+                }
+                if (!empty($skipReason)) {
+                    $this->log->debug('[心跳-打码量] 本次心跳不触发打码量', [
+                        'machine_code'   => $this->machine->code,
+                        'old_total_bet'  => $oldTotalBet,
+                        'new_total_bet'  => $totalBet,
+                        'gaming_user_id' => $currentGamingUserId,
+                        'skip_reason'    => implode('；', $skipReason),
+                    ]);
+                }
+            }
+
+            // ========== 同步更新兼容字段（与线上版保持一致） ==========
+            // ✅ 修正：point应该指向开分卡分数，因为洗分时退的是开分卡上的分数
+            // 洗分保护：与card_score写入判断一致，suppress时跳过，避免二次洗分
+            if (!$suppressStaleHeartbeat) {
+                $this->point = $cardScore;                // point = card_score（开分卡分数）
+            }
+            $this->score = $machineScore;             // score = machine_score（机台分数）
+            $this->win = $totalWin;                   // win = total_win（兼容线上版）
+            $this->bet = $totalBet;                   // bet = total_bet（兼容客户端 WS machineInfo）
+
+            // ✅ 优化：心跳更新数据时同步更新 actionVersion，避免查询指令等待超时
+            // 场景：发送查询指令后，心跳先到达并包含最新数据，此时应解除等待
+            $this->setActionVersion(self::READ_SCORE);  // card_score, machine_score 已更新
+            $this->setActionVersion(self::READ_BET);    // total_bet, total_win 已更新
+
+            // 解析状态字节
+            $status = $this->parseStatusByte($statusByte);
+
+            // ========== 登入状态（心跳BD.b7） ==========
+            $oldLoginStatus = $this->login_status ?? 0;
+            $loginValue = $status['logged_out'] ? 0 : 1;
+            $this->logFieldChange('心跳', 'login_status', $oldLoginStatus, $loginValue, '心跳检测');
+
+            $this->login_status = $loginValue;        // 新字段
+            $this->is_login = $loginValue;            // 兼容旧字段
+
+            // ✅ 优化：登入状态变化时更新 actionVersion
+            if ($oldLoginStatus !== $loginValue) {
+                if ($loginValue === 1) {
+                    $this->setActionVersion(self::LOGIN);   // 登入成功
+                    // 登入成功时清除限速 key，确保下次登出后能立即重试
+                    Cache::delete($this->cacheDataKey . '_login_retry_at');
+                } else {
+                    $this->setActionVersion(self::LOGOUT);  // 登出成功
+                }
+            }
+
+            // 心跳检测到未登入时主动补发登入指令（fire-and-forget，每10秒最多一次）
+            // 机板保持长期登入状态，硬件重启后靠此机制自动恢复，无需等玩家上分时触发
+            if ($loginValue === 0 && $this->has_lock != 1) {
+                $rateLimitKey = $this->cacheDataKey . '_login_retry_at';
+                if (!Cache::get($rateLimitKey)) {
+                    Cache::set($rateLimitKey, 1, 10);
+                    try {
+                        $uid = $this->machine->domain . ':' . $this->machine->port;
+                        $loginCmd = $this->createCmd(self::LOGIN);
+                        Gateway::sendToUid($uid, hex2bin($loginCmd));
+                        $this->log->info('[心跳] 检测到未登入，已主动发送登入指令', [
+                            'machine_code' => $this->machine->code,
+                        ]);
+                    } catch (\Exception $loginErr) {
+                        $this->log->warning('[心跳] 主动登入指令发送失败', [
+                            'machine_code' => $this->machine->code,
+                            'error'        => $loginErr->getMessage(),
+                        ]);
+                    }
+                }
+            }
+
+            // ========== 游戏状态（心跳BD.b0/b1/b2） ==========
+            $oldBigWin = $this->big_win ?? 0;
+            $oldHighProb = $this->high_prob ?? 0;
+            $oldSmallWin = $this->small_win ?? 0;
+
+            $newBigWin = $status['big_win'] ? 1 : 0;
+            $newHighProb = $status['high_prob'] ? 1 : 0;
+            $newSmallWin = $status['small_win'] ? 1 : 0;
+
+            $this->logFieldChange('心跳', 'big_win', $oldBigWin, $newBigWin, '大当状态');
+            $this->logFieldChange('心跳', 'high_prob', $oldHighProb, $newHighProb, '高确状态');
+            $this->logFieldChange('心跳', 'small_win', $oldSmallWin, $newSmallWin, '小当状态');
+
+            $this->big_win = $newBigWin;       // 大当状态
+            $this->high_prob = $newHighProb;   // 高确状态
+            $this->small_win = $newSmallWin;   // 小当状态
+
+            // ✅ 同步 reward_status：大当/小当置位时视为开奖中（兼容客户端 WS machineInfo）
+            // ⚠️ 高确（high_prob）是概率模式不是派彩过程，不纳入 reward_status
+            $newRewardStatus = ($newBigWin || $newSmallWin) ? 1 : 0;
+            if ($newRewardStatus !== $oldRewardStatus) {
+                $this->reward_status = $newRewardStatus;
+
+                if ($oldRewardStatus == 0 && $newRewardStatus == 1 && $this->now_turn > 0) {
+                    // 开奖开始：记录本局打码量（与线上版一致）
+                    $gamingUserId = $this->gaming_user_id ?? 0;
+                    if (!empty($gamingUserId)) {
+                        try {
+                            $lotteryRecord = new MachineLotteryRecord();
+                            $lotteryRecord->machine_id = $this->machine->id;
+                            $lotteryRecord->player_id = $gamingUserId;
+                            $lotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
+                            $lotteryRecord->draw_bet = $this->bet;
+                            $lotteryRecord->use_turn = $this->now_turn;
+                            $lotteryRecord->save();
+                        } catch (\Throwable $e) {
+                            $this->log->error('[心跳] 写入开奖记录失败', ['error' => $e->getMessage()]);
+                        }
+                    }
+                }
+
+                // 开奖结束（1→0）：线下机台无观看玩家，不需要推送也不需要写库
+                // 刷新活跃时间，防止开奖结束后玩家立即被判为闲置
+                if ($oldRewardStatus == 1 && $newRewardStatus == 0) {
+                    $gamingUserId = $this->gaming_user_id ?? 0;
+                    if (!empty($gamingUserId)) {
+                        $this->last_play_time = time();
+                    }
+                }
+
+                // 开奖状态切换时重置转数（开奖开始/结束都归零）
+                $this->now_turn = 0;
+            }
+
+            // 开奖中持续刷新活动时间，防止保留计时器计入闲置（大当可能持续较长时间）
+            if ($newRewardStatus == 1 && !empty($currentGamingUserId)) {
+                $this->last_play_time = time();
+            }
+
+            // 检测现场跳码表
+            if ($status['external_open'] || $status['external_wash']) {
+                $this->handleExternalButton($status);
+            }
+
+            $this->log->info('[心跳] 机台状态更新', [
+                'machine_code' => $this->machine->code,
+                'card_score' => $cardScore,
+                'machine_score' => $machineScore,
+                'total_bet' => $totalBet,
+                'total_win' => $totalWin,
+                'status' => $status,
+            ]);
+
+            return true;
+
+        } catch (Exception $e) {
+            $this->log->error('[心跳] 处理失败', [
+                'error' => $e->getMessage(),
+                'msg' => strtoupper($msg),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * 解析心跳数据
+     *
+     * ⚠️ 格式：B7 B1 [卡分3B] B2 [机分3B] BA [押分4B] BB [得分4B] BD [状态1B] S1 S2
+     *
+     * 位置计算（hex字符位置）：
+     * - B7: 0-2
+     * - B1: 2-4, 开分卡分数: 4-10 (3字节=6hex)
+     * - B2: 10-12, 机台分数: 12-18 (3字节=6hex)
+     * - BA: 18-20, 总押分: 20-28 (4字节=8hex)
+     * - BB: 28-30, 总得分: 30-38 (4字节=8hex)
+     * - BD: 38-40, 状态字节: 40-42 (1字节=2hex)
+     * - SUM1: 42-44, SUM2: 44-46
+     */
+    private function parseHeartbeatData(string $msg): array
+    {
+        try {
+            // ✅ 修复：开分卡和机台分数是3字节，不是4字节
+            $cardScore = $this->parseScore3Byte(substr($msg, 4, 6));      // B1后3字节
+            $machineScore = $this->parseScore3Byte(substr($msg, 12, 6));  // B2后3字节
+            $totalBet = $this->parseScore4Byte(substr($msg, 20, 8));      // BA后4字节
+            $totalWin = $this->parseScore4Byte(substr($msg, 30, 8));      // BB后4字节
+            $statusByte = substr($msg, 40, 2);                            // BD后1字节
+
+            return [$cardScore, $machineScore, $totalBet, $totalWin, $statusByte];
+
+        } catch (Exception $e) {
+            $this->log->error('[心跳] 数据解析失败', [
+                'error' => $e->getMessage(),
+                'msg' => strtoupper($msg),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * 解析3字节BCD分数（心跳专用）
+     *
+     * ⚠️ 心跳中的开分卡分数和机台分数是3字节BCD格式
+     *
+     * 示例：
+     * 0B 14 1E → 0B=11万位 14=20千位 1E=30百位十位个位
+     * 转换：11 20 30 → 112030
+     *
+     * @param string $scoreSection 6个hex字符（3字节）
+     * @return int 分数值
+     */
+    private function parseScore3Byte(string $scoreSection): int
+    {
+        if (strlen($scoreSection) !== 6) {
+            throw new Exception('3字节BCD格式错误，期望6个hex字符，实际：' . strlen($scoreSection));
+        }
+
+        $bytes = str_split($scoreSection, 2);
+
+        // 每个字节转换为2位十进制数
+        $byte1 = hexdec($bytes[0]);  // 十万、万
+        $byte2 = hexdec($bytes[1]);  // 千、百
+        $byte3 = hexdec($bytes[2]);  // 十、个
+
+        // 组合成最终数值
+        return ($byte1 * 10000) + ($byte2 * 100) + $byte3;
+    }
+
+    /**
+     * 解析BD状态字节
+     *
+     * BD状态字节（1字节8位）各位含义：
+     *   b7: 登入状态
+     *       - 0 = 登入中（可以开洗分）
+     *       - 1 = 登出中（无法开洗分）
+     *   b6: 预留
+     *   b5: 现场跳开分表（外部按钮开分，未透过后台）
+     *       - 0 = 正常
+     *       - 1 = 检测到现场跳开分表
+     *   b4: 现场跳洗分表（外部按钮洗分，未透过后台）
+     *       - 0 = 正常
+     *       - 1 = 检测到现场跳洗分表
+     *   b3: 空置预留
+     *   b2: 小当状态
+     *       - 0 = 无小当
+     *       - 1 = 小当中
+     *   b1: 高确状态
+     *       - 0 = 无高确
+     *       - 1 = 高确中
+     *   b0: 大当状态
+     *       - 0 = 无大当
+     *       - 1 = 大当中
+     *
+     * 示例：
+     *   BD80 = 10000000（二进制）= 登出中，其他状态正常
+     *   BD00 = 00000000（二进制）= 登入中，所有状态正常
+     *   BD01 = 00000001（二进制）= 登入中，大当中
+     *   BD07 = 00000111（二进制）= 登入中，大当+高确+小当
+     *
+     * @param string $byte 状态字节（2个hex字符）
+     * @return array 解析后的状态数组
+     */
+    private function parseStatusByte(string $byte): array
+    {
+        $val = hexdec($byte);
+
+        return [
+            'logged_out' => ($val & 0x80) > 0,      // bit7: 登出状态
+            'external_open' => ($val & 0x20) > 0,   // bit5: 现场跳开分表
+            'external_wash' => ($val & 0x10) > 0,   // bit4: 现场跳洗分表
+            'small_win' => ($val & 0x04) > 0,       // bit2: 小当
+            'high_prob' => ($val & 0x02) > 0,       // bit1: 高确
+            'big_win' => ($val & 0x01) > 0,         // bit0: 大当
+        ];
+    }
+
+    /**
+     * 处理外部按钮（现场跳码表）
+     */
+    private function handleExternalButton(array $status): void
+    {
+        $lockKey = "external_button_slot_{$this->machine->id}";
+        $lock = Locker::lock($lockKey, 10);
+
+        try {
+            if (!$lock->acquire()) {
+                $this->log->warning('[外部按钮] 获取锁失败', [
+                    'machine_code' => $this->machine->code,
+                ]);
+                return;
+            }
+
+            $gamingUserId = $this->gaming_user_id ?? 0;
+
+            // 检测开分表
+            if ($status['external_open']) {
+                $this->external_open = 1;
+                // ✅ 使用开分码表差值记录线下开分
+                $this->processExternalOpen($gamingUserId);
+            }
+
+            // 检测洗分表
+            if ($status['external_wash']) {
+                $this->external_wash = 1;
+                // ✅ 使用开分卡分数差值计算洗分金额
+                $this->processExternalWash($gamingUserId);
+            }
+
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * 处理外部码表（查询并记录）
+     *
+     * ⚠️ 修复Bug #7：统一调用processCounterChange，避免与路径1（EA C4）逻辑不一致
+     */
+    private function processExternalTable(string $type, int $userId): void
+    {
+        try {
+            // 查询详细账目获取码表数值
+            $detail = $this->queryDetailSync();
+
+            $fieldName = $type === 'open' ? 'open_table' : 'wash_table';
+            $newTable = $detail[$fieldName] ?? 0;
+            $oldTable = $this->$fieldName ?? 0;
+
+            // ✅ 修复：调用processCounterChange，统一两条路径的逻辑
+            // 这样可以：
+            // 1. 避免重复记录（10秒去重窗口）
+            // 2. 正确处理故障排除后的归零（check_flag检查）
+            // 3. 检测异常减少（告警和锁定机台）
+            // 4. 正确计算打码量（betAmount字段）
+            $timestamp = time();
+            $result = $this->processCounterChange($type, $oldTable, $newTable, $timestamp);
+
+            if ($result['should_update']) {
+                $this->$fieldName = $newTable;
+            }
+
+            if ($result['recorded']) {
+                $this->log->warning('[外部按钮-心跳触发] 检测到现场跳码表', [
+                    'machine_code' => $this->machine->code,
+                    'type' => $type,
+                    'old_table' => $oldTable,
+                    'new_table' => $newTable,
+                    'increment' => $newTable - $oldTable,
+                    'path' => 'B7 heartbeat',
+                ]);
+            }
+
+        } catch (Exception $e) {
+            $this->log->error('[外部按钮] 查询码表失败', [
+                'type' => $type,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * 处理线下洗分（通过开分卡分数差值计算）
+     *
+     * ✅ 新逻辑：根据上一次心跳的开分卡分数作为洗分金额
+     * - 洗分前：last_card_score（上一次心跳）
+     * - 洗分后：card_score（当前心跳）
+     * - 洗分金额 = last_card_score - card_score
+     *
+     * @param int $gamingUserId 当前游戏玩家ID（0=无玩家）
+     */
+    private function processExternalWash(int $gamingUserId): void
+    {
+        try {
+            // 1. 获取洗分前后的开分卡分数
+            $cardScoreBefore = $this->last_card_score ?? 0;
+            $cardScoreAfter = $this->card_score ?? 0;
+
+            // 2. 计算实际洗掉的分数
+            $washedScore = $cardScoreBefore - $cardScoreAfter;
+
+            // 3. 验证洗分金额
+            if ($washedScore <= 0) {
+                $this->log->warning('[线下洗分] 开分卡分数未减少，跳过处理', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'card_score_before' => $cardScoreBefore,
+                    'card_score_after' => $cardScoreAfter,
+                    'gaming_user_id' => $gamingUserId,
+                ]);
+                return;
+            }
+
+            // 4. 转换成玩家余额（使用机台比值）
+            // 公式：game_amount = floor(wash_point * odds_x / odds_y)
+            $washedAmount = floor(
+                bcmul(
+                    bcdiv($washedScore, $this->machine->odds_y ?? 1, 4),
+                    $this->machine->odds_x ?? 1,
+                    2
+                )
+            );
+
+            $this->log->info('[线下洗分] 检测到开分卡分数减少', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'card_score_before' => $cardScoreBefore,
+                'card_score_after' => $cardScoreAfter,
+                'washed_score' => $washedScore,
+                'washed_amount' => $washedAmount,
+                'odds_x' => $this->machine->odds_x,
+                'odds_y' => $this->machine->odds_y,
+                'gaming_user_id' => $gamingUserId,
+            ]);
+
+            // 5. 处理玩家余额
+            if ($gamingUserId > 0) {
+                // 有玩家：返回余额到钱包
+                $this->returnBalanceToPlayer($gamingUserId, $washedScore, $washedAmount);
+            } else {
+                // 无玩家：只记录操作
+                $this->recordExternalWashWithoutPlayer($washedScore, $washedAmount);
+            }
+
+            // 5.5 设置去重标记，防止 EAC4 路径重复创建"外部按键"记录
+            // B7 路径（processExternalWash）已处理本次洗分，EAC4 检测到 wash_table 变化时应跳过
+            \support\Cache::set('external_counter_wash_last_update_' . $this->machine->id, time(), 30);
+
+            // 6. 重置 last_card_score，防止下次 B7 复用旧值导致重复洗分
+            $this->last_card_score = $cardScoreAfter;
+
+            // 7. ✅ 发送 CHECK（A37005E0F8CE）归零机台 total_bet/total_win，同时清除 b4 标志
+            // CHECK 回复链：a3f833 → EE/EF → 机台计数器归零
+            try {
+                $this->sendCmd(self::CHECK, 0, 'system');
+                $this->log->info('[线下洗分] CHECK 指令已发送，机台 total_bet/total_win 将归零', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                ]);
+            } catch (Exception $e) {
+                $this->log->error('[线下洗分] 发送 CHECK 指令失败', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+        } catch (Exception $e) {
+            $this->log->error('[线下洗分] 处理失败', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+        }
+    }
+
+    /**
+     * 处理线下开分（通过开分码表差值记录）
+     *
+     * ✅ 新逻辑：根据开分码表差值记录线下开分
+     * - 查询：总账（EA C4）- 网络账（EA C7）= 线下账
+     * - 记录：创建开分记录（PlayerGameLog）
+     * - 注意：不扣减玩家余额（线下现金投币）
+     *
+     * @param int $gamingUserId 当前游戏玩家ID（0=无玩家）
+     */
+    private function processExternalOpen(int $gamingUserId): void
+    {
+        try {
+            // 1. 使用缓存数据计算开分码表差值
+            // 原设计调用 queryDetailSync()，但该方法在 Workerman 事件处理器内会阻塞整个事件循环
+            // 导致 EA C4 回复无法被处理，必然超时。改为使用 EA C4 回复时保存的前值。
+            $oldOpenTable = $this->prev_open_table ?? 0;
+            $newOpenTable = $this->open_table ?? 0;
+
+            // 2. 计算开分增量
+            $openIncrement = $newOpenTable - $oldOpenTable;
+
+            // 3. 验证开分金额
+            if ($openIncrement <= 0) {
+                $this->log->warning('[线下开分] 开分码表未增加，跳过处理', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'old_open_table' => $oldOpenTable,
+                    'new_open_table' => $newOpenTable,
+                    'gaming_user_id' => $gamingUserId,
+                ]);
+                return;
+            }
+
+            // 4. 换算金额（与 SongOfflineJackpot 保持一致）
+            // open_table 记录次数，1次 = PHYSICAL_BUTTON_UNIT 机台分
+            // 玩家余额等值 = 机台分 / odds_y * odds_x
+            $openedScore = $openIncrement * self::PHYSICAL_BUTTON_UNIT;  // 本次机台分
+            $openAmount = (int)floor(
+                $openedScore / ($this->machine->odds_y ?? 1) * ($this->machine->odds_x ?? 1)
+            );  // 等值余额（用于记录，不扣减）
+
+            $this->log->info('[线下开分] 检测到开分码表增加', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'old_open_table' => $oldOpenTable,
+                'new_open_table' => $newOpenTable,
+                'open_increment' => $openIncrement,
+                'opened_score' => $openedScore,
+                'open_amount' => $openAmount,
+                'odds_x' => $this->machine->odds_x,
+                'odds_y' => $this->machine->odds_y,
+                'gaming_user_id' => $gamingUserId,
+            ]);
+
+            // 5. 记录开分操作（不扣减余额）
+            if ($gamingUserId > 0) {
+                // 有玩家：记录玩家开分
+                $this->recordExternalOpenForPlayer($gamingUserId, $openedScore, $openAmount);
+            } else {
+                // 无玩家：记录系统开分
+                $this->recordExternalOpenWithoutPlayer($openedScore, $openAmount);
+            }
+
+            // 6. 更新前值，防止下次 B7 重复处理同一次开分事件
+            $this->prev_open_table = $newOpenTable;
+
+            // 7. ✅ 自动发送清除故障指令（清除 b5 标志）
+            try {
+                $this->sendCmd(self::CHECK, 0, 'system');
+                $this->log->info('[线下开分] 自动发送 CHECK 指令清除 b5 标志', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                ]);
+            } catch (Exception $e) {
+                $this->log->error('[线下开分] 发送 CHECK 指令失败', [
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+        } catch (Exception $e) {
+            $this->log->error('[线下开分] 处理失败', [
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+        }
+    }
+
+    /**
+     * 记录玩家的线下开分操作
+     *
+     * 流程：
+     * 1. 创建开分记录（PlayerGameLog）
+     * 2. 创建金流记录（PlayerDeliveryRecord）
+     * 3. 更新游戏记录（PlayerGameRecord）
+     * 4. 不扣减玩家余额（线下现金投币）
+     */
+    private function recordExternalOpenForPlayer(int $playerId, int $openedScore, int $openAmount): void
+    {
+        \support\Db::beginTransaction();
+
+        try {
+            $player = \app\model\Player::find($playerId);
+            if (!$player) {
+                throw new Exception("玩家不存在: {$playerId}");
+            }
+
+            // 1. 获取游戏记录
+            $gameRecord = \app\model\PlayerGameRecord::query()
+                ->where('machine_id', $this->machine->id)
+                ->where('player_id', $playerId)
+                ->where('status', \app\model\PlayerGameRecord::STATUS_START)
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            // 2. 读取玩家余额（记录用，不扣减）
+            $balance = \app\service\WalletService::getBalance($playerId);
+
+            // 3. 创建开分记录（PlayerGameLog）
+            $playerGameLog = addPlayerGameLog(
+                $player,
+                $this->machine,
+                $gameRecord,
+                $this->machine->control_open_point ?? 100
+            );
+            $playerGameLog->open_point = $openedScore;
+            $playerGameLog->game_amount = $openAmount;
+            $playerGameLog->before_game_amount = $balance;
+            $playerGameLog->after_game_amount = $balance;  // 余额不变
+            $playerGameLog->action = \app\model\PlayerGameLog::ACTION_OPEN;
+            $playerGameLog->chip_amount = 0;
+            $playerGameLog->is_system = 0;
+            $playerGameLog->remark = '线下实体按键开分（现金投币）';
+            $playerGameLog->save();
+
+            // 5. 更新游戏记录
+            if ($gameRecord) {
+                $gameRecord->open_point = bcadd($gameRecord->open_point, $openedScore, 2);
+                $gameRecord->open_amount = bcadd($gameRecord->open_amount, $openAmount, 2);
+                $gameRecord->save();
+            }
+
+            // 6. 更新 Redis 记录
+            $this->last_point_at = time();
+            $this->player_open_point = bcadd($this->player_open_point ?? '0', $openedScore, 2);
+
+            \support\Db::commit();
+
+            $this->log->info('[线下开分] 玩家开分记录创建成功', [
+                'player_id' => $playerId,
+                'opened_score' => $openedScore,
+                'open_amount' => $openAmount,
+                'machine_id' => $this->machine->id,
+                'balance_unchanged' => $balance,
+                'player_game_log_id' => $playerGameLog->id,
+            ]);
+
+        } catch (Exception $e) {
+            \support\Db::rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * 记录无玩家的线下开分操作
+     *
+     * 仅创建开分记录，标记为线下按键操作
+     */
+    private function recordExternalOpenWithoutPlayer(int $openedScore, int $openAmount): void
+    {
+        \support\Db::beginTransaction();
+
+        try {
+            // 创建系统开分记录（player_id = 0）
+            $playerGameLog = new \app\model\PlayerGameLog();
+            $playerGameLog->player_id = 0;  // 系统记录
+            $playerGameLog->department_id = $this->machine->department_id ?? 0;
+            $playerGameLog->machine_id = $this->machine->id;
+            $playerGameLog->open_point = $openedScore;
+            $playerGameLog->game_amount = $openAmount;
+            $playerGameLog->before_game_amount = 0;
+            $playerGameLog->after_game_amount = 0;
+            $playerGameLog->action = \app\model\PlayerGameLog::ACTION_OPEN;
+            $playerGameLog->chip_amount = 0;
+            $playerGameLog->is_system = 1;
+            $playerGameLog->remark = '线下实体按键开分（无玩家，现金投币）';
+            $playerGameLog->save();
+
+            \support\Db::commit();
+
+            $this->log->info('[线下开分] 无玩家游戏，已记录开分操作', [
+                'opened_score' => $openedScore,
+                'open_amount' => $openAmount,
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'player_game_log_id' => $playerGameLog->id,
+            ]);
+
+        } catch (Exception $e) {
+            \support\Db::rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * 返回余额给玩家（线下洗分）
+     *
+     * 流程：
+     * 1. 创建下分记录（PlayerGameLog）
+     * 2. 创建金流记录（PlayerDeliveryRecord）
+     * 3. 更新游戏记录（PlayerGameRecord）
+     * 4. 钱包加款（WalletService）
+     * 5. 推送余额变化（BalancePushService）
+     */
+    private function returnBalanceToPlayer(int $playerId, int $washedScore, string $washedAmount): void
+    {
+        \support\Db::beginTransaction();
+
+        try {
+            $player = \app\model\Player::find($playerId);
+            if (!$player) {
+                throw new Exception("玩家不存在: {$playerId}");
+            }
+
+            // 1. 获取游戏记录
+            $gameRecord = \app\model\PlayerGameRecord::query()
+                ->where('machine_id', $this->machine->id)
+                ->where('player_id', $playerId)
+                ->where('status', \app\model\PlayerGameRecord::STATUS_START)
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            // 2. 读取玩家余额
+            $beforeBalance = \app\service\WalletService::getBalance($playerId);
+            $afterBalance = bcadd($beforeBalance, $washedAmount, 2);
+
+            // 2.5 ✅ 计算玩家游戏期间的打码量
+            // CHECK 在开分前已归零 total_bet/total_win，每局从 0 开始，直接使用当前值
+            $gamingPressure = $this->total_bet ?? 0;   // 本局总押分（分）
+            $gamingScore    = $this->total_win ?? 0;   // 本局总得分（分）
+
+            // 打码量：bet(分) × (odds_x/odds_y) 换算为金额，与 WS chip_amount 和在线版 Slot.php 一致
+            $chipAmount = bcmul(
+                (string) max(0, (int) $gamingPressure),
+                bcdiv(
+                    (string) ($this->machine->odds_x ?? 1),
+                    (string) ($this->machine->odds_y ?? 1),
+                    8
+                ),
+                2
+            );
+
+            $this->log->info('[线下洗分] 计算打码量', [
+                'player_id'      => $playerId,
+                'gaming_pressure' => $gamingPressure,
+                'gaming_score'   => $gamingScore,
+                'odds_x'         => $this->machine->odds_x,
+                'odds_y'         => $this->machine->odds_y,
+                'chip_amount'    => floatval($chipAmount),
+            ]);
+
+            // 3. 创建下分记录（PlayerGameLog）
+            /** @var PlayerGameRecord $gameRecord */
+            $playerGameLog = addPlayerGameLog(
+                $player,
+                $this->machine,
+                $gameRecord,
+                $this->machine->control_open_point ?? 100
+            );
+            $playerGameLog->wash_point = $washedScore;
+            $playerGameLog->game_amount = $washedAmount;
+            $playerGameLog->before_game_amount = $beforeBalance;
+            $playerGameLog->after_game_amount = $afterBalance;
+            $playerGameLog->action = \app\model\PlayerGameLog::ACTION_DOWN;
+            $playerGameLog->chip_amount = floatval($chipAmount);  // ✅ 记录打码量
+            $playerGameLog->pressure = $gamingPressure;           // ✅ 记录游戏期间押分
+            $playerGameLog->score = $gamingScore;                 // ✅ 记录游戏期间得分
+            $playerGameLog->turn_point = 0;                       // Slot机台无转数
+            $playerGameLog->is_system = 0;
+            $playerGameLog->remark = '线下实体按键洗分';
+            $playerGameLog->save();
+
+            // 4. 创建金流记录（PlayerDeliveryRecord）
+            $playerDeliveryRecord = new \app\model\PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = $playerId;
+            $playerDeliveryRecord->department_id = $player->department_id;
+            $playerDeliveryRecord->target = $playerGameLog->getTable();
+            $playerDeliveryRecord->target_id = $playerGameLog->id;
+            $playerDeliveryRecord->machine_id = $this->machine->id;
+            $playerDeliveryRecord->machine_name = $this->machine->name;
+            $playerDeliveryRecord->machine_type = $this->machine->type;
+            $playerDeliveryRecord->code = $this->machine->code;
+            $playerDeliveryRecord->type = \app\model\PlayerDeliveryRecord::TYPE_MACHINE_DOWN;
+            $playerDeliveryRecord->source = 'external_button';  // 标记为外部按键
+            $playerDeliveryRecord->amount = $washedAmount;
+            $playerDeliveryRecord->amount_before = $beforeBalance;
+            $playerDeliveryRecord->amount_after = $afterBalance;
+            $playerDeliveryRecord->tradeno = $playerGameLog->tradeno ?? '';
+            $playerDeliveryRecord->remark = '线下实体按键洗分';
+            $playerDeliveryRecord->save();
+
+            // 5. 更新游戏记录
+            if ($gameRecord) {
+                $gameRecord->wash_point = bcadd($gameRecord->wash_point, $washedScore, 2);
+                $gameRecord->wash_amount = bcadd($gameRecord->wash_amount, $washedAmount, 2);
+                $gameRecord->after_game_amount = $afterBalance;
+                $gameRecord->save();
+            }
+
+            // 6. 更新 Redis 记录
+            $this->last_point_at = time();
+            $this->player_wash_point = bcadd($this->player_wash_point ?? '0', $washedScore, 2);
+
+            \support\Db::commit();
+
+            // 6.5 ✅ 清理玩家游戏数据（洗分后归零）
+            // now_turn 仅在 reward_status 切换时归零，洗分不会触发切换，
+            // 若不手动归零，下次游戏的 use_turn 会从旧值累加，导致彩金过早触发。
+            $this->bet       = 0;
+            $this->now_turn  = 0;
+            $this->total_bet = 0;
+            $this->total_win = 0;
+
+            $this->log->info('[线下洗分] 清理玩家游戏数据', [
+                'player_id'  => $playerId,
+                'machine_id' => $this->machine->id,
+                'bet'        => 0,
+                'now_turn'   => 0,
+                'total_bet'  => 0,
+                'total_win'  => 0,
+            ]);
+
+            // 7. 钱包加款（在事务外执行）
+            try {
+                $addResult = \app\service\WalletService::add($playerId, $washedAmount);
+
+                $this->log->info('[线下洗分] 钱包加款成功', [
+                    'player_id' => $playerId,
+                    'washed_score' => $washedScore,
+                    'washed_amount' => $washedAmount,
+                    'before_balance' => $beforeBalance,
+                    'after_balance' => $addResult['balance'],
+                    'machine_id' => $this->machine->id,
+                ]);
+
+                // 8. 推送余额变化
+                \app\service\BalancePushService::pushBalanceChange(
+                    $playerId,
+                    $beforeBalance,
+                    $addResult['balance'],
+                    'settle',
+                    [
+                        'platform' => $this->machine->name ?? $this->machine->code,
+                        'machine_id' => $this->machine->id,
+                        'type' => 'external_wash',
+                    ]
+                );
+
+            } catch (Exception $walletError) {
+                // 钱包加款失败，发送告警
+                $this->log->critical('[线下洗分] 钱包加款失败，需要人工介入', [
+                    'player_id' => $playerId,
+                    'amount' => $washedAmount,
+                    'error' => $walletError->getMessage(),
+                    'action' => '已记录下分成功，但钱包未加款，请立即手动给玩家加款',
+                ]);
+
+                // 发送 Telegram 告警
+                try {
+                    $telegramConfig = config('telegram');
+                    if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
+                        $telegram = new \app\service\TelegramService($telegramConfig['bot_token'], $telegramConfig['chat_id']);
+                        $telegram->sendAlert([
+                            'datetime' => new \DateTime(),
+                            'level_name' => 'CRITICAL',
+                            'message' => '线下洗分成功但钱包加款失败',
+                            'context' => [
+                                'player_id' => $playerId,
+                                'machine_id' => $this->machine->id,
+                                'amount' => $washedAmount,
+                                'action' => '请立即手动给玩家加款',
+                            ],
+                        ]);
+                    }
+                } catch (Exception $e) {
+                    // 忽略 Telegram 告警失败
+                }
+            }
+
+        } catch (Exception $e) {
+            \support\Db::rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * 记录无玩家的线下洗分操作
+     *
+     * 仅创建下分记录，不涉及钱包操作
+     */
+    private function recordExternalWashWithoutPlayer(int $washedScore, string $washedAmount): void
+    {
+        \support\Db::beginTransaction();
+
+        try {
+            // 创建系统下分记录（player_id = 0）
+            $playerGameLog = new \app\model\PlayerGameLog();
+            $playerGameLog->player_id = 0;  // 系统记录
+            $playerGameLog->department_id = $this->machine->department_id ?? 0;
+            $playerGameLog->machine_id = $this->machine->id;
+            $playerGameLog->wash_point = $washedScore;
+            $playerGameLog->game_amount = $washedAmount;
+            $playerGameLog->before_game_amount = 0;
+            $playerGameLog->after_game_amount = 0;
+            $playerGameLog->action = \app\model\PlayerGameLog::ACTION_DOWN;
+            $playerGameLog->chip_amount = 0;
+            $playerGameLog->is_system = 1;
+            $playerGameLog->remark = '线下实体按键洗分（无玩家）';
+            $playerGameLog->save();
+
+            // 创建金流记录
+            $playerDeliveryRecord = new \app\model\PlayerDeliveryRecord();
+            $playerDeliveryRecord->player_id = 0;
+            $playerDeliveryRecord->department_id = $this->machine->department_id ?? 0;
+            $playerDeliveryRecord->target = $playerGameLog->getTable();
+            $playerDeliveryRecord->target_id = $playerGameLog->id;
+            $playerDeliveryRecord->machine_id = $this->machine->id;
+            $playerDeliveryRecord->machine_name = $this->machine->name;
+            $playerDeliveryRecord->machine_type = $this->machine->type;
+            $playerDeliveryRecord->code = $this->machine->code;
+            $playerDeliveryRecord->type = \app\model\PlayerDeliveryRecord::TYPE_MACHINE_DOWN;
+            $playerDeliveryRecord->source = 'external_button';
+            $playerDeliveryRecord->amount = $washedAmount;
+            $playerDeliveryRecord->amount_before = 0;
+            $playerDeliveryRecord->amount_after = 0;
+            $playerDeliveryRecord->tradeno = $playerGameLog->tradeno ?? '';
+            $playerDeliveryRecord->remark = '线下实体按键洗分（无玩家）';
+            $playerDeliveryRecord->save();
+
+            \support\Db::commit();
+
+            $this->log->info('[线下洗分] 无玩家游戏，已记录下分操作', [
+                'washed_score' => $washedScore,
+                'washed_amount' => $washedAmount,
+                'machine_id' => $this->machine->id,
+                'machine_code' => $this->machine->code,
+                'player_game_log_id' => $playerGameLog->id,
+            ]);
+
+        } catch (Exception $e) {
+            \support\Db::rollback();
+            throw $e;
+        }
+    }
+
+    // ⚠️ 已删除：recordExternalButtonLog() 方法
+    // 原因：该方法与recordExternalButtonOperation()逻辑不一致，导致Bug #7
+    // 修复：processExternalTable()现在统一调用processCounterChange()
+    //      → recordExternalButtonOperation() → createExternalButtonGameLog()
+    // 这样两条路径（EA C4和B7心跳）的逻辑完全一致
+
+    /**
+     * 解析4字节BCD分数
+     * 格式: AA BB CC DD
+     * 值 = AA×1000000 + BB×10000 + CC×100 + DD
+     */
+    private function parseScore4Byte(string $scoreSection): int
+    {
+        $bytes = str_split($scoreSection, 2);
+        if (count($bytes) !== 4) {
+            throw new Exception('4字节BCD分数格式错误: ' . $scoreSection);
+        }
+
+        return (hexdec($bytes[0]) * 1000000)
+            + (hexdec($bytes[1]) * 10000)
+            + (hexdec($bytes[2]) * 100)
+            + hexdec($bytes[3]);
+    }
+
+    /**
+     * 解析2字节BCD（用于转数等）
+     *
+     * @param string $scoreSection 2字节hex字符串（4个字符）
+     * @return int 解析后的数值
+     *
+     * 示例：'1e14' → 0x1E=30, 0x14=20 → 30*100 + 20 = 3020
+     */
+    private function parseScore2Byte(string $scoreSection): int
+    {
+        $bytes = str_split($scoreSection, 2);
+        if (count($bytes) !== 2) {
+            throw new Exception('2字节BCD格式错误: ' . $scoreSection);
+        }
+
+        return (hexdec($bytes[0]) * 100)
+            + hexdec($bytes[1]);
+    }
+
+    /**
+     * 分数转4字节BCD
+     */
+    public static function scoreToBytes4(int $score): array
+    {
+        $score = max(0, min(self::MAX_SCORE, $score));
+
+        $tenMillions = intval($score / 1000000);
+        $tenThousands = intval(($score % 1000000) / 10000);
+        $hundreds = intval(($score % 10000) / 100);
+        $ones = $score % 100;
+
+        return [$tenMillions, $tenThousands, $hundreds, $ones];
+    }
+
+    /**
+     * 验证SUM1/SUM2校验和
+     */
+    private function validateChecksum(string $data): bool
+    {
+        if (strlen($data) < 4) {
+            return false;
+        }
+
+        $sum1 = substr($data, -4, 2);
+        $sum2 = substr($data, -2, 2);
+        $payload = substr($data, 0, -4);
+
+        $calculatedSUM1 = $this->calculateSUM1($payload);
+        $calculatedSUM2 = $this->calculateSUM2($payload, $calculatedSUM1);
+
+        return strtolower($sum1) == strtolower($calculatedSUM1)
+            && strtolower($sum2) == strtolower($calculatedSUM2);
+    }
+
+    /**
+     * 验证B7心跳校验和（特殊的S1/S2算法）
+     *
+     * ⚠️ 收账小卡的B7心跳使用特殊的校验算法，与其他指令（EA/A5/A6/A7等）不同：
+     *
+     * B7心跳：
+     * - S1 = XOR（异或）
+     * - S2 = ADD + S1（累加，包含S1）
+     *
+     * 其他指令（EA/A5/A6/A7）：
+     * - SUM1 = ADD（累加）
+     * - SUM2 = XOR ^ SUM1（异或）
+     *
+     * 算法顺序完全相反！
+     */
+    private function validateHeartbeatChecksum(string $data): bool
+    {
+        if (strlen($data) < 4) {
+            return false;
+        }
+
+        $s1 = substr($data, -4, 2);
+        $s2 = substr($data, -2, 2);
+        $payload = substr($data, 0, -4);
+
+        // S1 = XOR异或
+        $bytes = str_split($payload, 2);
+        $xor = 0;
+        foreach ($bytes as $byte) {
+            $xor ^= hexdec($byte);
+        }
+        $calculatedS1 = str_pad(dechex($xor), 2, '0', STR_PAD_LEFT);
+
+        // S2 = ADD累加 + S1
+        $add = 0;
+        foreach ($bytes as $byte) {
+            $add += hexdec($byte);
+        }
+        $add += hexdec($calculatedS1);
+        $calculatedS2 = str_pad(dechex($add & 0xFF), 2, '0', STR_PAD_LEFT);
+
+        return strtolower($s1) == strtolower($calculatedS1)
+            && strtolower($s2) == strtolower($calculatedS2);
+    }
+
+    /**
+     * 查询详细账目（同步方法）
+     */
+    private function queryDetailSync(): array
+    {
+        $uid = $this->machine->domain . ':' . $this->machine->port;
+        $cmd = $this->createCmd(self::READ_SCORE);
+
+        $beforeTime = $this->setActionVersion(self::READ_SCORE);
+        Gateway::sendToUid($uid, hex2bin($cmd));
+
+        $timeout = 1000000;  // 1秒
+        $sleep = 50000;      // 50ms
+        $elapsed = 0;
+
+        while ($elapsed < $timeout) {
+            $actionTime = $this->getActionVersion(self::READ_SCORE);
+            if ($actionTime > $beforeTime) {
+                return [
+                    'open_table' => $this->open_table ?? 0,
+                    'wash_table' => $this->wash_table ?? 0,
+                    'card_score' => $this->card_score ?? 0,
+                    'machine_score' => $this->machine_score ?? 0,
+                ];
+            }
+
+            usleep($sleep);
+            $elapsed += $sleep;
+        }
+
+        throw new Exception('查询详细账目超时');
+    }
+
+    /**
+     * 检查登入状态
+     */
+    private function checkLoginStatus(): bool
+    {
+        return ($this->login_status ?? 0) === 1;
+    }
+
+    /**
+     * 登入机台
+     */
+    private function loginMachine(): bool
+    {
+        $uid = $this->machine->domain . ':' . $this->machine->port;
+
+        // 发送登入指令
+        $cmd = $this->createCmd(self::LOGIN);
+        $beforeTime = $this->setActionVersion(self::LOGIN);
+        Gateway::sendToUid($uid, hex2bin($cmd));
+
+        $this->log->info('[登入] 发送登入指令', [
+            'machine_code' => $this->machine->code,
+        ]);
+
+        // ✅ 改进：带超时的等待回复
+        $timeout = 1000000;  // 每次等1秒，由 ensureLoggedIn 最多重试3次
+        $sleep = 50000;      // 50ms
+        $elapsed = 0;
+
+        while ($elapsed < $timeout) {
+            $actionTime = $this->getActionVersion(self::LOGIN);
+            if ($actionTime > $beforeTime) {
+                // 收到回复，检查登入状态
+                $status = $this->checkLoginStatus();
+                $this->log->info('[登入] 登入' . ($status ? '成功' : '失败'), [
+                    'machine_code' => $this->machine->code,
+                    'login_status' => $status,
+                ]);
+                return $status;
+            }
+
+            usleep($sleep);
+            $elapsed += $sleep;
+        }
+
+        // 超时
+        $this->log->error('[登入] 登入超时，未收到回复', [
+            'machine_code' => $this->machine->code,
+            'timeout' => $timeout / 1000 . 'ms',
+        ]);
+        return false;
+    }
+
+    /**
+     * 确保已登入（发送指令前调用）
+     * 机板保持长期登入状态，仅在硬件重启等异常场景需要重新登入，最多重试 3 次
+     * @throws Exception
+     */
+    private function ensureLoggedIn(): void
+    {
+        if ($this->checkLoginStatus()) {
+            return;
+        }
+
+        $maxRetries = 3;
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            $this->log->warning('[登入检查] 机台未登入，尝试自动登入', [
+                'machine_code' => $this->machine->code,
+                'attempt'      => "$attempt/$maxRetries",
+            ]);
+
+            if ($this->loginMachine()) {
+                $this->log->info('[登入检查] 自动登入成功', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxRetries",
+                ]);
+                return;
+            }
+
+            $this->log->warning('[登入检查] 登入失败', [
+                'machine_code' => $this->machine->code,
+                'attempt'      => "$attempt/$maxRetries",
+            ]);
+        }
+
+        throw new Exception('机台登入失败，请检查机台状态');
+    }
+
+    /**
+     * 创建指令（添加SUM1/SUM2校验）
+     */
+    private function createCmd(string $cmd, int $data = 0): string
+    {
+        $hexString = '';
+        if (!empty($data)) {
+            $bytes = self::scoreToBytes4($data);
+            $hexString = $this->toHexString($bytes);
+        }
+
+        $cmd .= $hexString;
+        $sum1 = $this->calculateSUM1($cmd);
+        $sum2 = $this->calculateSUM2($cmd, $sum1);
+
+        $this->log->debug('[创建指令]', [
+            'cmd' => strtoupper($cmd . $sum1 . $sum2)
+        ]);
+
+        return $cmd . $sum1 . $sum2;
+    }
+
+    /**
+     * 字节数组转十六进制字符串
+     */
+    private function toHexString(array $bytes): string
+    {
+        return implode('', array_map(function ($b) {
+            return strtoupper(str_pad(dechex($b), 2, '0', STR_PAD_LEFT));
+        }, $bytes));
+    }
+
+    // ========== 🆕 重构新增：公共辅助方法 ==========
+
+    /**
+     * 解析账目查询数据（A6回复）
+     *
+     * @param string $msg 完整消息
+     * @return array ['open_table', 'wash_table', 'card_score', 'machine_score', 'open_flag', 'wash_flag', 'card_flag']
+     */
+    private function parseAccountData(string $msg): array
+    {
+        $pos = 2; // 跳过A6
+
+        // 开分码表标志
+        $openFlag = substr($msg, $pos, 2);
+        $pos += 2;
+
+        // 开分码表（4字节）
+        $openTable = $this->parseScore4Byte(substr($msg, $pos, 8));
+        $pos += 8;
+
+        // 洗分码表标志
+        $washFlag = substr($msg, $pos, 2);
+        $pos += 2;
+
+        // 洗分码表（4字节）
+        $washTable = $this->parseScore4Byte(substr($msg, $pos, 8));
+        $pos += 8;
+
+        // 开分卡分数标志
+        $cardFlag = substr($msg, $pos, 2);
+        $pos += 2;
+
+        // 开分卡分数（4字节）
+        $cardScore = $this->parseScore4Byte(substr($msg, $pos, 8));
+        $pos += 8;
+
+        // 机台分数（4字节）
+        $machineScore = $this->parseScore4Byte(substr($msg, $pos, 8));
+
+        return [
+            'open_table' => $openTable,
+            'wash_table' => $washTable,
+            'card_score' => $cardScore,
+            'machine_score' => $machineScore,
+            'open_flag' => $openFlag,
+            'wash_flag' => $washFlag,
+            'card_flag' => $cardFlag,
+        ];
+    }
+
+    /**
+     * 检测账目标志状态
+     *
+     * @param string $openFlag 开分标志
+     * @param string $cardFlag 开分卡标志
+     * @return array ['is_rewarding', 'has_fault']
+     */
+    private function detectAccountFlags(string $openFlag, string $cardFlag): array
+    {
+        return [
+            'is_rewarding' => ($openFlag === self::FLAG_REWARDING),
+            'has_fault' => ($cardFlag === self::FLAG_FAULT),
+        ];
+    }
+
+    /**
+     * 处理Smart卡通讯故障（card_flag="EE"）
+     *
+     * @param array $data 解析后的数据
+     * @return bool true表示消息已处理（从缓冲区移除），数据已丢弃
+     */
+    private function handleSmartCardCommunicationFault(array $data): bool
+    {
+        // 获取重试计数
+        $retryKey = $this->cacheDataKey . '_account_retry_count';
+        $retryCount = (int) Cache::get($retryKey, 0);
+        $maxRetries = 5;  // 最大重试5次
+
+        if ($retryCount < $maxRetries) {
+            // 未达到最大重试次数，增加计数并延迟5秒后重试
+            $retryCount++;
+            Cache::set($retryKey, $retryCount, 60);  // 60秒过期
+
+            $this->log->warning('[收账小卡-通讯故障] Smart卡通讯超时（EE），丢弃数据并延迟1秒后重试', [
+                'machine_code' => $this->machine->code,
+                'card_flag' => $data['card_flag'],
+                'retry_count' => $retryCount,
+                'max_retries' => $maxRetries,
+                'retry_delay' => '1秒',
+                'reason' => 'Smart卡1秒内未发送完整信号（可能是RS232线路接触不良或信号干扰）',
+                'action' => '丢弃当前数据，1秒后重新查询最新数据',
+                'data_status' => '维持上一个有效值，不会丢失分数',
+                'note' => 'Smart卡大约1秒更新一次，延迟1秒确保机台有足够时间获取新数据',
+            ]);
+
+            // 使用Workerman定时器，1秒后发送重试查询
+            $uid = $this->machine->domain . ':' . $this->machine->port;
+            $machineCode = $this->machine->code;
+            $log = $this->log;
+            $cmd = $this->createCmd(self::READ_SCORE);  // 在闭包外生成指令
+
+            Timer::add(1, function() use ($uid, $machineCode, $retryCount, $log, $cmd) {
+                Gateway::sendToUid($uid, hex2bin($cmd));
+
+                $log->info('[收账小卡] 发送指令', [
+                    'machine_code' => $machineCode,
+                    'cmd' => strtoupper($cmd),
+                    'reason' => '延迟1秒后重试（第' . $retryCount . '次）',
+                ]);
+            }, null, false);  // false表示只执行一次
+
+            // 返回true，表示消息已处理（从缓冲区移除），但数据已丢弃（不更新Redis）
+            return true;
+        }
+
+        // 达到最大重试次数，锁定机台
+        $oldHasLock = $this->has_lock ?? 0;
+        $this->logFieldChange('账目查询', 'has_lock', $oldHasLock, 1, 'Smart卡通讯故障持续');
+
+        $this->log->error('[收账小卡-锁定] Smart卡通讯故障持续（EE），机台已锁定', [
+            'machine_id' => $this->machine->id,
+            'machine_code' => $this->machine->code,
+            'card_flag' => $data['card_flag'],
+            'retry_count' => $retryCount,
+            'max_retries' => $maxRetries,
+            'reason' => 'Smart卡通讯故障，' . $maxRetries . '次重试（每次间隔1秒）后仍未恢复',
+            'diagnosis' => 'card_flag=EE 表示账务小卡1秒内未收到Smart卡完整信号',
+            'possible_causes' => [
+                '1. RS232线路接触不良（账务小卡上的4P 2线）',
+                '2. 信号干扰/杂讯导致数据不完整',
+                '3. Smart卡硬件故障',
+                '4. 账务小卡读卡器故障',
+            ],
+            'next_steps' => [
+                '1. 检查RS232线路连接',
+                '2. 重新插拔4P 2线',
+                '3. 如果频繁出现，考虑更换线材或检查硬件',
+            ],
+        ]);
+
+        $this->has_lock = 1;
+        sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+
+        // 返回true，表示消息已处理（从缓冲区移除），但数据已丢弃（不更新Redis）
+        return true;
+    }
+
+    /**
+     * 更新账目数据到Redis
+     *
+     * @param array $data 解析后的数据
+     * @param array $flags 检测到的标志
+     */
+    private function updateAccountData(array $data, array $flags): void
+    {
+        // ✅ 记录开奖状态变化
+        $oldRewardStatus = $this->reward_status ?? 0;
+        $newRewardStatus = $flags['is_rewarding'] ? 1 : 0;
+        $this->logFieldChange('账目查询', 'reward_status', $oldRewardStatus, $newRewardStatus, '开奖状态');
+        $this->reward_status = $newRewardStatus;
+
+        // ✅ 记录分数变化（保存旧值用于诊断）
+        $oldCardScore = $this->card_score ?? 0;
+        $oldMachineScore = $this->machine_score ?? 0;
+        $this->logFieldChange('账目查询', 'card_score', $oldCardScore, $data['card_score'], '开分卡分数');
+        $this->logFieldChange('账目查询', 'machine_score', $oldMachineScore, $data['machine_score'], '机台分数');
+
+        $this->card_score = $data['card_score'];
+        $this->machine_score = $data['machine_score'];
+
+        // 旧字段（兼容性）
+        // ✅ 修正：point应该指向开分卡分数，因为洗分时退的是开分卡上的分数
+        $this->point = $data['card_score'];                 // 旧名（开分卡分数）
+        $this->score = $data['machine_score'];              // 旧名（机台分数）
+        $this->open_card_point = $data['card_score'];       // 旧名
+
+        // ✅ 注意：FLAG_FAULT（card_flag="EE"）的处理已移至handleSmartCardCommunicationFault方法
+        // 此方法只会在card_flag="E9"（正常）时被调用，因此不需要处理故障情况
+    }
+
+    /**
+     * 解析机台状态查询数据（A7 D2 回复）
+     *
+     * @param string $msg 完整消息
+     * @return array 解析后的字段数组
+     */
+    private function parseMachineStatusFields(string $msg): array
+    {
+        $pos = 2;  // 跳过 A7
+
+        // 1. 开分状态（D2=完成，D3=开分中）
+        $openStatus = substr($msg, $pos, 2);
+        $pos += 2;
+
+        // 2. 空置
+        $pos += 2;
+
+        // 3. 回补次数（开分失败次数）
+        $retryCount = hexdec(substr($msg, $pos, 2));
+        $pos += 2;
+
+        // 4. 码表少跳（高位+低位）
+        $counterSkipHigh = substr($msg, $pos, 2);
+        $counterSkipLow = substr($msg, $pos + 2, 2);
+        $pos += 4;
+
+        // 5. 洗分状态（D6=完成，D7=洗分中）
+        $washStatus = substr($msg, $pos, 2);
+        $pos += 2;
+
+        // 6. 洗分数据（4字节BCD）
+        $washScore = $this->parseScore4Byte(substr($msg, $pos, 8));
+        $pos += 8;
+
+        // 7. 跳过 DC 固定标志
+        $pos += 2;
+
+        // 8. 转数（2字节BCD）
+        $turnCount = $this->parseScore2Byte(substr($msg, $pos, 4));
+        $pos += 4;
+
+        // 9. 累计连庄数（不使用）
+        $pos += 2;
+
+        // 10. 状态字节
+        $statusByte = substr($msg, $pos, 2);
+        $statusValue = hexdec($statusByte);
+
+        return [
+            'open_status' => $openStatus,
+            'retry_count' => $retryCount,
+            'counter_skip_high' => $counterSkipHigh,
+            'counter_skip_low' => $counterSkipLow,
+            'wash_status' => $washStatus,
+            'wash_score' => $washScore,
+            'turn_count' => $turnCount,
+            'status_byte' => $statusByte,
+            'status_value' => $statusValue,
+        ];
+    }
+
+    /**
+     * 检测机台状态标志
+     *
+     * @param int $statusValue 状态字节值
+     * @return array 检测结果
+     */
+    private function detectMachineStatusFlags(int $statusValue): array
+    {
+        return [
+            'is_logout' => ($statusValue & 0x80) !== 0,  // 检查最高位（bit 7）
+            'has_fault1' => ($statusValue & 0x10) !== 0,  // 得分线故障1
+            'has_fault2' => ($statusValue & 0x20) !== 0,  // 故障2（网路未开分，却跳开洗分表）
+        ];
+    }
+
+    /**
+     * 更新机台状态数据
+     *
+     * @param array $fields 解析后的字段
+     * @param array $flags 检测到的标志
+     */
+    private function updateMachineStatus(array $fields, array $flags): void
+    {
+        // 如果检测到登出状态，更新登入状态
+        if ($flags['is_logout']) {
+            $oldLoginStatus = $this->login_status ?? 1;
+            $this->logFieldChange('机台情况', 'login_status', $oldLoginStatus, 0, '检测到登出状态');
+
+            $this->is_login = 0;
+            $this->login_status = 0;
+
+            $this->log->warning('[收账小卡-机台情况] 检测到登出状态（8x）', [
+                'machine_code' => $this->machine->code,
+                'status_byte' => strtoupper($fields['status_byte']),
+            ]);
+        }
+
+        // 如果有故障，记录警告
+        if ($flags['has_fault1'] || $flags['has_fault2']) {
+            $this->log->warning('[收账小卡-机台情况] 检测到故障状态', [
+                'machine_code' => $this->machine->code,
+                'fault1' => $flags['has_fault1'] ? '得分线故障' : null,
+                'fault2' => $flags['has_fault2'] ? '网路未开分却跳开洗分表' : null,
+            ]);
+        }
+
+        // 處理回補（開分部分失敗時退款給玩家）
+        // handleRetryRefund 回傳 false 表示錢包加款失敗，不更新 return_count，
+        // 下次 READ_STATUS 上報相同 retry_count 時可自動重試
+        $refundHandled = true;
+        if ($fields['retry_count'] > 0) {
+            $refundHandled = $this->handleRetryRefund($fields['retry_count']);
+        }
+
+        // 更新回補次數到快取（僅在退款成功或正常略過時更新）
+        if ($refundHandled) {
+            $oldReturnCount = $this->return_count ?? 0;
+            $this->logFieldChange('機台情況', 'return_count', $oldReturnCount, $fields['retry_count'], '回補次數');
+            $this->return_count = $fields['retry_count'];
+        }
+    }
+
+    /**
+     * 验证消息校验和（SUM1 + SUM2）
+     *
+     * @param string $msg 完整消息（包含校验和）
+     * @param string $context 上下文名称（用于日志）
+     * @return bool
+     */
+    private function validateMessageChecksum(string $msg, string $context = ''): bool
+    {
+        $dataWithoutSum = substr($msg, 0, -4);
+        $receivedSum1 = substr($msg, -4, 2);
+        $receivedSum2 = substr($msg, -2, 2);
+
+        $calculatedSum1 = $this->calculateSUM1($dataWithoutSum);
+        $calculatedSum2 = $this->calculateSUM2($dataWithoutSum, $calculatedSum1);
+
+        if ($receivedSum1 !== $calculatedSum1 || $receivedSum2 !== $calculatedSum2) {
+            $this->log->error("[{$context}] 校验和验证失败", [
+                'machine_code' => $this->machine->code,
+                'msg' => strtoupper($msg),
+                'expected_sum1' => $calculatedSum1,
+                'received_sum1' => $receivedSum1,
+                'expected_sum2' => $calculatedSum2,
+                'received_sum2' => $receivedSum2,
+            ]);
+            return false;
+        }
+
+        // ✅ 校验成功时也记录（DEBUG级别）
+        $this->log->debug("[{$context}] 校验和验证成功", [
+            'machine_code' => $this->machine->code,
+            'sum1' => $calculatedSum1,
+            'sum2' => $calculatedSum2,
+        ]);
+
+        return true;
+    }
+
+    /**
+     * 检查计数器变化是否应该跳过（去重检查）
+     *
+     * @param string $type 类型（open/wash）
+     * @param int $timestamp 当前时间戳
+     * @return bool true=应该跳过，false=继续处理
+     */
+    private function shouldSkipCounterChange(string $type, int $timestamp): bool
+    {
+        $cacheKey = "external_counter_{$type}_last_update_" . $this->machine->id;
+        $dedupeWindow = 10; // 10秒去重窗口
+
+        $lastUpdateTime = Cache::get($cacheKey, 0);
+        return ($timestamp - $lastUpdateTime < $dedupeWindow);
+    }
+
+    /**
+     * 检测计数器异常（减少情况）
+     *
+     * @param string $type 类型（open/wash）
+     * @param int $oldCount 旧计数
+     * @param int $newCount 新计数
+     * @return array ['has_anomaly' => bool, 'is_check_reset' => bool, 'reason' => string]
+     */
+    private function detectCounterAnomaly(string $type, int $oldCount, int $newCount): array
+    {
+        // 没有减少，无异常
+        if ($newCount >= $oldCount) {
+            return [
+                'has_anomaly' => false,
+                'is_check_reset' => false,
+                'reason' => '',
+            ];
+        }
+
+        // 检查是否故障排除后归零
+        $hasRecentCheck = Cache::get('check_flag_' . $this->machine->id);
+
+        if ($hasRecentCheck) {
+            // 正常归零（故障排除）
+            $this->log->info("[收账小卡-{$type}码表] 故障排除后归零", [
+                'machine_code' => $this->machine->code,
+                'old' => $oldCount,
+                'new' => $newCount,
+            ]);
+
+            return [
+                'has_anomaly' => false,
+                'is_check_reset' => true,
+                'reason' => '故排归零',
+            ];
+        } else {
+            // 异常减少
+            $this->log->error("[收账小卡-{$type}码表] 异常减少", [
+                'machine_code' => $this->machine->code,
+                'old' => $oldCount,
+                'new' => $newCount,
+            ]);
+            sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, 0);
+
+            return [
+                'has_anomaly' => true,
+                'is_check_reset' => false,
+                'reason' => '异常减少',
+            ];
+        }
+    }
+
+    /**
+     * 决定是否记录计数器变化
+     *
+     * @param string $type 类型（open/wash）
+     * @param int $increment 增量
+     * @param int $timestamp 时间戳
+     * @return bool true=已记录，false=未记录
+     */
+    private function decideCounterRecord(string $type, int $increment, int $timestamp): bool
+    {
+        if ($increment <= 0) {
+            return false;
+        }
+
+        $cacheKey = "external_counter_{$type}_last_update_" . $this->machine->id;
+        $dedupeWindow = 10;
+
+        // 更新去重时间戳
+        Cache::set($cacheKey, $timestamp, $dedupeWindow * 2);
+
+        // 记录操作
+        $this->recordExternalButtonOperation($type, $increment, $timestamp);
+
+        return true;
+    }
+
+    /**
+     * 记录字段状态变化
+     *
+     * @param string $context 上下文名称
+     * @param string $field 字段名
+     * @param mixed $oldValue 旧值
+     * @param mixed $newValue 新值
+     * @param string $reason 变化原因（可选）
+     */
+    private function logFieldChange(string $context, string $field, $oldValue, $newValue, string $reason = ''): void
+    {
+        if ($oldValue !== $newValue) {
+            $logData = [
+                'machine_code' => $this->machine->code,
+                'field' => $field,
+                'old' => $oldValue,
+                'new' => $newValue,
+            ];
+
+            if ($reason) {
+                $logData['reason'] = $reason;
+            }
+
+            $this->log->info("[{$context}] 字段更新", $logData);
+        }
+    }
+
+    /**
+     * 记录业务操作
+     *
+     * @param string $context 上下文名称
+     * @param string $operation 操作名称
+     * @param array $data 操作数据
+     * @param bool $success 是否成功
+     */
+    private function logOperation(string $context, string $operation, array $data = [], bool $success = true): void
+    {
+        $level = $success ? 'info' : 'error';
+        $status = $success ? '成功' : '失败';
+
+        $this->log->{$level}("[{$context}] {$operation}{$status}", array_merge([
+            'machine_code' => $this->machine->code,
+        ], $data));
+    }
+
+    /**
+     * 获取消息的完整长度（用于TCP分包处理）
+     *
+     * @param string $header 消息头（2字符）
+     * @param string $buffer 缓冲区数据
+     * @return int 消息长度，0表示无法确定
+     */
+    private function getMessageLength(string $header, string $buffer): int
+    {
+        switch ($header) {
+            case 'a7':
+                // A7 系列消息需要根据子类型判断长度
+                if (strlen($buffer) < 4) {
+                    return 0; // 长度不足，无法判断子类型
+                }
+                $subType = substr($buffer, 2, 2);
+                if ($subType === 'c3' || $subType === 'c5') {
+                    return 4;  // 登入/登出回复
+                }
+                if ($subType === 'd8') {
+                    return 26; // 总押分回复
+                }
+                if (in_array($subType, ['d2', 'd3', 'd6', 'd7'])) {
+                    return 44; // 机台状态回复
+                }
+
+                // ✅ 优化：未知 A7 子类型，记录警告便于发现新协议
+                $this->log->warning('[TCP分包] 未知的A7子类型', [
+                    'machine_code' => $this->machine->code,
+                    'buffer' => strtoupper(substr($buffer, 0, min(20, strlen($buffer)))),
+                    'sub_type' => strtoupper($subType),
+                ]);
+                return 0;
+
+            case 'a6':
+                return 44; // 账目查询回复
+
+            case 'a5':
+                return 6;  // 操作回复（A5 + 状态2字符 + 校验和2字符）
+
+            case 'ee':  // RESET_CLEAR（清除账目完成，单字节回复）
+            case 'ef':  // RESET_COMPLETE（完整归0完成，单字节回复）
+                return 2;
+
+            case 'a3':
+                // A3 归0回复：A3 F8 XX（机台收到归0指令的中间确认，3字节）
+                if (strlen($buffer) >= 4 && substr($buffer, 2, 2) === 'f8') {
+                    return 6;
+                }
+                return 0;
+
+            case 'b7':
+                return 46; // 心跳
+
+            case 'fa':
+                if (strlen($buffer) >= 3 && substr($buffer, 0, 3) === 'fah') {
+                    return 3; // FAH 开机信号
+                }
+                return 2; // FA 开机信号
+
+            case 'e1':
+                // E1 可能重复多次（e1e1e1...）
+                if (preg_match('/^(e1)+/', $buffer, $matches)) {
+                    return strlen($matches[0]);
+                }
+                return 0;
+
+            default:
+                return 0; // 未知消息类型
+        }
+    }
+}

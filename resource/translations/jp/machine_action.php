@@ -5,6 +5,7 @@ use app\model\Machine;
 use app\service\machine\Jackpot;
 use app\service\machine\Slot;
 use app\service\machine\SongJackpot;
+use app\service\machine\SongOfflineSlot;
 use app\service\machine\SongSlot;
 
 return [
@@ -106,6 +107,7 @@ return [
             SongJackpot::TURN_UP_ALL => 'すべて上昇',
             SongJackpot::TURN_DOWN_ALL => 'すべて下降',
             SongJackpot::AUTO_UP_TURN => '自動上昇（ゲーム開始）',
+            SongJackpot::AUTO_STOP => '機台停止',
             SongJackpot::TURN_TO_POINT => '回転数>>スコア',
             SongJackpot::POINT_TO_TURN => 'スコア>>回転数',
             SongJackpot::SCORE_TO_POINT => '得点>>スコア',
@@ -120,6 +122,10 @@ return [
             SongJackpot::MACHINE_CLOSE => '電源オフ',
             SongJackpot::PUSH_THREE => '連発PUSH',
             SongJackpot::PUSH_ONE => '単発PUSH',
+            // ✅ 小淞線下鋼珠（SongOfflineJackpot）專用指令 - 協議不同
+            '46ceac' => '外部カウンタ照会',      // SongOfflineJackpot::EXTERNAL_BUTTON_QUERY
+            '46ccb3' => '外部ボタンカウンタクリア',  // SongOfflineJackpot::CLEAR_EXTERNAL_BUTTON
+            '46ccb4' => '故障排除',  // SongOfflineJackpot::CHECK
         ],
         GameType::TYPE_SLOT . '_' . Machine::CONTROL_TYPE_MEI => [
             Slot::ALL => 'テーブル状態',
@@ -173,6 +179,18 @@ return [
             SongSlot::MACHINE_OPEN => '電源投入',
             SongSlot::MACHINE_CLOSE => 'シャットダウン',
             SongSlot::ALL_DOWN => '履歴データのクリーンアップ',
+
+            // ✅ 小淞オフラインSlot（SongOfflineSlot）専用コマンド - 収支カードプロトコル（リファクタリング後）
+            SongOfflineSlot::READ_SCORE => 'アカウント照会',       // 旧: QUERY_ACCOUNT
+            SongOfflineSlot::READ_BET => '総ベット/総勝利照会',    // 旧: QUERY_TOTAL
+            SongOfflineSlot::READ_STATUS => '機台状況照会',        // 旧: QUERY_STATUS
+            SongOfflineSlot::LOGIN => 'ログイン',
+            SongOfflineSlot::LOGOUT => 'ログアウト',
+            'a5xxc0' => 'クレジット追加',         // テスト用（特殊形式、定数なし）
+            'a500c1' => 'キャッシュアウト',       // テスト用（特殊形式、定数なし）
+            SongOfflineSlot::ALL_DOWN => '履歴クリア',            // 旧: CLEAR_ACCOUNT
+            SongOfflineSlot::CHECK => 'ボードリセット',            // 旧: RESET_BOARD
+            SongOfflineSlot::SSR_SIGNAL => 'SSR信号10秒',
         ],
     ]
 ];

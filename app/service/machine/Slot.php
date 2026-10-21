@@ -120,7 +120,7 @@ class Slot extends MachineServices implements BaseMachine
 
     public $cacheData = [];
 
-    public $expirationTime = 5000000; // 3秒内返回
+    public $expirationTime = 8000000; // 8秒内返回
 
     public $log = null;
 
@@ -276,33 +276,6 @@ class Slot extends MachineServices implements BaseMachine
                         'value' => $value
                     ]);
 
-                    // ✅ 发送 Telegram CRITICAL 告警
-                    try {
-                        $token = env('TELEGRAM_BOT_TOKEN');
-                        $chatId = env('TELEGRAM_CHAT_ID');
-
-                        if (!empty($token) && !empty($chatId)) {
-                            $telegram = new \app\service\TelegramService($token, $chatId, \Monolog\Logger::ERROR);
-                            $telegram->sendAlert([
-                                'datetime' => new \DateTime(),
-                                'level_name' => 'CRITICAL',
-                                'message' => '[MachineServices:Slot] Redis 关键字段保存失败',
-                                'context' => [
-                                    'machine_id' => $this->machine->id ?? null,
-                                    'machine_code' => $this->machine->code ?? '',
-                                    'field' => $name,
-                                    'value' => $value,
-                                    'error' => 'Redis关键字段保存失败，可能导致DB/Redis数据不一致',
-                                ],
-                            ]);
-                        }
-                    } catch (\Throwable $telegramEx) {
-                        // Telegram 发送失败不影响主流程
-                        \support\Log::warning('[MachineServices:Slot] Telegram 告警发送失败', [
-                            'error' => $telegramEx->getMessage(),
-                        ]);
-                    }
-
                     throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
                 }
 
@@ -356,6 +329,18 @@ class Slot extends MachineServices implements BaseMachine
                     'rb_status' => $machineCacheInfo[$this->cacheDataKey . '_rb_status'],
                     'bb_status' => $machineCacheInfo[$this->cacheDataKey . '_bb_status'],
                     'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'],
+                    'chip_amount' => bcmul(
+                        (string) max(0, (int) bcsub(
+                            (string) ($machineCacheInfo[$this->cacheDataKey . '_bet'] ?? 0),
+                            (string) ($machineCacheInfo[$this->cacheDataKey . '_player_pressure'] ?? 0)
+                        )),
+                        bcdiv(
+                            (string) ($this->machine->odds_x ?? 1),
+                            (string) ($this->machine->odds_y ?? 1),
+                            8
+                        ),
+                        2
+                    ),
                 ];
                 switch ($name) {
                     case 'gaming_user_id':
@@ -406,14 +391,6 @@ class Slot extends MachineServices implements BaseMachine
             // ✅ 消息长度校验（自动卡消息必须是 16 字符）
             $msgLen = strlen($msg);
             if ($msgLen != 16) {
-                $this->log->warning('[Slot-slotAutoCmd] 自动卡消息长度异常，已忽略', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'msg' => $msg,
-                    'msg_length' => $msgLen,
-                    'expected_length' => 16,
-                    'reason' => '可能是硬件故障或通信干扰',
-                ]);
                 return false;  // 忽略异常消息，不抛异常
             }
 
@@ -535,18 +512,11 @@ class Slot extends MachineServices implements BaseMachine
                     break;
                 case self::OPEN_ONE:
                 case self::OPEN_TEN:
+                case self::OPEN_FIVE:
                 case self::OPEN_ANY_POINT:
                     $this->openPoint($uid, $cmd, $data, $source, $source_id);
                     break;
                 case self::WASH_ZERO:
-                    Log::channel('slot_machine')->info('[Slot-sendCmd] 准备调用 washPoint', [
-                        'machine_code' => $this->machine->code,
-                        'cmd' => $cmd,
-                        'uid' => $uid,
-                        'source' => $source,
-                        'source_id' => $source_id,
-                        'current_point' => $this->point,
-                    ]);
                     $this->washPoint($uid, $source, $source_id);
                     break;
                 case self::WASH_POINT:
@@ -558,6 +528,8 @@ class Slot extends MachineServices implements BaseMachine
                 case Slot::READ_BB:
                 case Slot::READ_RB:
                 case Slot::ALL_DOWN:
+                case Slot::OPEN_TABLE:
+                case Slot::WASH_TABLE:
                     $this->machineAction($uid, $cmd, $source, $source_id);
                     break;
                 default:
@@ -641,6 +613,10 @@ class Slot extends MachineServices implements BaseMachine
             default:
                 throw new Exception('命令错误');
         }
+        Log::channel('slot_machine')->info('[Slot-sendCmd] 组装指令', [
+            'machine_code' => $this->machine->code,
+            'cmd' => $cmd,
+        ]);
         return $cmd;
     }
 
@@ -669,9 +645,29 @@ class Slot extends MachineServices implements BaseMachine
             $beforeActionTime = $this->action_time;
             $handleDuration = 0;
             $sleep = 50000; // 5毫秒取一次值
+
+            // ✅ 主动查询分数的时间节点（微秒）：1秒、2秒、3秒、5秒、7秒（间隔：1+1+1+2+2）
+            $queryIntervals = [1000000, 2000000, 3000000, 5000000, 7000000];
+            $queryIndex = 0;
+
             while (true) {
                 $point = $this->point;
                 $actionTime = $this->action_time;
+
+                // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
+                if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
+                    try {
+                        // 发送查询分数指令（READ_SCORE = '21'）
+                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
+                        $queryIndex++;
+                    } catch (\Exception $queryError) {
+                        Log::channel('slot_machine')->warning('[Slot-OpenPoint] 查询分数失败', [
+                            'machine_code' => $this->machine->code,
+                            'error' => $queryError->getMessage(),
+                        ]);
+                    }
+                }
+
                 if ($actionTime > $beforeActionTime && $beforePoint < $point) {
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
@@ -682,36 +678,7 @@ class Slot extends MachineServices implements BaseMachine
                     }
                     return;
                 }
-                if ($handleDuration >= $this->expirationTime) { // 只跑1.5秒钟
-                    // ✅ 发送 Telegram 告警：硬件开分指令超时
-                    try {
-                        $telegramConfig = config('telegram');
-                        if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
-                            $telegram = new \app\service\TelegramService(
-                                $telegramConfig['bot_token'],
-                                $telegramConfig['chat_id']
-                            );
-                            $telegram->sendAlert([
-                                'datetime' => new \DateTime(),
-                                'level_name' => 'ERROR',
-                                'message' => '硬件开分指令超时',
-                                'context' => [
-                                    'machine_id' => $this->machine->id,
-                                    'machine_code' => $this->machine->code,
-                                    'machine_type' => 'Slot',
-                                    'cmd' => $cmd,
-                                    'timeout_ms' => round($handleDuration / 1000, 2),
-                                    'current_point' => $this->point,
-                                    'action' => '请检查机台硬件连接状态',
-                                ],
-                            ]);
-                        }
-                    } catch (\Exception $telegramError) {
-                        Log::error('[TelegramAlert] 发送告警失败', [
-                            'error' => $telegramError->getMessage(),
-                        ]);
-                    }
-
+                if ($handleDuration >= $this->expirationTime) {
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
                 usleep($sleep);
@@ -832,21 +799,39 @@ class Slot extends MachineServices implements BaseMachine
             // 应该继续发送指令让硬件确认清零，而不是静默返回
 
             $cmdHex = $this->createCmd(self::PREFIX . self::WASH_ZERO, 0, self::TYPE_OPEN_CARD);
-            Log::channel('slot_machine')->info('[Slot-washPoint] 发送 WASH_ZERO 指令', [
-                'machine_code' => $this->machine->code,
-                'uid' => $uid,
-                'cmd_hex' => $cmdHex,
-                'before_point' => $beforePoint,
-                'attempts' => $attempts,
-            ]);
-
             Gateway::sendToUid($uid, hex2bin($cmdHex));
             $beforeActionTime = $this->action_time;
             $handleDuration = 0;
             $sleep = 50000; // 5毫秒取一次值
+
+            // ✅ 主动查询分数的时间节点（微秒）：1秒、2秒、3秒、5秒、7秒（间隔：1+1+1+2+2）
+            $queryIntervals = [1000000, 2000000, 3000000, 5000000, 7000000];
+            $queryIndex = 0;
+
             while (true) {
                 $point = $this->point;
                 $actionTime = $this->action_time;
+
+                // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
+                if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
+                    try {
+                        Log::channel('slot_machine')->debug('[Slot-WashPoint] 主动查询分数', [
+                            'machine_code' => $this->machine->code,
+                            'query_count' => $queryIndex + 1,
+                            'elapsed_ms' => round($handleDuration / 1000, 2),
+                        ]);
+
+                        // 发送查询分数指令（READ_SCORE = '21'）
+                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
+                        $queryIndex++;
+                    } catch (\Exception $queryError) {
+                        Log::channel('slot_machine')->warning('[Slot-WashPoint] 查询分数失败', [
+                            'machine_code' => $this->machine->code,
+                            'error' => $queryError->getMessage(),
+                        ]);
+                    }
+                }
+
                 if ($actionTime > $beforeActionTime && $point == 0) {
                     Log::channel('slot_machine')->info('[Slot-下分成功]', [
                         'machine_code' => $this->machine->code,
@@ -954,9 +939,29 @@ class Slot extends MachineServices implements BaseMachine
             $beforeActionTime = $this->action_time;
             $handleDuration = 0;
             $sleep = 50000; // 5毫秒取一次值
+
+            // ✅ 主动查询分数的时间节点（微秒）：1秒、2秒、3秒、5秒、7秒（间隔：1+1+1+2+2）
+            $queryIntervals = [1000000, 2000000, 3000000, 5000000, 7000000];
+            $queryIndex = 0;
+
             while (true) {
                 $point = $this->point;
                 $actionTime = $this->action_time;
+
+                // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
+                if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
+                    try {
+                        // 发送查询分数指令（READ_SCORE = '21'）
+                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
+                        $queryIndex++;
+                    } catch (\Exception $queryError) {
+                        Log::channel('slot_machine')->warning('[Slot-WashSurplusPoint] 查询分数失败', [
+                            'machine_code' => $this->machine->code,
+                            'error' => $queryError->getMessage(),
+                        ]);
+                    }
+                }
+
                 if ($actionTime > $beforeActionTime && $point < $beforePoint) {
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
@@ -967,7 +972,7 @@ class Slot extends MachineServices implements BaseMachine
                     }
                     return;
                 }
-                if ($handleDuration >= $this->expirationTime) { // 只跑1.5秒钟
+                if ($handleDuration >= $this->expirationTime) {
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
                 usleep($sleep);
@@ -1036,7 +1041,6 @@ class Slot extends MachineServices implements BaseMachine
         } catch (Exception) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code]]);
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
             usleep(50000);
@@ -1081,19 +1085,11 @@ class Slot extends MachineServices implements BaseMachine
             // ✅ 消息长度校验（开分卡消息必须是 32 字符）
             $msgLen = strlen($msg);
             if ($msgLen != 32) {
-                $this->log->warning('[Slot-slotCmd] 开分卡消息长度异常，已忽略', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'msg' => $msg,
-                    'msg_length' => $msgLen,
-                    'expected_length' => 32,
-                    'reason' => '可能是硬件故障或通信干扰',
-                ]);
                 return false;  // 忽略异常消息，不抛异常
             }
 
             checkCRC8($msg);
-            $fun = substr($msg, 2, 2);
+            $fun = strtoupper(substr($msg, 2, 2));  // ✅ 统一转换为大写，确保与常量定义一致
             $data = decodeData($msg); // 解码数据位
             checkSlotXor55($msg, $data);
             $orgBbStatus = $this->bb_status;
@@ -1141,16 +1137,21 @@ class Slot extends MachineServices implements BaseMachine
             switch ($fun) {
                 case Slot::MACHINE_BUSY:
                     throw new \Exception('slot机器' . $this->machine->code . '机器忙碌中');
-                case Slot::OPEN_ONE:
-                case Slot::OPEN_TEN:
                 case Slot::WASH_ZERO:
                 case Slot::WASH_POINT:
-                case Slot::OPEN_FIVE:
+                    $this->point;
+                    $this->setActionVersion($fun);
+                    break;
                 case Slot::MOVE_POINT_ON:
                 case Slot::MOVE_POINT_OFF:
                     break;
                 case Slot::OPEN_ANY_POINT:
+                case Slot::OPEN_ONE:
+                case Slot::OPEN_FIVE:
+                case Slot::OPEN_TEN:
                     Redis::publish($domain . ':' . $port, '设备返回的消息');
+                    $this->point = $data;
+                    $this->setActionVersion($fun);
                     break;
                 case Slot::READ_SCORE:
                     if ($data > 0 && $this->point != $data && !empty($gamingUserId)) {
@@ -1224,30 +1225,22 @@ class Slot extends MachineServices implements BaseMachine
                             'keeping' => $this->keeping,
                         ]);
 
-                        // ✅ 同时投递打码量统计（change_amount 就是打码量）
+                        // ✅ 同时投递打码量统计（change_amount × 兑换比 = 元）
                         if ($changeAmount > 0) {
-                            // ⚠️ turn_used_point 存储在 MachineCategory，不是 Machine
-                            $cateId = $this->machine->cate_id;
-                            $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
-                            $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
-
-                            if ($turnUsedPoint === null) {
-                                $turnUsedPoint = \app\model\MachineCategory::query()
-                                    ->where('id', $cateId)
-                                    ->value('turn_used_point') ?? 0;
-                                \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
-                            }
-
-                            $betAmount = bcmul($changeAmount, $turnUsedPoint, 2);
+                            $betAmount = bcmul(
+                                (string)$changeAmount,
+                                bcdiv((string)($this->machine->odds_x ?? 1), (string)($this->machine->odds_y ?? 1), 8),
+                                2
+                            );
 
                             if (bccomp($betAmount, '0', 2) > 0) {
-                                Log::channel('bet_statistics')->info('[BetStats] Slot 保留时投递打码量', [
+                                Log::channel('bet_statistics')->info('[BetStats] Slot 投递打码量', [
                                     'machine_id' => $this->machine->id,
                                     'player_id' => $gamingUserId,
                                     'change_amount' => $changeAmount,
-                                    'turn_used_point' => $turnUsedPoint,
+                                    'odds_x' => $this->machine->odds_x,
+                                    'odds_y' => $this->machine->odds_y,
                                     'bet_amount' => floatval($betAmount),
-                                    'source' => 'keep_machine',
                                 ]);
 
                                 Client::send('bet-statistics', [
@@ -1259,7 +1252,7 @@ class Slot extends MachineServices implements BaseMachine
                                     'created_at' => date('Y-m-d H:i:s'),
                                 ]);
                             } else {
-                                Log::channel('bet_statistics')->debug('[BetStats] Slot 保留时打码量为0，跳过投递', [
+                                Log::channel('bet_statistics')->debug('[BetStats] Slot 打码量为0，跳过投递', [
                                     'machine_id' => $this->machine->id,
                                     'bet_amount' => $betAmount,
                                 ]);
@@ -1292,9 +1285,11 @@ class Slot extends MachineServices implements BaseMachine
                     break;
                 case Slot::OPEN_TABLE:
                     $this->open_point = $data;
+                    $this->setActionVersion($fun);
                     break;
                 case Slot::WASH_TABLE:
                     $this->wash_point = $data;
+                    $this->setActionVersion($fun);
                     break;
                 case Slot::OPEN_TESTING:
                     $this->sendMachineNowStatusMessage($this->machine->id);

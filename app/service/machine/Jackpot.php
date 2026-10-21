@@ -14,6 +14,7 @@ use support\Cache;
 use support\Log;
 use Webman\Push\PushException;
 use Webman\RedisQueue\Client;
+use Workerman\Timer;
 
 /**
  * Class Jackpot
@@ -94,7 +95,7 @@ class Jackpot extends MachineServices implements BaseMachine
 
     public $cacheData = [];
 
-    public $expirationTime = 5000000; // 3秒内返回
+    public $expirationTime = 8000000; // 8秒内返回
 
     public $log = null;
 
@@ -247,34 +248,6 @@ class Jackpot extends MachineServices implements BaseMachine
                         'field' => $name,
                         'value' => $value
                     ]);
-
-                    // ✅ 发送 Telegram CRITICAL 告警
-                    try {
-                        $token = env('TELEGRAM_BOT_TOKEN');
-                        $chatId = env('TELEGRAM_CHAT_ID');
-
-                        if (!empty($token) && !empty($chatId)) {
-                            $telegram = new \app\service\TelegramService($token, $chatId, \Monolog\Logger::ERROR);
-                            $telegram->sendAlert([
-                                'datetime' => new \DateTime(),
-                                'level_name' => 'CRITICAL',
-                                'message' => '[MachineServices:Jackpot] Redis 关键字段保存失败',
-                                'context' => [
-                                    'machine_id' => $this->machine->id ?? null,
-                                    'machine_code' => $this->machine->code ?? '',
-                                    'field' => $name,
-                                    'value' => $value,
-                                    'error' => 'Redis关键字段保存失败，可能导致DB/Redis数据不一致',
-                                ],
-                            ]);
-                        }
-                    } catch (\Throwable $telegramEx) {
-                        // Telegram 发送失败不影响主流程
-                        \support\Log::warning('[MachineServices:Jackpot] Telegram 告警发送失败', [
-                            'error' => $telegramEx->getMessage(),
-                        ]);
-                    }
-
                     throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
                 }
 
@@ -292,6 +265,13 @@ class Jackpot extends MachineServices implements BaseMachine
 
             $machineCacheInfo = $this->getAllData() ?? [];
             if (!empty($machineCacheInfo)) {
+                $cateId = $this->machine->cate_id;
+                $turnUsedPointCacheKey = "machine_category:{$cateId}:turn_used_point";
+                $turnUsedPoint = \support\Cache::get($turnUsedPointCacheKey);
+                if ($turnUsedPoint === null) {
+                    $turnUsedPoint = \app\model\MachineCategory::query()->where('id', $cateId)->value('turn_used_point') ?? 0;
+                    \support\Cache::set($turnUsedPointCacheKey, $turnUsedPoint, 3600);
+                }
                 $info = [
                     'id' => $this->machine->id,
                     'last_game_at' => $this->machine->last_game_at,
@@ -326,6 +306,11 @@ class Jackpot extends MachineServices implements BaseMachine
                     'rush_status' => $machineCacheInfo[$this->cacheDataKey . '_rush_status'],
                     'bb_status' => $machineCacheInfo[$this->cacheDataKey . '_bb_status'],
                     'has_lock' => $machineCacheInfo[$this->cacheDataKey . '_has_lock'],
+                    'chip_amount' => bcmul(
+                        (string) ($machineCacheInfo[$this->cacheDataKey . '_player_win_number'] ?? 0),
+                        (string) $turnUsedPoint,
+                        2
+                    ),
                 ];
                 switch ($name) {
                     case 'gaming_user_id':
@@ -374,6 +359,7 @@ class Jackpot extends MachineServices implements BaseMachine
      */
     public function jackPotCmd(string $msg): bool
     {
+        $this->log->info('接收指令', ['machine_code' => $this->machine->code, 'hex' => $msg]);
         try {
             jackPotCheckCRC8($msg); // 检查crc8
             $fun = substr($msg, 2, 2);
@@ -416,7 +402,7 @@ class Jackpot extends MachineServices implements BaseMachine
                         'machine_code' => $this->machine->code,
                         'gaming_user_id' => $this->machine->gaming_user_id,
                     ]);
-                    $this->sendCmd(self::SCORE_TO_POINT, 0, 'player', $this->machine->gaming_user_id);
+                    $this->sendScoreToPointAsync($this->machine->gaming_user_id);
                 }
             }
             if ($orgBbStatus == 0 && $orgRushStatus == 0 && $this->bb_status == 1 && $this->rush_status == 1 && $this->now_turn > 0) {
@@ -556,10 +542,14 @@ class Jackpot extends MachineServices implements BaseMachine
                     if (($this->rush_status == 0 && $this->bb_status == 0) || ($this->rush_status == 1 && $this->bb_status == 0)) {
                         $nowTurn = $this->now_turn;
                         $bet = $this->win_number;
-                        $this->now_turn = bcadd($nowTurn, bcsub($data, $bet, 2), 2);
-                        if (!empty($currentGamingUserId)) {
-                            $playerNumber = $this->player_win_number;
-                            $this->player_win_number = bcadd($playerNumber, bcsub($data, $bet, 2), 2);
+                        $winNumberDelta = bcsub($data, $bet, 2);
+                        // 只在 win_number 正向增加时累加（开奖后机台归零时 delta 为负，不累加以防止负数）
+                        if (bccomp($winNumberDelta, '0', 2) > 0) {
+                            $this->now_turn = bcadd($nowTurn, $winNumberDelta, 2);
+                            if (!empty($currentGamingUserId)) {
+                                $playerNumber = $this->player_win_number;
+                                $this->player_win_number = bcadd($playerNumber, $winNumberDelta, 2);
+                            }
                         }
                     }
                     $this->win_number = $data;
@@ -604,6 +594,63 @@ class Jackpot extends MachineServices implements BaseMachine
         }
 
         return true;
+    }
+
+    /**
+     * 异步发送 SCORE_TO_POINT 指令（Timer 确认回复，避免在 onMessage 中阻塞事件循环）
+     */
+    private function sendScoreToPointAsync(int $gamingUserId, int $attempts = 0): void
+    {
+        $maxRetries = 3;
+        $uid = $this->machine->domain . ':' . $this->machine->port;
+
+        if (!Gateway::isUidOnline($uid)) {
+            $this->log->error('[SCORE_TO_POINT] 机台离线，跳过', [
+                'machine_code' => $this->machine->code, 'attempt' => $attempts,
+            ]);
+            return;
+        }
+
+        $sentVersion = $this->setActionVersion(self::SCORE_TO_POINT);
+        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::SCORE_TO_POINT)));
+
+        $this->log->info('[SCORE_TO_POINT] 异步发送', [
+            'machine_code' => $this->machine->code,
+            'attempt'      => $attempts + 1,
+            'sent_version' => $sentVersion,
+        ]);
+
+        $machineId = $this->machine->id;
+
+        Timer::add(1, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
+            $machine = Machine::find($machineId);
+            if (!$machine) return;
+
+            $svc = new static($machine);
+            $currentVersion = $svc->getActionVersion(self::SCORE_TO_POINT);
+
+            if ($currentVersion > $sentVersion) {
+                $svc->log->info('[SCORE_TO_POINT] 确认成功', [
+                    'machine_code'    => $machine->code,
+                    'attempt'         => $attempts + 1,
+                    'current_version' => $currentVersion,
+                ]);
+                return;
+            }
+
+            $newAttempts = $attempts + 1;
+            if ($newAttempts >= $maxRetries) {
+                $svc->log->error('[SCORE_TO_POINT] 重试耗尽，放弃', [
+                    'machine_code' => $machine->code, 'attempts' => $newAttempts,
+                ]);
+                return;
+            }
+
+            $svc->log->warning('[SCORE_TO_POINT] 超时未回复，重试', [
+                'machine_code' => $machine->code, 'attempt' => $newAttempts,
+            ]);
+            $svc->sendScoreToPointAsync($gamingUserId, $newAttempts);
+        }, null, false); // false = 只触发一次，不循环
     }
 
     /**
@@ -747,61 +794,9 @@ class Jackpot extends MachineServices implements BaseMachine
                 ]);
 
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
-
-                // ✅ 发送 Telegram 告警：硬件指令失败
-                try {
-                    $telegramConfig = config('telegram');
-                    if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
-                        $telegram = new \app\service\TelegramService(
-                            $telegramConfig['bot_token'],
-                            $telegramConfig['chat_id']
-                        );
-                        $cmdDesc = match($cmd) {
-                            self::OPEN_ANY_POINT => '开任意分',
-                            self::OPEN_ONE => '开分一次',
-                            self::OPEN_TEN => '开分10次',
-                            self::WASH_ZERO => '洗分清零',
-                            default => $cmd,
-                        };
-                        $telegram->sendAlert([
-                            'datetime' => new \DateTime(),
-                            'level_name' => 'ERROR',
-                            'message' => "钢珠机硬件指令失败（{$cmdDesc}）",
-                            'context' => [
-                                'machine_id' => $this->machine->id,
-                                'machine_code' => $this->machine->code,
-                                'machine_name' => $this->machine->name,
-                                'machine_type' => 'Jackpot',
-                                'cmd' => $cmd,
-                                'cmd_desc' => $cmdDesc,
-                                'error' => $e->getMessage(),
-                                'action' => '机台已自动锁定，请检查硬件状态',
-                            ],
-                        ]);
-                    }
-                } catch (\Exception $telegramError) {
-                    Log::error('[TelegramAlert] 发送告警失败', [
-                        'error' => $telegramError->getMessage(),
-                    ]);
-                }
             }
             throw new Exception($e->getMessage());
         }
-        // ✅ 优化：精简日志，只记录关键信息，移除冗余的 machine_data
-        $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
-        $this->log->info($operatorType . '机台操作', [
-            'operator_type' => $source,
-            'operator_id' => $source_id,
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'player_id' => $this->machine->gamingPlayer->id ?? 0,
-            'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',
-            'action' => $cmd,
-            'action_desc' => $this->getDescription($cmd),
-            'point' => $data,
-            // 移除 machine_data（几千字节的冗余数据）
-        ]);
-
         return true;
     }
 
@@ -819,7 +814,9 @@ class Jackpot extends MachineServices implements BaseMachine
         $cmd .= "{$option}00" . $decodeData;
         $cmd .= jackpotEncodeDataXor55($data) . '000000000000'; // 异或位处理
         $cmd .= crc8(hex2bin($cmd), 0x31, 0x00, 0x00, true, true, false);
-        return $cmd . 'DD';
+        $full = $cmd . 'DD';
+        $this->log->info('发送指令', ['machine_code' => $this->machine->code, 'hex' => $full]);
+        return $full;
     }
 
     /**
@@ -900,15 +897,69 @@ class Jackpot extends MachineServices implements BaseMachine
     {
         try {
             $beforePoint = $this->point;
+            $beforeActionTime0 = $this->action_time;
+            $this->log->info('[Jackpot-openPoint] 开始', [
+                'machine_code' => $this->machine->code,
+                'cmd' => $cmd,
+                'data' => $data,
+                'before_point' => $beforePoint,
+                'before_action_time' => $beforeActionTime0,
+            ]);
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . $cmd, $data)));
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::MACHINE_POINT)));
             $beforeActionTime = $this->action_time;
+            $this->log->info('[Jackpot-openPoint] 命令已发送', [
+                'machine_code' => $this->machine->code,
+                'before_action_time_pre' => $beforeActionTime0,
+                'before_action_time_post' => $beforeActionTime,
+                'action_time_shifted' => $beforeActionTime > $beforeActionTime0,
+            ]);
             $handleDuration = 0;
-            $sleep = 50000; // 5毫秒取一次值
+            $sleep = 50000; // 50毫秒取一次值
+            $lastLoggedPoint = $beforePoint;
+
+            // ✅ 主动查询分数的时间节点（微秒）：1秒、2秒、3秒、5秒、7秒（间隔：1+1+1+2+2）
+            $queryIntervals = [1000000, 2000000, 3000000, 5000000, 7000000];
+            $queryIndex = 0;
+
             while (true) {
                 $point = $this->point;
                 $actionTime = $this->action_time;
+
+                // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
+                if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
+                    try {
+                        // 发送查询分数指令（MACHINE_POINT = '21'）
+                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::MACHINE_POINT)));
+                        $queryIndex++;
+                    } catch (\Exception $queryError) {
+                        Log::channel('jackpot_machine')->warning('[Jackpot-OpenPoint] 查询分数失败', [
+                            'machine_code' => $this->machine->code,
+                            'error' => $queryError->getMessage(),
+                        ]);
+                    }
+                }
+
+                // 分数变化时记录一次日志
+                if ($point != $lastLoggedPoint) {
+                    $this->log->info('[Jackpot-openPoint] 分数变化', [
+                        'machine_code' => $this->machine->code,
+                        'before_point' => $beforePoint,
+                        'point_now' => $point,
+                        'action_time_ok' => $actionTime > $beforeActionTime,
+                        'point_ok' => $beforePoint < $point,
+                        'duration_ms' => $handleDuration / 1000,
+                    ]);
+                    $lastLoggedPoint = $point;
+                }
+
                 if ($actionTime > $beforeActionTime && $beforePoint < $point) {
+                    $this->log->info('[Jackpot-openPoint] 成功', [
+                        'machine_code' => $this->machine->code,
+                        'before_point' => $beforePoint,
+                        'final_point' => $point,
+                        'duration_ms' => $handleDuration / 1000,
+                    ]);
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -918,7 +969,21 @@ class Jackpot extends MachineServices implements BaseMachine
                     }
                     return;
                 }
-                if ($handleDuration >= $this->expirationTime) { // 只跑1.5秒钟
+                if ($handleDuration >= $this->expirationTime) {
+                    $uid = $this->machine->domain . ':' . $this->machine->port;
+                    $this->log->error('[Jackpot-openPoint] 等待硬件回复超时', [
+                        'machine_code' => $this->machine->code,
+                        'cmd' => $cmd,
+                        'data' => $data,
+                        'before_point' => $beforePoint,
+                        'current_point' => $this->point,
+                        'action_time_ok' => $actionTime > $beforeActionTime,
+                        'point_ok' => $beforePoint < $this->point,
+                        'before_action_time' => $beforeActionTime,
+                        'current_action_time' => $actionTime,
+                        'expiration_ms' => $this->expirationTime / 1000,
+                        'still_online' => Gateway::isUidOnline($uid),
+                    ]);
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
                 usleep($sleep);
@@ -980,6 +1045,12 @@ class Jackpot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
+                $this->log->error('[Jackpot-machineAction] 重试耗尽，硬件始终未回复', [
+                    'machine_code' => $this->machine->code,
+                    'cmd'          => $cmd,
+                    'attempts'     => $attempts,
+                    'still_online' => Gateway::isUidOnline($uid),
+                ]);
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
             usleep(50000);

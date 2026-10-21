@@ -83,7 +83,21 @@ class SyncMachineActivity
 
                 // 更新机台的 amount 字段（运转次数）
                 if ($machine->gaming == 1 && $machine->gaming_user_id > 0) {
-                    $machine->increment('amount');
+                    try {
+                        // 设置短超时时间，避免锁等待过久
+                        $machine->increment('amount');
+                    } catch (\PDOException $e) {
+                        // 捕获锁超时异常（1205错误码），静默跳过
+                        // amount 只是统计数据，丢失一次递增不影响核心业务
+                        if ($e->getCode() == 'HY000' && str_contains($e->getMessage(), '1205')) {
+                            $log->debug("机台 {$machine->code} 活动同步跳过（锁等待超时）", [
+                                'machine_id' => $machine->id,
+                            ]);
+                        } else {
+                            // 其他数据库异常仍然记录错误
+                            throw $e;
+                        }
+                    }
                 }
 
             } catch (\Exception $e) {

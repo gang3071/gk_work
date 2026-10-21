@@ -146,3 +146,4 @@ diagnose_*.php
 *记录*.md
 *检查*.md
 *统计*.md
+/.claudeignore

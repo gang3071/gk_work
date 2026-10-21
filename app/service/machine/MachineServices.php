@@ -37,7 +37,12 @@ class MachineServices
                     case Machine::CONTROL_TYPE_MEI:
                         return new Slot($machine, $lang);
                     case Machine::CONTROL_TYPE_SONG:
-                        return new SongSlot($machine, $lang);
+                        // 小淞工控：区分线上/线下
+                        if ($machine->machine_source === Machine::MACHINE_SOURCE_OFFLINE) {
+                            return new SongOfflineSlot($machine, $lang);
+                        } else {
+                            return new SongSlot($machine, $lang);
+                        }
                     default:
                         throw new Exception('Invalid product type');
                 }
@@ -46,7 +51,12 @@ class MachineServices
                     case Machine::CONTROL_TYPE_MEI:
                         return new Jackpot($machine, $lang);
                     case Machine::CONTROL_TYPE_SONG:
-                        return new SongJackpot($machine, $lang);
+                        // 小淞工控：区分线上/线下
+                        if ($machine->machine_source === Machine::MACHINE_SOURCE_OFFLINE) {
+                            return new SongOfflineJackpot($machine, $lang);
+                        } else {
+                            return new SongJackpot($machine, $lang);
+                        }
                     default:
                         throw new Exception('Invalid product type');
                 }

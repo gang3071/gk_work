@@ -28,12 +28,6 @@ Route::group('/api', function () {
         // 获取游戏列表（保留兼容性，建议使用 admin 接口）
         Route::post('/get-game-list', [\app\api\v1\GamePlatformProxyController::class, 'getGameList']);
 
-        // 推送测试接口
-        Route::post('/push-test', [\app\api\v1\PushTestController::class, 'test']);
-        Route::post('/push-broadcast', [\app\api\v1\PushTestController::class, 'broadcast']);
-        Route::get('/push-config', [\app\api\v1\PushTestController::class, 'checkConfig']);
-        Route::post('/push-test-player', [\app\api\v1\PushTestController::class, 'testPlayerPush']);
-
         // 玩家机台操作 API（来自 gk_api，使用 JWT Token 或 X-Player-Id）
         Route::group('/machine', function () {
             // ✅ 统一操作入口
@@ -60,6 +54,8 @@ Route::group('/api', function () {
         Route::group('/machine', function () {
             // ✅ 统一操作入口
             Route::post('/execute', [\app\api\v1\MachineOperationController::class, 'execute']);
+            // ✅ 后台专用操作入口（返回 HTTP 标准状态码）
+            Route::post('/execute-admin', [\app\api\v1\MachineOperationController::class, 'executeAdmin']);
             Route::post('/batch-execute', [\app\api\v1\MachineOperationController::class, 'batchExecute']);
             Route::get('/operations', [\app\api\v1\MachineOperationController::class, 'getOperations']);
 
@@ -68,6 +64,8 @@ Route::group('/api', function () {
             Route::get('/gateway-info', [\app\api\v1\AdminMachineController::class, 'getGatewayInfo']);
             // 获取机台状态（包含数据库信息和 Redis 缓存数据）
             Route::post('/status', [\app\api\v1\AdminMachineController::class, 'getMachineStatus']);
+            // 批量获取机台状态
+            Route::post('/batch-status', [\app\api\v1\AdminMachineController::class, 'batchGetMachineStatus']);
             // 检查单个机台在线状态
             Route::post('/check-online', [\app\api\v1\AdminMachineController::class, 'checkOnline']);
             // 获取所有机台在线状态（批量）
@@ -184,12 +182,28 @@ Route::group('/single-wallet', function () {
         Route::post('/bet', [\app\wallet\controller\game\TNineGameController::class, 'bet']);
         Route::post('/notice', [\app\wallet\controller\game\TNineGameController::class, 'betResult']);
     });
-    Route::group('/tnine-solt-channel',function(){
-        // 获取玩家钱包
-        Route::post('/SeamlessGameHub/GetBalance', [\app\wallet\controller\game\TNineSlotGameController::class, 'balance']); //商戶會員餘額查詢
-        Route::post('/SeamlessGameHub/BetAndSettle', [\app\wallet\controller\game\TNineSlotGameController::class, 'bet']); //商戶會員餘額查詢
-        Route::post('SeamlessGameHub/CancelBet', [\app\wallet\controller\game\TNineSlotGameController::class, 'cancelBet']); //商戶會員餘額查詢
+    // ========== T9 电子 V1（保留，勿删除）==========
+    // 对接版本：V1 SeamlessGameHub
+    // 状态：保留兼容，待 T9 V2 稳定后再评估下线时机
+    // V2 控制器：TNineSlotV2GameController，路由：/single-wallet/t9-integration/*
+    Route::group('/tnine-solt-channel', function () {
+        Route::post('/SeamlessGameHub/GetBalance', [\app\wallet\controller\game\TNineSlotGameController::class, 'balance']);
+        Route::post('/SeamlessGameHub/BetAndSettle', [\app\wallet\controller\game\TNineSlotGameController::class, 'bet']);
+        Route::post('/SeamlessGameHub/CancelBet', [\app\wallet\controller\game\TNineSlotGameController::class, 'cancelBet']);
+        // ========== T9 电子 V2（2026-09-23 新增）==========
+        // 对接版本：V2 t9-integration
+        // 响应格式：{"statusCode": 0, "data": {...}}（V1 为 resultCode）
+        // 新增接口：/bet、/settle、/modify-game-order
+        Route::group('/t9-integration', function () {
+            Route::post('/get-balance', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'balance']);
+            Route::post('/bet-and-settle', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'betAndSettle']);
+            Route::post('/cancel-bet', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'cancelBet']);
+            Route::post('/bet', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'bet']);
+            Route::post('/settle', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'settle']);
+            Route::post('/modify-game-order', [\app\wallet\controller\game\TNineSlotV2GameController::class, 'modifyGameOrder']);
+        });
     });
+
     Route::group('/kt-channel', function () {
         Route::post('/auth', [\app\wallet\controller\game\KTGameController::class, 'auth']);
         Route::post('/balance', [\app\wallet\controller\game\KTGameController::class, 'balance']);
