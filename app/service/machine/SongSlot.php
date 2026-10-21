@@ -501,25 +501,6 @@ class SongSlot extends MachineServices implements BaseMachine
                                 'keeping' => $this->keeping,
                             ]);
 
-                            // ✅ 同时投递打码量统计（change_amount × 兑换比 = 元）
-                            if ($changeAmount > 0) {
-                                $betAmount = bcmul(
-                                    (string)$changeAmount,
-                                    bcdiv((string)($this->machine->odds_x ?? 1), (string)($this->machine->odds_y ?? 1), 8),
-                                    2
-                                );
-
-                                if (bccomp($betAmount, '0', 2) > 0) {
-                                    Client::send('bet-statistics', [
-                                        'player_id' => $currentGamingUserId,
-                                        'stat_type' => 'machine',
-                                        'bet_amount' => floatval($betAmount),
-                                        'source' => 'song_slot',
-                                        'machine_id' => $this->machine->id,
-                                        'created_at' => date('Y-m-d H:i:s'),
-                                    ]);
-                                }
-                            }
                         }
                     }
                     if ($nowPoint > 0 && $orgPoint != $nowPoint && !empty($currentGamingUserId)) {
