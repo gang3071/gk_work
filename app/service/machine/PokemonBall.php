@@ -907,22 +907,17 @@ class PokemonBall extends MachineServices implements BaseMachine
     /**
      * 判断当前机台是否为「三关」玩法
      *
-     * 以 machine.play_type 为准，兜底查 pokemon_ball_play_rule 表。
+     * play_type 是机台玩法模式，以 pokemon_ball_play_rule 表为唯一来源
+     * （1=一球多灯 2=三球 3=三关，同一机台规则的 play_type 一致）。
      * 暂时只处理三关玩法，其它玩法返回 false 不做关卡判断。
      *
      * @return bool
      */
     protected function isThreeLevelPlay(): bool
     {
-        $playType = (int)($this->machine->play_type ?? 0);
-        if ($playType === \app\model\PokemonBallPlayRule::PLAY_TYPE_THREE_LEVEL) {
-            return true;
-        }
-
-        // 兜底：规则表里存在三关规则也算三关玩法
         try {
-            $rules = \app\model\PokemonBallPlayRule::getByMachineId((int)$this->machine->id);
-            return $rules->contains('play_type', \app\model\PokemonBallPlayRule::PLAY_TYPE_THREE_LEVEL);
+            $playType = \app\model\PokemonBallPlayRule::getPlayTypeByMachineId((int)$this->machine->id);
+            return $playType === \app\model\PokemonBallPlayRule::PLAY_TYPE_THREE_LEVEL;
         } catch (\Exception $e) {
             $this->log->warning('[PokemonBall] 读取玩法规则失败', [
                 'machine_id' => $this->machine->id,

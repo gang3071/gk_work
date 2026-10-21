@@ -12,7 +12,7 @@ use Illuminate\Support\Collection as SupportCollection;
  *
  * @property int id 主键
  * @property int machine_id 机台ID
- * @property int play_type 玩法类型 1=一球多灯 2=三球 3=三关
+ * @property int play_type 机台玩法模式 1=一球多灯 2=三球 3=三关
  * @property int light_count 灯数
  * @property float multiplier 倍率
  * @property int sort 排序
@@ -43,6 +43,35 @@ class PokemonBallPlayRule extends Model
             ->where('machine_id', $machineId)
             ->orderBy('sort')
             ->get();
+    }
+
+    /**
+     * 获取机台玩法模式
+     *
+     * play_type 是机台玩法模式（同一机台规则的 play_type 一致），
+     * 以 pokemon_ball_play_rule 表为唯一来源。未配置规则返回 0。
+     *
+     * @param int $machineId 机台ID
+     * @return int 玩法模式（1=一球多灯 2=三球 3=三关），0=未配置
+     */
+    public static function getPlayTypeByMachineId(int $machineId): int
+    {
+        return static::resolvePlayTypeFromRules(static::getByMachineId($machineId));
+    }
+
+    /**
+     * 从规则集合解析机台玩法模式（纯函数，不依赖 DB）
+     *
+     * @param SupportCollection $rules 规则集合
+     * @return int 玩法模式（1=一球多灯 2=三球 3=三关），0=未配置
+     */
+    public static function resolvePlayTypeFromRules(SupportCollection $rules): int
+    {
+        if ($rules->isEmpty()) {
+            return 0;
+        }
+        // 同一机台 play_type 应一致；若配置混杂，取最大值（3=三关 > 2=三球 > 1=一球多灯）
+        return (int)$rules->max('play_type');
     }
 
     /**
