@@ -2218,22 +2218,29 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                             'wash_status'  => $preStatus,
                         ]);
 
-                        if ($preStatus === 'd7' || $preStatus === 'd6') {
+                        $preScore = (int)($preFields['wash_score'] ?? 0);
+                        if ($preStatus === 'd7' || ($preStatus === 'd6' && $preScore > 0)) {
                             $this->log->warning('[收账小卡-下分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
                                 'machine_code' => $this->machine->code,
                                 'attempt'      => "$attempt/$maxAttempts",
                                 'pre_check'    => "$preCheck/$preCheckMax",
                                 'wash_status'  => $preStatus,
+                                'wash_score'   => $preScore,
                             ]);
                             if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
-                                return; // 入账成功
+                                return;
                             }
-                            // 过期D6：confirmWashPointWithStatus 未入账，跳出预检，继续发A5
-                            $this->log->warning('[收账小卡-下分] 重试前确认返回stale，继续发A5', [
+                            // confirmWashPointWithStatus 返回 false（异常情况），跳出预检继续发A5
+                            break;
+                        }
+
+                        if ($preStatus === 'd6' && $preScore === 0) {
+                            // 过期D6：机台尚未执行，继续预检或直接发A5
+                            $this->log->warning('[收账小卡-下分] 重试前D6为过期状态(wash_score=0)，继续预检', [
                                 'machine_code' => $this->machine->code,
                                 'attempt'      => "$attempt/$maxAttempts",
+                                'pre_check'    => "$preCheck/$preCheckMax",
                             ]);
-                            break;
                         }
                     } else {
                         $this->log->warning('[收账小卡-下分] 重试前EA D4预检无响应', [
@@ -2294,27 +2301,35 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if ($statusRaw !== null && $statusRaw !== false) {
                     $statusFields = json_decode($statusRaw, true) ?: [];
                     $washStatus   = $statusFields['wash_status'] ?? '';
+                    $washScore    = (int)($statusFields['wash_score'] ?? 0);
 
                     $this->log->info('[收账小卡-下分] CA超时，EA D4查询机台状态', [
                         'machine_code' => $this->machine->code,
                         'attempt'      => "$attempt/$maxAttempts",
                         'wash_status'  => $washStatus,
+                        'wash_score'   => $washScore,
                     ]);
 
-                    if ($washStatus === 'd7' || $washStatus === 'd6') {
-                        // 与上分对称：D7=洗分中，D6=洗分完成（真实性由 confirmWashPointWithStatus 内部判断）
+                    if ($washStatus === 'd7' || ($washStatus === 'd6' && $washScore > 0)) {
+                        // D7=洗分中；D6+wash_score>0=本次洗分已完成
                         $this->log->warning('[收账小卡-下分] CA丢包但机台已执行，等待D6完成，跳过重试', [
                             'machine_code' => $this->machine->code,
                             'attempt'      => "$attempt/$maxAttempts",
                             'wash_status'  => $washStatus,
+                            'wash_score'   => $washScore,
                         ]);
                         if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
-                            return; // 入账成功
+                            return;
                         }
-                        // 过期D6（未入账），继续重试A5
-                        $this->log->warning('[收账小卡-下分] 确认返回stale，继续重试A5', [
+                        // confirmWashPointWithStatus 返回 false（异常情况），继续重试
+                    }
+
+                    if ($washStatus === 'd6' && $washScore === 0) {
+                        // 过期D6：机台未执行本次A5，立即重试（不进入20s轮询）
+                        $this->log->warning('[收账小卡-下分] D6为过期状态(wash_score=0)，立即重试A5', [
                             'machine_code' => $this->machine->code,
                             'attempt'      => "$attempt/$maxAttempts",
+                            'turn_count'   => $statusFields['turn_count'] ?? 0,
                         ]);
                     }
                 }
@@ -2368,26 +2383,34 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if ($nullStatusRaw !== null && $nullStatusRaw !== false) {
                     $nullFields     = json_decode($nullStatusRaw, true) ?: [];
                     $nullWashStatus = $nullFields['wash_status'] ?? '';
+                    $nullWashScore  = (int)($nullFields['wash_score'] ?? 0);
 
                     $this->log->info('[收账小卡-下分] 结果未知，EA D4查询机台状态', [
                         'machine_code' => $this->machine->code,
                         'attempt'      => "$attempt/$maxAttempts",
                         'wash_status'  => $nullWashStatus,
+                        'wash_score'   => $nullWashScore,
                     ]);
 
-                    if ($nullWashStatus === 'd7' || $nullWashStatus === 'd6') {
+                    if ($nullWashStatus === 'd7' || ($nullWashStatus === 'd6' && $nullWashScore > 0)) {
                         $this->log->warning('[收账小卡-下分] 结果未知但机台已执行（D7/D6），尝试确认', [
                             'machine_code' => $this->machine->code,
                             'attempt'      => "$attempt/$maxAttempts",
                             'wash_status'  => $nullWashStatus,
+                            'wash_score'   => $nullWashScore,
                         ]);
                         if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
-                            return; // 入账成功
+                            return;
                         }
-                        // 过期D6，继续重试A5
-                        $this->log->warning('[收账小卡-下分] 确认返回stale，继续重试A5', [
+                        // confirmWashPointWithStatus 返回 false（异常情况），继续重试
+                    }
+
+                    if ($nullWashStatus === 'd6' && $nullWashScore === 0) {
+                        // 过期D6，立即重试A5
+                        $this->log->warning('[收账小卡-下分] 结果未知但D6为过期状态(wash_score=0)，立即重试A5', [
                             'machine_code' => $this->machine->code,
                             'attempt'      => "$attempt/$maxAttempts",
+                            'turn_count'   => $nullFields['turn_count'] ?? 0,
                         ]);
                     }
                 }
@@ -2492,12 +2515,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $confirmed = true;
                     break;
                 }
-                // wash_score=0 且从未见过D7：这是前次洗分留下的过期D6，机台未执行本次A5
-                $this->log->warning('[收账小卡-下分] D6但wash_score=0且未见D7，疑似过期状态，继续轮询', [
+                // wash_score=0 且从未见过D7：过期D6，机台未执行本次A5，立即返回false
+                $this->log->warning('[收账小卡-下分] D6但wash_score=0且未见D7，过期状态，立即退出确认', [
                     'machine_code' => $this->machine->code,
                     'check'        => "$check/$maxChecks",
                     'turn_count'   => $fields['turn_count'] ?? 0,
                 ]);
+                break;
             }
 
             usleep($d7Wait);
