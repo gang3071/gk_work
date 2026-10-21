@@ -2349,8 +2349,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     'machine_code' => $this->machine->code,
                     'attempt' => "$attempt/$maxAttempts",
                 ]);
-                $this->confirmWashPointWithStatus($uid, $source, $source_id);
-                return;
+                if ($this->confirmWashPointWithStatus($uid, $source, $source_id, true)) {
+                    return;
+                }
+                // CA已确认但EA D4 50次内未见D7 → 机台收到指令却未执行，硬件异常，锁机台
+                $this->log->warning('[收账小卡-下分] CA确认但EA D4无D7响应，硬件异常，锁机台', [
+                    'machine_code' => $this->machine->code,
+                    'attempt'      => "$attempt/$maxAttempts",
+                ]);
+                $this->has_lock = 1;
+                sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
+                throw new Exception("下分失败：CA已确认但机台未开始洗分（EA D4无D7），机台已锁定");
             }
 
             if ($lastResult === 'c5') {
@@ -2454,7 +2463,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * 统一使用50次（50 × ~400ms ≈ 20秒），EA D4 是协议层权威确认。
      * machineWash 侧的 card_score 轮询仅在 D6 未确认时作兜底。
      */
-    private function confirmWashPointWithStatus(string $uid, string $source, int $source_id): bool
+    private function confirmWashPointWithStatus(string $uid, string $source, int $source_id, bool $caConfirmed = false): bool
     {
         $maxChecks = 50; // 50 × ~400ms ≈ 20 秒
         $replyTimeout = 300000;   // 0.3s 等回复
@@ -2515,13 +2524,23 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $confirmed = true;
                     break;
                 }
-                // wash_score=0 且从未见过D7：过期D6，机台未执行本次A5，立即返回false
-                $this->log->warning('[收账小卡-下分] D6但wash_score=0且未见D7，过期状态，立即退出确认', [
-                    'machine_code' => $this->machine->code,
-                    'check'        => "$check/$maxChecks",
-                    'turn_count'   => $fields['turn_count'] ?? 0,
-                ]);
-                break;
+                // wash_score=0 且从未见过D7：疑似过期D6
+                if ($caConfirmed) {
+                    // CA已确认机台收到指令，过期D6是正常的（机台还没开始洗），继续轮询等D7
+                    $this->log->warning('[收账小卡-下分] D6 wash_score=0（CA已确认，继续等D7）', [
+                        'machine_code' => $this->machine->code,
+                        'check'        => "$check/$maxChecks",
+                        'turn_count'   => $fields['turn_count'] ?? 0,
+                    ]);
+                } else {
+                    // CA未确认，过期D6表示机台未执行本次A5，立即返回false供调用方快速重试
+                    $this->log->warning('[收账小卡-下分] D6 wash_score=0（CA未确认，过期状态，立即退出）', [
+                        'machine_code' => $this->machine->code,
+                        'check'        => "$check/$maxChecks",
+                        'turn_count'   => $fields['turn_count'] ?? 0,
+                    ]);
+                    break;
+                }
             }
 
             usleep($d7Wait);
