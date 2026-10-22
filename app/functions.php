@@ -3340,10 +3340,11 @@ if (!function_exists('machineOpenAnyFree')) {
                 //累計該玩家開分（包含赠分）
                 $services->gaming = 1;
                 $services->gaming_user_id = $player->id;
-                // 修复：记录开机时的机台累计押分作为本局 player_pressure 基准。
-                // 防止线上机台（不归零）的历史押分被错误计入本局 gaming_pressure。
-                // 离线机台洗分后 bet 已归零，赋值无影响；线上机台 bet 保留历史值，此处锁定基准。
-                if ($machine->type === \app\model\GameType::TYPE_SLOT) {
+                // 修复：线上 Slot 机台物理押分计数器不随洗分归零，
+                // 需在开机时将 player_pressure 锁定为当前 bet，确保 gaming_pressure 只计算本局。
+                // 离线机台依赖 CHECK 指令归零，player_pressure 保持 0 即可，不在此修改。
+                if ($machine->type === \app\model\GameType::TYPE_SLOT
+                    && $machine->machine_source === \app\model\Machine::MACHINE_SOURCE_ONLINE) {
                     $services->player_pressure = $services->bet ?? 0;
                 }
                 $services->player_open_point = bcadd($services->player_open_point ?? '0', $totalOpenScore ?? '0');
