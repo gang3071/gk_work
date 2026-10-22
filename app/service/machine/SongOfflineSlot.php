@@ -1951,8 +1951,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     ]);
 
                     if ($openStatus === 'd3' || $openStatus === 'd2') {
-                        // 机台已在执行或已完成（CA丢包），等待D2，不重发A5
-                        $this->log->warning('[收账小卡-上分] CA丢包但机台已执行，等待D2完成，跳过重试', [
+                        // D3=开分进行中；D2=开分完成。两种状态均表示机台已收到并执行指令（CA丢包），跳过重试
+                        $this->log->warning('[收账小卡-上分] CA丢包但机台已执行，跳过重试', [
                             'machine_code' => $this->machine->code,
                             'attempt'      => "$attempt/$maxAttempts",
                             'open_status'  => $openStatus,
