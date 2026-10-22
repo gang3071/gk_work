@@ -3340,6 +3340,12 @@ if (!function_exists('machineOpenAnyFree')) {
                 //累計該玩家開分（包含赠分）
                 $services->gaming = 1;
                 $services->gaming_user_id = $player->id;
+                // 修复：记录开机时的机台累计押分作为本局 player_pressure 基准。
+                // 防止线上机台（不归零）的历史押分被错误计入本局 gaming_pressure。
+                // 离线机台洗分后 bet 已归零，赋值无影响；线上机台 bet 保留历史值，此处锁定基准。
+                if ($machine->type === \app\model\GameType::TYPE_SLOT) {
+                    $services->player_pressure = $services->bet ?? 0;
+                }
                 $services->player_open_point = bcadd($services->player_open_point ?? '0', $totalOpenScore ?? '0');
                 $services->last_point_at = time();
 
@@ -3356,12 +3362,12 @@ if (!function_exists('machineOpenAnyFree')) {
                         \app\service\PlayerBetStatisticsService::DIMENSION_WEEKLY
                     );
                     Log::channel('bet_statistics')->info('[BetStats] 玩家开机初始打码量', [
-                        'player_id'        => $player->id,
-                        'machine_id'       => $machine->id,
-                        'player_pressure'  => (float)$services->bet,  // 开机时机台累计押分 = 本局 player_pressure 基准（洗分后=0）
-                        'open_point'       => $totalOpenScore,
-                        'daily_bet_yuan'   => round(($initDailyStats['bet_amount']  ?? 0) / 100, 2),
-                        'weekly_bet_yuan'  => round(($initWeeklyStats['bet_amount'] ?? 0) / 100, 2),
+                        'player_id'          => $player->id,
+                        'machine_id'         => $machine->id,
+                        'player_pressure'    => (float)($services->player_pressure ?? 0),  // 本局 gaming_pressure 基准（开机时锁定）
+                        'open_point'         => $totalOpenScore,
+                        'daily_bet_yuan'     => round(($initDailyStats['bet_amount']  ?? 0) / 100, 2),
+                        'weekly_bet_yuan'    => round(($initWeeklyStats['bet_amount'] ?? 0) / 100, 2),
                     ]);
                 } catch (\Exception $e) {
                     Log::channel('bet_statistics')->warning('[BetStats] 开机初始打码量查询失败', [
