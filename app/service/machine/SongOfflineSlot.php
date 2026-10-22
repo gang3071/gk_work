@@ -2466,10 +2466,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function confirmWashPointWithStatus(string $uid, string $source, int $source_id, bool $caConfirmed = false): bool
     {
-        $maxChecks = 50; // 50 × ~400ms ≈ 20 秒
-        $replyTimeout = 300000;   // 0.3s 等回复
-        $pollInterval = 100000;   // 100ms 轮询间隔
-        $d7Wait = 300000;   // D7洗分中：等0.3s再次查询
+        $maxChecks = 30; // 30 × ~700ms ≈ 21 秒
+        $replyTimeout = 500000;   // 0.5s 等回复
+        $pollInterval = 200000;   // 200ms 轮询间隔
+        $d7Wait = 500000;   // D7洗分中：等0.5s再次查询
 
         $openStatus = '';
         $washStatus = '';
