@@ -3340,14 +3340,6 @@ if (!function_exists('machineOpenAnyFree')) {
                 //累計該玩家開分（包含赠分）
                 $services->gaming = 1;
                 $services->gaming_user_id = $player->id;
-                // 修复：线上 Slot 机台物理押分/得分计数器不随洗分归零，
-                // 需在开机时将 player_pressure/player_score 锁定为当前值，确保只计算本局数据。
-                // bet 在洗分时归零，win 不归零；两者均无需担心离线机台（依赖 CHECK 归零）。
-                if ($machine->type === \app\model\GameType::TYPE_SLOT
-                    && $machine->machine_source === \app\model\Machine::MACHINE_SOURCE_ONLINE) {
-                    $services->player_pressure = $services->bet ?? 0;
-                    $services->player_score    = $services->win ?? 0;
-                }
                 $services->player_open_point = bcadd($services->player_open_point ?? '0', $totalOpenScore ?? '0');
                 $services->last_point_at = time();
 
@@ -3364,13 +3356,13 @@ if (!function_exists('machineOpenAnyFree')) {
                         \app\service\PlayerBetStatisticsService::DIMENSION_WEEKLY
                     );
                     Log::channel('bet_statistics')->info('[BetStats] 玩家开机初始打码量', [
-                        'player_id'          => $player->id,
-                        'machine_id'         => $machine->id,
-                        'player_pressure'    => (float)($services->player_pressure ?? 0),  // gaming_pressure 基准（开机时锁定的 bet）
-                        'player_score'       => (float)($services->player_score    ?? 0),  // gaming_score 基准（开机时锁定的 win）
-                        'open_point'         => $totalOpenScore,
-                        'daily_bet_yuan'     => round(($initDailyStats['bet_amount']  ?? 0) / 100, 2),
-                        'weekly_bet_yuan'    => round(($initWeeklyStats['bet_amount'] ?? 0) / 100, 2),
+                        'player_id'      => $player->id,
+                        'machine_id'     => $machine->id,
+                        'bet_now'        => (float)($services->bet  ?? 0),  // 开机时机台当前 bet（洗分后应为0）
+                        'win_now'        => (float)($services->win  ?? 0),  // 开机时机台当前 win（供诊断）
+                        'open_point'     => $totalOpenScore,
+                        'daily_bet_yuan' => round(($initDailyStats['bet_amount']  ?? 0) / 100, 2),
+                        'weekly_bet_yuan'=> round(($initWeeklyStats['bet_amount'] ?? 0) / 100, 2),
                     ]);
                 } catch (\Exception $e) {
                     Log::channel('bet_statistics')->warning('[BetStats] 开机初始打码量查询失败', [
