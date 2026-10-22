@@ -1287,7 +1287,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'machine_name'  => $this->machine->name ?? $this->machine->code,
             'refund_amount' => $refundAmount,
             'retry_count'   => $newRetries,
-            'message'       => "本次上分有 {$newRetries} 次部分失敗，已退款 {$refundAmount} 元至您的帳戶",
+            'message'       => "本次上分有 {$newRetries} 次部分失敗，已退款 {$refundAmount} 點數至您的帳戶",
             'timestamp'     => time(),
         ];
         sendSocketMessage('player-' . $gamingUserId, $notifyMsg);
