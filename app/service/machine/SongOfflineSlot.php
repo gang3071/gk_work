@@ -1290,7 +1290,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'message'       => "本次上分有 {$newRetries} 次部分失敗，已退款 \${$refundAmount} 至您的帳戶",
             'timestamp'     => time(),
         ];
-        sendSocketMessage('player-' . $gamingUserId . '-' . $this->machine->id, $notifyMsg);
         sendSocketMessage('player-' . $gamingUserId, $notifyMsg);
 
         return true;
