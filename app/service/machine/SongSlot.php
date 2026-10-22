@@ -557,11 +557,8 @@ class SongSlot extends MachineServices implements BaseMachine
                     break;
                 case self::GET_BET:
                     $bet = self::parseScore(substr($msg, 4, 6));
-                    $orgBet = $this->bet;
-                    if (!empty($gamingUserId) && $this->reward_status == 0) {
-                        $playerPressure = $this->player_pressure;
-                        $this->player_pressure = bcadd($playerPressure, bcsub($bet, $orgBet, 2), 2);
-                    }
+                    // player_pressure 不在此累加：开机时已锁定基准，累加 delta 会使 gaming_pressure 少计
+                    // gaming_pressure = this->bet - player_pressure（在 machineWash 中计算）
                     $this->bet = $bet;
                     self::sendCmd('af');
                     $this->setActionVersion(self::READ_BET);
