@@ -1512,6 +1512,14 @@ function machineWash(
                 $services->player_win_number = 0;
                 break;
             case GameType::TYPE_SLOT:
+                // [打码量诊断] 清零前记录本局末尾状态
+                \support\Log::channel('bet_statistics')->info('[BetStats] 玩家洗分/离场，本局押分清零', [
+                    'player_id'           => $player->id,
+                    'machine_id'          => $machine->id,
+                    'machine_bet_at_wash' => (float)$services->bet,          // 清零前机台累计押分（分）
+                    'player_pressure'     => (float)$services->player_pressure, // 本局玩家押分（分）
+                    'path'                => $path ?? 'wash',
+                ]);
                 $services->player_pressure = 0;
                 $services->player_score = 0;
                 $services->bet = 0;
@@ -3330,6 +3338,33 @@ if (!function_exists('machineOpenAnyFree')) {
                 $services->gaming_user_id = $player->id;
                 $services->player_open_point = bcadd($services->player_open_point ?? '0', $totalOpenScore ?? '0');
                 $services->last_point_at = time();
+
+                // [打码量诊断] 记录玩家开机时的初始打码量余额
+                try {
+                    $initDailyStats  = \app\service\PlayerBetStatisticsService::getStats(
+                        $player->id,
+                        \app\service\PlayerBetStatisticsService::TYPE_MACHINE,
+                        \app\service\PlayerBetStatisticsService::DIMENSION_DAILY
+                    );
+                    $initWeeklyStats = \app\service\PlayerBetStatisticsService::getStats(
+                        $player->id,
+                        \app\service\PlayerBetStatisticsService::TYPE_MACHINE,
+                        \app\service\PlayerBetStatisticsService::DIMENSION_WEEKLY
+                    );
+                    Log::channel('bet_statistics')->info('[BetStats] 玩家开机初始打码量', [
+                        'player_id'       => $player->id,
+                        'machine_id'      => $machine->id,
+                        'machine_bet_now' => (float)$services->bet,   // 机台当前押分（洗分后通常=0）
+                        'open_point'      => $totalOpenScore,
+                        'daily_bet_yuan'  => round(($initDailyStats['bet_amount']  ?? 0) / 100, 2),
+                        'weekly_bet_yuan' => round(($initWeeklyStats['bet_amount'] ?? 0) / 100, 2),
+                    ]);
+                } catch (\Exception $e) {
+                    Log::channel('bet_statistics')->warning('[BetStats] 开机初始打码量查询失败', [
+                        'player_id' => $player->id,
+                        'error'     => $e->getMessage(),
+                    ]);
+                }
 
                 // ✅ 诊断日志：验证 Redis 更新成功
                 $newRedisGamingUserId = $services->gaming_user_id ?? null;

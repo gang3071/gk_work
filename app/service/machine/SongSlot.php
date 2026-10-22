@@ -427,7 +427,7 @@ class SongSlot extends MachineServices implements BaseMachine
                             }
                         }
 
-                        $this->now_turn = $newTurn;
+                        $this->now_turn = max(0, (float)$newTurn);
                     }
                     // ✅ bet 是累加值，必须增加才说明有新押注
                     $betCondition1 = $orgBet > 0;
@@ -435,6 +435,18 @@ class SongSlot extends MachineServices implements BaseMachine
                     $betCondition3 = !empty($gamingUserId);
                     $betCondition4 = $this->change_point_card_status == 0;
                     $betAllConditionsMet = $betCondition1 && $betCondition2 && $betCondition3 && $betCondition4;
+
+                    // [打码量诊断] 押分基准建立：orgBet=0 说明是本局首次有效心跳
+                    if (!$betCondition1 && $nowBet > 0 && !empty($gamingUserId)) {
+                        Log::channel('bet_statistics')->info('[BetStats] 押分基准建立', [
+                            'machine_id'   => $this->machine->id,
+                            'player_id'    => $gamingUserId,
+                            'baseline_bet' => (float)$nowBet,  // 机台当前累计押分（本局参考点）
+                            'last_org_bet' => (float)$orgBet,  // 上次记录值（0=洗分后/首次）
+                            'odds_x'       => $this->machine->odds_x,
+                            'odds_y'       => $this->machine->odds_y,
+                        ]);
+                    }
 
                     if ($betAllConditionsMet) {
                         // ⚠️ CRITICAL：重新读取 gaming_user_id，防止使用已被踢出的玩家ID
@@ -454,12 +466,14 @@ class SongSlot extends MachineServices implements BaseMachine
 
                                 if (bccomp($betAmount, '0', 2) > 0) {
                                     Log::channel('bet_statistics')->info('[BetStats] SongSlot 投递打码量', [
-                                        'machine_id' => $this->machine->id,
-                                        'player_id' => $currentGamingUserId,
+                                        'machine_id'         => $this->machine->id,
+                                        'player_id'          => $currentGamingUserId,
+                                        'org_bet'            => (float)$orgBet,
+                                        'now_bet'            => (float)$nowBet,
                                         'pressure_increment' => $pressureIncrement,
-                                        'odds_x' => $this->machine->odds_x,
-                                        'odds_y' => $this->machine->odds_y,
-                                        'bet_amount' => floatval($betAmount),
+                                        'odds_x'             => $this->machine->odds_x,
+                                        'odds_y'             => $this->machine->odds_y,
+                                        'bet_amount'         => floatval($betAmount),
                                     ]);
 
                                     Client::send('bet-statistics', [
