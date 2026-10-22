@@ -1950,15 +1950,35 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         'open_status'  => $openStatus,
                     ]);
 
-                    if ($openStatus === 'd3' || $openStatus === 'd2') {
-                        // 机台已在执行或已完成（CA丢包），等待D2，不重发A5
-                        $this->log->warning('[收账小卡-上分] CA丢包但机台已执行，等待D2完成，跳过重试', [
+                    if ($openStatus === 'd3') {
+                        // D3 = 开分进行中，确认机台已收到指令
+                        $this->log->warning('[收账小卡-上分] CA丢包但机台已执行（D3进行中），跳过重试', [
                             'machine_code' => $this->machine->code,
                             'attempt'      => "$attempt/$maxAttempts",
                             'open_status'  => $openStatus,
                         ]);
                         $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
                         return;
+                    }
+
+                    if ($openStatus === 'd2') {
+                        // D2 既是空闲态也是完成态，需用心跳 card_score 区分
+                        // 机台执行上分后心跳会立即更新 card_score > 0；未执行则仍为 0
+                        $cachedCardScore = (int)$this->card_score;
+                        if ($cachedCardScore > 0) {
+                            $this->log->warning('[收账小卡-上分] CA丢包已执行（D2+card_score>0），跳过重试', [
+                                'machine_code' => $this->machine->code,
+                                'attempt'      => "$attempt/$maxAttempts",
+                                'card_score'   => $cachedCardScore,
+                            ]);
+                            $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                            return;
+                        }
+                        // card_score=0 且 D2：过期空闲状态，机台未执行本次 A5，继续重试
+                        $this->log->warning('[收账小卡-上分] D2但card_score=0（过期状态），继续重试', [
+                            'machine_code' => $this->machine->code,
+                            'attempt'      => "$attempt/$maxAttempts",
+                        ]);
                     }
                 }
 
