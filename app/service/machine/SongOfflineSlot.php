@@ -1661,7 +1661,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 }
 
                 // EA D4 无回复或 D2/D3 以外状态：机台确认未执行，安全重试 A5
-                MachineLogger::warning($this->machine->toArray(), ACTION_OPEN, '[收账小卡-上分] 机台未执行，重试 attempt='."$attempt/$maxAttempts", $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] 机台未执行，重试 attempt='."$attempt/$maxAttempts", $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 continue;
             }
 
