@@ -2037,11 +2037,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $ratio = $ratioArr[$ratioCode] ?? null;
 
         if ($ratio === null) {
-            // 记录异常扣趴码
-            Log::channel('machine_operations')->warning('[SongOfflineJackpot] 收到未定义的扣趴码', [
-                'ratio_code' => $ratioCode,
-                'default_to' => '10%'
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'parse_ratio', '收到未定义的扣趴码 code='.$ratioCode.' 默认10%', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             $ratio = '10'; // 默认10%
         }
 
@@ -2256,13 +2252,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             if (in_array($cmd, [self::OPEN_ANY_POINT, self::WASH_ZERO])) {
                 $wasAlreadyLocked = $this->has_lock == 1;
                 $this->has_lock = 1;
-                Log::channel('machine_operations')->error('[SongOfflineJackpot-MachineLock] 机台被锁', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'cmd' => $cmd,
-                    'lock_reason' => '指令执行异常',
-                    'exception_message' => $e->getMessage(),
-                ]);
+                MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令执行异常-机台被锁 cmd='.$cmd.' '.$e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
                 // 已锁定时重试失败不重复发送通知（防止通知轰炸）
                 if (!$wasAlreadyLocked) {
                     sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
