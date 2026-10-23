@@ -151,7 +151,7 @@ class Events
                 switch ($machine->control_type) {
                     case Machine::CONTROL_TYPE_MEI:
                         $msg = strtoupper(bin2hex($message));
-                        Log::channel('slot_machine')->info('收到双美Slot消息', [
+                        Log::channel('machine_ctrl')->info('收到双美Slot消息', [
                             'code' => $machine->code,
                             'remote_addr' => $domain,
                             'remote_port' => $port,

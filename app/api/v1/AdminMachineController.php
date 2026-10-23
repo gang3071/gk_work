@@ -405,18 +405,7 @@ class AdminMachineController
 
             // ✅ 特殊处理：小淞机器解锁时自动发送故障排除指令
             if ($field === 'has_lock' && $value == 0 && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
-                Log::channel('machine_operations')->info('[机台解锁] 执行解锁操作', [
-                    'machine_id' => $machineIdInt,
-                    'machine_code' => $machine->code,
-                    'machine_type' => $machine->type,
-                    'control_type' => $machine->control_type,
-                    'machine_source' => $machine->machine_source ?? 'online',
-                    'service_class' => get_class($services),
-                    'old_has_lock' => $services->has_lock ?? 1,
-                    'new_has_lock' => 0,
-                    'operator_type' => 'admin',
-                    'operator_id' => $adminId ?? null,
-                ]);
+                \app\support\MachineLogger::adminEvent($machine->toArray(), ['id' => $adminId ?? 0], \app\support\MachineLogger::ACTION_UNLOCK, '执行解锁操作 service='.get_class($services));
 
                 try {
                     // ✅ 修复：使用服务实例的 CHECK 常量，自动适配线上/线下版
@@ -428,30 +417,13 @@ class AdminMachineController
                         // 发送故障排除指令
                         $result = $services->sendCmd($checkCmd, 0, 'admin');
 
-                        Log::channel('machine_operations')->info('[机台解锁] 故障排除指令发送成功', [
-                            'machine_id' => $machineIdInt,
-                            'machine_code' => $machine->code,
-                            'machine_source' => $machine->machine_source ?? 'online',
-                            'service_class' => get_class($services),
-                            'cmd' => $checkCmd,
-                            'result' => $result,
-                        ]);
+                        \app\support\MachineLogger::adminEvent($machine->toArray(), ['id' => $adminId ?? 0], \app\support\MachineLogger::ACTION_UNLOCK, '故障排除指令发送成功 cmd='.$checkCmd);
                     } else {
-                        Log::channel('machine_operations')->warning('[机台解锁] CHECK 常量未定义', [
-                            'machine_id' => $machineIdInt,
-                            'machine_code' => $machine->code,
-                            'service_class' => get_class($services),
-                        ]);
+                        \app\support\MachineLogger::warning($machine->toArray(), \app\support\MachineLogger::ACTION_UNLOCK, 'CHECK常量未定义 service='.get_class($services), [], \app\support\MachineLogger::DIR_COMMAND);
                     }
                 } catch (Exception $e) {
                     // 故障排除失败不阻断主流程
-                    Log::channel('machine_operations')->error('[机台解锁] 故障排除指令发送失败', [
-                        'machine_id' => $machineIdInt,
-                        'machine_code' => $machine->code,
-                        'service_class' => get_class($services),
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString(),
-                    ]);
+                    \app\support\MachineLogger::error($machine->toArray(), \app\support\MachineLogger::ACTION_UNLOCK, '故障排除指令发送失败: '.$e->getMessage(), [], \app\support\MachineLogger::DIR_COMMAND);
                 }
             }
 

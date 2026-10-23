@@ -83,14 +83,7 @@ class MachineOperationController
             $lang = $this->setLanguage($request);
 
             // 5. 记录请求日志
-            Log::channel('machine_operations')->info('[MachineOperationController] 收到请求', [
-                'machine_id' => $machineId,
-                'action' => $action,
-                'operator_type' => $operatorType,
-                'operator_id' => $operatorId,
-                'params' => $params,
-                'route' => $request->path(),
-            ]);
+            \app\support\MachineLogger::log($machine->toArray(), $operatorType === MachineOperationService::OPERATOR_ADMIN ? \app\support\MachineLogger::SOURCE_ADMIN : ($operatorType === MachineOperationService::OPERATOR_PLAYER ? \app\support\MachineLogger::SOURCE_PLAYER : \app\support\MachineLogger::SOURCE_SYSTEM), \app\support\MachineLogger::STATUS_NORMAL, \app\support\MachineLogger::DIR_EVENT, $action, '收到请求', ['operator_id' => $operatorId]);
 
             // 6. 创建服务实例
             $service = new MachineOperationService(
@@ -111,12 +104,7 @@ class MachineOperationController
             }
 
         } catch (\Throwable $e) {
-            Log::channel('machine_operations')->error('[MachineOperationController] 机台操作失败', [
-                'machine_id' => $machineId,
-                'action' => $action,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            \app\support\MachineLogger::error($machine->toArray(), $action ?? 'execute', '机台操作失败: '.$e->getMessage());
 
             return json(['code' => 0, 'msg' => trans('machine_operation_failed', [], 'machine_operation', $this->setLanguage($request)) . ': ' . $e->getMessage(), 'data' => []]);
         }
@@ -180,12 +168,7 @@ class MachineOperationController
             }
 
         } catch (\Throwable $e) {
-            Log::channel('machine_operations')->error('[MachineOperationController::executeAdmin] 机台操作失败', [
-                'machine_id' => $machineId,
-                'action' => $action,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            \app\support\MachineLogger::error($machine->toArray(), $action ?? 'executeAdmin', '机台操作失败(admin): '.$e->getMessage());
 
             return json(['code' => 500, 'msg' => trans('machine_operation_failed', [], 'machine_operation', $this->setLanguage($request)) . ': ' . $e->getMessage(), 'data' => []]);
         }
@@ -223,9 +206,7 @@ class MachineOperationController
                 }
             } catch (Exception $e) {
                 // 获取玩家信息失败，继续判断为系统操作
-                Log::channel('machine_operations')->warning('[MachineOperationController] 获取玩家信息失败', [
-                    'error' => $e->getMessage(),
-                ]);
+                Log::channel('machine_ctrl')->warning('获取玩家信息失败', ['error' => $e->getMessage()]);
             }
         }
 
@@ -336,11 +317,7 @@ class MachineOperationController
             ]);
 
         } catch (Exception $e) {
-            Log::channel('machine_operations')->error('[MachineOperationController] 批量操作失败', [
-                'action' => $action ?? null,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            Log::channel('machine_ctrl')->error('批量操作失败', ['action' => $action ?? null, 'error' => $e->getMessage()]);
 
             $lang = $this->setLanguage($request);
             return json(['code' => 500, 'msg' => trans('batch_operation_failed', [], 'machine_operation', $lang) . ': ' . $e->getMessage(), 'data' => []]);
@@ -433,10 +410,7 @@ class MachineOperationController
             ]);
 
         } catch (Exception $e) {
-            Log::channel('machine_operations')->error('[MachineOperationController] 获取操作列表失败', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            Log::channel('machine_ctrl')->error('获取操作列表失败', ['error' => $e->getMessage()]);
 
             $lang = $this->setLanguage($request);
             return json(['code' => 500, 'msg' => trans('get_operations_failed', [], 'machine_operation', $lang) . ': ' . $e->getMessage(), 'data' => []]);
