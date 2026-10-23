@@ -1148,7 +1148,7 @@ function machineWash(
 ): PlayerLotteryRecord|bool|array
 {
     // 分布式锁：防止上下分并发
-    // TTL=70s：SongOfflineSlot 洗分最长 handleWashPoint 48s + card_score 轮询 10s = 58s，留有余量
+    // TTL=70s：SongOfflineSlot 洗分最长 handleWashPoint 50s + card_score 轮询 10s = 60s，留有余量
     $actionLockerKey = 'machine_operation_lock_' . $machine->id;
     $lock = Locker::lock($actionLockerKey, 70, true);
 
@@ -1353,7 +1353,7 @@ function machineWash(
             }
             /** TODO 计算打码量 */
         }
-        // 斯洛离开机台或弃台下分重置活动 检查彩金中奖情况
+            // 斯洛离开机台或弃台下分重置活动
         if ($machine->type == GameType::TYPE_SLOT) {
             // 离开机台参与活动结束（只有线上机台）
             if ($machine->machine_source == Machine::MACHINE_SOURCE_ONLINE) {
@@ -1365,11 +1365,7 @@ function machineWash(
             // 玩家离开机台时，清除所有彩金的累计打码量
             \app\service\LotteryServices::clearPlayerAccumulatedBet($player->id, $machine->type);
 
-            // 下分检查彩金获奖情况
-            if ($money > 0) {
-                $playerLotteryRecord = (new LotteryServices())->setMachine($machine)->setPlayer($player)->fixedPotCheckLottery($money,
-                    false, $path == 'leave');
-            }
+            // ⚠️ 固定彩金检查已移至 DB::commit() 之后执行，见下方注释
         }
 
         // ✅ 硬件清零指令（在事务内执行，失败可回滚）
@@ -1404,30 +1400,38 @@ function machineWash(
                     ]);
                     $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
 
-                    // 离线小淞：轮询等待机台物理出分完成（card_score 降到 0 才确认）
-                    // 物理出分需要 1-3 秒，B7 心跳每秒上报一次，最多等 10 秒
-                    // 若超时说明机台未执行 WASH_POINT（如 L1162 第一次洗分静默失败），
-                    // 抛出异常 → DB::rollBack() → 钱包不加款，防止重复给款
+                    // 离线小淞：EA D4 已在 handleWashPoint 内轮询 D6（最长20秒）。
+                    // 若 EA D4 未确认 D6，再用 card_score 心跳兜底（最多10秒）。
                     if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                         && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
-                        $maxAttempts = 25; // 25 × 400ms = 10 秒
-                        $confirmed = false;
-                        for ($i = 0; $i < $maxAttempts; $i++) {
-                            usleep(400000); // 400ms
-                            if ($services->card_score == 0) {
-                                $confirmed = true;
-                                break;
+                        $statusFields = $services->getLastStatusFields();
+                        $washDoneByD4 = ($statusFields['wash_status'] ?? '') === 'd6';
+
+                        if (!$washDoneByD4) {
+                            // EA D4 未确认 D6，card_score 心跳兜底
+                            $maxAttempts = 25; // 25 × 400ms = 10 秒
+                            $confirmed = false;
+                            for ($i = 0; $i < $maxAttempts; $i++) {
+                                usleep(400000); // 400ms
+                                if ($services->card_score == 0) {
+                                    $confirmed = true;
+                                    break;
+                                }
                             }
-                        }
-                        $cardScoreAfterWash = $services->card_score;
-                        Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO 执行完成（离线小淞）', [
-                            'machine_code' => $machine->code,
-                            'confirmed' => $confirmed,
-                            'card_score_after_wash' => $cardScoreAfterWash,
-                            'attempts' => $i + 1,
-                        ]);
-                        if (!$confirmed) {
-                            throw new Exception("洗分失败：机台未在10秒内确认出分（card_score={$cardScoreAfterWash}），请重试");
+                            $cardScoreAfterWash = $services->card_score;
+                            Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO card_score 兜底确认（离线小淞）', [
+                                'machine_code' => $machine->code,
+                                'confirmed' => $confirmed,
+                                'card_score_after_wash' => $cardScoreAfterWash,
+                                'attempts' => $i + 1,
+                            ]);
+                            if (!$confirmed) {
+                                throw new Exception("洗分失败：机台未确认出分（EA D4 非D6，card_score={$cardScoreAfterWash}），请重试");
+                            }
+                        } else {
+                            Log::channel('slot_machine')->info('[machineWash-硬件清零] WASH_ZERO EA D4 已确认D6，跳过card_score轮询', [
+                                'machine_code' => $machine->code,
+                            ]);
                         }
                     } else {
                         // 在线 Slot：短暂延迟，确保硬件完全清零
@@ -1469,6 +1473,30 @@ function machineWash(
         // ✅ 硬件指令成功后才提交数据库
         DB::commit();
 
+            // ✅ 固定彩金检查：必须在 DB::commit() 之后执行
+            // 原因：若在外层事务内调用，fixedPotCheckLottery 的 DB::beginTransaction() 会退化为
+            // SAVEPOINT，commit() 只释放 SAVEPOINT 而非真正提交。此时业务锁已释放，但
+            // lockForUpdate 的行锁仍由外层事务持有。addLotteryPool sync 获得业务锁后读到
+            // MVCC 快照（扣款前旧值），其 UPDATE 被行锁阻塞；外层事务 commit 后行锁释放，
+            // sync 的 UPDATE 以旧值覆盖正确扣款结果 → 彩池永远不被扣减。
+            // 移到 commit() 之后：fixedPotCheckLottery 拥有独立事务，lockForUpdate 行锁在
+            // 自身 commit 后立即释放，sync 读到已提交的扣款值，不会覆盖。
+            if ($machine->type == GameType::TYPE_SLOT && $money > 0) {
+                try {
+                    $playerLotteryRecord = (new LotteryServices())
+                        ->setMachine($machine)
+                        ->setPlayer($player)
+                        ->fixedPotCheckLottery($money, false, $path == 'leave');
+                } catch (\Exception $e) {
+                    \support\Log::error('[machineWash] 固定彩金检查失败（洗分已完成）', [
+                        'machine_id' => $machine->id,
+                        'player_id' => $player->id,
+                        'money' => $money,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
         // ✅ 立即更新 Redis 状态（保证 DB/Redis 一致性）
         // 优化：在钱包操作之前更新 Redis，缩小不一致时间窗口
         if ($path == 'leave') {
@@ -1484,6 +1512,18 @@ function machineWash(
                 $services->player_win_number = 0;
                 break;
             case GameType::TYPE_SLOT:
+                // [打码量诊断] 清零前记录本局末尾状态
+                // gaming_pressure = bet - player_pressure（本局押分）
+                // gaming_score    = win - player_score（本局得分）
+                \support\Log::channel('bet_statistics')->info('[BetStats] 玩家洗分/离场，本局押分清零', [
+                    'player_id'       => $player->id,
+                    'machine_id'      => $machine->id,
+                    'gaming_pressure' => $gamingPressure ?? 0,  // 本局押分（分）= bet - player_pressure
+                    'gaming_score'    => $gamingScore    ?? 0,  // 本局得分（分）= win - player_score
+                    'bet_raw'         => (float)$services->bet,
+                    'player_pressure' => (float)$services->player_pressure,
+                    'path'            => $path ?? 'wash',
+                ]);
                 $services->player_pressure = 0;
                 $services->player_score = 0;
                 $services->bet = 0;
@@ -2841,8 +2881,10 @@ if (!function_exists('machineOpenAnyFree')) {
             $totalOpenScore = $openScore + $giftScore;
 
             // SongOfflineSlot：$totalOpenScore 是机台分（machine game points），
-            // 而 $services->point 和 $machine->max_point/min_point 均为 card_score 单位，
-            // 需先换算成 card_score 再做比较。
+            // 而 max_point/min_point 均为 card_score 单位（= 机台分 ÷ odds_x）。
+            // 当前分数使用 machine_score（心跳B2字段）换算，而非 card_score（B1字段）：
+            // card_score 只记录开分卡累积开分，玩家中大奖后 machine_score 可远超 card_score，
+            // 必须以实际机台分来判断是否超出上限。
             $isSongOfflineSlot = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                 && $machine->control_type == Machine::CONTROL_TYPE_SONG
                 && $machine->type == \app\model\GameType::TYPE_SLOT);
@@ -2850,10 +2892,18 @@ if (!function_exists('machineOpenAnyFree')) {
                 ? intdiv($totalOpenScore, $machine->odds_x)
                 : $totalOpenScore;
 
+            // SongOfflineSlot：card_score（B1）+ machine_score（B2）直接叠加作为当前持有量
+            // 两者均为心跳返回的原始机台分（同单位），无需换算，叠加后才完整反映机台总持有分
+            // 其他机台：直接用 $services->point（机台当前分数）
+            $currentPointForCheck = $services->point;
+            if ($isSongOfflineSlot) {
+                $currentPointForCheck += (int) ($services->machine_score ?? 0);
+            }
+
             if ($machine->min_point != 0 && $machine->min_point > $totalOpenScoreForCheck) {
                     throw new Exception(trans('machine_min_open', [], 'message') . $machine->min_point);
                 }
-                if ($machine->max_point != 0 && ($machine->max_point < $services->point || $machine->max_point < $totalOpenScoreForCheck || $machine->max_point < ($services->point + $totalOpenScoreForCheck))) {
+                if ($machine->max_point != 0 && ($machine->max_point < $currentPointForCheck || $machine->max_point < $totalOpenScoreForCheck || $machine->max_point < ($currentPointForCheck + $totalOpenScoreForCheck))) {
                     throw new Exception(trans('machine_max_open', [], 'message') . $machine->max_point);
             }
 
@@ -3220,28 +3270,54 @@ if (!function_exists('machineOpenAnyFree')) {
                     $cmdSourceId = $adminId > 0 ? $adminId : $player->id;
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, $cmdSource, $cmdSourceId);
 
-                    // ── EA D4 回补退款处理 ──
-                    // sendCmd 内部已发 EA D4 并将结果存入 Redis（_last_status_fields）。
-                    // retry_count > 0 表示机台有开分失败次数（如到达积分上限），需退还对应金额。
-                    $statusFields = $services->getLastStatusFields();
-                    $retryCount   = (int)($statusFields['retry_count'] ?? 0);
-                    if ($retryCount > 0 && $openScore > 0) {
-                        $paidTimes = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
-                        // 防御：机台异常上报值不应超过实际次数，超出则按全额退款处理
-                        $retryCount = min($retryCount, $paidTimes);
-                        $refundMoney = $paidTimes > 0
-                            ? bcdiv(bcmul($retryCount, $money, 6), $paidTimes, 2)
-                            : '0.00';
-                        if (bccomp($refundMoney, '0', 2) > 0) {
-                            $refundResult = \app\service\WalletService::add($player->id, $refundMoney);
-                            Log::channel('slot_machine')->warning('[machineOpenAnyFree] 回补退款', [
+                    // ── EA D4 回補退款處理（唯一合法觸發點：CA 確認後）──
+                    // EA D4 的 retry_count 是本批次 A5 指令的失敗次數（非累積值）
+                    // sendCmd 最多輪詢 EA D4 25 次，每次 A7 都會觸發心跳路徑的 handleRetryRefund。
+                    // 若心跳已在輪詢期間處理完（return_count >= batchRetryCount），inline 直接跳過，
+                    // 避免「重複查詢 EA D4 → 心跳先退 → inline 再退」的雙重退款。
+                    $statusFields      = $services->getLastStatusFields();
+                    $batchRetryCount   = (int)($statusFields['retry_count'] ?? 0);
+                    $currentReturnCount = (int)($services->return_count ?? 0);
+                    $paidTimes         = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
+                    // 防禦：本批次失敗次數不應超過本次付款開分次數
+                    $refundRetries     = min($batchRetryCount, $paidTimes);
+
+                    // 只有當心跳路徑尚未處理本批次（return_count < batchRetryCount）才由 inline 退款
+                    if ($refundRetries > 0 && $batchRetryCount > $currentReturnCount) {
+                        // 以 prevBase=0 呼叫：告知 handleRetryRefund 這是本批次絕對次數，不做 return_count 差值
+                        $refundHandled = $services->handleRetryRefund($refundRetries, 0);
+                        if ($refundHandled) {
+                            Log::channel('slot_machine')->info('[machineOpenAnyFree] EA D4 批次回補完成（inline）', [
+                                'machine_code'      => $machine->code,
+                                'player_id'         => $player->id,
+                                'batch_retries'     => $refundRetries,
+                                'paid_times'        => $paidTimes,
+                                'prev_return_count' => $currentReturnCount,
+                            ]);
+                            // 加款成功才同步 return_count，與 updateMachineStatus 邏輯一致：
+                            // 失敗時保留舊值，讓下次心跳路徑見到相同 retry_count 時可自動重試
+                            $services->return_count = $batchRetryCount;
+                        } else {
+                            Log::channel('slot_machine')->critical('[machineOpenAnyFree] EA D4 批次回補錢包加款失敗，等待心跳路徑重試', [
                                 'machine_code'  => $machine->code,
                                 'player_id'     => $player->id,
-                                'retry_count'   => $retryCount,
-                                'refund_money'  => $refundMoney,
-                                'refund_ok'     => $refundResult['success'] ?? false,
+                                'batch_retries' => $refundRetries,
+                            ]);
+                            // 不更新 return_count，確保心跳路徑能重試 pendingRefundKey 中的記錄
+                        }
+                    } else {
+                        // 無需 inline 退款（batchRetryCount=0 或心跳已先處理）
+                        if ($refundRetries > 0) {
+                            Log::channel('slot_machine')->info('[machineOpenAnyFree] EA D4 批次回補已由心跳路徑處理，inline 跳過', [
+                                'machine_code'  => $machine->code,
+                                'player_id'     => $player->id,
+                                'batch_retries' => $refundRetries,
+                                'return_count'  => $currentReturnCount,
                             ]);
                         }
+                        // 同步 return_count：無失敗時重置為 0 供下次開分使用；
+                        // 心跳已處理時此行通常為 no-op（TCP 早已寫入相同值）
+                        $services->return_count = $batchRetryCount;
                     }
                 } else {
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
@@ -3266,6 +3342,34 @@ if (!function_exists('machineOpenAnyFree')) {
                 $services->gaming_user_id = $player->id;
                 $services->player_open_point = bcadd($services->player_open_point ?? '0', $totalOpenScore ?? '0');
                 $services->last_point_at = time();
+
+                // [打码量诊断] 记录玩家开机时的初始打码量余额
+                try {
+                    $initDailyStats  = \app\service\PlayerBetStatisticsService::getStats(
+                        $player->id,
+                        \app\service\PlayerBetStatisticsService::TYPE_MACHINE,
+                        \app\service\PlayerBetStatisticsService::DIMENSION_DAILY
+                    );
+                    $initWeeklyStats = \app\service\PlayerBetStatisticsService::getStats(
+                        $player->id,
+                        \app\service\PlayerBetStatisticsService::TYPE_MACHINE,
+                        \app\service\PlayerBetStatisticsService::DIMENSION_WEEKLY
+                    );
+                    Log::channel('bet_statistics')->info('[BetStats] 玩家开机初始打码量', [
+                        'player_id'      => $player->id,
+                        'machine_id'     => $machine->id,
+                        'bet_now'        => (float)($services->bet  ?? 0),  // 开机时机台当前 bet（洗分后应为0）
+                        'win_now'        => (float)($services->win  ?? 0),  // 开机时机台当前 win（供诊断）
+                        'open_point'     => $totalOpenScore,
+                        'daily_bet_yuan' => round(($initDailyStats['bet_amount']  ?? 0) / 100, 2),
+                        'weekly_bet_yuan'=> round(($initWeeklyStats['bet_amount'] ?? 0) / 100, 2),
+                    ]);
+                } catch (\Exception $e) {
+                    Log::channel('bet_statistics')->warning('[BetStats] 开机初始打码量查询失败', [
+                        'player_id' => $player->id,
+                        'error'     => $e->getMessage(),
+                    ]);
+                }
 
                 // ✅ 诊断日志：验证 Redis 更新成功
                 $newRedisGamingUserId = $services->gaming_user_id ?? null;

@@ -850,6 +850,71 @@ class AdminMachineController
     }
 
     /**
+     * 批量获取机台状态
+     * POST /api/admin/machine/batch-status
+     *
+     * @param Request $request
+     * @return Response
+     */
+    public function batchGetMachineStatus(Request $request): Response
+    {
+        try {
+            $lang = $this->setLanguage($request);
+            $machineIds = $request->post('machine_ids', []);
+
+            if (empty($machineIds) || !is_array($machineIds)) {
+                return $this->fail('machine_ids 参数无效', 400);
+            }
+
+            $machines = Machine::whereIn('id', $machineIds)->get();
+            $results = [];
+
+            foreach ($machines as $machine) {
+                $services = MachineServices::createServices($machine, $lang);
+                $cacheData = [];
+                if ($services && isset($services->cacheData) && is_array($services->cacheData)) {
+                    $cacheData = $services->cacheData;
+                }
+
+                $results[] = [
+                    'machine_id'   => $machine->id,
+                    'machine_info' => [
+                        'id'              => $machine->id,
+                        'name'            => $machine->name,
+                        'code'            => $machine->code,
+                        'type'            => $machine->type,
+                        'control_type'    => $machine->control_type,
+                        'status'          => $machine->status,
+                        'is_use'          => $machine->is_use,
+                        'maintaining'     => $machine->maintaining,
+                        'domain'          => $machine->domain,
+                        'port'            => $machine->port,
+                        'odds_x'          => $machine->odds_x,
+                        'odds_y'          => $machine->odds_y,
+                        'min_point'       => $machine->min_point,
+                        'max_point'       => $machine->max_point,
+                        'seat'            => $machine->seat,
+                        'gaming'          => $machine->gaming,
+                        'gaming_user_id'  => $machine->gaming_user_id,
+                        'keeping'         => $machine->keeping,
+                        'keeping_user_id' => $machine->keeping_user_id,
+                        'last_keep_at'    => $machine->last_keep_at,
+                        'last_play_time'  => $machine->last_play_time,
+                    ],
+                    'cache_data' => $cacheData,
+                ];
+            }
+
+            return $this->success($results);
+
+        } catch (Exception $e) {
+            return $this->handleException($e, '批量获取机台状态失败', [
+                'machine_ids' => $machineIds ?? []
+            ]);
+        }
+    }
+
+    /**
      * 获取机台操作描述
      * POST /api/admin/machine/get-description
      *

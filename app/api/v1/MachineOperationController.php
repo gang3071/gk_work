@@ -110,7 +110,7 @@ class MachineOperationController
                 return json(['code' => 0, 'msg' => $result['message'], 'data' => []]);
             }
 
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             Log::channel('machine_operations')->error('[MachineOperationController] 机台操作失败', [
                 'machine_id' => $machineId,
                 'action' => $action,
@@ -179,7 +179,7 @@ class MachineOperationController
                 return json(['code' => 400, 'msg' => $result['message'], 'data' => []]);
             }
 
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             Log::channel('machine_operations')->error('[MachineOperationController::executeAdmin] 机台操作失败', [
                 'machine_id' => $machineId,
                 'action' => $action,
@@ -448,7 +448,14 @@ class MachineOperationController
      */
     private function setLanguage(Request $request): string
     {
-        return $request->header('accept-language', 'zh_CN');
+        $lang = $request->header('accept-language', 'zh_TW');
+        $lang = str_replace('-', '_', $lang);
+        // 系統僅在台灣使用，zh_CN 統一對應繁體
+        if ($lang === 'zh_CN') {
+            $lang = 'zh_TW';
+        }
+        locale($lang);
+        return $lang;
     }
 
     /**

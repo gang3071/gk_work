@@ -1160,15 +1160,20 @@ LUA;
         DB::beginTransaction();
         try {
             // 先同步 Redis 累积金额到数据库（避免数据不一致）
+            // ⚠️ 用原子 Lua GET+DEL，防止 TOCTOU：
+            // addLotteryPool 的 INCRBYFLOAT 不感知锁，可能在 GET 之后、DEL 之前写入新值；
+            // 若用分步 GET/DEL，新增量会被 DEL 删掉但未计入 DB，导致资金永久丢失。
             $redis = \support\Redis::connection()->client();
             $redisKey = self::REDIS_KEY_LOTTERY_AMOUNT . $lottery->id;
-            $accumulatedAmount = $redis->get($redisKey);
+            $luaGetDel = "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v";
+            $accumulatedAmount = $redis->eval($luaGetDel, [$redisKey], 1);
 
             if ($accumulatedAmount && $accumulatedAmount > 0) {
-                // 有未同步的累积金额，先同步到数据库
+                // refresh 保证加到最新 DB 值上，避免覆盖其他并发操作的修改
+                $lottery->refresh();
                 $lottery->amount = bcadd($lottery->amount, $accumulatedAmount, 4);
                 $lottery->save();
-                $redis->del($redisKey);  // 清除已同步的累积
+                // Redis key 已在 Lua 脚本中原子删除，无需再次 del
             }
 
             // 重新加载彩金数据，检查余额
@@ -1230,11 +1235,7 @@ LUA;
 
             // 派彩成功后补充到保底金额（如果启用了自动补充）
             if ($lottery->auto_refill_status == 1 && $lottery->auto_refill_amount > 0) {
-                $beforeRefillAmount = $lottery->amount;
-
-                // 只有当彩池低于保底金额时才补充
                 if ($lottery->amount < $lottery->auto_refill_amount) {
-                    $refillAmount = bcsub($lottery->auto_refill_amount, $lottery->amount, 4);
                     $lottery->amount = $lottery->auto_refill_amount;
                 }
             }
@@ -1919,11 +1920,17 @@ LUA;
 
         $poolsData = [];
         $today = date('Y-m-d');
+        $redis = \support\Redis::connection()->client();
 
         /** @var GameLottery $lottery */
         foreach ($lotteryList as $lottery) {
-            // 检查是否达到最大彩池限制
-            if ($lottery->max_pool_amount > 0 && $lottery->amount >= $lottery->max_pool_amount) {
+            // 真實彩金 = DB 金額 + Redis 尚未同步的累積量
+            $redisKey      = self::REDIS_KEY_LOTTERY_AMOUNT . $lottery->id;
+            $pendingAmount = (float)($redis->get($redisKey) ?: 0);
+            $realAmount    = (float)bcadd($lottery->amount, $pendingAmount, 4);
+
+            // 检查是否达到最大彩池限制（必須用真實金額比較）
+            if ($lottery->max_pool_amount > 0 && $realAmount >= $lottery->max_pool_amount) {
                 continue;
             }
 
@@ -1941,10 +1948,13 @@ LUA;
                 }
             }
 
-            // 检查是否超过最大彩池限制
-            $newAmount = bcadd($lottery->amount, $addAmount, 4);
+            // 检查是否超过最大彩池限制（以真實金額為基準）
+            $newAmount = bcadd($realAmount, $addAmount, 4);
             if ($lottery->max_pool_amount > 0 && $newAmount > $lottery->max_pool_amount) {
-                $addAmount = bcsub($lottery->max_pool_amount, $lottery->amount, 4);
+                $addAmount = bcsub($lottery->max_pool_amount, $realAmount, 4);
+                if ((float)$addAmount <= 0) {
+                    continue;
+                }
             }
 
             // 准备批量数据
@@ -1959,7 +1969,6 @@ LUA;
         // 如果有需要累积的彩金池，使用 Lua 脚本批量处理
         if (!empty($poolsData)) {
             try {
-                $redis = \support\Redis::connection()->client();
 
                 // ✅ 性能优化：使用 EVALSHA 替代 EVAL（减少 95% 网络传输）
                 if (self::$luaScriptSha === null) {
@@ -2031,18 +2040,24 @@ LUA;
 
             foreach ($lotteryList as $lottery) {
                 try {
+                    // 使用与 tryDistributeLottery 相同的锁，防止并发写入导致 lost update
+                    $syncLock = Locker::lock('game_lottery_pool_random_locker_' . $lottery->id, 3, true);
+                    if (!$syncLock->acquire()) {
+                        continue; // 彩金派彩进行中，跳过此次强制同步
+                    }
+                    try {
                     $redisKey = self::REDIS_KEY_LOTTERY_AMOUNT . $lottery->id;
-                    $accumulatedAmount = $redis->get($redisKey);
+                    $luaGetDel = "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v";
+                    $accumulatedAmount = $redis->eval($luaGetDel, [$redisKey], 1);
 
                     // 如果 Redis 中有累积金额
                     if ($accumulatedAmount !== false && $accumulatedAmount > 0) {
-                        // 更新数据库中的金额
+                        // refresh 保证拿到最新 DB 值，避免覆盖派彩后的扣款
+                        $lottery->refresh();
                         $oldAmount = $lottery->amount;
                         $lottery->amount = bcadd($lottery->amount, $accumulatedAmount, 4);
                         $lottery->save();
-
-                        // 清除 Redis 累积计数
-                        $redis->del($redisKey);
+                        // Redis key 已在 Lua 中原子删除
 
                         // 更新最后同步时间
                         $lastSyncKey = 'game_lottery_last_sync:' . $lottery->id;
@@ -2063,6 +2078,9 @@ LUA;
                             'accumulated' => $accumulatedAmount,
                             'new_amount' => $lottery->amount,
                         ]);
+                    }
+                    } finally {
+                        $syncLock->release();
                     }
                 } catch (\Exception $e) {
                     $result['errors'][] = [
