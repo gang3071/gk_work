@@ -15,6 +15,7 @@ use app\model\Machine;
 use app\model\MachineGamingLog;
 use app\model\MachineOpenCard;
 use app\service\machine\MachineServices;
+use app\service\machine\SongSlot;
 use Exception;
 use support\Log;
 use Workerman\Crontab\Crontab;
@@ -134,7 +135,10 @@ class SyncMachineGameLog
                 if ($machine->type == GameType::TYPE_SLOT) {
                     $services = MachineServices::createServices($machine);
                     $services->sendCmd($services::READ_BET, 0, 'admin', 0, 1);
-                    $services->sendCmd($services::READ_WIN, 0, 'admin', 0, 1);
+                    // 在线版 SongSlot 有 READ_WIN 指令；线下版得分由心跳累计写入 Redis，无此指令
+                    if ($services instanceof SongSlot) {
+                        $services->sendCmd($services::READ_WIN, 0, 'admin', 0, 1);
+                    }
                     MachineGamingLog::query()->updateOrCreate([
                         'machine_id' => $machine->id,
                         'type' => $machine->type,
