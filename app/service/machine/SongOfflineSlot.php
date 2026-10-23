@@ -170,7 +170,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
     public $cacheData = [];
     public $expirationTime = 5000000;  // 5秒超时
-    public $log = null;
 
     // ✅ 指令测试支持：记录原始指令码（用于设置正确的 actionVersion）
     private $originalCmd = null;
@@ -244,7 +243,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         $this->lang = $lang;
         $this->cacheData = $this->getMachineCache();
-        $this->log = Log::channel('song_offline_slot_machine');
     }
 
     /**
@@ -373,9 +371,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     public function slotCmd(string $msg): bool
     {
         // 转换为小写并调用 handleMsg
-        $this->log->info('[收账小卡-开机] 收到指令', [
-            'msg' => $msg,
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[收账小卡-开机] 收到指令', ['machine_data' => $this->getMachineCache()]);
         return $this->handleMsg(strtolower($msg));
     }
 
@@ -409,10 +405,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // ✅ 修复：fah 在前（长的优先匹配），避免 "fah" 被识别为 "fa"
             if (preg_match('/^(fah|fa)/', $buffer, $matches)) {
                 $bootMsg = $matches[0];
-                $this->log->info('[收账小卡-开机] 机版开机', [
-                    'machine_code' => $this->machine->code,
-                    'msg' => strtoupper($bootMsg),
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[收账小卡-开机] 机版开机 msg='.strtoupper($bootMsg), ['machine_data' => $this->getMachineCache()]);
                 // 开机后应该重新登入
                 $this->is_login = 0;
                 $this->login_status = 0;
@@ -424,11 +417,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     // 检查是否是合法的消息头
                     if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
                         // 非法消息头 → 可能是脏数据 → 清空
-                        $this->log->warning('[TCP分包] 清除非法残留数据', [
-                            'machine_code' => $this->machine->code,
-                            'remaining' => strtoupper($remaining),
-                            'remaining_size' => strlen($remaining),
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), 'tcp_fragment', '[TCP分包] 清除非法残留数据 size='.strlen($remaining), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                         $remaining = '';
                     }
                 }
@@ -448,10 +437,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if (strlen($buffer) > 46 && str_starts_with($bufferedRemaining, 'a5ca33')) {
                     Cache::set($this->cacheDataKey . '_last_open_result', 'ca', 10);
                     $this->setActionVersion(self::OPEN_ANY_POINT);
-                    $this->log->info('[TCP粘包] B7+CA粘包，提前标记CA', [
-                        'machine_code' => $this->machine->code,
-                        'ca_hex'       => strtoupper(substr($bufferedRemaining, 0, 6)),
-                    ]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'tcp_sticky', '[TCP粘包] B7+CA粘包，提前标记CA ca='.strtoupper(substr($bufferedRemaining, 0, 6)), ['machine_data' => $this->getMachineCache()]);
                 }
 
                 // ✅ 直接处理，删除冗余的 isHeartbeat() 检查（消除死锁风险）
@@ -466,21 +452,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         // 检查是否是合法的消息头
                         if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
                             // 非法消息头 → 可能是脏数据 → 清空
-                            $this->log->warning('[TCP分包] 清除非法残留数据', [
-                                'machine_code' => $this->machine->code,
-                                'remaining' => strtoupper($remaining),
-                                'remaining_size' => strlen($remaining),
-                            ]);
+                            MachineLogger::warning($this->machine->toArray(), 'tcp_fragment', '[TCP分包] 清除非法残留数据', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                             $remaining = '';
                         }
                     }
                     self::$msgBuffer[$machineId] = $remaining;
                 } else {
                     // ⚠️ 处理失败，保留消息在缓冲区待重试
-                    $this->log->warning('[TCP分包] 心跳处理失败，保留在缓冲区', [
-                        'machine_code' => $this->machine->code,
-                        'heartbeat' => strtoupper(substr($heartbeat, 0, 20)) . '...',
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), 'tcp_fragment', '[TCP分包] 心跳处理失败，保留在缓冲区', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 }
                 return $processed;
             }
@@ -497,21 +476,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     if (strlen($remaining) > 0) {
                         $remainingHeader = substr($remaining, 0, 2);
                         if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
-                            $this->log->warning('[TCP分包] 清除非法残留数据', [
-                                'machine_code' => $this->machine->code,
-                                'remaining' => strtoupper($remaining),
-                                'remaining_size' => strlen($remaining),
-                            ]);
+                            MachineLogger::warning($this->machine->toArray(), 'tcp_fragment', '[TCP分包] 清除非法残留数据', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                             $remaining = '';
                         }
                     }
                     self::$msgBuffer[$machineId] = $remaining;
                 } else {
                     // ⚠️ 处理失败，保留消息在缓冲区待重试
-                    $this->log->warning('[TCP分包] 账目查询回复处理失败，保留在缓冲区', [
-                        'machine_code' => $this->machine->code,
-                        'account_msg' => strtoupper(substr($accountMsg, 0, 20)) . '...',
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), 'tcp_fragment', '[TCP分包] 账目查询回复处理失败，保留在缓冲区', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 }
                 return $processed;
             }
@@ -579,11 +551,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         $processed = $this->handleResetReply($msg);
                         break;
                     default:
-                        $this->log->warning('[收账小卡] 未识别的消息类型', [
-                            'machine_code' => $this->machine->code,
-                            'msg' => $msg,
-                            'header' => $header,
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), 'ca_message', '[收账小卡] 未识别的消息类型 header='.$header, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                         $processed = false;
                         break;
                 }
@@ -596,32 +564,20 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if (strlen($remaining) > 0) {
                     $remainingHeader = substr($remaining, 0, 2);
                     if (!in_array($remainingHeader, ['a3', 'a5', 'a6', 'a7', 'b7', 'fa', 'e1'])) {
-                        $this->log->warning('[TCP分包] 清除非法残留数据', [
-                            'machine_code' => $this->machine->code,
-                            'remaining' => strtoupper($remaining),
-                            'remaining_size' => strlen($remaining),
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), 'tcp_fragment', '[TCP分包] 清除非法残留数据 size='.strlen($remaining), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                         $remaining = '';
                     }
                 }
                 self::$msgBuffer[$machineId] = $remaining;
             } else {
                 // ⚠️ 处理失败，保留消息在缓冲区待重试
-                $this->log->warning('[TCP分包] 消息处理失败，保留在缓冲区', [
-                    'machine_code' => $this->machine->code,
-                    'msg_type' => strtoupper($header),
-                    'msg' => strtoupper(substr($msg, 0, 20)) . '...',
-                ]);
+                MachineLogger::warning($this->machine->toArray(), 'tcp_fragment', '[TCP分包] 消息处理失败，保留在缓冲区 type='.strtoupper($header), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             }
 
             return $processed;
 
         } catch (\Exception $e) {
-            $this->log->error('[收账小卡] 消息处理错误', [
-                'machine_code' => $this->machine->code,
-                'msg' => $msg ?? 'unknown',
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'message_error', '[收账小卡] 消息处理错误: '.$e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         } finally {
             // ✅ 定期清理缓冲区（防止内存泄漏）
@@ -631,11 +587,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
                 // 条件1：缓冲区超过200字符（异常情况）
                 if ($bufferSize > 200) {
-                    $this->log->warning('[TCP分包] 缓冲区过大，清空', [
-                        'machine_code' => $this->machine->code,
-                        'buffer_size' => $bufferSize,
-                        'buffer_content' => strtoupper(substr(self::$msgBuffer[$machineId], 0, 50)) . '...',
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), 'tcp_fragment', '[TCP分包] 缓冲区过大，清空 size='.$bufferSize, $this->getMachineCache(), MachineLogger::DIR_EVENT);
                     self::$msgBuffer[$machineId] = '';
                     self::$bufferLastClearTime[$machineId] = $now;
                 }
@@ -643,12 +595,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 // 条件2：超过10秒未清理（可能有残留数据）
                 if (isset(self::$bufferLastClearTime[$machineId])
                     && ($now - self::$bufferLastClearTime[$machineId]) > 10) {
-                    if ($bufferSize > 0) {
-                        $this->log->debug('[TCP分包] 定期清理缓冲区', [
-                            'machine_code' => $this->machine->code,
-                            'buffer_size' => $bufferSize,
-                        ]);
-                    }
                     self::$msgBuffer[$machineId] = '';
                     self::$bufferLastClearTime[$machineId] = $now;
                 }
@@ -662,21 +608,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function handleAccountReply(string $msg): bool
     {
         // ✅ 入口日志
-        $this->log->info('[账目查询] 处理开始', [
-            'machine_code' => $this->machine->code,
-            'msg_len' => strlen($msg),
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'account_query', '[账目查询] 处理开始 len='.strlen($msg), ['machine_data' => $this->getMachineCache()]);
 
         // A6 C9 05 14 31 0B CA 10 00 63 1E E9 00 04 03 02 00 07 28 00 SUM1 SUM2
         // 最小长度：2 + 2 + 8 + 2 + 8 + 2 + 8 + 8 + 2 + 2 = 44字符
 
         if (strlen($msg) < 44) {
-            $this->log->error('[账目查询] 回复长度不足', [
-                'machine_code' => $this->machine->code,
-                'msg' => strtoupper($msg),
-                'len' => strlen($msg),
-                'expected_min' => 44,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'account_query', '[账目查询] 回复长度不足 len='.strlen($msg).' expected>=44', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 
@@ -692,16 +630,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $flags = $this->detectAccountFlags($data['open_flag'], $data['card_flag']);
 
         // 记录解析结果
-        $this->log->info('[收账小卡-账目] 查询回复', [
-            'machine_code' => $this->machine->code,
-            'open_table' => $data['open_table'],
-            'wash_table' => $data['wash_table'],
-            'card_score' => $data['card_score'],
-            'machine_score' => $data['machine_score'],
-            'is_rewarding' => $flags['is_rewarding'],
-            'has_fault' => $flags['has_fault'],
-            'card_flag' => $data['card_flag'],
-        ]);
+        MachineLogger::receiveResponse($this->machine->toArray(), 'account_query', '[收账小卡-账目] 查询回复 open='.$data['open_table'].' wash='.$data['wash_table'].' card='.$data['card_score'], $this->getMachineCache());
 
         // ✅ 检测Smart卡通讯故障（card_flag="EE"）
         if ($flags['has_fault']) {
@@ -750,19 +679,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function handleStatusReply(string $msg): bool
     {
         // ✅ 入口日志
-        $this->log->info('[状态查询] 处理开始', [
-            'machine_code' => $this->machine->code,
-            'msg_len' => strlen($msg),
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'status_query', '[状态查询] 处理开始 len='.strlen($msg), ['machine_data' => $this->getMachineCache()]);
 
         // ✅ 修复：先检查最小长度（A7 + 类型 = 4字符）
         if (strlen($msg) < 4) {
-            $this->log->error('[状态查询] 回复长度不足', [
-                'machine_code' => $this->machine->code,
-                'msg' => strtoupper($msg),
-                'len' => strlen($msg),
-                'expected_min' => 4,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'status_query', '[状态查询] 回复长度不足 len='.strlen($msg).' expected>=4', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 
@@ -774,12 +695,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 // ✅ 修复：登入/登出回复只有 4 字节，不包含 SUM1/SUM2
                 // 协议说明：EA C3 → 回复 A7 C3（表示登入中）
                 if (strlen($msg) !== 4) {
-                    $this->log->error('[登入登出] 回复长度异常', [
-                        'machine_code' => $this->machine->code,
-                        'msg' => strtoupper($msg),
-                        'len' => strlen($msg),
-                        'expected' => 4,
-                    ]);
+                    MachineLogger::error($this->machine->toArray(), 'login_logout', '[登入登出] 回复长度异常 len='.strlen($msg).' expected=4', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     return false;
                 }
 
@@ -822,11 +738,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 return $this->handleMachineStatusReply($msg);
 
             default:
-                $this->log->warning('[收账小卡] 未识别的A7状态回复', [
-                    'machine_code' => $this->machine->code,
-                    'msg' => $msg,
-                    'type' => $type,
-                ]);
+                MachineLogger::warning($this->machine->toArray(), 'status_query', '[收账小卡] 未识别的A7状态回复 type='.$type, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 return false;
         }
 
@@ -839,10 +751,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function handleResetReply(string $msg): bool
     {
         if (strlen($msg) < 6) {
-            $this->log->error('[收账小卡] 归0回复长度不足', [
-                'machine_code' => $this->machine->code,
-                'msg' => $msg,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'ca_message', '[收账小卡] 归0回复长度不足 len='.strlen($msg), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 
@@ -857,11 +766,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             return true;
         }
 
-        $this->log->warning('[收账小卡] 未识别的A3归0回复', [
-            'machine_code' => $this->machine->code,
-            'msg' => $msg,
-            'status' => $status,
-        ]);
+        MachineLogger::warning($this->machine->toArray(), 'ca_message', '[收账小卡] 未识别的A3归0回复 status='.$status, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
         return false;
     }
 
@@ -878,11 +783,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 最小长度：2 + 2 + 8 + 2 + 8 + 2 + 2 = 26字符
 
         if (strlen($msg) < 26) {
-            $this->log->error('[收账小卡] 总押总赢回复长度不足', [
-                'machine_code' => $this->machine->code,
-                'msg' => $msg,
-                'len' => strlen($msg),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'total_bet_win', '[收账小卡] 总押总赢回复长度不足 len='.strlen($msg).' expected>=26', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 
@@ -895,14 +796,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $calculatedSum2 = $this->calculateSUM2($dataWithoutSum, $calculatedSum1);
 
         if ($receivedSum1 !== $calculatedSum1 || $receivedSum2 !== $calculatedSum2) {
-            $this->log->error('[收账小卡] 总押总赢回复校验失败', [
-                'machine_code' => $this->machine->code,
-                'msg' => $msg,
-                'expected_sum1' => $calculatedSum1,
-                'received_sum1' => $receivedSum1,
-                'expected_sum2' => $calculatedSum2,
-                'received_sum2' => $receivedSum2,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'total_bet_win', '[收账小卡] 总押总赢回复校验失败 sum1='.$receivedSum1.'!='.$calculatedSum1, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 
@@ -921,13 +815,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         $totalWin = $this->parseScore4Byte(substr($msg, $pos, 8));
 
-        $this->log->info('[收账小卡-总押总赢] 查询回复', [
-            'machine_code' => $this->machine->code,
-            'total_bet' => $totalBet,
-            'total_win' => $totalWin,
-            'is_rewarding' => $isRewarding,
-            'bet_flag' => strtoupper($betFlag),
-        ]);
+        MachineLogger::receiveResponse($this->machine->toArray(), 'total_bet_win', '[收账小卡-总押总赢] 查询回复 bet='.$totalBet.' win='.$totalWin.' rewarding='.($isRewarding?1:0), $this->getMachineCache());
 
         // 更新数据
         $this->total_bet = $totalBet;
@@ -962,20 +850,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function handleMachineStatusReply(string $msg): bool
     {
         // ✅ 入口日志
-        $this->log->info('[机台情况] 处理开始', [
-            'machine_code' => $this->machine->code,
-            'msg_len' => strlen($msg),
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'status_query', '[机台情况] 处理开始 len='.strlen($msg), ['machine_data' => $this->getMachineCache()]);
 
         // A7 D2 00 01 00 00 D6 10 00 63 1E DC 1E 14 00 00 AC xx xx xx SUM1 SUM2
         // 最小长度：44字符（22字节）
         if (strlen($msg) < 44) {
-            $this->log->error('[机台情况] 回复长度不足', [
-                'machine_code' => $this->machine->code,
-                'msg' => strtoupper($msg),
-                'len' => strlen($msg),
-                'expected_min' => 44,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'status_query', '[机台情况] 回复长度不足', $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
             return false;
         }
 
@@ -994,21 +874,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $flags = $this->detectMachineStatusFlags($fields['status_value']);
 
         // 记录解析结果
-        $this->log->info('[收账小卡-机台情况] 查询回复', [
-            'machine_code' => $this->machine->code,
-            'open_status' => strtoupper($fields['open_status']),
-            'open_ing' => ($fields['open_status'] === 'd3'),
-            'retry_count' => $fields['retry_count'],
-            'counter_skip' => strtoupper($fields['counter_skip_high'] . $fields['counter_skip_low']),
-            'wash_status' => strtoupper($fields['wash_status']),
-            'wash_ing' => ($fields['wash_status'] === 'd7'),
-            'wash_score' => $fields['wash_score'],
-            'turn_count' => $fields['turn_count'],
-            'status_byte' => strtoupper($fields['status_byte']),
-            'is_logout' => $flags['is_logout'],
-            'has_fault1' => $flags['has_fault1'],
-            'has_fault2' => $flags['has_fault2'],
-        ]);
+        MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[收账小卡-机台情况] 查询回复 open='.strtoupper($fields['open_status']).' wash='.strtoupper($fields['wash_status']).' retry='.$fields['retry_count'], $this->getMachineCache());
 
         // ✅ 使用提取的方法更新状态
         $this->updateMachineStatus($fields, $flags);
@@ -1045,11 +911,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $gamingUserId = $this->gaming_user_id ?? 0;
 
         if ($gamingUserId <= 0) {
-            $this->log->info('[收帳小卡-回補] 偵測到回補次數，但無玩家使用，略過退款', [
-                'machine_code'       => $this->machine->code,
-                'retry_count'        => $retryCount,
-                'retry_score_points' => $retryCount * self::OPEN_UNIT,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'ca_replenish', '[收帳小卡-回補] 偵測到回補次數，但無玩家使用，略過退款 retry='.$retryCount, ['machine_data' => $this->getMachineCache()]);
             return true;
         }
 
@@ -1063,11 +925,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // 若 retryCount < prevRetryCount，機台可能已重啟（累計值歸零後重新累加）
             if ($retryCount < $prevRetryCount) {
-                $this->log->warning('[收帳小卡-回補] 偵測到 retry_count 小於已處理值，疑似機台重啟，重置基準', [
-                    'machine_code'         => $this->machine->code,
-                    'retry_count'          => $retryCount,
-                    'old_prev_retry_count' => $prevRetryCount,
-                ]);
+                MachineLogger::warning($this->machine->toArray(), 'ca_replenish', '[收帳小卡-回補] retry_count小於已處理值，疑似機台重啟，重置基準 retry='.$retryCount.' prev='.$prevRetryCount, $this->getMachineCache(), MachineLogger::DIR_EVENT);
                 $prevRetryCount = 0;
             }
         }
@@ -1075,11 +933,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $newRetries = $retryCount - $prevRetryCount;
 
         if ($newRetries <= 0) {
-            $this->log->info('[收帳小卡-回補] 回補次數未增加，略過（非新增失敗）', [
-                'machine_code'     => $this->machine->code,
-                'retry_count'      => $retryCount,
-                'prev_retry_count' => $prevRetryCount,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'ca_replenish', '[收帳小卡-回補] 回補次數未增加，略過', ['machine_data' => $this->getMachineCache()]);
             return true;
         }
 
@@ -1090,22 +944,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $refundAmount = (string)$refundScore;
 
         if ((float) $refundAmount <= 0) {
-            $this->log->warning('[收帳小卡-回補] 退款金額換算為0，略過', [
-                'machine_code' => $this->machine->code,
-                'refund_score' => $refundScore,
-                'odds_x'       => $this->machine->odds_x,
-                'odds_y'       => $this->machine->odds_y,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'ca_replenish', '[收帳小卡-回補] 退款金額換算為0，略過 score='.$refundScore, $this->getMachineCache(), MachineLogger::DIR_EVENT);
             return true;
         }
 
-        $this->log->warning('[收帳小卡-回補] 執行部分開分失敗退款', [
-            'machine_code'  => $this->machine->code,
-            'player_id'     => $gamingUserId,
-            'new_retries'   => $newRetries,
-            'refund_score'  => $refundScore,
-            'refund_amount' => $refundAmount,
-        ]);
+        MachineLogger::warning($this->machine->toArray(), 'ca_replenish', '[收帳小卡-回補] 執行部分開分失敗退款 newRetries='.$newRetries.' amount='.$refundAmount, $this->getMachineCache(), MachineLogger::DIR_EVENT);
 
         // 4. 事務：記錄日誌 + 金流（僅包含 DB 操作）
         // 若上次 wallet add 失敗（return false），return_count 未更新，下次心跳仍會觸發重試。
@@ -1120,12 +963,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         if ($existingDelivery) {
             // DB 記錄已存在（上次加款失敗），跳過建立，直接重試錢包加款
             $beforeBalance = $existingDelivery->amount_before;
-            $this->log->warning('[收帳小卡-回補] 偵測到待重試退款記錄，跳過重複建立，直接重試加款', [
-                'machine_code'   => $this->machine->code,
-                'player_id'      => $gamingUserId,
-                'delivery_id'    => $existingDelivery->id,
-                'refund_amount'  => $refundAmount,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'ca_replenish', '[收帳小卡-回補] 偵測到待重試退款記錄，跳過重複建立，直接重試加款 deliveryId='.$existingDelivery->id, $this->getMachineCache(), MachineLogger::DIR_EVENT);
         } else {
         \support\Db::beginTransaction();
         try {
@@ -1188,13 +1026,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 玩家不存在是永久性錯誤，回 true 讓 return_count 更新以停止重試
             // 其他 DB 錯誤（Deadlock、連線中斷）屬暫時性，回 false 讓心跳路徑自動重試
             $isPermanent = str_contains($e->getMessage(), '玩家不存在');
-            $this->log->critical('[收帳小卡-回補] 退款事務失敗', [
-                'machine_code'  => $this->machine->code,
-                'player_id'     => $gamingUserId,
-                'refund_amount' => $refundAmount,
-                'error'         => $e->getMessage(),
-                'will_retry'    => !$isPermanent,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'ca_replenish', '[收帳小卡-回補] 退款事務失敗: '.$e->getMessage().' willRetry='.(!$isPermanent?'yes':'no'), $this->getMachineCache(), MachineLogger::DIR_EVENT);
             return $isPermanent;
         }
         } // end else（非重試路徑）
@@ -1211,13 +1043,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if ($deliveryIdToStore > 0) {
                 \support\Cache::set($pendingRefundKey, $deliveryIdToStore, 3600);
             }
-            $this->log->critical('[收帳小卡-回補] 錢包加款失敗，需人工介入', [
-                'machine_code'  => $this->machine->code,
-                'player_id'     => $gamingUserId,
-                'refund_amount' => $refundAmount,
-                'error'         => $addResult['error'] ?? '未知錯誤',
-                'action'        => '已記錄退款日誌，但錢包未加款，請立即手動給玩家加款',
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'ca_replenish', '[收帳小卡-回補] 錢包加款失敗，需人工介入 amount='.$refundAmount.' err='.($addResult['error'] ?? '未知'), $this->getMachineCache(), MachineLogger::DIR_EVENT);
             // 回傳 false：呼叫端不更新 return_count，下次 READ_STATUS 可自動重試加款
             return false;
         }
@@ -1225,14 +1051,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 加款成功，清除待重試標記
         \support\Cache::delete($pendingRefundKey);
 
-        $this->log->info('[收帳小卡-回補] 退款成功', [
-            'machine_code'   => $this->machine->code,
-            'player_id'      => $gamingUserId,
-            'refund_score'   => $refundScore,
-            'refund_amount'  => $refundAmount,
-            'before_balance' => $beforeBalance,
-            'after_balance'  => $addResult['balance'],
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'ca_replenish', '[收帳小卡-回補] 退款成功 amount='.$refundAmount, ['machine_data' => $this->getMachineCache()]);
 
         \app\service\BalancePushService::pushBalanceChange(
             $gamingUserId,
@@ -1267,10 +1086,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function handleActionReply(string $msg): bool
     {
         if (strlen($msg) < 6) {
-            $this->log->error('[收账小卡] 操作回复长度不足', [
-                'machine_code' => $this->machine->code,
-                'msg' => $msg,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'ca_operation', '[收账小卡] 操作回复长度不足 len='.strlen($msg).' expected>=6', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 
@@ -1279,28 +1095,18 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         switch ($status) {
             case 'ca': // 操作成功
-                $this->log->info('[收账小卡-操作] 操作成功', [
-                    'machine_code' => $this->machine->code,
-                    'version' => $version,
-                ]);
+                MachineLogger::receiveResponse($this->machine->toArray(), 'ca_operation', '[收账小卡-操作] 操作成功 ver='.$version, $this->getMachineCache());
                 Cache::set($this->cacheDataKey . '_last_open_result', 'ca', 10);
                 break;
 
             case 'c5': // 操作失败（未登入）
-                $this->log->error('[收账小卡-操作] 操作失败（未登入）', [
-                    'machine_code' => $this->machine->code,
-                    'version' => $version,
-                ]);
+                MachineLogger::error($this->machine->toArray(), 'ca_operation', '[收账小卡-操作] 操作失败（未登入）ver='.$version, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 $this->login_status = 0;
                 Cache::set($this->cacheDataKey . '_last_open_result', 'c5', 10);
                 break;
 
             default:
-                $this->log->warning('[收账小卡] 未识别的A5操作回复', [
-                    'machine_code' => $this->machine->code,
-                    'msg' => $msg,
-                    'status' => $status,
-                ]);
+                MachineLogger::warning($this->machine->toArray(), 'ca_operation', '[收账小卡] 未识别的A5操作回复 status='.$status, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 return false;
         }
 
@@ -1319,10 +1125,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 删除临时数据（已使用）
             Cache::delete($this->cacheDataKey . '_pending_cmd');
 
-            $this->log->info('[收账小卡-操作] 同时更新原始指令版本号', [
-                'machine_code' => $this->machine->code,
-                'original_cmd' => $this->originalCmd,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'ca_operation', '[收账小卡-操作] 同时更新原始指令版本号 cmd='.$this->originalCmd, ['machine_data' => $this->getMachineCache()]);
         }
 
         return true;
@@ -1390,26 +1193,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 2
             );
 
-            $this->log->info('[收账小卡-记录] 外部按钮操作', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'type' => $type,
-                'amount' => $amount,
-                'odds_x' => $this->machine->odds_x,
-                'odds_y' => $this->machine->odds_y,
-                'bet_amount' => floatval($betAmount),
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'game_log', '[收账小卡-记录] 外部按钮操作 type='.$type.' amount='.$amount, ['machine_data' => $this->getMachineCache()]);
 
             // 创建游戏日志
             $this->createExternalButtonGameLog($type, $amount, $betAmount, $timestamp);
 
         } catch (\Exception $e) {
-            $this->log->error('[收账小卡-记录] 记录失败', [
-                'machine_id' => $this->machine->id,
-                'type' => $type,
-                'amount' => $amount,
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'game_log', '[收账小卡-记录] 记录失败: '.$e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_EVENT);
         }
     }
 
@@ -1481,23 +1271,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->save();
             \support\Db::commit();
 
-            $this->log->info('[收账小卡-日志] 游戏日志已创建', [
-                'game_log_id' => $playerGameLog->id,
-                'machine_id' => $this->machine->id,
-                'type' => $type,
-                'amount' => $amount,
-                'bet_amount' => $betAmount,
-                'department_id' => $playerGameLog->department_id ?? 'NULL',
-                'store_id' => $playerGameLog->store_id ?? 'NULL',
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'game_log', '[收账小卡-日志] 游戏日志已创建 logId='.$playerGameLog->id.' type='.$type, ['machine_data' => $this->getMachineCache()]);
 
         } catch (\Exception $e) {
             \support\Db::rollBack();
-            $this->log->error('[收账小卡-日志] 创建失败', [
-                'machine_id' => $this->machine->id,
-                'type' => $type,
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'game_log', '[收账小卡-日志] 创建失败: '.$e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_EVENT);
             throw $e;
         }
     }
@@ -1625,12 +1403,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if (!Gateway::isUidOnline($uid)) {
                 throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
             }
-            $this->log->warning('[收账小卡-发送] 发送指令', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'has_lock' => $this->has_lock,
-                'cmd' => $cmd,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'ca_send', '[收账小卡-发送] 发送指令 cmd='.strtoupper($cmd), $this->getMachineCache());
             // 锁定时仅允许归0指令（E1错误/上分5次失败后需 CHECK 归0解锁）
             if ($this->has_lock == 1 && $cmd !== self::CHECK) {
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
@@ -1685,11 +1458,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 case self::SSR_SIGNAL:      // SSR讯号（EA EC）
                 // ✅ 使用 createCmd 添加校验和
                     $fullCmd = $this->createCmd($cmd);
-                    $this->log->info('[收账小卡] 发送指令', [
-                        'machine_code' => $this->machine->code,
-                        'cmd' => strtoupper($cmd),
-                        'full_cmd' => strtoupper($fullCmd),
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), strtoupper($cmd), '[收账小卡] 发送指令', $this->getMachineCache(), strtoupper($fullCmd));
                     Gateway::sendToUid($uid, hex2bin($fullCmd));
                     break;
 
@@ -1710,17 +1479,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
         } catch (Exception $e) {
-            $this->log->error('[收账小卡] 发送指令失败', [
-                'machine_code' => $this->machine->code,
-                'cmd' => $cmd,
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'ca_send', '[收账小卡] 发送指令失败 cmd='.$cmd, $this->getMachineCache());
             throw $e;
         }
-        $this->log->info('[收账小卡-开机] 发送指令', [
-            'machine_code' => $this->machine->code,
-            'msg' => strtoupper($cmd),
-        ]);
+        MachineLogger::sendCommand($this->machine->toArray(), strtoupper($cmd), '[收账小卡-开机] 发送指令', $this->getMachineCache());
         return true;
     }
 
@@ -1751,12 +1513,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 设置 30 秒去重窗口，覆盖管理员洗分和物理按键洗分两条路径。
         \support\Cache::set('external_counter_wash_last_update_' . $this->machine->id, time(), 30);
 
-        $this->log->info('[收账小卡-故障排除] 清除外部码表', [
-            'machine_code' => $this->machine->code,
-            'old_open_count' => $oldOpenCount,
-            'old_wash_count' => $oldWashCount,
-            'note' => '故障排除会清除开分码表和洗分码表，已同步清零 open_table/wash_table',
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'ca_fault', '[收账小卡-故障排除] 清除外部码表', ['machine_data' => $this->getMachineCache()]);
 
         // 发送故排指令（固定指令：A3 70 05 E0 F8 CE）
         Gateway::sendToUid($uid, hex2bin(self::CHECK));
@@ -1803,9 +1560,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 开分前发 EA DE 清除上次残留的 D4 状态，避免 CA 超时时误读到旧 D2
         $dePreCmd = $this->createCmd(self::ALL_DOWN);
         Gateway::sendToUid($uid, hex2bin($dePreCmd));
-        $this->log->info('[收账小卡-上分] 开分前EA DE清除机台历史状态', [
-            'machine_code' => $this->machine->code,
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[收账小卡-上分] 开分前EA DE清除机台历史状态', ['machine_data' => $this->getMachineCache()]);
         usleep(200000); // 等 200ms 让机台处理完 EA DE
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
@@ -1833,29 +1588,15 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         $preFields = json_decode($preRaw, true) ?: [];
                         $preStatus = $preFields['open_status'] ?? '';
 
-                        $this->log->info('[收账小卡-上分] 重试前EA D4预检', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'pre_check'    => "$preCheck/$preCheckMax",
-                            'open_status'  => $preStatus,
-                        ]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[收账小卡-上分] 重试前EA D4预检 status='.$preStatus, ['machine_data' => $this->getMachineCache()]);
 
                         if ($preStatus === 'd3' || $preStatus === 'd2') {
-                            $this->log->warning('[收账小卡-上分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
-                                'machine_code' => $this->machine->code,
-                                'attempt'      => "$attempt/$maxAttempts",
-                                'pre_check'    => "$preCheck/$preCheckMax",
-                                'open_status'  => $preStatus,
-                            ]);
+                            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', $this->getMachineCache());
                             $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
                             return;
                         }
                     } else {
-                        $this->log->warning('[收账小卡-上分] 重试前EA D4预检无响应', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'pre_check'    => "$preCheck/$preCheckMax",
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] 重试前EA D4预检无响应', $this->getMachineCache());
                     }
                 }
             }
@@ -1871,15 +1612,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
             Cache::delete($this->cacheDataKey . '_last_open_result');
 
-            $this->log->info('[收账小卡-上分] 发送上分指令', [
-                'machine_code'  => $this->machine->code,
-                'machine_score' => $data,
-                'times'         => $times,
-                'unit'          => self::OPEN_UNIT,
-                'cmd'           => strtoupper($fullCmd),
-                'attempt'       => "$attempt/$maxAttempts",
-                'current_card_score' => $this->card_score ?? 0,
-            ]);
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] 发送上分指令 attempt='.$attempt.'/'.$maxAttempts, $this->getMachineCache(), strtoupper($fullCmd));
 
             Gateway::sendToUid($uid, hex2bin($fullCmd));
 
@@ -1917,59 +1650,36 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $statusFields = json_decode($statusRaw, true) ?: [];
                     $openStatus   = $statusFields['open_status'] ?? '';
 
-                    $this->log->info('[收账小卡-上分] CA超时，EA D4查询机台状态', [
-                        'machine_code' => $this->machine->code,
-                        'attempt'      => "$attempt/$maxAttempts",
-                        'open_status'  => $openStatus,
-                    ]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[收账小卡-上分] CA超时，EA D4查询机台状态 status='.$openStatus, ['machine_data' => $this->getMachineCache()]);
 
                     if ($openStatus === 'd3' || $openStatus === 'd2') {
                         // D3=开分进行中；D2=开分完成。两种状态均表示机台已收到并执行指令（CA丢包），跳过重试
-                        $this->log->warning('[收账小卡-上分] CA丢包但机台已执行，跳过重试', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'open_status'  => $openStatus,
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] CA丢包但机台已执行，跳过重试 status='.$openStatus, $this->getMachineCache());
                         $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
                         return;
                     }
                 }
 
                 // EA D4 无回复或 D2/D3 以外状态：机台确认未执行，安全重试 A5
-                $this->log->warning('[收账小卡-上分] 机台未执行，重试', [
-                    'machine_code' => $this->machine->code,
-                    'attempt'      => "$attempt/$maxAttempts",
-                ]);
+                MachineLogger::warning($this->machine->toArray(), ACTION_OPEN, '[收账小卡-上分] 机台未执行，重试 attempt='."$attempt/$maxAttempts", $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 continue;
             }
 
             $lastResult = Cache::get($this->cacheDataKey . '_last_open_result');
 
             if ($lastResult === 'ca') {
-                $this->log->info('[收账小卡-上分] 收到CA确认，主动查询机台执行状态（EA D4）', [
-                    'machine_code' => $this->machine->code,
-                    'attempt'      => "$attempt/$maxAttempts",
-                    'times'        => $times,
-                    'score'        => $data,
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[收账小卡-上分] 收到CA确认，主动查询机台执行状态（EA D4）', ['machine_data' => $this->getMachineCache()]);
                 $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
                 return;
             }
 
             if ($lastResult === 'c5') {
-                $this->log->warning('[收账小卡-上分] 机台回复未登入（A5 C5），重试', [
-                    'machine_code' => $this->machine->code,
-                    'attempt'      => "$attempt/$maxAttempts",
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] 机台回复未登入（A5 C5），重试', $this->getMachineCache());
             } else {
                 // null：_last_open_result TTL 过期或 Redis 故障，结果未知。
                 // 版本号已变说明机台发过回复（CA或C5），必须先查 EA D4 确认是否在开分中，
                 // 若D3/D2则机台已执行，不能重发A5（否则重复上分）。
-                $this->log->warning('[收账小卡-上分] 回复结果未知（非 CA/C5），先查EA D4再决定', [
-                    'machine_code' => $this->machine->code,
-                    'last_result'  => $lastResult,
-                    'attempt'      => "$attempt/$maxAttempts",
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] 回复结果未知（非 CA/C5），先查EA D4再决定', $this->getMachineCache());
 
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
@@ -1989,18 +1699,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $nullFields     = json_decode($nullStatusRaw, true) ?: [];
                     $nullOpenStatus = $nullFields['open_status'] ?? '';
 
-                    $this->log->info('[收账小卡-上分] 结果未知，EA D4查询机台状态', [
-                        'machine_code' => $this->machine->code,
-                        'attempt'      => "$attempt/$maxAttempts",
-                        'open_status'  => $nullOpenStatus,
-                    ]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[收账小卡-上分] 结果未知，EA D4查询机台状态 status='.$nullOpenStatus, ['machine_data' => $this->getMachineCache()]);
 
                     if ($nullOpenStatus === 'd3' || $nullOpenStatus === 'd2') {
-                        $this->log->warning('[收账小卡-上分] 结果未知但机台已执行（D3/D2），跳过重试直接确认', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'open_status'  => $nullOpenStatus,
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] 结果未知但机台已执行（D3/D2），跳过重试直接确认 status='.$nullOpenStatus, $this->getMachineCache());
                         $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
                         return;
                     }
@@ -2012,27 +1714,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 3 次 CA 全部超时：机台可能已执行 A5 但 CA 丢包（网络瞬断）。
         // 发 EA D4 做最终确认，若 open_status=d2 则视为成功，避免误锁机台 + 误重置 gaming_user_id。
         try {
-            $this->log->warning('[收账小卡-上分] CA全部超时，发EA D4最终确认', [
-                'machine_code' => $this->machine->code,
-                'data'         => $data,
-                'times'        => $times,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] CA全部超时，发EA D4最终确认', $this->getMachineCache());
             $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
             $raw    = \support\Cache::get($this->cacheDataKey . '_last_status_fields');
             $fields = $raw ? json_decode($raw, true) : [];
             if (($fields['open_status'] ?? '') === 'd2') {
                 // 机台已完成开分，CA 只是丢包，当作成功处理
-                $this->log->warning('[收账小卡-上分] EA D4 确认 d2，CA丢包但开分成功，跳过锁机台', [
-                    'machine_code' => $this->machine->code,
-                    'retry_count'  => $fields['retry_count'] ?? 0,
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] EA D4 确认 d2，CA丢包但开分成功，跳过锁机台', $this->getMachineCache());
                 return;
             }
         } catch (\Exception $statusEx) {
-            $this->log->warning('[收账小卡-上分] EA D4 最终确认也失败', [
-                'machine_code' => $this->machine->code,
-                'error'        => $statusEx->getMessage(),
-            ]);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] EA D4 最终确认也失败: '.$statusEx->getMessage(), $this->getMachineCache());
         }
 
         // CA 全部超时 + EA D4 无法确认 → 锁机台
@@ -2077,10 +1769,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                $this->log->warning('[收账小卡-上分] EA D4 回复超时，重试', [
-                    'machine_code' => $this->machine->code,
-                    'check'        => "$check/$maxChecks",
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] EA D4 回复超时，重试 check='.$check.'/'.$maxChecks, $this->getMachineCache());
                 continue;
             }
 
@@ -2090,13 +1779,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $washStatus = $fields['wash_status'] ?? '';
             $retryCount = (int)($fields['retry_count'] ?? 0);
 
-            $this->log->info('[收账小卡-上分] EA D4 查询', [
-                'machine_code' => $this->machine->code,
-                'check'        => "$check/$maxChecks",
-                'open_status'  => $openStatus === 'd2' ? '开分完成' : '开分中(D3)',
-                'wash_status'  => $washStatus === 'd6' ? '洗分完成' : '洗分中(D7)',
-                'retry_count'  => $retryCount,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[收账小卡-上分] EA D4 查询 status='.$openStatus.' retry='.$retryCount, ['machine_data' => $this->getMachineCache()]);
 
             if ($openStatus === 'd2') {
                 // 开分完成，退出轮询
@@ -2111,11 +1794,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         }
 
         if (!$confirmed) {
-            $this->log->warning('[收账小卡-上分] EA D4 轮询结束仍为D3或无回复，以CA确认为准', [
-                'machine_code' => $this->machine->code,
-                'open_status'  => $openStatus,
-                'checks'       => $maxChecks,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收账小卡-上分] EA D4 轮询结束仍为D3或无回复，以CA确认为准 status='.$openStatus, $this->getMachineCache());
         }
 
         // 上分流程结束（无论D2是否确认），清除洗分保护标记，
@@ -2126,9 +1805,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 避免下次开分 CA 超时查询 EA D4 时误读到本次残留的 D2（开分完成）
         $deCmd = $this->createCmd(self::ALL_DOWN);
         Gateway::sendToUid($uid, hex2bin($deCmd));
-        $this->log->info('[收账小卡-上分] 开分完成EA DE清除机台历史状态', [
-            'machine_code' => $this->machine->code,
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[收账小卡-上分] 开分完成EA DE清除机台历史状态', ['machine_data' => $this->getMachineCache()]);
 
         if ($source === 'admin') {
             $openDesc = $openStatus === 'd2' ? '开分完成' : ($openStatus === 'd3' ? '开分中' : '状态未知');
@@ -2192,22 +1869,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         $preFields = json_decode($preRaw, true) ?: [];
                         $preStatus = $preFields['wash_status'] ?? '';
 
-                        $this->log->info('[收账小卡-下分] 重试前EA D4预检', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'pre_check'    => "$preCheck/$preCheckMax",
-                            'wash_status'  => $preStatus,
-                        ]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[收账小卡-下分] 重试前EA D4预检 status='.$preStatus, ['machine_data' => $this->getMachineCache()]);
 
                         $preScore = (int)($preFields['wash_score'] ?? 0);
                         if ($preStatus === 'd7' || ($preStatus === 'd6' && $preScore > 0)) {
-                            $this->log->warning('[收账小卡-下分] 重试前EA D4确认机台已在执行，取消重发A5直接确认', [
-                                'machine_code' => $this->machine->code,
-                                'attempt'      => "$attempt/$maxAttempts",
-                                'pre_check'    => "$preCheck/$preCheckMax",
-                                'wash_status'  => $preStatus,
-                                'wash_score'   => $preScore,
-                            ]);
+                            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 重试前EA D4确认机台已在执行，取消重发A5直接确认 status='.$preStatus, $this->getMachineCache());
                             if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
                                 return;
                             }
@@ -2217,18 +1883,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
                         if ($preStatus === 'd6' && $preScore === 0) {
                             // 过期D6：机台尚未执行，继续预检或直接发A5
-                            $this->log->warning('[收账小卡-下分] 重试前D6为过期状态(wash_score=0)，继续预检', [
-                                'machine_code' => $this->machine->code,
-                                'attempt'      => "$attempt/$maxAttempts",
-                                'pre_check'    => "$preCheck/$preCheckMax",
-                            ]);
+                            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 重试前D6为过期状态(wash_score=0)，继续预检', $this->getMachineCache());
                         }
                     } else {
-                        $this->log->warning('[收账小卡-下分] 重试前EA D4预检无响应', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'pre_check'    => "$preCheck/$preCheckMax",
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 重试前EA D4预检无响应', $this->getMachineCache());
                     }
                 }
             }
@@ -2241,13 +1899,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
             Cache::delete($this->cacheDataKey . '_last_open_result');
 
-            $this->log->info('[收账小卡-下分] 发送下分指令', [
-                'machine_code' => $this->machine->code,
-                'attempt' => "$attempt/$maxAttempts",
-                'cmd' => strtoupper($fullCmd),
-                'current_card_score' => $this->card_score ?? 0,
-                'current_machine_score' => $this->machine_score ?? 0,
-            ]);
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 发送下分指令 attempt='.$attempt.'/'.$maxAttempts, $this->getMachineCache(), strtoupper($fullCmd));
 
             Gateway::sendToUid($uid, hex2bin($fullCmd));
 
@@ -2285,21 +1937,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $washStatus   = $statusFields['wash_status'] ?? '';
                     $washScore    = (int)($statusFields['wash_score'] ?? 0);
 
-                    $this->log->info('[收账小卡-下分] CA超时，EA D4查询机台状态', [
-                        'machine_code' => $this->machine->code,
-                        'attempt'      => "$attempt/$maxAttempts",
-                        'wash_status'  => $washStatus,
-                        'wash_score'   => $washScore,
-                    ]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[收账小卡-下分] CA超时，EA D4查询机台状态 status='.$washStatus, ['machine_data' => $this->getMachineCache()]);
 
                     if ($washStatus === 'd7' || ($washStatus === 'd6' && $washScore > 0)) {
                         // D7=洗分中；D6+wash_score>0=本次洗分已完成
-                        $this->log->warning('[收账小卡-下分] CA丢包但机台已执行，等待D6完成，跳过重试', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'wash_status'  => $washStatus,
-                            'wash_score'   => $washScore,
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] CA丢包但机台已执行，等待D6完成，跳过重试 status='.$washStatus, $this->getMachineCache());
                         if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
                             return;
                         }
@@ -2308,54 +1950,33 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
                     if ($washStatus === 'd6' && $washScore === 0) {
                         // 过期D6：机台未执行本次A5，立即重试（不进入20s轮询）
-                        $this->log->warning('[收账小卡-下分] D6为过期状态(wash_score=0)，立即重试A5', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'turn_count'   => $statusFields['turn_count'] ?? 0,
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] D6为过期状态(wash_score=0)，立即重试A5', $this->getMachineCache());
                     }
                 }
 
-                $this->log->warning('[收账小卡-下分] 继续重试A5', [
-                    'machine_code' => $this->machine->code,
-                    'attempt'      => "$attempt/$maxAttempts",
-                    'wash_status'  => $washStatus ?? '',
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 继续重试A5 status='.($washStatus ?? ''), $this->getMachineCache());
                 continue;
             }
 
             $lastResult = Cache::get($this->cacheDataKey . '_last_open_result');
 
             if ($lastResult === 'ca') {
-                $this->log->info('[收账小卡-下分] 收到CA确认，主动查询机台执行状态（EA D4）', [
-                    'machine_code' => $this->machine->code,
-                    'attempt' => "$attempt/$maxAttempts",
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[收账小卡-下分] 收到CA确认，主动查询机台执行状态（EA D4）', ['machine_data' => $this->getMachineCache()]);
                 if ($this->confirmWashPointWithStatus($uid, $source, $source_id, true)) {
                     return;
                 }
                 // CA已确认但EA D4 50次内未见D7 → 机台收到指令却未执行，硬件异常，锁机台
-                $this->log->warning('[收账小卡-下分] CA确认但EA D4无D7响应，硬件异常，锁机台', [
-                    'machine_code' => $this->machine->code,
-                    'attempt'      => "$attempt/$maxAttempts",
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] CA确认但EA D4无D7响应，硬件异常，锁机台', $this->getMachineCache());
                 $this->has_lock = 1;
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
                 throw new Exception("下分失败：CA已确认但机台未开始洗分（EA D4无D7），机台已锁定");
             }
 
             if ($lastResult === 'c5') {
-                $this->log->warning('[收账小卡-下分] 机台回复未登入（A5 C5），重试', [
-                    'machine_code' => $this->machine->code,
-                    'attempt' => "$attempt/$maxAttempts",
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 机台回复未登入（A5 C5），重试', $this->getMachineCache());
             } else {
                 // null：Redis 故障，结果未知，先查 EA D4 确认是否在洗分中
-                $this->log->warning('[收账小卡-下分] 回复结果未知（非 CA/C5），先查EA D4再决定', [
-                    'machine_code' => $this->machine->code,
-                    'last_result' => $lastResult,
-                    'attempt' => "$attempt/$maxAttempts",
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 回复结果未知（非 CA/C5），先查EA D4再决定', $this->getMachineCache());
 
                 Cache::delete($this->cacheDataKey . '_last_status_fields');
                 Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
@@ -2376,20 +1997,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $nullWashStatus = $nullFields['wash_status'] ?? '';
                     $nullWashScore  = (int)($nullFields['wash_score'] ?? 0);
 
-                    $this->log->info('[收账小卡-下分] 结果未知，EA D4查询机台状态', [
-                        'machine_code' => $this->machine->code,
-                        'attempt'      => "$attempt/$maxAttempts",
-                        'wash_status'  => $nullWashStatus,
-                        'wash_score'   => $nullWashScore,
-                    ]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[收账小卡-下分] 结果未知，EA D4查询机台状态 status='.$nullWashStatus, ['machine_data' => $this->getMachineCache()]);
 
                     if ($nullWashStatus === 'd7' || ($nullWashStatus === 'd6' && $nullWashScore > 0)) {
-                        $this->log->warning('[收账小卡-下分] 结果未知但机台已执行（D7/D6），尝试确认', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'wash_status'  => $nullWashStatus,
-                            'wash_score'   => $nullWashScore,
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 结果未知但机台已执行（D7/D6），尝试确认 status='.$nullWashStatus, $this->getMachineCache());
                         if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
                             return;
                         }
@@ -2398,11 +2009,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
                     if ($nullWashStatus === 'd6' && $nullWashScore === 0) {
                         // 过期D6，立即重试A5
-                        $this->log->warning('[收账小卡-下分] 结果未知但D6为过期状态(wash_score=0)，立即重试A5', [
-                            'machine_code' => $this->machine->code,
-                            'attempt'      => "$attempt/$maxAttempts",
-                            'turn_count'   => $nullFields['turn_count'] ?? 0,
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 结果未知但D6为过期状态(wash_score=0)，立即重试A5', $this->getMachineCache());
                     }
                 }
                 // EA D4 无回复或非D7/D6，机台未执行，安全重试A5
@@ -2413,23 +2020,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // confirmWashPointWithStatus 返回 true = 洗分真实完成，跳过锁机台。
         // 返回 false = 只见过期D6，机台确认未执行，锁机台。
         try {
-            $this->log->warning('[收账小卡-下分] CA全部超时，发EA D4最终确认', [
-                'machine_code' => $this->machine->code,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] CA全部超时，发EA D4最终确认', $this->getMachineCache());
             if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
-                $this->log->warning('[收账小卡-下分] EA D4 最终确认洗分成功，跳过锁机台', [
-                    'machine_code' => $this->machine->code,
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] EA D4 最终确认洗分成功，跳过锁机台', $this->getMachineCache());
                 return;
             }
-            $this->log->warning('[收账小卡-下分] EA D4 最终确认为过期状态，机台未执行洗分，锁机台', [
-                'machine_code' => $this->machine->code,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] EA D4 最终确认为过期状态，机台未执行洗分，锁机台', $this->getMachineCache());
         } catch (\Exception $statusEx) {
-            $this->log->warning('[收账小卡-下分] EA D4 最终确认也失败', [
-                'machine_code' => $this->machine->code,
-                'error'        => $statusEx->getMessage(),
-            ]);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] EA D4 最终确认也失败: '.$statusEx->getMessage(), $this->getMachineCache());
         }
 
         $this->has_lock = 1;
@@ -2475,10 +2073,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                $this->log->warning('[收账小卡-下分] EA D4 回复超时，重试', [
-                    'machine_code' => $this->machine->code,
-                    'check' => "$check/$maxChecks",
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] EA D4 回复超时，重试 check='.$check.'/'.$maxChecks, $this->getMachineCache());
                 continue;
             }
 
@@ -2492,13 +2087,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $seenD7 = true;
             }
 
-            $this->log->info('[收账小卡-下分] EA D4 查询', [
-                'machine_code' => $this->machine->code,
-                'check'        => "$check/$maxChecks",
-                'open_status'  => $openStatus === 'd2' ? '开分完成' : '开分中(D3)',
-                'wash_status'  => $washStatus === 'd6' ? '洗分完成' : '洗分中(D7)',
-                'wash_score'   => $washScore,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[收账小卡-下分] EA D4 查询 status='.$washStatus.' score='.$washScore, ['machine_data' => $this->getMachineCache()]);
 
             if ($washStatus === 'd6') {
                 if ($washScore > 0 || $seenD7) {
@@ -2509,18 +2098,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 // wash_score=0 且从未见过D7：疑似过期D6
                 if ($caConfirmed) {
                     // CA已确认机台收到指令，过期D6是正常的（机台还没开始洗），继续轮询等D7
-                    $this->log->warning('[收账小卡-下分] D6 wash_score=0（CA已确认，继续等D7）', [
-                        'machine_code' => $this->machine->code,
-                        'check'        => "$check/$maxChecks",
-                        'turn_count'   => $fields['turn_count'] ?? 0,
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] D6 wash_score=0（CA已确认，继续等D7）', $this->getMachineCache());
                 } else {
                     // CA未确认，过期D6表示机台未执行本次A5，立即返回false供调用方快速重试
-                    $this->log->warning('[收账小卡-下分] D6 wash_score=0（CA未确认，过期状态，立即退出）', [
-                        'machine_code' => $this->machine->code,
-                        'check'        => "$check/$maxChecks",
-                        'turn_count'   => $fields['turn_count'] ?? 0,
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] D6 wash_score=0（CA未确认，过期状态，立即退出）', $this->getMachineCache());
                     break;
                 }
             }
@@ -2531,10 +2112,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         if (!$confirmed && !$seenD7) {
             // 50次轮询内既未确认真实D6，也未见过D7 → 机台未执行本次洗分
             // 返回 false 让调用方决定（继续重试A5 或 锁机台）
-            $this->log->warning('[收账小卡-下分] 确认洗分：50次轮询内无D7/真实D6，视为过期状态未执行', [
-                'machine_code' => $this->machine->code,
-                'wash_status'  => $washStatus,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 确认洗分：50次轮询内无D7/真实D6，视为过期状态未执行 status='.$washStatus, $this->getMachineCache());
             return false;
         }
 
@@ -2546,11 +2124,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->point = 0;
 
         if (!$confirmed) {
-            $this->log->warning('[收账小卡-下分] EA D4 轮询结束仍为D7或无回复，card_score已清零，等待A6兜底', [
-                'machine_code' => $this->machine->code,
-                'wash_status' => $washStatus,
-                'checks' => $maxChecks,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] EA D4 轮询结束仍为D7或无回复，card_score已清零，等待A6兜底 status='.$washStatus, $this->getMachineCache());
         }
 
         // 等待心跳最终确认机台 B1 寄存器物理归零，最多等 5s
@@ -2566,16 +2140,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 break;
             }
         }
-        $this->log->info('[收账小卡-下分] 心跳最终确认', [
-            'machine_code' => $this->machine->code,
-            'b1_zeroed'    => $hbZeroed,
-            'waited_ms'    => $hbWaited / 1000,
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '[收账小卡-下分] 心跳最终确认 zeroed='.($hbZeroed?'true':'false'), ['machine_data' => $this->getMachineCache()]);
         if (!$hbZeroed) {
             \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
-            $this->log->warning('[收账小卡-下分] 心跳归零超时（5s），强制清除 wash_confirmed', [
-                'machine_code' => $this->machine->code,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收账小卡-下分] 心跳归零超时（5s），强制清除 wash_confirmed', $this->getMachineCache());
         }
 
         if ($source === 'admin') {
@@ -2723,18 +2291,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function handleHeartbeat(string $msg): bool
     {
         try {
-            // ✅ 入口日志（DEBUG级别，避免日志过多）
-            $this->log->debug('[心跳] 处理开始', [
-                'machine_code' => $this->machine->code,
-                'msg_len' => strlen($msg),
-            ]);
-
             // ✅ B7心跳使用特殊的S1/S2校验算法（不是收账小卡标准的SUM1/SUM2）
             if (!$this->validateHeartbeatChecksum($msg)) {
-                $this->log->error('[心跳] 校验失败', [
-                    'machine_code' => $this->machine->code,
-                    'msg' => strtoupper($msg),
-                ]);
+                MachineLogger::error($this->machine->toArray(), 'heartbeat', '[心跳] 校验失败', $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 return false;
             }
 
@@ -2770,14 +2329,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
                 $this->logFieldChange('心跳', 'card_score', $oldCardScore, $cardScore, $changeReason);
 
-                $this->log->info('[心跳-分数诊断] 卡分变化', [
-                    'machine_code' => $this->machine->code,
-                    'old_card_score' => $oldCardScore,
-                    'new_card_score' => $cardScore,
-                    'change' => $cardScoreChange,
-                    'reason' => $changeReason,
-                    'note' => '如果此变化后出现锁机台，说明分数变化不符合预期',
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'heartbeat', '[心跳-分数诊断] 卡分变化 old='.$oldCardScore.' new='.$cardScore, ['machine_data' => $this->getMachineCache()]);
             }
 
             if (abs($machineScore - $oldMachineScore) > 0) {
@@ -2797,10 +2349,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $washConfirmed = \support\Cache::get($this->cacheDataKey . '_wash_confirmed');
             $suppressStaleHeartbeat = $washConfirmed && $cardScore > 0;
             if ($suppressStaleHeartbeat) {
-                $this->log->info('[心跳-洗分保护] 跳过陈旧B7写入，等待机台B1归零', [
-                    'machine_code'   => $this->machine->code,
-                    'stale_card_score' => $cardScore,
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'heartbeat', '[心跳-洗分保护] 跳过陈旧B7写入，等待机台B1归零', ['machine_data' => $this->getMachineCache()]);
             } else {
                 if ($washConfirmed && $cardScore == 0) {
                     // 机台硬件已确认归零，清除保护标记
@@ -2850,15 +2399,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     'keeping'          => $this->keeping,
                 ]);
 
-                $this->log->info('[心跳-打码量] 检测到押分增量', [
-                    'machine_code'  => $this->machine->code,
-                    'player_id'     => $currentGamingUserId,
-                    'old_total_bet' => $oldTotalBet,
-                    'new_total_bet' => $totalBet,
-                    'bet_increment' => $betIncrement,
-                    'num_for_queue' => $numForQueue,
-                    'last_num'      => $lastNumForQueue,
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'heartbeat', '[心跳-打码量] 检测到押分增量 inc='.$betIncrement, ['machine_data' => $this->getMachineCache()]);
 
                 try {
                     // 彩金抽奖检查
@@ -2868,12 +2409,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         'machine_id' => $this->machine->id,
                         'player_id' => $currentGamingUserId,
                     ]);
-                    $this->log->info('[心跳-打码量] lottery-machine 已投递', [
-                        'machine_code' => $this->machine->code,
-                        'player_id'    => $currentGamingUserId,
-                        'num'          => $numForQueue,
-                        'last_num'     => $lastNumForQueue,
-                    ]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'heartbeat', '[心跳-打码量] lottery-machine 已投递', ['machine_data' => $this->getMachineCache()]);
 
                     // 实时打码量统计：转数 × (odds_x/odds_y) = 元，与洗分打码量公式一致
                     $oddsX = $this->machine->odds_x ?? 1;
@@ -2884,14 +2420,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                             bcdiv((string)$oddsX, (string)$oddsY, 8),
                             2
                         );
-                        $this->log->info('[心跳-打码量] 打码金额计算', [
-                            'machine_code'       => $this->machine->code,
-                            'player_id'          => $currentGamingUserId,
-                            'bet_increment_turn' => $betIncrement,
-                            'odds_x'             => $oddsX,
-                            'odds_y'             => $oddsY,
-                            'bet_amount'         => $betAmount,
-                        ]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'heartbeat', '[心跳-打码量] 打码金额计算 amount='.$betAmount, ['machine_data' => $this->getMachineCache()]);
                         if (bccomp($betAmount, '0', 2) > 0) {
                             \Webman\RedisQueue\Client::send('bet-statistics', [
                                 'player_id' => $currentGamingUserId,
@@ -2901,20 +2430,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                                 'machine_id' => $this->machine->id,
                                 'created_at' => date('Y-m-d H:i:s'),
                             ]);
-                            $this->log->info('[心跳-打码量] bet-statistics 已投递', [
-                                'machine_code' => $this->machine->code,
-                                'player_id'    => $currentGamingUserId,
-                                'bet_amount'   => $betAmount,
-                            ]);
+                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'heartbeat', '[心跳-打码量] bet-statistics 已投递 amount='.$betAmount, ['machine_data' => $this->getMachineCache()]);
                         }
                     }
                 } catch (\Exception $e) {
-                    $this->log->error('[心跳-打码量] 投递队列失败', [
-                        'machine_code'  => $this->machine->code,
-                        'player_id'     => $currentGamingUserId,
-                        'bet_increment' => $betIncrement,
-                        'error'         => $e->getMessage(),
-                    ]);
+                    MachineLogger::error($this->machine->toArray(), 'heartbeat', '[心跳-打码量] 投递队列失败: '.$e->getMessage(), $this->getMachineCache());
                 }
             } else {
                 $skipReason = [];
@@ -2924,15 +2444,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if (empty($currentGamingUserId)) {
                     $skipReason[] = 'gaming_user_id为空（无玩家在游戏）';
                 }
-                if (!empty($skipReason)) {
-                    $this->log->debug('[心跳-打码量] 本次心跳不触发打码量', [
-                        'machine_code'   => $this->machine->code,
-                        'old_total_bet'  => $oldTotalBet,
-                        'new_total_bet'  => $totalBet,
-                        'gaming_user_id' => $currentGamingUserId,
-                        'skip_reason'    => implode('；', $skipReason),
-                    ]);
-                }
+                // debug: skip reason logged at trace level only
             }
 
             // ========== 同步更新兼容字段（与线上版保持一致） ==========
@@ -2982,14 +2494,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         $uid = $this->machine->domain . ':' . $this->machine->port;
                         $loginCmd = $this->createCmd(self::LOGIN);
                         Gateway::sendToUid($uid, hex2bin($loginCmd));
-                        $this->log->info('[心跳] 检测到未登入，已主动发送登入指令', [
-                            'machine_code' => $this->machine->code,
-                        ]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, 'login', '[心跳] 检测到未登入，已主动发送登入指令', ['machine_data' => $this->getMachineCache()]);
                     } catch (\Exception $loginErr) {
-                        $this->log->warning('[心跳] 主动登入指令发送失败', [
-                            'machine_code' => $this->machine->code,
-                            'error'        => $loginErr->getMessage(),
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), 'login', '[心跳] 主动登入指令发送失败: '.$loginErr->getMessage(), $this->getMachineCache());
                     }
                 }
             }
@@ -3030,7 +2537,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                             $lotteryRecord->use_turn = $this->now_turn;
                             $lotteryRecord->save();
                         } catch (\Throwable $e) {
-                            $this->log->error('[心跳] 写入开奖记录失败', ['error' => $e->getMessage()]);
+                            MachineLogger::error($this->machine->toArray(), 'heartbeat', '[心跳] 写入开奖记录失败: '.$e->getMessage(), $this->getMachineCache());
                         }
                     }
                 }
@@ -3063,11 +2570,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             return true;
 
         } catch (Exception $e) {
-            $this->log->error('[心跳] 处理失败', [
-                'error' => $e->getMessage(),
-                'msg' => strtoupper($msg),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'heartbeat', '[心跳] 处理失败: '.$e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
             return false;
         }
     }
@@ -3099,10 +2602,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             return [$cardScore, $machineScore, $totalBet, $totalWin, $statusByte];
 
         } catch (Exception $e) {
-            $this->log->error('[心跳] 数据解析失败', [
-                'error' => $e->getMessage(),
-                'msg' => strtoupper($msg),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'heartbeat', '[心跳] 数据解析失败: '.$e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
             throw $e;
         }
     }
@@ -3194,9 +2694,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         try {
             if (!$lock->acquire()) {
-                $this->log->warning('[外部按钮] 获取锁失败', [
-                    'machine_code' => $this->machine->code,
-                ]);
+                MachineLogger::warning($this->machine->toArray(), 'external_button', '[外部按钮] 获取锁失败', $this->getMachineCache());
                 return;
             }
 
@@ -3250,21 +2748,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if ($result['recorded']) {
-                $this->log->warning('[外部按钮-心跳触发] 检测到现场跳码表', [
-                    'machine_code' => $this->machine->code,
-                    'type' => $type,
-                    'old_table' => $oldTable,
-                    'new_table' => $newTable,
-                    'increment' => $newTable - $oldTable,
-                    'path' => 'B7 heartbeat',
-                ]);
+                MachineLogger::warning($this->machine->toArray(), 'external_button', '[外部按钮-心跳触发] 检测到现场跳码表 type='.$type.' inc='.($newTable-$oldTable), $this->getMachineCache());
             }
 
         } catch (Exception $e) {
-            $this->log->error('[外部按钮] 查询码表失败', [
-                'type' => $type,
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'external_button', '[外部按钮] 查询码表失败 type='.$type.': '.$e->getMessage(), $this->getMachineCache());
         }
     }
 
@@ -3290,13 +2778,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // 3. 验证洗分金额
             if ($washedScore <= 0) {
-                $this->log->warning('[线下洗分] 开分卡分数未减少，跳过处理', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'card_score_before' => $cardScoreBefore,
-                    'card_score_after' => $cardScoreAfter,
-                    'gaming_user_id' => $gamingUserId,
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[线下洗分] 开分卡分数未减少，跳过处理 before='.$cardScoreBefore.' after='.$cardScoreAfter, $this->getMachineCache(), MachineLogger::DIR_EVENT);
                 return;
             }
 
@@ -3310,17 +2792,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 )
             );
 
-            $this->log->info('[线下洗分] 检测到开分卡分数减少', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'card_score_before' => $cardScoreBefore,
-                'card_score_after' => $cardScoreAfter,
-                'washed_score' => $washedScore,
-                'washed_amount' => $washedAmount,
-                'odds_x' => $this->machine->odds_x,
-                'odds_y' => $this->machine->odds_y,
-                'gaming_user_id' => $gamingUserId,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '[线下洗分] 检测到开分卡分数减少 score='.$washedScore.' amount='.$washedAmount, ['machine_data' => $this->getMachineCache()]);
 
             // 5. 处理玩家余额
             if ($gamingUserId > 0) {
@@ -3342,25 +2814,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // CHECK 回复链：a3f833 → EE/EF → 机台计数器归零
             try {
                 $this->sendCmd(self::CHECK, 0, 'system');
-                $this->log->info('[线下洗分] CHECK 指令已发送，机台 total_bet/total_win 将归零', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_WASH, '[线下洗分] CHECK 指令已发送，机台 total_bet/total_win 将归零', ['machine_data' => $this->getMachineCache()]);
             } catch (Exception $e) {
-                $this->log->error('[线下洗分] 发送 CHECK 指令失败', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'error' => $e->getMessage(),
-                ]);
+                MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '[线下洗分] 发送 CHECK 指令失败: '.$e->getMessage(), $this->getMachineCache());
             }
 
         } catch (Exception $e) {
-            $this->log->error('[线下洗分] 处理失败', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '[线下洗分] 处理失败: '.$e->getMessage(), $this->getMachineCache());
         }
     }
 
@@ -3388,13 +2848,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // 3. 验证开分金额
             if ($openIncrement <= 0) {
-                $this->log->warning('[线下开分] 开分码表未增加，跳过处理', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'old_open_table' => $oldOpenTable,
-                    'new_open_table' => $newOpenTable,
-                    'gaming_user_id' => $gamingUserId,
-                ]);
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[线下开分] 开分码表未增加，跳过处理 old='.$oldOpenTable.' new='.$newOpenTable, $this->getMachineCache());
                 return;
             }
 
@@ -3406,18 +2860,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $openedScore / ($this->machine->odds_y ?? 1) * ($this->machine->odds_x ?? 1)
             );  // 等值余额（用于记录，不扣减）
 
-            $this->log->info('[线下开分] 检测到开分码表增加', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'old_open_table' => $oldOpenTable,
-                'new_open_table' => $newOpenTable,
-                'open_increment' => $openIncrement,
-                'opened_score' => $openedScore,
-                'open_amount' => $openAmount,
-                'odds_x' => $this->machine->odds_x,
-                'odds_y' => $this->machine->odds_y,
-                'gaming_user_id' => $gamingUserId,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '[线下开分] 检测到开分码表增加 inc='.$openIncrement.' score='.$openedScore.' amount='.$openAmount, ['machine_data' => $this->getMachineCache()]);
 
             // 5. 记录开分操作（不扣减余额）
             if ($gamingUserId > 0) {
@@ -3434,25 +2877,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // 7. ✅ 自动发送清除故障指令（清除 b5 标志）
             try {
                 $this->sendCmd(self::CHECK, 0, 'system');
-                $this->log->info('[线下开分] 自动发送 CHECK 指令清除 b5 标志', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[线下开分] 自动发送 CHECK 指令清除 b5 标志', ['machine_data' => $this->getMachineCache()]);
             } catch (Exception $e) {
-                $this->log->error('[线下开分] 发送 CHECK 指令失败', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'error' => $e->getMessage(),
-                ]);
+                MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[线下开分] 发送 CHECK 指令失败: '.$e->getMessage(), $this->getMachineCache());
             }
 
         } catch (Exception $e) {
-            $this->log->error('[线下开分] 处理失败', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[线下开分] 处理失败: '.$e->getMessage(), $this->getMachineCache());
         }
     }
 
@@ -3516,14 +2947,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             \support\Db::commit();
 
-            $this->log->info('[线下开分] 玩家开分记录创建成功', [
-                'player_id' => $playerId,
-                'opened_score' => $openedScore,
-                'open_amount' => $openAmount,
-                'machine_id' => $this->machine->id,
-                'balance_unchanged' => $balance,
-                'player_game_log_id' => $playerGameLog->id,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '[线下开分] 玩家开分记录创建成功 score='.$openedScore.' player='.$playerId, ['machine_data' => $this->getMachineCache()]);
 
         } catch (Exception $e) {
             \support\Db::rollback();
@@ -3558,13 +2982,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             \support\Db::commit();
 
-            $this->log->info('[线下开分] 无玩家游戏，已记录开分操作', [
-                'opened_score' => $openedScore,
-                'open_amount' => $openAmount,
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'player_game_log_id' => $playerGameLog->id,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '[线下开分] 无玩家游戏，已记录开分操作 score='.$openedScore, ['machine_data' => $this->getMachineCache()]);
 
         } catch (Exception $e) {
             \support\Db::rollback();
@@ -3620,14 +3038,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 2
             );
 
-            $this->log->info('[线下洗分] 计算打码量', [
-                'player_id'      => $playerId,
-                'gaming_pressure' => $gamingPressure,
-                'gaming_score'   => $gamingScore,
-                'odds_x'         => $this->machine->odds_x,
-                'odds_y'         => $this->machine->odds_y,
-                'chip_amount'    => floatval($chipAmount),
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '[线下洗分] 计算打码量 chip='.$chipAmount, ['machine_data' => $this->getMachineCache()]);
 
             // 3. 创建下分记录（PlayerGameLog）
             /** @var PlayerGameRecord $gameRecord */
@@ -3691,27 +3102,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->total_bet = 0;
             $this->total_win = 0;
 
-            $this->log->info('[线下洗分] 清理玩家游戏数据', [
-                'player_id'  => $playerId,
-                'machine_id' => $this->machine->id,
-                'bet'        => 0,
-                'now_turn'   => 0,
-                'total_bet'  => 0,
-                'total_win'  => 0,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '[线下洗分] 清理玩家游戏数据', ['machine_data' => $this->getMachineCache()]);
 
             // 7. 钱包加款（在事务外执行）
             try {
                 $addResult = \app\service\WalletService::add($playerId, $washedAmount);
 
-                $this->log->info('[线下洗分] 钱包加款成功', [
-                    'player_id' => $playerId,
-                    'washed_score' => $washedScore,
-                    'washed_amount' => $washedAmount,
-                    'before_balance' => $beforeBalance,
-                    'after_balance' => $addResult['balance'],
-                    'machine_id' => $this->machine->id,
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '[线下洗分] 钱包加款成功 amount='.$washedAmount.' player='.$playerId, ['machine_data' => $this->getMachineCache()]);
 
                 // 8. 推送余额变化
                 \app\service\BalancePushService::pushBalanceChange(
@@ -3728,12 +3125,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             } catch (Exception $walletError) {
                 // 钱包加款失败，发送告警
-                $this->log->critical('[线下洗分] 钱包加款失败，需要人工介入', [
-                    'player_id' => $playerId,
-                    'amount' => $washedAmount,
-                    'error' => $walletError->getMessage(),
-                    'action' => '已记录下分成功，但钱包未加款，请立即手动给玩家加款',
-                ]);
+                MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '[线下洗分] 钱包加款失败，需要人工介入: '.$walletError->getMessage(), $this->getMachineCache());
 
                 // 发送 Telegram 告警
                 try {
@@ -3809,13 +3201,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             \support\Db::commit();
 
-            $this->log->info('[线下洗分] 无玩家游戏，已记录下分操作', [
-                'washed_score' => $washedScore,
-                'washed_amount' => $washedAmount,
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'player_game_log_id' => $playerGameLog->id,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '[线下洗分] 无玩家游戏，已记录下分操作 score='.$washedScore, ['machine_data' => $this->getMachineCache()]);
 
         } catch (Exception $e) {
             \support\Db::rollback();
@@ -3999,9 +3385,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $beforeTime = $this->setActionVersion(self::LOGIN);
         Gateway::sendToUid($uid, hex2bin($cmd));
 
-        $this->log->info('[登入] 发送登入指令', [
-            'machine_code' => $this->machine->code,
-        ]);
+        MachineLogger::sendCommand($this->machine->toArray(), 'login', '[登入] 发送登入指令', $this->getMachineCache());
 
         // ✅ 改进：带超时的等待回复
         $timeout = 1000000;  // 每次等1秒，由 ensureLoggedIn 最多重试3次
@@ -4013,10 +3397,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if ($actionTime > $beforeTime) {
                 // 收到回复，检查登入状态
                 $status = $this->checkLoginStatus();
-                $this->log->info('[登入] 登入' . ($status ? '成功' : '失败'), [
-                    'machine_code' => $this->machine->code,
-                    'login_status' => $status,
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'login', '[登入] 登入'.($status ? '成功' : '失败'), ['machine_data' => $this->getMachineCache()]);
                 return $status;
             }
 
@@ -4025,10 +3406,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         }
 
         // 超时
-        $this->log->error('[登入] 登入超时，未收到回复', [
-            'machine_code' => $this->machine->code,
-            'timeout' => $timeout / 1000 . 'ms',
-        ]);
+        MachineLogger::error($this->machine->toArray(), 'login', '[登入] 登入超时，未收到回复', $this->getMachineCache());
         return false;
     }
 
@@ -4045,23 +3423,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         $maxRetries = 3;
         for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-            $this->log->warning('[登入检查] 机台未登入，尝试自动登入', [
-                'machine_code' => $this->machine->code,
-                'attempt'      => "$attempt/$maxRetries",
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'login', '[登入检查] 机台未登入，尝试自动登入 attempt='.$attempt.'/'.$maxRetries, $this->getMachineCache());
 
             if ($this->loginMachine()) {
-                $this->log->info('[登入检查] 自动登入成功', [
-                    'machine_code' => $this->machine->code,
-                    'attempt'      => "$attempt/$maxRetries",
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'login', '[登入检查] 自动登入成功', ['machine_data' => $this->getMachineCache()]);
                 return;
             }
 
-            $this->log->warning('[登入检查] 登入失败', [
-                'machine_code' => $this->machine->code,
-                'attempt'      => "$attempt/$maxRetries",
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'login', '[登入检查] 登入失败', $this->getMachineCache());
         }
 
         throw new Exception('机台登入失败，请检查机台状态');
@@ -4081,10 +3450,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $cmd .= $hexString;
         $sum1 = $this->calculateSUM1($cmd);
         $sum2 = $this->calculateSUM2($cmd, $sum1);
-
-        $this->log->debug('[创建指令]', [
-            'cmd' => strtoupper($cmd . $sum1 . $sum2)
-        ]);
 
         return $cmd . $sum1 . $sum2;
     }
@@ -4182,32 +3547,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $retryCount++;
             Cache::set($retryKey, $retryCount, 60);  // 60秒过期
 
-            $this->log->warning('[收账小卡-通讯故障] Smart卡通讯超时（EE），丢弃数据并延迟1秒后重试', [
-                'machine_code' => $this->machine->code,
-                'card_flag' => $data['card_flag'],
-                'retry_count' => $retryCount,
-                'max_retries' => $maxRetries,
-                'retry_delay' => '1秒',
-                'reason' => 'Smart卡1秒内未发送完整信号（可能是RS232线路接触不良或信号干扰）',
-                'action' => '丢弃当前数据，1秒后重新查询最新数据',
-                'data_status' => '维持上一个有效值，不会丢失分数',
-                'note' => 'Smart卡大约1秒更新一次，延迟1秒确保机台有足够时间获取新数据',
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'ca_fault', '[收账小卡-通讯故障] Smart卡通讯超时（EE），丢弃数据并延迟1秒后重试 retry='.$retryCount.'/'.$maxRetries, $this->getMachineCache());
 
             // 使用Workerman定时器，1秒后发送重试查询
             $uid = $this->machine->domain . ':' . $this->machine->port;
-            $machineCode = $this->machine->code;
-            $log = $this->log;
+            $machineArr = $this->machine->toArray();
+            $machineCache = $this->getMachineCache();
             $cmd = $this->createCmd(self::READ_SCORE);  // 在闭包外生成指令
 
-            Timer::add(1, function() use ($uid, $machineCode, $retryCount, $log, $cmd) {
+            Timer::add(1, function() use ($uid, $machineArr, $machineCache, $retryCount, $cmd) {
                 Gateway::sendToUid($uid, hex2bin($cmd));
-
-                $log->info('[收账小卡] 发送指令', [
-                    'machine_code' => $machineCode,
-                    'cmd' => strtoupper($cmd),
-                    'reason' => '延迟1秒后重试（第' . $retryCount . '次）',
-                ]);
+                MachineLogger::sendCommand($machineArr, 'ca_fault', '[收账小卡] 发送重试查询指令 retry='.$retryCount, $machineCache, strtoupper($cmd));
             }, null, false);  // false表示只执行一次
 
             // 返回true，表示消息已处理（从缓冲区移除），但数据已丢弃（不更新Redis）
@@ -4218,26 +3568,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $oldHasLock = $this->has_lock ?? 0;
         $this->logFieldChange('账目查询', 'has_lock', $oldHasLock, 1, 'Smart卡通讯故障持续');
 
-        $this->log->error('[收账小卡-锁定] Smart卡通讯故障持续（EE），机台已锁定', [
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'card_flag' => $data['card_flag'],
-            'retry_count' => $retryCount,
-            'max_retries' => $maxRetries,
-            'reason' => 'Smart卡通讯故障，' . $maxRetries . '次重试（每次间隔1秒）后仍未恢复',
-            'diagnosis' => 'card_flag=EE 表示账务小卡1秒内未收到Smart卡完整信号',
-            'possible_causes' => [
-                '1. RS232线路接触不良（账务小卡上的4P 2线）',
-                '2. 信号干扰/杂讯导致数据不完整',
-                '3. Smart卡硬件故障',
-                '4. 账务小卡读卡器故障',
-            ],
-            'next_steps' => [
-                '1. 检查RS232线路连接',
-                '2. 重新插拔4P 2线',
-                '3. 如果频繁出现，考虑更换线材或检查硬件',
-            ],
-        ]);
+        MachineLogger::error($this->machine->toArray(), 'ca_fault', '[收账小卡-锁定] Smart卡通讯故障持续（EE），机台已锁定 retry='.$retryCount.'/'.$maxRetries, $this->getMachineCache());
 
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
@@ -4371,19 +3702,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->is_login = 0;
             $this->login_status = 0;
 
-            $this->log->warning('[收账小卡-机台情况] 检测到登出状态（8x）', [
-                'machine_code' => $this->machine->code,
-                'status_byte' => strtoupper($fields['status_byte']),
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'status_query', '[收账小卡-机台情况] 检测到登出状态（8x）', $this->getMachineCache());
         }
 
         // 如果有故障，记录警告
         if ($flags['has_fault1'] || $flags['has_fault2']) {
-            $this->log->warning('[收账小卡-机台情况] 检测到故障状态', [
-                'machine_code' => $this->machine->code,
-                'fault1' => $flags['has_fault1'] ? '得分线故障' : null,
-                'fault2' => $flags['has_fault2'] ? '网路未开分却跳开洗分表' : null,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'status_query', '[收账小卡-机台情况] 检测到故障状态', $this->getMachineCache());
         }
 
         // 處理回補（開分部分失敗時退款給玩家）
@@ -4419,23 +3743,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $calculatedSum2 = $this->calculateSUM2($dataWithoutSum, $calculatedSum1);
 
         if ($receivedSum1 !== $calculatedSum1 || $receivedSum2 !== $calculatedSum2) {
-            $this->log->error("[{$context}] 校验和验证失败", [
-                'machine_code' => $this->machine->code,
-                'msg' => strtoupper($msg),
-                'expected_sum1' => $calculatedSum1,
-                'received_sum1' => $receivedSum1,
-                'expected_sum2' => $calculatedSum2,
-                'received_sum2' => $receivedSum2,
-            ]);
+            MachineLogger::error($this->machine->toArray(), $context, "[{$context}] 校验和验证失败", $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
             return false;
         }
-
-        // ✅ 校验成功时也记录（DEBUG级别）
-        $this->log->debug("[{$context}] 校验和验证成功", [
-            'machine_code' => $this->machine->code,
-            'sum1' => $calculatedSum1,
-            'sum2' => $calculatedSum2,
-        ]);
 
         return true;
     }
@@ -4480,11 +3790,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         if ($hasRecentCheck) {
             // 正常归零（故障排除）
-            $this->log->info("[收账小卡-{$type}码表] 故障排除后归零", [
-                'machine_code' => $this->machine->code,
-                'old' => $oldCount,
-                'new' => $newCount,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'counter_reset', "[收账小卡-{$type}码表] 故障排除后归零 old={$oldCount} new={$newCount}", ['machine_data' => $this->getMachineCache()]);
 
             return [
                 'has_anomaly' => false,
@@ -4493,11 +3799,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             ];
         } else {
             // 异常减少
-            $this->log->error("[收账小卡-{$type}码表] 异常减少", [
-                'machine_code' => $this->machine->code,
-                'old' => $oldCount,
-                'new' => $newCount,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'counter_anomaly', "[收账小卡-{$type}码表] 异常减少 old={$oldCount} new={$newCount}", $this->getMachineCache(), MachineLogger::DIR_EVENT);
             sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, 0);
 
             return [
@@ -4557,7 +3859,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $logData['reason'] = $reason;
             }
 
-            $this->log->info("[{$context}] 字段更新", $logData);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'field_update', "[{$context}] 字段更新", ['machine_data' => $this->getMachineCache()]);
         }
     }
 
@@ -4574,9 +3876,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $level = $success ? 'info' : 'error';
         $status = $success ? '成功' : '失败';
 
-        $this->log->{$level}("[{$context}] {$operation}{$status}", array_merge([
-            'machine_code' => $this->machine->code,
-        ], $data));
+        if ($success) {
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'operation', "[{$context}] {$operation}{$status}", ['machine_data' => $this->getMachineCache()]);
+        } else {
+            MachineLogger::error($this->machine->toArray(), 'operation', "[{$context}] {$operation}{$status}", $this->getMachineCache(), MachineLogger::DIR_EVENT);
+        }
     }
 
     /**
@@ -4606,11 +3910,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 }
 
                 // ✅ 优化：未知 A7 子类型，记录警告便于发现新协议
-                $this->log->warning('[TCP分包] 未知的A7子类型', [
-                    'machine_code' => $this->machine->code,
-                    'buffer' => strtoupper(substr($buffer, 0, min(20, strlen($buffer)))),
-                    'sub_type' => strtoupper($subType),
-                ]);
+                MachineLogger::warning($this->machine->toArray(), 'tcp_fragment', '[TCP分包] 未知的A7子类型 sub_type='.strtoupper($subType), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 return 0;
 
             case 'a6':
