@@ -147,7 +147,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
     public $cacheData = [];
     public $expirationTime = 5000000;  // 5秒超时
-    public $log = null;
+
     private string $extensionNumber = '46'; // 分机号（默认46H=70号）
     // ⚠️ P1-4修复：去重时间改用 Cache 存储，支持跨请求去重
     // 已移除 private array $lastCounterUpdateTime（实例变量跨请求失效）
@@ -205,7 +205,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
         $this->lang = $lang;
         $this->cacheData = $this->getMachineCache();
-        $this->log = Log::channel('song_offline_jackpot_machine');
     }
 
     /**
@@ -445,11 +444,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             return $this->processCommandMessage($msg, $len, $originalState['gamingUserId']);
 
         } catch (Exception $e) {
-            $this->log->error('消息处理错误', [
-                'error' => $e->getMessage(),
-                'msg' => $msg,
-                'machine_code' => $this->machine->code,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'message_error', '消息处理错误: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
             return false;
         }
     }
@@ -468,12 +463,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
 
             $hasB5B7 = (stripos($msg, 'b5') !== false || stripos($msg, 'b7') !== false);
-            $this->log->info('收到非标准长度消息，尝试解析', [
-                'machine_code' => $this->machine->code,
-                'length' => $len,
-                'has_b5_b7' => $hasB5B7,
-                'msg_preview' => substr($msg, 0, min(60, $len)),
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'message_parse', '收到非标准长度消息，尝试解析', ['machine_data' => $this->getMachineCache(), 'length' => $len, 'has_b5_b7' => $hasB5B7]);
         }
     }
 
@@ -657,12 +647,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     {
         $receivedExtension = substr($mainCmd, 0, 2);
         if ($receivedExtension !== $this->extensionNumber) {
-            $this->log->warning('收到不匹配的分机号消息', [
-                'machine_code' => $this->machine->code,
-                'expected' => $this->extensionNumber,
-                'received' => $receivedExtension,
-                'msg' => substr($mainCmd, 0, 20) . '...'
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'message_parse', '收到不匹配的分机号消息 expected=' . $this->extensionNumber . ' received=' . $receivedExtension, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
         }
     }
 
@@ -682,10 +667,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
         try {
             if (!$lock->acquire()) {
-                $this->log->warning('[外部按钮] 获取解析锁失败，跳过本次处理', [
-                    'machine_code' => $this->machine->code,
-                    'data_length' => strlen($data),
-                ]);
+                MachineLogger::warning($this->machine->toArray(), 'external_button', '[外部按钮] 获取解析锁失败，跳过本次处理', $this->getMachineCache(), MachineLogger::DIR_EVENT);
                 return;
             }
             $lockAcquired = true;  // ✅ 标记已成功获取锁
@@ -709,24 +691,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                     $calculatedS1 = self::calculateS1($b5Content);
                     if ($s1 != $calculatedS1) {
-                        $this->log->error('[B5协议] S1校验失败', [
-                            'machine_code' => $this->machine->code,
-                            'data' => $b5Data,
-                            'expected_s1' => $calculatedS1,
-                            'actual_s1' => $s1,
-                        ]);
+                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[B5协议] S1校验失败 expected=' . $calculatedS1 . ' actual=' . $s1, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $b5Data);
                         $offset += 10;
                         continue;
                     }
 
                     $calculatedS2 = self::calculateS2($b5Content, $calculatedS1);
                     if ($s2 != $calculatedS2) {
-                        $this->log->error('[B5协议] S2校验失败', [
-                            'machine_code' => $this->machine->code,
-                            'data' => $b5Data,
-                            'expected_s2' => $calculatedS2,
-                            'actual_s2' => $s2,
-                        ]);
+                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[B5协议] S2校验失败 expected=' . $calculatedS2 . ' actual=' . $s2, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $b5Data);
                         $offset += 10;
                         continue;
                     }
@@ -735,11 +707,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                     // ✅ P2-5修复：检测计数器溢出（B5最大9999）
                     if ($newCount > 9999) {
-                        $this->log->error('[B5协议] 计数器溢出，数据异常', [
-                            'machine_code' => $this->machine->code,
-                            'new_count' => $newCount,
-                            'data' => $b5Data,
-                        ]);
+                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[B5协议] 计数器溢出，数据异常 count=' . $newCount, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $b5Data);
                         $offset += 10;
                         continue;
                     }
@@ -801,11 +769,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     $offset += $availableLen;
                 } else {
                     // 未知指令，跳过2字符
-                    $this->log->warning('未知的附加指令', [
-                        'machine_code' => $this->machine->code,
-                        'cmd' => $cmd,
-                        'remaining_data' => substr($data, $offset)
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), 'external_button', '未知的附加指令 cmd=' . $cmd, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     break;
                 }
             }
@@ -835,27 +799,17 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             if ($hasRecentCheck) {
                 // 故排后归零，正常
-                $this->log->info("[{$type}计数器] 故排后归零", [
-                    'machine_code' => $this->machine->code,
-                    'old' => $oldCount,
-                    'new' => $newCount,
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'counter', "[{$type}计数器] 故排后归零 old={$oldCount} new={$newCount}", ['machine_data' => $this->getMachineCache()]);
                 return ['should_update' => true, 'recorded' => false, 'reason' => '故排归零'];
             } else {
                 // 异常减少，告警（可能是换卡或重启）
-                $this->log->error("[{$type}计数器] 异常减少", [
-                    'machine_code' => $this->machine->code,
-                    'old' => $oldCount,
-                    'new' => $newCount,
-                    'decrease' => $oldCount - $newCount,
-                    'note' => '如果是换卡，应先点击"更换开分卡"保存数据'
-                ]);
+                MachineLogger::error($this->machine->toArray(), 'counter', "[{$type}计数器] 异常减少 old={$oldCount} new={$newCount} decrease=" . ($oldCount - $newCount), $this->getMachineCache(), MachineLogger::DIR_EVENT);
 
                 // 发送机台异常通知
                 try {
                     sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, 0);
                 } catch (Exception $e) {
-                    $this->log->error('发送机台异常通知失败', ['error' => $e->getMessage()]);
+                    MachineLogger::error($this->machine->toArray(), 'machine_exception', '发送机台异常通知失败: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_EVENT);
                 }
 
                 return ['should_update' => true, 'recorded' => false, 'reason' => '异常减少'];
@@ -874,22 +828,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $cacheKey = "last_counter_update_{$this->machine->id}_{$type}";
         $lastUpdate = Cache::get($cacheKey, 0);
         if ($now - $lastUpdate < 2) {
-            $this->log->warning("[{$type}计数器] 短时间内重复心跳，跳过", [
-                'machine_code' => $this->machine->code,
-                'interval' => $now - $lastUpdate,
-                'increment' => $increment,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'counter', "[{$type}计数器] 短时间内重复心跳，跳过 interval=" . ($now - $lastUpdate) . " increment={$increment}", $this->getMachineCache(), MachineLogger::DIR_EVENT);
             return ['should_update' => false, 'recorded' => false, 'reason' => '重复心跳'];
         }
 
         // 异常增量检查（单次心跳增量不应超过20）
         if ($increment > 20) {
-            $this->log->warning("[{$type}计数器] 单次增量异常", [
-                'machine_code' => $this->machine->code,
-                'increment' => $increment,
-                'old' => $oldCount,
-                'new' => $newCount,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'counter', "[{$type}计数器] 单次增量异常 increment={$increment} old={$oldCount} new={$newCount}", $this->getMachineCache(), MachineLogger::DIR_EVENT);
             // 仍然记录，但记录警告
         }
 
@@ -903,11 +848,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             Cache::set($cacheKey, $now, 5);
 
         } catch (Exception $e) {
-            $this->log->error("[{$type}计数器] 数据库记录失败，不更新Redis", [
-                'machine_code' => $this->machine->code,
-                'increment' => $increment,
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'counter', "[{$type}计数器] 数据库记录失败，不更新Redis increment={$increment}: " . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_EVENT);
             $recorded = false;
             $reason = '数据库记录失败';
         }
@@ -941,10 +882,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // 根据机台比值转换成玩家钱包分数
         // 公式：walletAmount = machinePoint / odds_y * odds_x
         if (!$this->machine->odds_y || $this->machine->odds_y <= 0) {
-            $this->log->error('[外部按钮] 机台odds_y无效，无法记录', [
-                'machine_code' => $this->machine->code,
-                'odds_y' => $this->machine->odds_y,
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'external_button', '[外部按钮] 机台odds_y无效，无法记录 odds_y=' . $this->machine->odds_y, $this->getMachineCache(), MachineLogger::DIR_EVENT);
             throw new Exception("机台 {$this->machine->code} 的 odds_y 无效");
         }
 
@@ -1045,10 +983,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     $playerGameLog->before_game_amount = $currentBalance;
                     $playerGameLog->after_game_amount = $currentBalance; // 外部按钮不扣款，余额不变
                 } catch (Exception $e) {
-                    $this->log->warning('[外部按钮] 获取玩家余额失败，使用0', [
-                        'player_id' => $player->id,
-                        'error' => $e->getMessage(),
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), 'external_button', '[外部按钮] 获取玩家余额失败，使用0: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_EVENT);
                     $playerGameLog->before_game_amount = 0;
                     $playerGameLog->after_game_amount = 0;
                 }
@@ -1104,43 +1039,20 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                     $gameRecord->save();
 
-                    $this->log->info('[外部按钮] 更新 PlayerGameRecord', [
-                        'game_record_id' => $gameRecordId,
-                        'type' => $type,
-                        'machine_point' => $machinePoint,
-                        'wallet_amount' => $walletAmount,
-                        'updated_open_point' => $gameRecord->open_point,
-                        'updated_wash_point' => $gameRecord->wash_point,
-                    ]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'game_record', '[外部按钮] 更新 PlayerGameRecord game_record_id=' . $gameRecordId . ' type=' . $type, ['machine_data' => $this->getMachineCache()]);
                 } else {
                     // ✅ P0-8修复：游戏记录已结束或不存在，不累加（只记录日志）
-                    $this->log->warning('[外部按钮] 游戏记录已结束或不存在，跳过更新 PlayerGameRecord', [
-                        'game_record_id' => $gameRecordId,
-                        'type' => $type,
-                        'machine_point' => $machinePoint,
-                        'wallet_amount' => $walletAmount,
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), 'game_record', '[外部按钮] 游戏记录已结束或不存在，跳过更新 PlayerGameRecord game_record_id=' . $gameRecordId, $this->getMachineCache(), MachineLogger::DIR_EVENT);
                 }
             }
 
             \support\Db::commit();
 
-            $this->log->info('[外部按钮] 创建游戏日志', [
-                'player_game_log_id' => $playerGameLog->id,
-                'player_id' => $playerGameLog->player_id,
-                'machine_id' => $playerGameLog->machine_id,
-                'type' => $type,
-                'machine_point' => $machinePoint,
-                'wallet_amount' => $walletAmount,
-                'game_record_id' => $gameRecordId,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'game_log', '[外部按钮] 创建游戏日志 type=' . $type . ' log_id=' . $playerGameLog->id, ['machine_data' => $this->getMachineCache()]);
 
         } catch (Exception $e) {
             \support\Db::rollBack();
-            $this->log->error('[外部按钮] 创建游戏日志失败', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'game_log', '[外部按钮] 创建游戏日志失败: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_EVENT);
             throw $e; // ✅ 抛出异常，让上层处理
         }
     }
@@ -1175,9 +1087,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             return null;
 
         } catch (Exception $e) {
-            $this->log->error('[外部按钮] 获取游戏记录失败', [
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'game_record', '[外部按钮] 获取游戏记录失败: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_EVENT);
             return null;
         }
     }
@@ -1233,12 +1143,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function handleShortHeartbeat(string $msg, int $len, int $gamingUserId): bool
     {
-        $this->log->info('[心跳] 收到短心跳，跳过详细解析', [
-            'machine_code' => $this->machine->code,
-            'heartbeat_length' => $len,
-            'heartbeat' => $msg,
-            'player_id' => $gamingUserId,
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'heartbeat', '[心跳] 收到短心跳，跳过详细解析 len=' . $len, ['machine_data' => $this->getMachineCache()]);
 
         // 短心跳只维持在线状态，不更新详细数据
         // 详细数据从Redis缓存读取（保持上次标准心跳的状态）
@@ -1277,10 +1182,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             throw new Exception('机台故障: ' . $faultType);
         } else {
             // ⚠️ 未知状态码
-            $this->log->warning('[机台健康] 未知健康状态码', [
-                'machine_code' => $this->machine->code,
-                'health_code' => $healthCode,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), 'machine_health', '[机台健康] 未知健康状态码 code=' . $healthCode, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
         }
     }
 
@@ -1466,10 +1368,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // 开奖状态中不处理转数累加
         if ($nowRewardStatus != 0) {
             if (!empty($gamingUserId)) {
-                $this->log->info('[转数累加] 开奖状态中，跳过累加', [
-                    'machine_code' => $this->machine->code,
-                    'reward_status' => $nowRewardStatus
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'turn_change', '[转数累加] 开奖状态中，跳过累加 reward_status=' . $nowRewardStatus, ['machine_data' => $this->getMachineCache()]);
             }
             return;
         }
@@ -1485,10 +1384,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
         // 检查是否刚执行过上转下转操作
         if ($this->isTurnActionFlagSet()) {
-            $this->log->info('[转数累加] 检测到上转/下转操作标记，跳过本次累加', [
-                'machine_code' => $this->machine->code,
-                'turn_delta' => $turnDelta
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'turn_change', '[转数累加] 检测到上转/下转操作标记，跳过本次累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
             return;
         }
 
@@ -1499,26 +1395,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $consumed = abs($turnDelta);  // 消耗的转数（绝对值）
             $this->handleTurnConsumption($consumed, $gamingUserId);
 
-            $this->log->info('[转数累加] turn 减少，累加打码量', [
-                'machine_code' => $this->machine->code,
-                'turn_delta' => $turnDelta,
-                'consumed' => $consumed,
-                'old_turn' => $orgTurn,
-                'new_turn' => $nowTurn,
-                'player_win_number' => $this->player_win_number,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'turn_change', '[转数累加] turn减少，累加打码量 delta=' . $turnDelta . ' consumed=' . $consumed, ['machine_data' => $this->getMachineCache()]);
         } else if (bccomp($turnDelta, '-10', 2) < 0) {
             // turn 大幅减少：可能是下转操作
-            $this->log->info('[转数累加] turn大幅减少，可能是下转操作，不累加', [
-                'machine_code' => $this->machine->code,
-                'turn_delta' => $turnDelta
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'turn_change', '[转数累加] turn大幅减少，可能是下转操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
         } else if (bccomp($turnDelta, '0', 2) > 0) {
             // turn 增加：可能是上转操作
-            $this->log->info('[转数累加] turn增加，可能是上转操作，不累加', [
-                'machine_code' => $this->machine->code,
-                'turn_delta' => $turnDelta
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'turn_change', '[转数累加] turn增加，可能是上转操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
         }
 
         // 累加彩池：win_number 增加时投递 lottery-machine 队列（对齐 SongJackpot 在线版）
@@ -1616,11 +1499,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     {
         if ($nowTurn <= 0 && !empty($gamingUserId)) {
             Cache::delete('gift_cache_' . $this->machine->id . '_' . $gamingUserId);
-            $this->log->info('[礼物缓存] 转数为0，清理礼物缓存', [
-                'machine_code' => $this->machine->code,
-                'player_id' => $gamingUserId,
-                'turn' => $nowTurn
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_cache', '[礼物缓存] 转数为0，清理礼物缓存 player_id=' . $gamingUserId, ['machine_data' => $this->getMachineCache()]);
         }
     }
 
@@ -1676,12 +1555,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     private function handleActionReply(string $msg, string $action, int $gamingUserId): bool
     {
         // ✅ 记录进入handleActionReply
-        $this->log->debug('[动作回复] 处理机台动作回复', [
-            'machine_code' => $this->machine->code,
-            'action' => $action,
-            'msg' => $msg,
-            'msg_length' => strlen($msg),
-        ]);
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'action_reply', '[动作回复] 处理机台动作回复 action=' . $action . ' len=' . strlen($msg), ['machine_data' => $this->getMachineCache()]);
 
         switch ($action) {
             // 上分回复
@@ -1712,10 +1586,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $uid = $this->machine->domain . ':' . $this->machine->port;
                 Gateway::sendToUid($uid, hex2bin($cmd . $s1 . $s2));
 
-                $this->log->info('[下分回复] 发送第二次握手', [
-                    'machine_code' => $this->machine->code,
-                    'send_cmd' => $cmd . $s1 . $s2,
-                ]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, 'wash_zero', '[下分回复] 发送第二次握手 cmd=' . $cmd . $s1 . $s2, ['machine_data' => $this->getMachineCache()]);
                 break;
 
             // 查询分数响应
@@ -1745,10 +1616,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 if ($isTurnAction) {
                     // 清除标记
                     Cache::delete('turn_action_flag_' . $this->machine->id);
-                    $this->log->info('[查询转数] 清除上转/下转操作标记', [
-                        'machine_code' => $this->machine->code,
-                        'turn' => $turn
-                    ]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'turn_change', '[查询转数] 清除上转/下转操作标记 turn=' . $turn, ['machine_data' => $this->getMachineCache()]);
                 }
 
                 $this->setActionVersion(self::MACHINE_TURN);
@@ -1765,12 +1633,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 // 防止异常值
                 if (abs($delta) > 100) {
-                    $this->log->error('检测到异常的winNumber值，拒绝更新', [
-                        'machine_code' => $this->machine->code,
-                        'old_win_number' => $oldWinNumber,
-                        'new_win_number' => $winNumber,
-                        'delta' => $delta,
-                    ]);
+                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '检测到异常的winNumber值，拒绝更新 old=' . $oldWinNumber . ' new=' . $winNumber . ' delta=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 } else {
                     $this->win_number = $winNumber;
                 }
@@ -1785,11 +1648,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $point = self::parseScore(substr($msg, 4, 6));
                 $this->point = $point;
                 $this->setActionVersion(self::MACHINE_POINT);
-                $this->log->info('[新版查询] 收到分数查询回复', [
-                    'machine_code' => $this->machine->code,
-                    'point' => $point,
-                    'msg' => $msg
-                ]);
+                MachineLogger::receiveResponse($this->machine->toArray(), self::QUERY_REPLY_POINT, '[新版查询] 收到分数查询回复 point=' . $point, $this->getMachineCache(), $msg);
                 break;
 
             // 查询得分响应（新版）：46 EB xx xx xx S1 S2
@@ -1797,11 +1656,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $score = self::parseScore(substr($msg, 4, 6));
                 $this->score = $score;
                 $this->setActionVersion(self::MACHINE_SCORE);
-                $this->log->info('[新版查询] 收到得分查询回复', [
-                    'machine_code' => $this->machine->code,
-                    'score' => $score,
-                    'msg' => $msg
-                ]);
+                MachineLogger::receiveResponse($this->machine->toArray(), self::QUERY_REPLY_SCORE, '[新版查询] 收到得分查询回复 score=' . $score, $this->getMachineCache(), $msg);
                 break;
 
             // 查询转数响应（新版）：46 EC xx xx S1 S2
@@ -1809,11 +1664,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                 $this->turn = $turn;
                 $this->setActionVersion(self::MACHINE_TURN);
-                $this->log->info('[新版查询] 收到转数查询回复', [
-                    'machine_code' => $this->machine->code,
-                    'turn' => $turn,
-                    'msg' => $msg
-                ]);
+                MachineLogger::receiveResponse($this->machine->toArray(), self::QUERY_REPLY_TURN, '[新版查询] 收到转数查询回复 turn=' . $turn, $this->getMachineCache(), $msg);
                 break;
 
             // 查询累积转数响应（新版）：46 ED xx xx xx S1 S2
@@ -1824,19 +1675,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 // 防止异常值
                 if (abs($delta) > 100) {
-                    $this->log->error('[新版查询] 检测到异常的winNumber值，拒绝更新', [
-                        'machine_code' => $this->machine->code,
-                        'old_win_number' => $oldWinNumber,
-                        'new_win_number' => $winNumber,
-                        'delta' => $delta,
-                    ]);
+                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '[新版查询] 检测到异常的winNumber值，拒绝更新 old=' . $oldWinNumber . ' new=' . $winNumber . ' delta=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 } else {
                     $this->win_number = $winNumber;
-                    $this->log->info('[新版查询] 收到累积转数查询回复', [
-                        'machine_code' => $this->machine->code,
-                        'win_number' => $winNumber,
-                        'msg' => $msg
-                    ]);
+                    MachineLogger::receiveResponse($this->machine->toArray(), self::QUERY_REPLY_WIN_NUMBER, '[新版查询] 收到累积转数查询回复 win_number=' . $winNumber, $this->getMachineCache(), $msg);
                 }
                 $this->setActionVersion(self::WIN_NUMBER);
                 break;
@@ -1851,12 +1693,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     // 验证中间的EF标识
                     $efMarker = substr($msg, 8, 2);
                     if ($efMarker !== 'ef') {
-                        $this->log->error('[新版查询] 外部码表回复格式错误，缺少EF标识', [
-                            'machine_code' => $this->machine->code,
-                            'expected_ef' => 'ef',
-                            'actual' => $efMarker,
-                            'msg' => $msg
-                        ]);
+                        MachineLogger::error($this->machine->toArray(), 'external_button', '[新版查询] 外部码表回复格式错误，缺少EF标识 actual=' . $efMarker, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                         break;
                     }
 
@@ -1871,20 +1708,12 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                     // ✅ 校验数据合理性
                     if ($openCount > 9999) {
-                        $this->log->error('[新版查询] 外部开分次数超出范围', [
-                            'machine_code' => $this->machine->code,
-                            'open_count' => $openCount,
-                            'max' => 9999,
-                        ]);
+                        MachineLogger::error($this->machine->toArray(), 'external_button', '[新版查询] 外部开分次数超出范围 open_count=' . $openCount . ' max=9999', $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                         break;
                     }
 
                     if ($washCount > 999999) {
-                        $this->log->error('[新版查询] 外部洗分次数超出范围', [
-                            'machine_code' => $this->machine->code,
-                            'wash_count' => $washCount,
-                            'max' => 999999,
-                        ]);
+                        MachineLogger::error($this->machine->toArray(), 'external_button', '[新版查询] 外部洗分次数超出范围 wash_count=' . $washCount . ' max=999999', $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                         break;
                     }
 
@@ -1900,14 +1729,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                             $this->external_open_count = $openCount;
                         }
 
-                        $this->log->info('[新版查询] 开分计数器变化', [
-                            'machine_code' => $this->machine->code,
-                            'old' => $oldOpenCount,
-                            'new' => $openCount,
-                            'increment' => $openCount - $oldOpenCount,
-                            'recorded' => $result['recorded'],
-                            'reason' => $result['reason'],
-                        ]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'external_button', '[新版查询] 开分计数器变化 old=' . $oldOpenCount . ' new=' . $openCount . ' reason=' . $result['reason'], ['machine_data' => $this->getMachineCache()]);
                     } else {
                         $this->external_open_count = $openCount;
                     }
@@ -1919,35 +1741,16 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                             $this->external_wash_count = $washCount;
                         }
 
-                        $this->log->info('[新版查询] 洗分计数器变化', [
-                            'machine_code' => $this->machine->code,
-                            'old' => $oldWashCount,
-                            'new' => $washCount,
-                            'increment' => $washCount - $oldWashCount,
-                            'recorded' => $result['recorded'],
-                            'reason' => $result['reason'],
-                        ]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'external_button', '[新版查询] 洗分计数器变化 old=' . $oldWashCount . ' new=' . $washCount . ' reason=' . $result['reason'], ['machine_data' => $this->getMachineCache()]);
                     } else {
                         $this->external_wash_count = $washCount;
                     }
 
                     $this->setActionVersion(self::EXTERNAL_BUTTON_QUERY);
 
-                    $this->log->info('[新版查询] 收到外部开洗分码表查询回复', [
-                        'machine_code' => $this->machine->code,
-                        'external_open_count' => $openCount,
-                        'external_wash_count' => $washCount,
-                        'old_open_count' => $oldOpenCount,
-                        'old_wash_count' => $oldWashCount,
-                        'msg' => $msg
-                    ]);
+                    MachineLogger::receiveResponse($this->machine->toArray(), self::QUERY_REPLY_EXTERNAL, '[新版查询] 收到外部开洗分码表查询回复 open=' . $openCount . ' wash=' . $washCount, $this->getMachineCache(), $msg);
                 } else {
-                    $this->log->error('[新版查询] 外部码表回复格式错误', [
-                        'machine_code' => $this->machine->code,
-                        'expected_length' => 20,
-                        'actual_length' => strlen($msg),
-                        'msg' => $msg
-                    ]);
+                    MachineLogger::error($this->machine->toArray(), 'external_button', '[新版查询] 外部码表回复格式错误 expected_len=20 actual_len=' . strlen($msg), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 }
                 break;
 
@@ -2099,42 +1902,22 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
         try {
             // 🔍 DEBUG: sendCmd 调用诊断
-            $this->log->info('[sendCmd] 开始执行指令', [
-                'machine_code' => $this->machine->code,
-                'cmd' => $cmd,
-                'data' => $data,
-                'source' => $source,
-                'source_id' => $source_id,
-                'uid' => $uid,
-            ]);
+            MachineLogger::sendCommand($this->machine->toArray(), $cmd, '[sendCmd] 开始执行指令', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : ($source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_SYSTEM));
 
             // 检查设备在线
             $isOnline = Gateway::isUidOnline($uid);
             if (!$isOnline) {
-                $this->log->error('[sendCmd] 设备离线', [
-                    'machine_code' => $this->machine->code,
-                    'uid' => $uid,
-                    'cmd' => $cmd,
-                ]);
+                MachineLogger::error($this->machine->toArray(), 'sendCmd', '[sendCmd] 设备离线 uid=' . $uid . ' cmd=' . $cmd, $this->getMachineCache(), MachineLogger::DIR_COMMAND);
                 throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
             }
 
             // 检查机台锁定（仅允许归0指令，其他操作须先 CHECK 解锁）
             if ($this->has_lock == 1 && $cmd != self::CHECK) {
-                $this->log->error('[sendCmd] 机台已锁定', [
-                    'machine_code' => $this->machine->code,
-                    'has_lock' => $this->has_lock,
-                    'cmd' => $cmd,
-                ]);
+                MachineLogger::error($this->machine->toArray(), 'sendCmd', '[sendCmd] 机台已锁定 has_lock=' . $this->has_lock . ' cmd=' . $cmd, $this->getMachineCache(), MachineLogger::DIR_COMMAND);
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
             }
 
-            $this->log->info('[sendCmd] 检查通过，准备发送指令', [
-                'machine_code' => $this->machine->code,
-                'cmd' => $cmd,
-                'is_online' => true,
-                'is_locked' => $this->has_lock == 1,
-            ]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, 'sendCmd', '[sendCmd] 检查通过，准备发送指令 cmd=' . $cmd, ['machine_data' => $this->getMachineCache()]);
 
             // 玩家操作时更新活动时间并累加保留时间
             if ($source == 'player') {
@@ -2269,13 +2052,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             ]);
         }
 
-        $this->log->info('[' . ($source === 'admin' ? '管理员操作' : '玩家操作') . '] 机台操作', [
-            'operator_type' => $source,
-            'operator_id' => $source_id,
-            'machine_code' => $this->machine->code,
-            'action' => $cmd,
-            'point' => $data,
-        ]);
+        MachineLogger::sendCommand($this->machine->toArray(), $cmd, ($source === 'admin' ? '管理员操作' : '玩家操作') . ' 机台操作', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : MachineLogger::SOURCE_PLAYER);
 
         return true;
     }
@@ -2354,14 +2131,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'win_number' => $this->win_number ?? null,                 // 累积转数（中洞对奖次数）D0 00 00
             ];
 
-            $this->log->info('[单向指令] 发送指令', [
-                'machine_code' => $this->machine->code,
-                'cmd' => $cmd,
-                'before_heartbeat_c0' => $beforeHeartbeatVersionC0,
-                'before_heartbeat_c6' => $beforeHeartbeatVersionC6,
-                'before_heartbeat_version' => $beforeHeartbeatVersion,
-                'before_state' => $beforeState,
-            ]);
+            MachineLogger::sendCommand($this->machine->toArray(), $cmd, '[单向指令] 发送指令', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : MachineLogger::SOURCE_PLAYER);
 
             // 发送指令
             Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd)));
@@ -2391,32 +2161,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     // 验证结果
                     $verification = $this->verifyOneWayCommandResult($cmd, $beforeState, $afterState);
 
-                    $this->log->info('[单向指令] 收到心跳确认', [
-                        'machine_code' => $this->machine->code,
-                        'cmd' => $cmd,
-                        'wait_time_ms' => $handleDuration / 1000,
-                        'verified' => $verification['verified'],
-                        'verification_details' => $verification['details'],
-                        'before_state' => $beforeState,
-                        'after_state' => $afterState,
-                    ]);
+                    MachineLogger::receiveResponse($this->machine->toArray(), $cmd, '[单向指令] 收到心跳确认 wait_ms=' . ($handleDuration / 1000) . ' verified=' . ($verification['verified'] ? 'true' : 'false'), $this->getMachineCache());
 
                     if (!$verification['verified']) {
-                        $this->log->warning('[单向指令] 验证失败', [
-                            'machine_code' => $this->machine->code,
-                            'cmd' => $cmd,
-                            'reason' => $verification['reason'],
-                            'before_state' => $beforeState,
-                            'after_state' => $afterState,
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), 'sendCmd', '[单向指令] 验证失败 cmd=' . $cmd . ' reason=' . $verification['reason'], $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                         throw new Exception('指令执行失败: ' . $verification['reason']);
                     }
 
-                    $this->log->info('[单向指令] 执行成功', [
-                        'machine_code' => $this->machine->code,
-                        'cmd' => $cmd,
-                        'wait_time_ms' => $handleDuration / 1000,
-                    ]);
+                    MachineLogger::receiveResponse($this->machine->toArray(), $cmd, '[单向指令] 执行成功 wait_ms=' . ($handleDuration / 1000), $this->getMachineCache());
 
                     // ✅ 设置指令版本号，让前端的 sendRawCmdWithReply 能检测到完成
                     $this->setActionVersion($cmd);
@@ -2441,11 +2193,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $handleDuration += $sleep;
             }
         } catch (Exception $e) {
-            $this->log->error('[单向指令] 执行失败', [
-                'machine_code' => $this->machine->code,
-                'cmd' => $cmd,
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'sendCmd', '[单向指令] 执行失败 cmd=' . $cmd . ': ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             throw new Exception(trans('machine_action_fail', [], 'message'));
         }
     }
@@ -2612,9 +2360,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $cmd .= $hexString;
         $s1 = self::calculateS1($cmd);
         $s2 = self::calculateS2($cmd, $s1);
-        $this->log->info('发送指令', [
-            $cmd . $s1 . $s2
-        ]);
+        MachineLogger::sendCommand($this->machine->toArray(), $cmd, '发送指令 cmd=' . $cmd . $s1 . $s2, $this->getMachineCache(), $cmd . $s1 . $s2);
         return $cmd . $s1 . $s2;
     }
 
@@ -2714,17 +2460,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
                     try {
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_POINT)));
-                        $this->log->info('[开分查询] 主动查询分数', [
-                            'machine_code' => $this->machine->code,
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'open_point', '[开分查询] 主动查询分数', [
                             'query_time' => $handleDuration / 1000 . 'ms',
                             'query_index' => $queryIndex + 1,
                         ]);
                         $queryIndex++;
                     } catch (\Exception $queryError) {
-                        $this->log->warning('[开分查询] 查询分数失败', [
-                            'machine_code' => $this->machine->code,
-                            'error' => $queryError->getMessage(),
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), 'open_point', '[开分查询] 查询分数失败', $this->getMachineCache(), MachineLogger::DIR_EVENT, $queryError->getMessage());
                     }
                 }
 
@@ -2733,8 +2475,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     $baseCmd = substr($cmd, 0, 4); // '46ca3f' → '46ca'
                     $this->setActionVersion($baseCmd);
 
-                    $this->log->info('[开分成功] 收到机台回复', [
-                        'machine_code' => $this->machine->code,
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'open_point', '[开分成功] 收到机台回复', [
                         'full_cmd' => $cmd,
                         'base_cmd' => $baseCmd,
                         'wait_time_ms' => $handleDuration / 1000,
@@ -2775,8 +2516,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $sendCmd = $this->createCmd($cmd . 'c1', 0);
 
             // ✅ 详细日志：记录下分请求
-            $this->log->info('[下分请求] 发送第一次握手', [
-                'machine_code' => $this->machine->code,
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, 'wash_point', '[下分请求] 发送第一次握手', [
                 'cmd' => $cmd,
                 'full_cmd' => $cmd . 'c1',
                 'hex_cmd' => $sendCmd,
@@ -2803,18 +2543,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
                     try {
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_POINT)));
-                        $this->log->info('[下分查询] 主动查询分数', [
-                            'machine_code' => $this->machine->code,
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'wash_point', '[下分查询] 主动查询分数', [
                             'query_time' => $handleDuration / 1000 . 'ms',
                             'query_index' => $queryIndex + 1,
                             'attempts' => $attempts,
                         ]);
                         $queryIndex++;
                     } catch (\Exception $queryError) {
-                        $this->log->warning('[下分查询] 查询分数失败', [
-                            'machine_code' => $this->machine->code,
-                            'error' => $queryError->getMessage(),
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), 'wash_point', '[下分查询] 查询分数失败', $this->getMachineCache(), MachineLogger::DIR_EVENT, $queryError->getMessage());
                     }
                 }
 
@@ -2823,8 +2559,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     $baseCmd = substr($cmd, 0, 4); // '46cb3f' → '46cb'
                     $this->setActionVersion($baseCmd);
 
-                    $this->log->info('[下分成功] 收到机台回复', [
-                        'machine_code' => $this->machine->code,
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'wash_point', '[下分成功] 收到机台回复', [
                         'full_cmd' => $cmd,
                         'base_cmd' => $baseCmd,
                         'wait_time_ms' => $handleDuration / 1000,
@@ -2836,8 +2571,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 if ($handleDuration >= $expirationTime) {
                     // ✅ 超时日志：记录详细状态
-                    $this->log->error('[下分超时] 等待机台回复超时', [
-                        'machine_code' => $this->machine->code,
+                    MachineLogger::error($this->machine->toArray(), 'wash_point', '[下分超时] 等待机台回复超时', $this->getMachineCache(), MachineLogger::DIR_EVENT, json_encode([
                         'cmd' => $cmd,
                         'wait_time_ms' => $handleDuration / 1000,
                         'check_count' => $checkCount,
@@ -2845,7 +2579,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         'before_action_time' => $beforeActionTime,
                         'current_action_time' => $actionTime,
                         'cache_key' => $this->cacheDataKey . '_action_' . $cmd,
-                    ]);
+                    ]));
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
 
@@ -2857,24 +2591,22 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // ✅ 重试日志
             if ($attempts < $maxRetries) {
-                $this->log->warning('[下分重试] 准备重试', [
-                    'machine_code' => $this->machine->code,
+                MachineLogger::warning($this->machine->toArray(), 'wash_point', '[下分重试] 准备重试', $this->getMachineCache(), MachineLogger::DIR_EVENT, json_encode([
                     'cmd' => $cmd,
                     'attempts' => $attempts,
                     'max_retries' => $maxRetries,
                     'error' => $e->getMessage(),
-                ]);
+                ]));
                 usleep(100000); // 重试前等待100ms
                 $this->washPoint($uid, $cmd, $data, $source, $source_id, $attempts);
             } else {
                 // ✅ 最终失败日志
-                $this->log->error('[下分失败] 重试次数已用尽', [
-                    'machine_code' => $this->machine->code,
+                MachineLogger::error($this->machine->toArray(), 'wash_point', '[下分失败] 重试次数已用尽', $this->getMachineCache(), MachineLogger::DIR_EVENT, json_encode([
                     'cmd' => $cmd,
                     'attempts' => $attempts,
                     'max_retries' => $maxRetries,
                     'final_error' => $e->getMessage(),
-                ]);
+                ]));
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
         }
