@@ -45,54 +45,6 @@ $handlers = [
             ]
         ],
     ],
-    'slot_machine' => [
-        'handlers' => [
-            [
-                'class' => Monolog\Handler\RotatingFileHandler::class,
-                'constructor' => [
-                    runtime_path() . '/logs/slot_machine_log.log',
-                    2, //$maxFiles (优化：3天 → 2天)
-                    Monolog\Logger::INFO, // 优化：DEBUG → INFO，减少冗余日志
-                ],
-                'formatter' => [
-                    'class' => Monolog\Formatter\LineFormatter::class,
-                    'constructor' => [null, 'Y-m-d H:i:s', true],
-                ],
-            ]
-        ],
-    ],
-    'jackpot_machine' => [
-        'handlers' => [
-            [
-                'class' => Monolog\Handler\RotatingFileHandler::class,
-                'constructor' => [
-                    runtime_path() . '/logs/jackpot_machine_log.log',
-                    2, //$maxFiles (优化：3天 → 2天)
-                    Monolog\Logger::INFO, // 优化：DEBUG → WARNING
-                ],
-                'formatter' => [
-                    'class' => Monolog\Formatter\LineFormatter::class,
-                    'constructor' => [null, 'Y-m-d H:i:s', true],
-                ],
-            ]
-        ],
-    ],
-    'song_slot_machine' => [
-        'handlers' => [
-            [
-                'class' => Monolog\Handler\RotatingFileHandler::class,
-                'constructor' => [
-                    runtime_path() . '/logs/song_slot_machine.log',
-                    2, //$maxFiles (优化：3天 → 2天)
-                    Monolog\Logger::INFO, // 临时改为 INFO 查看调试日志（原 WARNING）
-                ],
-                'formatter' => [
-                    'class' => Monolog\Formatter\LineFormatter::class,
-                    'constructor' => [null, 'Y-m-d H:i:s', true],
-                ],
-            ]
-        ],
-    ],
     'national_promoter' => [
         'handlers' => [
             [
@@ -511,58 +463,6 @@ $handlers = [
             ]
         ],
     ],
-    'song_jackpot_machine' => [
-        'handlers' => [
-            [
-                'class' => Monolog\Handler\RotatingFileHandler::class,
-                'constructor' => [
-                    runtime_path() . '/logs/song_jackpot_machine.log',
-                    2, //$maxFiles (优化：3天 → 2天)
-                    Monolog\Logger::WARNING, // 优化：DEBUG → WARNING
-                ],
-                'formatter' => [
-                    'class' => Monolog\Formatter\LineFormatter::class,
-                    'constructor' => [null, 'Y-m-d H:i:s', true],
-                ],
-            ]
-        ],
-    ],
-    // ✅ 线下版钢珠机日志通道（2026-09-01）
-    // 用于记录外部按钮操作、B5/B7协议解析、计数器变化等详细信息
-    'song_offline_jackpot_machine' => [
-        'handlers' => [
-            [
-                'class' => Monolog\Handler\RotatingFileHandler::class,
-                'constructor' => [
-                    runtime_path() . '/logs/song_offline_jackpot_machine.log',
-                    3, //$maxFiles（保留3天，便于追踪外部按钮操作历史）
-                    Monolog\Logger::INFO, // INFO 级别，记录关键操作和异常
-                ],
-                'formatter' => [
-                    'class' => Monolog\Formatter\LineFormatter::class,
-                    'constructor' => [null, 'Y-m-d H:i:s', true],
-                ],
-            ]
-        ],
-    ],
-    // ✅ 线下版Slot机日志通道（2026-09-09）
-    // 用于记录外部按钮操作、心跳协议解析、开洗分操作等详细信息
-    'song_offline_slot_machine' => [
-        'handlers' => [
-            [
-                'class' => Monolog\Handler\RotatingFileHandler::class,
-                'constructor' => [
-                    runtime_path() . '/logs/song_offline_slot_machine.log',
-                    3, //$maxFiles（保留3天，便于追踪外部按钮操作历史）
-                    Monolog\Logger::INFO, // INFO 级别，记录关键操作和异常
-                ],
-                'formatter' => [
-                    'class' => Monolog\Formatter\LineFormatter::class,
-                    'constructor' => [null, 'Y-m-d H:i:s', true],
-                ],
-            ]
-        ],
-    ],
     'game_lottery' => [
         'handlers' => [
             [
@@ -831,24 +731,6 @@ $handlers = [
                     runtime_path() . '/logs/game_interaction_log.log',
                     1, //$maxFiles
                     Monolog\Logger::DEBUG,
-                ],
-                'formatter' => [
-                    'class' => Monolog\Formatter\LineFormatter::class,
-                    'constructor' => [null, 'Y-m-d H:i:s', true],
-                ],
-            ]
-        ],
-    ],
-    // 机台开分/洗分操作专用日志（与 gk_api 共享同一业务流程）
-    // 记录：指令接收、执行过程、机台状态更新
-    'machine_operations' => [
-        'handlers' => [
-            [
-                'class' => Monolog\Handler\RotatingFileHandler::class,
-                'constructor' => [
-                    runtime_path() . '/logs/machine_operations.log',
-                    3, // 保留3天（优化：7天 → 3天）
-                    Monolog\Logger::INFO, // 优化：DEBUG → INFO
                 ],
                 'formatter' => [
                     'class' => Monolog\Formatter\LineFormatter::class,
