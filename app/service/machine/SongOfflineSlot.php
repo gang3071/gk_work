@@ -3848,18 +3848,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private function logFieldChange(string $context, string $field, $oldValue, $newValue, string $reason = ''): void
     {
         if ($oldValue !== $newValue) {
-            $logData = [
-                'machine_code' => $this->machine->code,
-                'field' => $field,
-                'old' => $oldValue,
-                'new' => $newValue,
+            $extra = [
+                'machine_data' => $this->getMachineCache(),
+                'field_change' => [
+                    'field' => $field,
+                    'old' => $oldValue,
+                    'new' => $newValue,
+                    'reason' => $reason,
+                ],
             ];
 
-            if ($reason) {
-                $logData['reason'] = $reason;
-            }
-
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'field_update', "[{$context}] 字段更新", ['machine_data' => $this->getMachineCache()]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'field_update', "[{$context}] 字段更新", $extra);
         }
     }
 
@@ -3873,11 +3872,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function logOperation(string $context, string $operation, array $data = [], bool $success = true): void
     {
-        $level = $success ? 'info' : 'error';
         $status = $success ? '成功' : '失败';
+        $extra = ['machine_data' => $this->getMachineCache()];
+        if (!empty($data)) {
+            $extra['operation_data'] = $data;
+        }
 
         if ($success) {
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'operation', "[{$context}] {$operation}{$status}", ['machine_data' => $this->getMachineCache()]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'operation', "[{$context}] {$operation}{$status}", $extra);
         } else {
             MachineLogger::error($this->machine->toArray(), 'operation', "[{$context}] {$operation}{$status}", $this->getMachineCache(), MachineLogger::DIR_EVENT);
         }
