@@ -136,6 +136,19 @@ class MachineLogger
             // === 协议调试（可选，CRC 错误等场景传入）===
             'raw_send' => (string)($extra['raw_send'] ?? ''),  // 发送的原始 hex 字节
             'raw_recv' => (string)($extra['raw_recv'] ?? ''),  // 收到的原始 hex 字节
+
+            // === 调用方自定义扩展字段（如 field_change、operation_data 等）===
+            // 将 extra 中未被上方消费的键序列化为 JSON，供 ClickHouse 按需解析
+            'extra_data' => (function () use ($extra): string {
+                static $knownKeys = [
+                    'machine_data', 'player_id', 'player_uuid',
+                    'operator_id', 'operator_name',
+                    'has_problem', 'problem_desc',
+                    'raw_send', 'raw_recv',
+                ];
+                $custom = array_diff_key($extra, array_flip($knownKeys));
+                return empty($custom) ? '' : (json_encode($custom, JSON_UNESCAPED_UNICODE) ?: '');
+            })(),
         ];
 
         match ($logStatus) {
