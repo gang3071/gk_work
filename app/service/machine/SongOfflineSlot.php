@@ -1834,6 +1834,14 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
         $pollInterval = 100000;        // 100ms 轮询间隔
 
+        // 开分前发 EA DE 清除上次残留的 D4 状态，避免 CA 超时时误读到旧 D2
+        $dePreCmd = $this->createCmd(self::ALL_DOWN);
+        Gateway::sendToUid($uid, hex2bin($dePreCmd));
+        $this->log->info('[收账小卡-上分] 开分前EA DE清除机台历史状态', [
+            'machine_code' => $this->machine->code,
+        ]);
+        usleep(200000); // 等 200ms 让机台处理完 EA DE
+
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             // 重试前先查 EA D4，确认机台未在开分中才允许重发 A5
             // 防止上一轮 CA 因粘包延迟被漏判，机台已执行但被误判为未执行后重发导致重复上分
@@ -2148,19 +2156,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 防止B7心跳因 _wash_confirmed 持续suppress _point 导致后续下分读到0
         \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
 
-        // EA DE 前先处理本次开分的回补退款，防止 EA DE 清零 retry_count 后退款遗失
-        if ($retryCount > 0) {
-            $this->handleRetryRefund($retryCount, (int)($this->return_count ?? 0));
-            $this->return_count = $retryCount;
-        }
-
-        // 开分完成后发 EA DE 清除机台 D4 状态，
+        // 开分流程结束后发 EA DE 清除机台 D4 状态，
         // 避免下次开分 CA 超时查询 EA D4 时误读到本次残留的 D2（开分完成）
         $deCmd = $this->createCmd(self::ALL_DOWN);
         Gateway::sendToUid($uid, hex2bin($deCmd));
-        $this->log->info('[收账小卡-上分] EA DE 清除机台历史状态', [
+        $this->log->info('[收账小卡-上分] 开分完成EA DE清除机台历史状态', [
             'machine_code' => $this->machine->code,
-            'retry_count'  => $retryCount,
         ]);
 
         if ($source === 'admin') {
