@@ -2587,10 +2587,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             ]);
         }
 
-        // 等待心跳最终确认机台 B1 寄存器物理归零
-        // _wash_confirmed 被心跳删除 = 机台真实回报 card_score=0
-        $hbMaxWait = 8000000;  // 最多等 8s（机台通常 1~3 次心跳即归零）
-        $hbPoll    = 200000;   // 每 200ms 轮询一次
+        // 等待心跳最终确认机台 B1 寄存器物理归零，最多等 5s
+        $hbMaxWait = 5000000;
+        $hbPoll    = 200000;
         $hbWaited  = 0;
         $hbZeroed  = false;
         while ($hbWaited < $hbMaxWait) {
@@ -2607,9 +2606,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             'waited_ms'    => $hbWaited / 1000,
         ]);
         if (!$hbZeroed) {
-            // 超时未收到归零心跳，强制清除保护标记，避免后续开分被长期 suppress
             \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
-            $this->log->warning('[收账小卡-下分] 心跳归零超时，强制清除 wash_confirmed', [
+            $this->log->warning('[收账小卡-下分] 心跳归零超时（5s），强制清除 wash_confirmed', [
                 'machine_code' => $this->machine->code,
             ]);
         }
