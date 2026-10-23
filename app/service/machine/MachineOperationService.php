@@ -708,7 +708,27 @@ class MachineOperationService
                 ];
 
             case 'ead4': // 查询机台情况
-                return $this->getMachineCurrentData();
+                $d4Raw = \support\Cache::get($service->cacheDataKey . '_last_status_fields');
+                $d4Fields = $d4Raw ? (json_decode($d4Raw, true) ?: []) : [];
+                $openStatus = $d4Fields['open_status'] ?? '';
+                $washStatus = $d4Fields['wash_status'] ?? '';
+                return [
+                    'open_status'      => strtoupper($openStatus),
+                    'open_status_text' => match($openStatus) {
+                        'd2' => '開分完成',
+                        'd3' => '開分中',
+                        default => $openStatus ?: '-',
+                    },
+                    'wash_status'      => strtoupper($washStatus),
+                    'wash_status_text' => match($washStatus) {
+                        'd6' => '洗分完成/空閒',
+                        'd7' => '洗分中',
+                        default => $washStatus ?: '-',
+                    },
+                    'wash_score'       => (int)($d4Fields['wash_score'] ?? 0),
+                    'retry_count'      => (int)($d4Fields['retry_count'] ?? 0),
+                    'turn_count'       => (int)($d4Fields['turn_count'] ?? 0),
+                ];
 
             case 'eade': // 清除账目
                 return [
