@@ -95,7 +95,7 @@ class SongJackpot extends MachineServices implements BaseMachine
 
     public $expirationTime = 5000000; // 3秒内返回
 
-    public $log = null;
+
 
     public function __construct(Machine $machine, $lang = 'zh_CN')
     {
@@ -146,7 +146,6 @@ class SongJackpot extends MachineServices implements BaseMachine
         ];
         $this->lang = $lang;
         $this->cacheData = $this->getMachineCache();
-        $this->log = Log::channel('song_jackpot_machine');
     }
 
     /**
@@ -478,10 +477,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                         $isTurnAction = Cache::get('turn_action_flag_' . $this->machine->id);
                         // 如果检测到上转下转标记，跳过本次累加
                         if ($isTurnAction) {
-                            $this->log->info('检测到上转/下转操作标记，跳过本次累加', [
-                                'machine_code' => $this->machine->code,
-                                'turn_delta' => $turnDelta
-                            ]);
+                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '检测到上转/下转操作标记，跳过本次累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
                         }
                         // turn是剩余转数，负增量说明玩家消耗了转数（正常游玩）
                         // 但需要过滤大幅减少（可能是下转操作）
@@ -494,28 +490,16 @@ class SongJackpot extends MachineServices implements BaseMachine
                             // ⚠️ CRITICAL：玩家消耗转数说明在游戏，更新 last_play_time
                             $this->last_play_time = time();
                         } else if (bccomp($turnDelta, '-10', 2) < 0) {
-                            $this->log->info('turn大幅减少，可能是下转操作，不累加', [
-                                'machine_code' => $this->machine->code,
-                                'turn_delta' => $turnDelta
-                            ]);
+                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', 'turn大幅减少，可能是下转操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
                         } else if (bccomp($turnDelta, '0', 2) > 0) {
-                            $this->log->info('turn增加，可能是上转操作，不累加', [
-                                'machine_code' => $this->machine->code,
-                                'turn_delta' => $turnDelta
-                            ]);
+                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', 'turn增加，可能是上转操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
                         }
                     } else {
-                        $this->log->info('没有游戏中的玩家，跳过turn累加', [
-                            'machine_code' => $this->machine->code,
-                            'gaming_user_id' => $gamingUserId
-                        ]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '没有游戏中的玩家，跳过turn累加 gaming_user_id=' . $gamingUserId, ['machine_data' => $this->getMachineCache()]);
                     }
                 } else {
                     if (!empty($gamingUserId)) {
-                        $this->log->info('开奖状态中，跳过turn累加', [
-                            'machine_code' => $this->machine->code,
-                            'reward_status' => $nowRewardStatus
-                        ]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '开奖状态中，跳过turn累加 reward_status=' . $nowRewardStatus, ['machine_data' => $this->getMachineCache()]);
                     }
                 }
                 if ($nowTurn <= 0 && !empty($gamingUserId)) {
@@ -675,15 +659,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                                 // winNumber 在正常游戏中不应该突然变化超过100
                                 // 也不应该大幅减少（除非是机器重启，但那样应该是从0开始）
                                 if (abs($delta) > 100) {
-                                    $this->log->error('检测到异常的winNumber值，拒绝更新', [
-                                        'machine_code' => $this->machine->code,
-                                        'old_win_number' => $oldWinNumber,
-                                        'new_win_number' => $winNumber,
-                                        'delta' => $delta,
-                                        'raw_msg' => $msg,
-                                        'extracted_hex' => substr($msg, 4, 6),
-                                        'command' => $action ?? $fun
-                                    ]);
+                                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '检测到异常winNumber值，拒绝更新 old=' . $oldWinNumber . ' new=' . $winNumber . ' delta=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
                                     // 不更新 win_number，保持原值
                                     // 但仍然设置 action version 以免阻塞等待
                                 } else {
@@ -703,14 +679,7 @@ class SongJackpot extends MachineServices implements BaseMachine
             }
 
         } catch (\Exception $e) {
-            $this->log->error('消息处理错误: ', [
-                $e->getMessage(),
-                [
-                    'msg' => $msg,
-                    'action' => $fun ?? '',
-                    'machine_code' => $this->machine->code,
-                ]
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'message_error', '消息处理错误: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
             return false;
         }
 

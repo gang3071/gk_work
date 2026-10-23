@@ -83,7 +83,6 @@ class SongSlot extends MachineServices implements BaseMachine
 
     public $expirationTime = 5000000; // 3秒内返回
 
-    public $log = null;
 
     public function __construct(Machine $machine, $lang = 'zh_CN')
     {
@@ -127,7 +126,6 @@ class SongSlot extends MachineServices implements BaseMachine
         ];
         $this->lang = $lang;
         $this->cacheData = $this->getMachineCache();
-        $this->log = Log::channel('song_slot_machine');
     }
 
     /**
@@ -602,14 +600,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     break;
             }
         } catch (\Exception $e) {
-            $this->log->error('消息处理错误: ', [
-                $e->getMessage(),
-                [
-                    'msg' => $msg,
-                    'action' => $fun ?? '',
-                    'machine_code' => $this->machine->code
-                ]
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'message_error', '消息处理错误: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
             return false;
         }
 
@@ -811,18 +802,20 @@ class SongSlot extends MachineServices implements BaseMachine
         }
         // ✅ 优化：精简日志，只记录关键信息，移除冗余的 machine_data
         $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
-        $this->log->info($operatorType . '机台操作', [
-            'operator_type' => $source,
-            'operator_id' => $source_id,
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'player_id' => $this->machine->gamingPlayer->id ?? 0,
-            'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',
-            'action' => $cmd,
-            'action_desc' => $this->getDescription($cmd),
-            'point' => $data,
-            // 移除 machine_data（几千字节的冗余数据）
-        ]);
+        MachineLogger::log(
+            $this->machine->toArray(),
+            $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
+            MachineLogger::STATUS_NORMAL,
+            MachineLogger::DIR_COMMAND,
+            'sendCmd',
+            $operatorType . '机台操作 cmd=' . $cmd,
+            [
+                'player_id'   => $this->machine->gamingPlayer->id ?? 0,
+                'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',
+                'operator_id' => $source_id,
+                'machine_data' => $this->getMachineCache(),
+            ]
+        );
 
         return true;
     }
@@ -866,10 +859,7 @@ class SongSlot extends MachineServices implements BaseMachine
             // 推送格式见 pushAutoStatus() 方法
 
         } catch (Exception $e) {
-            $this->log->error('开启自动指令发送失败', [
-                'machine_code' => $this->machine->code,
-                'error' => $e->getMessage()
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'auto_cmd', '开启自动指令发送失败: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             throw new Exception(trans('machine_action_fail', [], 'message'));
         }
     }
@@ -1002,10 +992,7 @@ class SongSlot extends MachineServices implements BaseMachine
             // 推送格式见 pushAutoStatus() 方法
 
         } catch (Exception $e) {
-            $this->log->error('关闭自动指令发送失败', [
-                'machine_code' => $this->machine->code,
-                'error' => $e->getMessage()
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'auto_cmd', '关闭自动指令发送失败: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             throw new Exception(trans('machine_action_fail', [], 'message'));
         }
     }
@@ -1230,7 +1217,7 @@ class SongSlot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code], 'error' => $e->getMessage()]);
+                MachineLogger::error($this->machine->toArray(), 'action_timeout', '指令超时异常: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
                 throw new Exception(trans('machine_connect_timeout', [], 'message'));
             }
             usleep(50000);
