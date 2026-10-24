@@ -293,7 +293,7 @@ class MachineLogger
             self::STATUS_NORMAL,
             self::DIR_RESPONSE,
             self::ACTION_HEARTBEAT,
-            '心跳状态变化',
+            '心跳狀態變化',
             ['machine_data' => $machineData]
         );
     }

@@ -1094,7 +1094,7 @@ class MachineOperationService
                 // 移分OFF（仅双美斯洛）
                 if ($controlType === Machine::CONTROL_TYPE_MEI) {
                     $this->sendCmd($this->services::MOVE_POINT_OFF);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_OFF, '發送 MOVE_POINT_OFF (雙美)', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_OFF, '發送 MOVE_POINT_OFF (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
                 break;
 
@@ -1103,10 +1103,10 @@ class MachineOperationService
                 // 先关闭移分，再发送压分指令
                 if ($controlType === Machine::CONTROL_TYPE_MEI) {
                     $this->sendCmd($this->services::MOVE_POINT_OFF);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_OFF, '發送 MOVE_POINT_OFF (雙美)', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_OFF, '發送 MOVE_POINT_OFF (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
 
                     $this->sendCmd($this->services::PRESSURE);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::PRESSURE, '發送 PRESSURE (雙美)', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::PRESSURE, '發送 PRESSURE (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
                 break;
 
@@ -1114,13 +1114,13 @@ class MachineOperationService
                 // 条件1: 移分开关（仅双美斯洛）
                 if ($controlType === Machine::CONTROL_TYPE_MEI && $movePoint == 0) {
                     $this->sendCmd($this->services::MOVE_POINT_ON);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_ON, '發送 MOVE_POINT_ON (雙美)', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_ON, '發送 MOVE_POINT_ON (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
 
                 // 条件2: 压分读取（仅双美斯洛）
                 if ($controlType === Machine::CONTROL_TYPE_MEI) {
                     $this->sendCmd($this->services::PRESSURE);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::PRESSURE, '發送 PRESSURE (雙美)', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::PRESSURE, '發送 PRESSURE (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
 
                 // 条件3: 开始指令（除线下小淞外的斯洛机）
@@ -1130,9 +1130,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::START);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::START, '發送 START', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::START, '發送 START', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 START 指令', [], MachineLogger::DIR_COMMAND);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 START 指令', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1140,7 +1140,7 @@ class MachineOperationService
                 // 条件1: 移分开关（仅双美斯洛）
                 if ($controlType === Machine::CONTROL_TYPE_MEI && $movePoint == 0) {
                     $this->sendCmd($this->services::MOVE_POINT_ON);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_ON, '發送 MOVE_POINT_ON (雙美)', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_ON, '發送 MOVE_POINT_ON (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
 
                 // 条件2: 开启自动出分（除线下小淞外的斯洛机）
@@ -1150,9 +1150,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::OUT_ON);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::OUT_ON, '發送 OUT_ON', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::OUT_ON, '發送 OUT_ON', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 OUT_ON 指令', [], MachineLogger::DIR_COMMAND);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 OUT_ON 指令', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1164,9 +1164,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::OUT_OFF);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::OUT_OFF, '發送 OUT_OFF', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::OUT_OFF, '發送 OUT_OFF', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 OUT_OFF 指令', [], MachineLogger::DIR_COMMAND);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 OUT_OFF 指令', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1175,11 +1175,11 @@ class MachineOperationService
                 if ($controlType === Machine::CONTROL_TYPE_SONG) {
                     // 小淞：REWARD_SWITCH
                     $this->sendCmd($this->services::REWARD_SWITCH);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::REWARD_SWITCH, '發送 REWARD_SWITCH (小淞)', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::REWARD_SWITCH, '發送 REWARD_SWITCH (小淞)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
                     // 双美：OUTPUT + U1_PULSE
                     $this->sendCmd($this->services::OUTPUT . $this->services::U1_PULSE);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::OUTPUT . $this->services::U1_PULSE, '發送 OUTPUT+U1_PULSE (雙美)', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::OUTPUT . $this->services::U1_PULSE, '發送 OUTPUT+U1_PULSE (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
                 break;
 
@@ -1191,9 +1191,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::STOP_ONE);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::STOP_ONE, '發送 STOP_ONE', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::STOP_ONE, '發送 STOP_ONE', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 STOP_ONE 指令', [], MachineLogger::DIR_COMMAND);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 STOP_ONE 指令', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1205,9 +1205,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::STOP_TWO);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::STOP_TWO, '發送 STOP_TWO', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::STOP_TWO, '發送 STOP_TWO', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 STOP_TWO 指令', [], MachineLogger::DIR_COMMAND);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 STOP_TWO 指令', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1219,9 +1219,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::STOP_THREE);
-                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::STOP_THREE, '發送 STOP_THREE', [], '', MachineLogger::SOURCE_ADMIN);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::STOP_THREE, '發送 STOP_THREE', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 STOP_THREE 指令', [], MachineLogger::DIR_COMMAND);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞機台不支援 STOP_THREE 指令', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1249,13 +1249,13 @@ class MachineOperationService
         switch ($action) {
             case 'reward_switch':
                 $this->sendCmd($this->services::REWARD_SWITCH);
-                MachineLogger::sendCommand($this->machine->toArray(), $this->services::REWARD_SWITCH, '發送 REWARD_SWITCH', [], '', MachineLogger::SOURCE_ADMIN);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::REWARD_SWITCH, '發送 REWARD_SWITCH', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'plc_start_or_stop':
                 // 自动上转（开始游戏）
                 $this->sendCmd($this->services::AUTO_UP_TURN);
-                MachineLogger::sendCommand($this->machine->toArray(), $this->services::AUTO_UP_TURN, '發送 AUTO_UP_TURN', [], '', MachineLogger::SOURCE_ADMIN);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::AUTO_UP_TURN, '發送 AUTO_UP_TURN', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'plc_push_5hz':
@@ -1267,7 +1267,7 @@ class MachineOperationService
                     // 小淞：直接发送 PUSH_THREE
                     $this->sendCmd($this->services::PUSH_THREE);
                 }
-                MachineLogger::sendCommand($this->machine->toArray(), $this->services::PUSH_THREE, '發送 PUSH_THREE（連發）', [], '', MachineLogger::SOURCE_ADMIN);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::PUSH_THREE, '發送 PUSH_THREE（連發）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'plc_push_stop':
@@ -1279,31 +1279,31 @@ class MachineOperationService
                     // 小淞：PUSH_ONE（单发 PUSH）
                     $this->sendCmd($this->services::PUSH_ONE);
                 }
-                MachineLogger::sendCommand($this->machine->toArray(), 'push_stop', '發送 PUSH_STOP 指令', [], '', MachineLogger::SOURCE_ADMIN);
+                MachineLogger::sendCommand($this->machine->toArray(), 'push_stop', '發送 PUSH_STOP 指令', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'plc_down_turn':
                 // 下转一次（转数转分数）
                 $this->sendCmd($this->services::TURN_TO_POINT);
-                MachineLogger::sendCommand($this->machine->toArray(), $this->services::TURN_TO_POINT, '發送 TURN_TO_POINT（下轉一次）', [], '', MachineLogger::SOURCE_ADMIN);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::TURN_TO_POINT, '發送 TURN_TO_POINT（下轉一次）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'all_down_turn':
                 // 全部下转
                 $this->sendCmd($this->services::TURN_DOWN_ALL);
-                MachineLogger::sendCommand($this->machine->toArray(), $this->services::TURN_DOWN_ALL, '發送 TURN_DOWN_ALL（全部下轉）', [], '', MachineLogger::SOURCE_ADMIN);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::TURN_DOWN_ALL, '發送 TURN_DOWN_ALL（全部下轉）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'plc_up_turn_100':
                 // 上转一次（分数转转数）
                 $this->sendCmd($this->services::POINT_TO_TURN);
-                MachineLogger::sendCommand($this->machine->toArray(), $this->services::POINT_TO_TURN, '發送 POINT_TO_TURN（上轉一次）', [], '', MachineLogger::SOURCE_ADMIN);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::POINT_TO_TURN, '發送 POINT_TO_TURN（上轉一次）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'all_up_turn':
                 // 全部上转
                 $this->sendCmd($this->services::TURN_UP_ALL);
-                MachineLogger::sendCommand($this->machine->toArray(), $this->services::TURN_UP_ALL, '發送 TURN_UP_ALL（全部上轉）', [], '', MachineLogger::SOURCE_ADMIN);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::TURN_UP_ALL, '發送 TURN_UP_ALL（全部上轉）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             default:
