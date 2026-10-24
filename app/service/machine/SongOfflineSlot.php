@@ -1448,6 +1448,20 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 Cache::set($this->cacheDataKey . '_pending_cmd', $this->originalCmd, 60);
             }
 
+            $cmdActionMap = [
+                self::LOGIN       => 'send_login',
+                self::LOGOUT      => 'send_logout',
+                self::READ_SCORE  => 'send_read_score',
+                self::READ_BET    => 'send_read_bet',
+                self::READ_STATUS => 'send_read_status',
+                self::ALL_DOWN    => 'send_all_down',
+                self::SSR_SIGNAL  => 'send_ssr_signal',
+                self::CHECK       => 'send_check',
+                self::OPEN_ANY_POINT => 'send_open',
+                self::WASH_POINT  => 'send_wash',
+            ];
+            $cmdAction = $cmdActionMap[$cmd] ?? 'send_cmd';
+
             switch ($cmd) {
                 case self::LOGIN:           // 登入（EA C3）
                 case self::LOGOUT:          // 登出（EA C5）
@@ -1458,7 +1472,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 case self::SSR_SIGNAL:      // SSR讯号（EA EC）
                 // ✅ 使用 createCmd 添加校验和
                     $fullCmd = $this->createCmd($cmd);
-                    MachineLogger::sendCommand($this->machine->toArray(), strtoupper($cmd), '[收账小卡] 发送指令', $this->getMachineCache(), strtoupper($fullCmd));
+                    MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '[收账小卡] 发送指令', $this->getMachineCache(), strtoupper($fullCmd));
                     Gateway::sendToUid($uid, hex2bin($fullCmd));
                     break;
 
@@ -1482,7 +1496,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             MachineLogger::error($this->machine->toArray(), 'ca_send', '[收账小卡] 发送指令失败 cmd='.$cmd, $this->getMachineCache());
             throw $e;
         }
-        MachineLogger::sendCommand($this->machine->toArray(), strtoupper($cmd), '[收账小卡-开机] 发送指令', $this->getMachineCache());
+        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '[收账小卡] 指令已发出', $this->getMachineCache());
         return true;
     }
 
