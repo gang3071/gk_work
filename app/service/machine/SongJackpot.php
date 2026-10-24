@@ -491,11 +491,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                             $this->last_play_time = time();
                         } else if (bccomp($turnDelta, '-10', 2) < 0) {
                             MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', 'turn大幅減少，可能是下轉操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
-                        } else if (bccomp($turnDelta, '0', 2) > 0) {
-                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', 'turn增加，可能是上轉操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
                         }
-                    } else {
-                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '沒有遊戲中的玩家，跳過turn累加 gaming_user_id=' . $gamingUserId, ['machine_data' => $this->getMachineCache()]);
                     }
                 } else {
                     if (!empty($gamingUserId)) {

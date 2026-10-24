@@ -1403,7 +1403,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if (!Gateway::isUidOnline($uid)) {
                 throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
             }
-            MachineLogger::warning($this->machine->toArray(), 'ca_send', '[收賬小卡-發送] 發送指令 cmd='.strtoupper($cmd), $this->getMachineCache());
             // 锁定时仅允许归0指令（E1错误/上分5次失败后需 CHECK 归0解锁）
             if ($this->has_lock == 1 && $cmd !== self::CHECK) {
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
@@ -1496,7 +1495,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             MachineLogger::error($this->machine->toArray(), 'ca_send', '[收賬小卡] 發送指令失敗 cmd='.$cmd, $this->getMachineCache());
             throw $e;
         }
-        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '[收賬小卡] 指令已發出', $this->getMachineCache());
         return true;
     }
 

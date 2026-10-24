@@ -629,7 +629,7 @@ class Slot extends MachineServices implements BaseMachine
             default:
                 throw new Exception('命令錯誤');
         }
-        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '組裝指令', $this->getMachineCache(), $cmd);
+        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '已組裝指令準備發送', $this->getMachineCache(), $cmd);
         return $cmd;
     }
 

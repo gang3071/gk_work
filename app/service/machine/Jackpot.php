@@ -357,7 +357,6 @@ class Jackpot extends MachineServices implements BaseMachine
      */
     public function jackPotCmd(string $msg): bool
     {
-        MachineLogger::receiveResponse($this->machine->toArray(), 'message_receive', '接收指令', $this->getMachineCache(), $msg);
         try {
             jackPotCheckCRC8($msg); // 检查crc8
             $fun = substr($msg, 2, 2);

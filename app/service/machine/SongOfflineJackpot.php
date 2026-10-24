@@ -1401,7 +1401,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'turn_change', '[轉數累加] turn大幅減少，可能是下轉操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
         } else if (bccomp($turnDelta, '0', 2) > 0) {
             // turn 增加：可能是上转操作
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'turn_change', '[轉數累加] turn增加，可能是上轉操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
         }
 
         // 累加彩池：win_number 增加时投递 lottery-machine 队列（对齐 SongJackpot 在线版）
@@ -1554,9 +1553,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function handleActionReply(string $msg, string $action, int $gamingUserId): bool
     {
-        // ✅ 记录进入handleActionReply
-        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'action_reply', '[動作回覆] 處理機台動作回覆 action=' . $action . ' len=' . strlen($msg), ['machine_data' => $this->getMachineCache()]);
-
         switch ($action) {
             // 上分回复
             case self::OPEN_ANY_POINT:
@@ -1902,22 +1898,20 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $cmdAction = $this->getCmdActionName($cmd);
 
         try {
-            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '[sendCmd] 開始執行指令', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : ($source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_SYSTEM));
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, 'cmd=' . $cmd, $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : ($source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_SYSTEM));
 
             // 检查设备在线
             $isOnline = Gateway::isUidOnline($uid);
             if (!$isOnline) {
-                MachineLogger::error($this->machine->toArray(), 'sendCmd', '[sendCmd] 裝置離線 uid=' . $uid . ' cmd=' . $cmd, $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+                MachineLogger::error($this->machine->toArray(), 'sendCmd', '裝置離線 uid=' . $uid, $this->getMachineCache(), MachineLogger::DIR_COMMAND);
                 throw new Exception(trans('machine_has_offline', ['{code}' => $this->machine->code], 'message'));
             }
 
             // 检查机台锁定（仅允许归0指令，其他操作须先 CHECK 解锁）
             if ($this->has_lock == 1 && $cmd != self::CHECK) {
-                MachineLogger::error($this->machine->toArray(), 'sendCmd', '[sendCmd] 機台已鎖定 has_lock=' . $this->has_lock . ' cmd=' . $cmd, $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+                MachineLogger::error($this->machine->toArray(), 'sendCmd', '機台已鎖定 cmd=' . $cmd, $this->getMachineCache(), MachineLogger::DIR_COMMAND);
                 throw new Exception(trans('machine_lock', ['{code}' => $this->machine->code], 'message'));
             }
-
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, 'sendCmd', '[sendCmd] 檢查通過，準備發送指令 cmd=' . $cmd, ['machine_data' => $this->getMachineCache()]);
 
             // 玩家操作时更新活动时间并累加保留时间
             if ($source == 'player') {
