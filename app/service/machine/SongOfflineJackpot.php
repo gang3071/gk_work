@@ -1900,9 +1900,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     {
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
+        $cmdAction = $this->getCmdActionName($cmd);
+
         try {
-            // 🔍 DEBUG: sendCmd 调用诊断
-            MachineLogger::sendCommand($this->machine->toArray(), $cmd, '[sendCmd] 开始执行指令', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : ($source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_SYSTEM));
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '[sendCmd] 开始执行指令', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : ($source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_SYSTEM));
 
             // 检查设备在线
             $isOnline = Gateway::isUidOnline($uid);
@@ -2052,7 +2053,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             ]);
         }
 
-        MachineLogger::sendCommand($this->machine->toArray(), $cmd, ($source === 'admin' ? '管理员操作' : '玩家操作') . ' 机台操作', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : MachineLogger::SOURCE_PLAYER);
+        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, ($source === 'admin' ? '管理员操作' : '玩家操作') . ' 机台操作', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : MachineLogger::SOURCE_PLAYER);
 
         return true;
     }
@@ -2116,6 +2117,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     ): void
     {
         $expirationTime = 3000000; // 3秒超时（心跳应该立即到来）
+        $cmdAction = $this->getCmdActionName($cmd);
 
         try {
             // 记录发送前的心跳版本号和状态（检查两种心跳：46c0停止状态、46c6自动状态）
@@ -2131,7 +2133,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'win_number' => $this->win_number ?? null,                 // 累积转数（中洞对奖次数）D0 00 00
             ];
 
-            MachineLogger::sendCommand($this->machine->toArray(), $cmd, '[单向指令] 发送指令', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : MachineLogger::SOURCE_PLAYER);
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '[单向指令] 发送指令', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : MachineLogger::SOURCE_PLAYER);
 
             // 发送指令
             Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd)));
@@ -2161,14 +2163,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     // 验证结果
                     $verification = $this->verifyOneWayCommandResult($cmd, $beforeState, $afterState);
 
-                    MachineLogger::receiveResponse($this->machine->toArray(), $cmd, '[单向指令] 收到心跳确认 wait_ms=' . ($handleDuration / 1000) . ' verified=' . ($verification['verified'] ? 'true' : 'false'), $this->getMachineCache());
+                    MachineLogger::receiveResponse($this->machine->toArray(), $cmdAction, '[单向指令] 收到心跳确认 wait_ms=' . ($handleDuration / 1000) . ' verified=' . ($verification['verified'] ? 'true' : 'false'), $this->getMachineCache());
 
                     if (!$verification['verified']) {
                         MachineLogger::warning($this->machine->toArray(), 'sendCmd', '[单向指令] 验证失败 cmd=' . $cmd . ' reason=' . $verification['reason'], $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                         throw new Exception('指令执行失败: ' . $verification['reason']);
                     }
 
-                    MachineLogger::receiveResponse($this->machine->toArray(), $cmd, '[单向指令] 执行成功 wait_ms=' . ($handleDuration / 1000), $this->getMachineCache());
+                    MachineLogger::receiveResponse($this->machine->toArray(), $cmdAction, '[单向指令] 执行成功 wait_ms=' . ($handleDuration / 1000), $this->getMachineCache());
 
                     // ✅ 设置指令版本号，让前端的 sendRawCmdWithReply 能检测到完成
                     $this->setActionVersion($cmd);
@@ -2340,6 +2342,53 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         }
     }
 
+    /** 将 hex 指令常量转换为语义化 action 名称，用于 MachineLogger */
+    private function getCmdActionName(string $cmd): string
+    {
+        static $map = [
+            self::MACHINE_POINT          => 'read_point',
+            self::MACHINE_SCORE          => 'read_score',
+            self::MACHINE_TURN           => 'read_turn',
+            self::WIN_NUMBER             => 'read_win_number',
+            self::EXTERNAL_BUTTON_QUERY  => 'read_external_button',
+            self::GET_MACHINE_POINT      => 'heartbeat',
+            self::AUTO_MACHINE_POINT     => 'heartbeat',
+            self::GET_MACHINE_SCORE      => 'heartbeat',
+            self::FAULT1_MACHINE_SCORE   => 'heartbeat',
+            self::FAULT_MACHINE_SCORE    => 'heartbeat',
+            self::GET_MACHINE_TURN       => 'heartbeat',
+            self::GET_WIN_NUMBER         => 'heartbeat',
+            self::REWARD_WIN_NUMBER      => 'heartbeat',
+            self::QUERY_REPLY_POINT      => 'recv_point',
+            self::QUERY_REPLY_SCORE      => 'recv_score',
+            self::QUERY_REPLY_TURN       => 'recv_turn',
+            self::QUERY_REPLY_WIN_NUMBER => 'recv_win_number',
+            self::QUERY_REPLY_EXTERNAL   => 'recv_external_open',
+            self::QUERY_REPLY_EXTERNAL_WASH => 'recv_external_wash',
+            self::CHECK                  => 'fault_clear',
+            self::CLEAR_EXTERNAL_BUTTON  => 'clear_external_button',
+            self::CLEAR_LOG              => 'clear_log',
+            self::MACHINE_OPEN           => 'machine_open',
+            self::MACHINE_CLOSE          => 'machine_close',
+            self::REWARD_SWITCH          => 'reward_switch',
+            self::AUTO_UP_TURN           => 'auto_start',
+            self::AUTO_STOP              => 'auto_stop',
+            self::PUSH_THREE             => 'push_three',
+            self::PUSH_ONE               => 'push_one',
+            self::POINT_TO_TURN          => 'point_to_turn',
+            self::TURN_UP_ALL            => 'turn_up_all',
+            self::TURN_TO_POINT          => 'turn_to_point',
+            self::TURN_DOWN_ALL          => 'turn_down_all',
+            self::SCORE_TO_POINT         => 'score_to_point',
+            self::OPEN_ANY_POINT         => 'open',
+            self::WASH_ZERO              => 'wash',
+            self::TESTING                => 'heartbeat',
+            self::TESTING2               => 'heartbeat',
+        ];
+        // 前4字节前缀匹配（open/wash附加随机码时命中父前缀）
+        return $map[$cmd] ?? $map[substr($cmd, 0, 4)] ?? 'send_cmd';
+    }
+
     /**
      * 创建指令（添加S1/S2校验）
      *
@@ -2347,6 +2396,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function createCmd(string $cmd, mixed $data = 0): string
     {
+        $cmdAction = $this->getCmdActionName($cmd);
         // ✅ 替换分机号（指令常量硬编码为46，需要替换为实际分机号）
         if (strlen($cmd) >= 2 && $this->extensionNumber !== '46') {
             $cmd = $this->extensionNumber . substr($cmd, 2);
@@ -2360,7 +2410,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $cmd .= $hexString;
         $s1 = self::calculateS1($cmd);
         $s2 = self::calculateS2($cmd, $s1);
-        MachineLogger::sendCommand($this->machine->toArray(), $cmd, '发送指令 cmd=' . $cmd . $s1 . $s2, $this->getMachineCache(), $cmd . $s1 . $s2);
+        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '发送指令', $this->getMachineCache(), $cmd . $s1 . $s2);
         return $cmd . $s1 . $s2;
     }
 

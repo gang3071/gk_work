@@ -570,8 +570,53 @@ class Slot extends MachineServices implements BaseMachine
      * @return string
      * @throws Exception
      */
+    /** 将 hex 指令常量转换为语义化 action 名称，用于 MachineLogger */
+    private function getCmdActionName(string $cmd): string
+    {
+        static $map = [
+            self::OPEN_ONE          => 'open_one',
+            self::OPEN_TEN          => 'open_ten',
+            self::WASH_ZERO         => 'wash_zero',
+            self::WASH_POINT        => 'wash',
+            self::MOVE_POINT_ON     => 'move_point_on',
+            self::MOVE_POINT_OFF    => 'move_point_off',
+            self::ALL_DOWN          => 'all_down',
+            self::OPEN_FIVE         => 'open_five',
+            self::OPEN_ANY_POINT    => 'open',
+            self::REWARD_SWITCH     => 'reward_switch',
+            self::REWARD_SWITCH_OPT => 'reward_switch_opt',
+            self::MACHINE_BUSY      => 'machine_busy',
+            self::OUTPUT            => 'output',
+            self::ALL_UP            => 'all_up',
+            self::OPEN_TESTING      => 'open_testing',
+            self::READ_SCORE        => 'read_score',
+            self::READ_CREDIT2      => 'read_credit2',
+            self::READ_BET          => 'read_bet',
+            self::READ_WIN          => 'read_win',
+            self::READ_BB           => 'read_bb',
+            self::READ_RB           => 'read_rb',
+            self::OPEN_TABLE        => 'read_open_table',
+            self::WASH_TABLE        => 'read_wash_table',
+            self::INSERT_COIN_TABLE => 'read_insert_coin',
+            self::OUT_COIN_TABLE    => 'read_out_coin',
+            self::OUT_ON            => 'auto_out_start',
+            self::OUT_OFF           => 'auto_out_stop',
+            self::PRESSURE          => 'pressure',
+            self::START             => 'auto_start',
+            self::STOP_ONE          => 'stop_one',
+            self::STOP_TWO          => 'stop_two',
+            self::STOP_THREE        => 'stop_three',
+            self::TESTING           => 'heartbeat',
+            self::GET_AUTO_STATUS   => 'read_auto_status',
+            self::AUTO_START        => 'auto_start',
+            self::AUTO_STOP         => 'auto_stop',
+        ];
+        return $map[$cmd] ?? 'send_cmd';
+    }
+
     private function createCmd(string $cmd, $data, int $type, string $option = '00'): string
     {
+        $cmdAction = $this->getCmdActionName($cmd);
         switch ($type) {
             case self::TYPE_OPEN_CARD:
                 $decodeData = encodeData($data);
@@ -584,7 +629,7 @@ class Slot extends MachineServices implements BaseMachine
             default:
                 throw new Exception('命令错误');
         }
-        MachineLogger::sendCommand($this->machine->toArray(), $cmd, '组装指令', $this->getMachineCache(), $cmd);
+        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '组装指令', $this->getMachineCache(), $cmd);
         return $cmd;
     }
 

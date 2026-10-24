@@ -748,6 +748,41 @@ class Jackpot extends MachineServices implements BaseMachine
         return true;
     }
 
+    /** 将 hex 指令常量转换为语义化 action 名称，用于 MachineLogger */
+    private function getCmdActionName(string $cmd): string
+    {
+        static $map = [
+            self::OPEN_ONE           => 'open_one',
+            self::OPEN_TEN           => 'open_ten',
+            self::WASH_ZERO          => 'wash_zero',
+            self::WASH_ZERO_REMAINDER => 'wash_zero_remainder',
+            self::AUTO_UP_TURN       => 'auto_start',
+            self::RESET_READY_TURN   => 'reset_ready',
+            self::TURN_DOWN_ALL      => 'turn_down_all',
+            self::TURN_TO_POINT      => 'turn_to_point',
+            self::POINT_TO_TURN      => 'point_to_turn',
+            self::OPEN_ANY_POINT     => 'open',
+            self::SCORE_TO_POINT     => 'score_to_point',
+            self::TURN_UP_ALL        => 'turn_up_all',
+            self::OP_3               => 'op3',
+            self::CLEAR_GIVE         => 'clear_give',
+            self::CLEAR_LOG          => 'clear_log',
+            self::BB_RUSH            => 'read_bb_rush',
+            self::TESTING            => 'heartbeat',
+            self::MACHINE_POINT      => 'read_point',
+            self::MACHINE_SCORE      => 'read_score',
+            self::MACHINE_TURN       => 'read_turn',
+            self::WIN_NUMBER         => 'read_win_number',
+            self::READ_OPEN_POINT    => 'read_open_point',
+            self::READ_WASH_POINT    => 'read_wash_point',
+            self::REWARD_SWITCH      => 'reward_switch',
+            self::REWARD_SWITCH_OPT  => 'reward_switch_opt',
+            self::PUSH               => 'push',
+            self::KEEPING            => 'heartbeat_keep',
+        ];
+        return $map[$cmd] ?? 'send_cmd';
+    }
+
     /**
      * 创建cmd
      * @param string $cmd 指令
@@ -758,12 +793,13 @@ class Jackpot extends MachineServices implements BaseMachine
      */
     private function createCmd(string $cmd, int $data = 0, string $option = '00'): string
     {
+        $cmdAction = $this->getCmdActionName(substr($cmd, strlen(self::PREFIX)));
         $decodeData = jackpotEncodeData($data);
         $cmd .= "{$option}00" . $decodeData;
         $cmd .= jackpotEncodeDataXor55($data) . '000000000000'; // 异或位处理
         $cmd .= crc8(hex2bin($cmd), 0x31, 0x00, 0x00, true, true, false);
         $full = $cmd . 'DD';
-        MachineLogger::sendCommand($this->machine->toArray(), $cmd, '发送指令', $this->getMachineCache(), $full);
+        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '发送指令', $this->getMachineCache(), $full);
         return $full;
     }
 
@@ -846,7 +882,7 @@ class Jackpot extends MachineServices implements BaseMachine
         try {
             $beforePoint = $this->point;
             $beforeActionTime0 = $this->action_time;
-            MachineLogger::sendCommand($this->machine->toArray(), $cmd, 'openPoint开始', $this->getMachineCache());
+            MachineLogger::sendCommand($this->machine->toArray(), $this->getCmdActionName($cmd), 'openPoint开始', $this->getMachineCache());
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . $cmd, $data)));
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::MACHINE_POINT)));
             $beforeActionTime = $this->action_time;
@@ -953,7 +989,7 @@ class Jackpot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                MachineLogger::error($this->machine->toArray(), $cmd, 'machineAction重试耗尽，硬件始终未回复 attempts=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                MachineLogger::error($this->machine->toArray(), $this->getCmdActionName($cmd), 'machineAction重试耗尽，硬件始终未回复 attempts=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
             usleep(50000);
