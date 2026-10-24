@@ -1840,8 +1840,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $ratio = $ratioArr[$ratioCode] ?? null;
 
         if ($ratio === null) {
-            MachineLogger::warning($this->machine->toArray(), 'parse_ratio', '收到未定义的扣趴码 code='.$ratioCode.' 默认10%', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
-            $ratio = '10'; // 默认10%
+            $ratio = '10'; // 默认10%（未定义的扣趴码，静态方法中无法访问实例状态）
         }
 
         return [
