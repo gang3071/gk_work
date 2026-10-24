@@ -246,7 +246,7 @@ class Jackpot extends MachineServices implements BaseMachine
                         'field' => $name,
                         'value' => $value
                     ]);
-                    throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
+                    throw new \Exception("Redis关键字段保存失敗: {$name}，请立即檢查Redis服务");
                 }
 
                 // 其他重要字段只记录日志
@@ -579,7 +579,7 @@ class Jackpot extends MachineServices implements BaseMachine
                     return false;
             }
         } catch (\Exception $e) {
-            MachineLogger::error($this->machine->toArray(), 'message_handle', '消息处理错误: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
             return false;
         }
 
@@ -595,14 +595,14 @@ class Jackpot extends MachineServices implements BaseMachine
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
         if (!Gateway::isUidOnline($uid)) {
-            MachineLogger::error($this->machine->toArray(), self::SCORE_TO_POINT, '机台离线，跳过', $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+            MachineLogger::error($this->machine->toArray(), self::SCORE_TO_POINT, '機台離線，跳過', $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             return;
         }
 
         $sentVersion = $this->setActionVersion(self::SCORE_TO_POINT);
         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::SCORE_TO_POINT)));
 
-        MachineLogger::sendCommand($this->machine->toArray(), self::SCORE_TO_POINT, '异步发送 attempt=' . ($attempts + 1), $this->getMachineCache());
+        MachineLogger::sendCommand($this->machine->toArray(), self::SCORE_TO_POINT, '異步發送 attempt=' . ($attempts + 1), $this->getMachineCache());
 
         $machineId = $this->machine->id;
 
@@ -614,17 +614,17 @@ class Jackpot extends MachineServices implements BaseMachine
             $currentVersion = $svc->getActionVersion(self::SCORE_TO_POINT);
 
             if ($currentVersion > $sentVersion) {
-                MachineLogger::receiveResponse($svc->machine->toArray(), self::SCORE_TO_POINT, '确认成功 attempt=' . ($attempts + 1), $svc->getMachineCache());
+                MachineLogger::receiveResponse($svc->machine->toArray(), self::SCORE_TO_POINT, '確認成功 attempt=' . ($attempts + 1), $svc->getMachineCache());
                 return;
             }
 
             $newAttempts = $attempts + 1;
             if ($newAttempts >= $maxRetries) {
-                MachineLogger::error($svc->machine->toArray(), self::SCORE_TO_POINT, '重试耗尽，放弃 attempts=' . $newAttempts, $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                MachineLogger::error($svc->machine->toArray(), self::SCORE_TO_POINT, '重試耗盡，放棄 attempts=' . $newAttempts, $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 return;
             }
 
-            MachineLogger::warning($svc->machine->toArray(), self::SCORE_TO_POINT, '超时未回复，重试 attempt=' . $newAttempts, $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
+            MachineLogger::warning($svc->machine->toArray(), self::SCORE_TO_POINT, '超時未回覆，重試 attempt=' . $newAttempts, $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
             $svc->sendScoreToPointAsync($gamingUserId, $newAttempts);
         }, null, false); // false = 只触发一次，不循环
     }
@@ -739,7 +739,7 @@ class Jackpot extends MachineServices implements BaseMachine
                 self::WASH_ZERO
             ])) {
                 $this->has_lock = 1;
-                MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令执行异常-机台被锁: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+                MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令執行異常-機台已鎖定: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
 
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
             }
@@ -799,7 +799,7 @@ class Jackpot extends MachineServices implements BaseMachine
         $cmd .= jackpotEncodeDataXor55($data) . '000000000000'; // 异或位处理
         $cmd .= crc8(hex2bin($cmd), 0x31, 0x00, 0x00, true, true, false);
         $full = $cmd . 'DD';
-        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '发送指令', $this->getMachineCache(), $full);
+        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '發送指令', $this->getMachineCache(), $full);
         return $full;
     }
 
@@ -882,7 +882,7 @@ class Jackpot extends MachineServices implements BaseMachine
         try {
             $beforePoint = $this->point;
             $beforeActionTime0 = $this->action_time;
-            MachineLogger::sendCommand($this->machine->toArray(), $this->getCmdActionName($cmd), 'openPoint开始', $this->getMachineCache());
+            MachineLogger::sendCommand($this->machine->toArray(), $this->getCmdActionName($cmd), '開分開始', $this->getMachineCache());
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . $cmd, $data)));
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::MACHINE_POINT)));
             $beforeActionTime = $this->action_time;
@@ -905,18 +905,18 @@ class Jackpot extends MachineServices implements BaseMachine
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::MACHINE_POINT)));
                         $queryIndex++;
                     } catch (\Exception $queryError) {
-                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '查询分数失败: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '查詢分數失敗: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     }
                 }
 
                 // 分数变化时记录一次日志
                 if ($point != $lastLoggedPoint) {
-                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '分数变化 before=' . $beforePoint . ' now=' . $point, $this->getMachineCache());
+                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '分數變化 before=' . $beforePoint . ' now=' . $point, $this->getMachineCache());
                     $lastLoggedPoint = $point;
                 }
 
                 if ($actionTime > $beforeActionTime && $beforePoint < $point) {
-                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, 'openPoint成功', $this->getMachineCache());
+                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分成功', $this->getMachineCache());
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -927,7 +927,7 @@ class Jackpot extends MachineServices implements BaseMachine
                     return;
                 }
                 if ($handleDuration >= $this->expirationTime) {
-                    MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_OPEN, 'openPoint等待硬件回复超时', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                    MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分等待硬體回覆超時', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
                 usleep($sleep);
@@ -989,7 +989,7 @@ class Jackpot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                MachineLogger::error($this->machine->toArray(), $this->getCmdActionName($cmd), 'machineAction重试耗尽，硬件始终未回复 attempts=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                MachineLogger::error($this->machine->toArray(), $this->getCmdActionName($cmd), '機台動作重試耗盡，硬體始終未回覆 attempts=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
             usleep(50000);

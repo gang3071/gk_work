@@ -271,7 +271,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                         ]);
                     }
 
-                    throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
+                    throw new \Exception("Redis关键字段保存失敗: {$name}，请立即檢查Redis服务");
                 }
 
                 // 其他重要字段只记录日志
@@ -389,7 +389,7 @@ class SongJackpot extends MachineServices implements BaseMachine
         try {
             $len = mb_strlen($msg);
             if ($len != 30 && $len != 10 && $len != 16 && $len != 14 && $len != 12 && $len != 36) {
-                throw new \Exception('指令错误');
+                throw new \Exception('指令錯誤');
             }
             $s1 = substr($msg, -4, 2);
             $s2 = substr($msg, -2, 2);
@@ -397,11 +397,11 @@ class SongJackpot extends MachineServices implements BaseMachine
             $data = substr($msg, 0, -4);
             $calculatedS1 = self::calculateS1($data);
             if ($s1 != $calculatedS1) {
-                throw new \Exception('指令s1校验失败');
+                throw new \Exception('指令S1校驗失敗');
             }
             $calculatedS2 = self::calculateS2($data, $calculatedS1);
             if ($s2 != $calculatedS2) {
-                throw new \Exception('指令s2校验失败');
+                throw new \Exception('指令S2校驗失敗');
             }
             $fun = substr($msg, 0, 6);
             $fun1 = substr($msg, 0, 4);
@@ -413,10 +413,10 @@ class SongJackpot extends MachineServices implements BaseMachine
                 if (substr($msg, 18, 2) != 'da') {
                     $this->has_lock = 1;
 
-                    MachineLogger::error($this->machine->toArray(), 'machine_lock', '心跳字节校验失败-机台被锁', $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
+                    MachineLogger::error($this->machine->toArray(), 'machine_lock', '心跳位元組校驗失敗-機台已鎖定', $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
 
                     sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
-                    throw new \Exception('机台故障');
+                    throw new \Exception('機台故障');
                 }
                 [$nowPoint, $nowRatio, $nowWinNumber, $nowScore, $nowTurn] = self::parseHeartbeat($msg);
                 $nowAuto = substr($msg, 2, 2) == 'c6' ? 1 : 0;
@@ -477,7 +477,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                         $isTurnAction = Cache::get('turn_action_flag_' . $this->machine->id);
                         // 如果检测到上转下转标记，跳过本次累加
                         if ($isTurnAction) {
-                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '检测到上转/下转操作标记，跳过本次累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
+                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '檢測到上轉/下轉操作標記，跳過本次累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
                         }
                         // turn是剩余转数，负增量说明玩家消耗了转数（正常游玩）
                         // 但需要过滤大幅减少（可能是下转操作）
@@ -490,16 +490,16 @@ class SongJackpot extends MachineServices implements BaseMachine
                             // ⚠️ CRITICAL：玩家消耗转数说明在游戏，更新 last_play_time
                             $this->last_play_time = time();
                         } else if (bccomp($turnDelta, '-10', 2) < 0) {
-                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', 'turn大幅减少，可能是下转操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
+                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', 'turn大幅減少，可能是下轉操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
                         } else if (bccomp($turnDelta, '0', 2) > 0) {
-                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', 'turn增加，可能是上转操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
+                            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', 'turn增加，可能是上轉操作，不累加 delta=' . $turnDelta, ['machine_data' => $this->getMachineCache()]);
                         }
                     } else {
-                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '没有游戏中的玩家，跳过turn累加 gaming_user_id=' . $gamingUserId, ['machine_data' => $this->getMachineCache()]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '沒有遊戲中的玩家，跳過turn累加 gaming_user_id=' . $gamingUserId, ['machine_data' => $this->getMachineCache()]);
                     }
                 } else {
                     if (!empty($gamingUserId)) {
-                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '开奖状态中，跳过turn累加 reward_status=' . $nowRewardStatus, ['machine_data' => $this->getMachineCache()]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '開獎狀態中，跳過turn累加 reward_status=' . $nowRewardStatus, ['machine_data' => $this->getMachineCache()]);
                     }
                 }
                 if ($nowTurn <= 0 && !empty($gamingUserId)) {
@@ -613,10 +613,10 @@ class SongJackpot extends MachineServices implements BaseMachine
                                 $this->has_lock = 1;
 
                             $faultCode = ($action == self::FAULT1_MACHINE_SCORE) ? 'FAULT1_MACHINE_SCORE' : 'FAULT_MACHINE_SCORE';
-                            MachineLogger::error($this->machine->toArray(), 'machine_lock', '机台报告故障码: ' . $faultCode, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
+                            MachineLogger::error($this->machine->toArray(), 'machine_lock', '機台回報故障碼: ' . $faultCode, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
 
                                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
-                                throw new \Exception('机台故障');
+                                throw new \Exception('機台故障');
                             case self::WASH_ZERO:
                                 Redis::publish($domain . ':' . $port, '设备返回的消息');
                                 $cmd = substr($msg, 0, 6);
@@ -659,7 +659,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                                 // winNumber 在正常游戏中不应该突然变化超过100
                                 // 也不应该大幅减少（除非是机器重启，但那样应该是从0开始）
                                 if (abs($delta) > 100) {
-                                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '检测到异常winNumber值，拒绝更新 old=' . $oldWinNumber . ' new=' . $winNumber . ' delta=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+                                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '檢測到異常winNumber值，拒絕更新 old=' . $oldWinNumber . ' new=' . $winNumber . ' delta=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
                                     // 不更新 win_number，保持原值
                                     // 但仍然设置 action version 以免阻塞等待
                                 } else {
@@ -679,7 +679,7 @@ class SongJackpot extends MachineServices implements BaseMachine
             }
 
         } catch (\Exception $e) {
-            MachineLogger::error($this->machine->toArray(), 'message_error', '消息处理错误: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+            MachineLogger::error($this->machine->toArray(), 'message_error', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
             return false;
         }
 
@@ -795,7 +795,7 @@ class SongJackpot extends MachineServices implements BaseMachine
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
         if (!Gateway::isUidOnline($uid)) {
-            MachineLogger::error($this->machine->toArray(), self::SCORE_TO_POINT, '机台离线，跳过SCORE_TO_POINT', $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+            MachineLogger::error($this->machine->toArray(), self::SCORE_TO_POINT, '機台離線，跳過SCORE_TO_POINT', $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             return;
         }
 
@@ -803,7 +803,7 @@ class SongJackpot extends MachineServices implements BaseMachine
         $sentVersion = $this->setActionVersion(self::SCORE_TO_POINT);
         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::SCORE_TO_POINT)));
 
-        MachineLogger::sendCommand($this->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 异步发送 attempt=' . ($attempts + 1), $this->getMachineCache());
+        MachineLogger::sendCommand($this->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 異步發送 attempt=' . ($attempts + 1), $this->getMachineCache());
 
         $machineId = $this->machine->id;
 
@@ -819,18 +819,18 @@ class SongJackpot extends MachineServices implements BaseMachine
 
             if ($currentVersion > $sentVersion) {
                 // 机台已回复，成功
-                MachineLogger::receiveResponse($svc->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 确认成功', $svc->getMachineCache());
+                MachineLogger::receiveResponse($svc->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 確認成功', $svc->getMachineCache());
                 return;
             }
 
             // 未收到回复
             $newAttempts = $attempts + 1;
             if ($newAttempts >= $maxRetries) {
-                MachineLogger::error($svc->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 重试耗尽', $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                MachineLogger::error($svc->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 重試耗盡', $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 return;
             }
 
-            MachineLogger::warning($svc->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 超时重试 attempt=' . $newAttempts, $svc->getMachineCache());
+            MachineLogger::warning($svc->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 超時重試 attempt=' . $newAttempts, $svc->getMachineCache());
             $svc->sendScoreToPointAsync($gamingUserId, $newAttempts);
         }, null, false); // false = 只触发一次，不循环
     }
@@ -945,7 +945,7 @@ class SongJackpot extends MachineServices implements BaseMachine
             ])) {
                 $this->has_lock = 1;
 
-                MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令执行异常-机台被锁: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+                MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令執行異常-機台已鎖定: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
 
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id); // ✅ 从 Redis 读取
             }
@@ -958,7 +958,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                 'description' => $this->getDescription($cmd),
             ]);
         }
-        $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
+        $operatorType = $source === 'admin' ? '【管理員操作】' : '【玩家操作】';
         MachineLogger::sendCommand(
             $this->machine->toArray(),
             $cmd,

@@ -275,7 +275,7 @@ class Slot extends MachineServices implements BaseMachine
                         'value' => $value
                     ]);
 
-                    throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
+                    throw new \Exception("Redis关键字段保存失敗: {$name}，请立即檢查Redis服务");
                 }
 
                 // 其他重要字段只记录日志
@@ -432,7 +432,7 @@ class Slot extends MachineServices implements BaseMachine
                     return false;
             }
         } catch (\Exception $e) {
-            MachineLogger::error($this->machine->toArray(), 'message_handle', '消息处理错误: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
             return false;
         }
         return true;
@@ -551,7 +551,7 @@ class Slot extends MachineServices implements BaseMachine
                 self::WASH_ZERO
             ])) {
                 $this->has_lock = 1;
-                MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令执行异常-机台被锁: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+                MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令執行異常-機台已鎖定: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
 
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
             }
@@ -627,9 +627,9 @@ class Slot extends MachineServices implements BaseMachine
             case self::TYPE_OUT_CARD:
                 break;
             default:
-                throw new Exception('命令错误');
+                throw new Exception('命令錯誤');
         }
-        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '组装指令', $this->getMachineCache(), $cmd);
+        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '組裝指令', $this->getMachineCache(), $cmd);
         return $cmd;
     }
 
@@ -674,7 +674,7 @@ class Slot extends MachineServices implements BaseMachine
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
                         $queryIndex++;
                     } catch (\Exception $queryError) {
-                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '查询分数失败: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '查詢分數失敗: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     }
                 }
 
@@ -695,7 +695,7 @@ class Slot extends MachineServices implements BaseMachine
                 $handleDuration += $sleep;
             }
         } catch (Exception $e) {
-            MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_OPEN, '开分失败: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+            MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分失敗: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             throw new Exception($e->getMessage());
         }
     }
@@ -784,7 +784,7 @@ class Slot extends MachineServices implements BaseMachine
         $expirationTime = 1000000;
 
         if ($attempts == 0) {
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '下分开始', ['machine_data' => $this->getMachineCache()]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '下分開始', ['machine_data' => $this->getMachineCache()]);
         }
 
         try {
@@ -812,12 +812,12 @@ class Slot extends MachineServices implements BaseMachine
                 // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
                 if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
                     try {
-                        MachineLogger::sendCommand($this->machine->toArray(), 'query_score', '主动查询分数 count=' . ($queryIndex + 1), $this->getMachineCache());
+                        MachineLogger::sendCommand($this->machine->toArray(), 'query_score', '主動查詢分數 count=' . ($queryIndex + 1), $this->getMachineCache());
                         // 发送查询分数指令（READ_SCORE = '21'）
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
                         $queryIndex++;
                     } catch (\Exception $queryError) {
-                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '查询分数失败: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '查詢分數失敗: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     }
                 }
 
@@ -872,12 +872,12 @@ class Slot extends MachineServices implements BaseMachine
                     ]);
                 }
 
-                MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分失败: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分失敗: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
 
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
 
-            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分重试 attempts=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_EVENT);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分重試 attempts=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_EVENT);
 
             usleep(50000);
             $this->washPoint($uid, $source, $source_id, $attempts);
@@ -927,7 +927,7 @@ class Slot extends MachineServices implements BaseMachine
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
                         $queryIndex++;
                     } catch (\Exception $queryError) {
-                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, 'WashSurplusPoint查询分数失败: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, 'WashSurplusPoint查詢分數失敗: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     }
                 }
 
@@ -948,7 +948,7 @@ class Slot extends MachineServices implements BaseMachine
                 $handleDuration += $sleep;
             }
         } catch (Exception $e) {
-            MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '洗分留分失败: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+            MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '洗分留分失敗: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             throw new Exception($e->getMessage());
         }
     }
@@ -1261,7 +1261,7 @@ class Slot extends MachineServices implements BaseMachine
                     return false;
             }
         } catch (\Exception $e) {
-            MachineLogger::error($this->machine->toArray(), 'message_handle', '消息处理错误: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
             return false;
         }
 
