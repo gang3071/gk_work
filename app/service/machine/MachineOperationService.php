@@ -1370,7 +1370,7 @@ class MachineOperationService
     private function kickPlayer(array $params): array
     {
         // TODO: 从 AdminMachineController 迁移实现
-        MachineLogger::warning($this->machine->toArray(), 'kick_player', 'kickPlayer 尚未實現', [], MachineLogger::DIR_EVENT);
+        MachineLogger::warning($this->machine->toArray(), 'kick_player', '踢出玩家功能尚未實現，待遷移', $this->services->getMachineCache(), MachineLogger::DIR_EVENT);
 
         throw new Exception(trans('kick_player_not_migrated', [], 'message', $this->lang));
     }
@@ -1383,7 +1383,7 @@ class MachineOperationService
     private function forceKickPlayer(array $params): array
     {
         // TODO: 从 AdminMachineController 迁移实现
-        MachineLogger::warning($this->machine->toArray(), 'force_kick_player', 'forceKickPlayer 尚未實現', [], MachineLogger::DIR_EVENT);
+        MachineLogger::warning($this->machine->toArray(), 'force_kick_player', '強制踢出玩家功能尚未實現，待遷移', $this->services->getMachineCache(), MachineLogger::DIR_EVENT);
 
         throw new Exception(trans('force_kick_player_not_migrated', [], 'message', $this->lang));
     }
@@ -1396,7 +1396,7 @@ class MachineOperationService
     private function customOpenScore(array $params): array
     {
         // TODO: 从 AdminMachineController 迁移实现
-        MachineLogger::warning($this->machine->toArray(), 'custom_open_score', 'customOpenScore 尚未實現', [], MachineLogger::DIR_EVENT);
+        MachineLogger::warning($this->machine->toArray(), 'custom_open_score', '自定義開分功能尚未實現，待遷移', $this->services->getMachineCache(), MachineLogger::DIR_EVENT);
 
         throw new Exception(trans('custom_open_score_not_migrated', [], 'message', $this->lang));
     }

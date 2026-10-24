@@ -791,7 +791,7 @@ class SongJackpot extends MachineServices implements BaseMachine
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
         if (!Gateway::isUidOnline($uid)) {
-            MachineLogger::error($this->machine->toArray(), self::SCORE_TO_POINT, '機台離線，跳過SCORE_TO_POINT', $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+            MachineLogger::error($this->machine->toArray(), 'score_to_point', '機台離線，跳過得分轉分數', $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             return;
         }
 
@@ -799,7 +799,7 @@ class SongJackpot extends MachineServices implements BaseMachine
         $sentVersion = $this->setActionVersion(self::SCORE_TO_POINT);
         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::SCORE_TO_POINT)));
 
-        MachineLogger::sendCommand($this->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 異步發送 attempt=' . ($attempts + 1), $this->getMachineCache());
+        MachineLogger::sendCommand($this->machine->toArray(), 'score_to_point', '得分轉分數 異步發送 attempt=' . ($attempts + 1), $this->getMachineCache());
 
         $machineId = $this->machine->id;
 
@@ -815,18 +815,18 @@ class SongJackpot extends MachineServices implements BaseMachine
 
             if ($currentVersion > $sentVersion) {
                 // 机台已回复，成功
-                MachineLogger::receiveResponse($svc->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 確認成功', $svc->getMachineCache());
+                MachineLogger::receiveResponse($svc->machine->toArray(), 'score_to_point', '得分轉分數 確認成功 attempt=' . ($attempts + 1), $svc->getMachineCache());
                 return;
             }
 
             // 未收到回复
             $newAttempts = $attempts + 1;
             if ($newAttempts >= $maxRetries) {
-                MachineLogger::error($svc->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 重試耗盡', $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                MachineLogger::error($svc->machine->toArray(), 'score_to_point', '得分轉分數 重試耗盡 attempts=' . $newAttempts, $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 return;
             }
 
-            MachineLogger::warning($svc->machine->toArray(), self::SCORE_TO_POINT, 'SCORE_TO_POINT 超時重試 attempt=' . $newAttempts, $svc->getMachineCache());
+            MachineLogger::warning($svc->machine->toArray(), 'score_to_point', '得分轉分數 超時未回覆，重試 attempt=' . $newAttempts, $svc->getMachineCache());
             $svc->sendScoreToPointAsync($gamingUserId, $newAttempts);
         }, null, false); // false = 只触发一次，不循环
     }

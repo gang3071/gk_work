@@ -793,8 +793,8 @@ class SongSlot extends MachineServices implements BaseMachine
             }
             MachineLogger::error(
                 $this->machine->toArray(),
-                $cmd,
-                '發送指令異常: ' . $e->getMessage(),
+                'send_cmd',
+                '發送指令失敗 cmd=' . $cmd . ': ' . $e->getMessage(),
                 $this->getMachineCache(),
                 MachineLogger::DIR_COMMAND
             );
@@ -808,7 +808,7 @@ class SongSlot extends MachineServices implements BaseMachine
             MachineLogger::STATUS_NORMAL,
             MachineLogger::DIR_COMMAND,
             'sendCmd',
-            $operatorType . '机台操作 cmd=' . $cmd,
+            $operatorType . '機台操作 cmd=' . $cmd,
             [
                 'player_id'   => $this->machine->gamingPlayer->id ?? 0,
                 'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',

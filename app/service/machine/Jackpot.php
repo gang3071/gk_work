@@ -798,7 +798,7 @@ class Jackpot extends MachineServices implements BaseMachine
         $cmd .= jackpotEncodeDataXor55($data) . '000000000000'; // 异或位处理
         $cmd .= crc8(hex2bin($cmd), 0x31, 0x00, 0x00, true, true, false);
         $full = $cmd . 'DD';
-        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '發送指令', $this->getMachineCache(), $full);
+        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '已組裝指令並發送', $this->getMachineCache(), $full);
         return $full;
     }
 
