@@ -575,7 +575,7 @@ class MachineOperationService
 
             if ($currentVersion > $beforeVersion) {
                 $replied = true;
-                MachineLogger::receiveResponse($this->machine->toArray(), $actionKey, '收到回覆 elapsed=' . (time() - $startTime), $this->services->getMachineCache());
+                MachineLogger::receiveResponse($this->machine->toArray(), $actionKey, '收到回覆 耗時(秒)=' . (time() - $startTime), $this->services->getMachineCache());
                 break;
             }
 
@@ -583,7 +583,7 @@ class MachineOperationService
         }
 
         if (!$replied) {
-            MachineLogger::warning($this->machine->toArray(), $actionKey, '等待回覆超時 timeout=' . $timeout, $this->services->getMachineCache(), MachineLogger::DIR_RESPONSE);
+            MachineLogger::warning($this->machine->toArray(), $actionKey, '等待回覆超時 超時設定(秒)=' . $timeout, $this->services->getMachineCache(), MachineLogger::DIR_RESPONSE);
 
             return [
                 'success' => false,
@@ -1443,7 +1443,7 @@ class MachineOperationService
         ];
 
         if (!in_array(get_class($this->services), $supportedClasses)) {
-            throw new Exception('歸0操作僅支援小淞線下版機台（收帳小卡協定）');
+            throw new Exception('歸0操作僅支援小松線下版機台（小松斯洛線下 / 小松鋼珠線下）');
         }
 
         // 发送归0指令（通过sendCmd调用handleCheckCommand）
@@ -1600,7 +1600,7 @@ class MachineOperationService
             $adminUsername
         );
 
-        MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, 'machineWash返回結果 result_type=' . gettype($result), $this->services->getMachineCache());
+        MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分流程完成 回傳類型=' . gettype($result), $this->services->getMachineCache());
 
         // 处理返回结果
         if ($result === false) {

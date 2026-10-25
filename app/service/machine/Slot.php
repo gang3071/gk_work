@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace app\service\machine;
 
@@ -427,6 +427,7 @@ class Slot extends MachineServices implements BaseMachine
                 case Slot::STOP_TWO:
                 case Slot::STOP_THREE:
                 case Slot::TESTING:
+                    MachineLogger::heartbeat($this->machine->toArray(), $this->getMachineCache());
                     break;
                 default:
                     return false;
@@ -654,6 +655,7 @@ class Slot extends MachineServices implements BaseMachine
     {
         try {
             $beforePoint = $this->point;
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分開始 前分數=' . $beforePoint, $this->getMachineCache());
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . $cmd, $data, self::TYPE_OPEN_CARD)));
             $beforeActionTime = $this->action_time;
             $handleDuration = 0;
@@ -679,6 +681,7 @@ class Slot extends MachineServices implements BaseMachine
                 }
 
                 if ($actionTime > $beforeActionTime && $beforePoint < $point) {
+                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分結束 後分數=' . $point, $this->getMachineCache());
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -812,7 +815,7 @@ class Slot extends MachineServices implements BaseMachine
                 // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
                 if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
                     try {
-                        MachineLogger::sendCommand($this->machine->toArray(), 'query_score', '主動查詢分數 count=' . ($queryIndex + 1), $this->getMachineCache());
+                        MachineLogger::sendCommand($this->machine->toArray(), 'query_score', '主動查詢分數 第' . ($queryIndex + 1) . '次', $this->getMachineCache());
                         // 发送查询分数指令（READ_SCORE = '21'）
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
                         $queryIndex++;
@@ -822,7 +825,7 @@ class Slot extends MachineServices implements BaseMachine
                 }
 
                 if ($actionTime > $beforeActionTime && $point == 0) {
-                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分成功', $this->getMachineCache());
+                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分結束', $this->getMachineCache());
 
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
@@ -867,7 +870,7 @@ class Slot extends MachineServices implements BaseMachine
                         ]);
                     }
                 } catch (\Exception $telegramError) {
-                    Log::error('[TelegramAlert] 发送告警失败', [
+                    Log::error('[雙美斯洛-電報警報] 发送告警失败', [
                         'error' => $telegramError->getMessage(),
                     ]);
                 }
@@ -877,7 +880,7 @@ class Slot extends MachineServices implements BaseMachine
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
 
-            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分重試 attempts=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_EVENT);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分重試 嘗試次數=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_EVENT);
 
             usleep(50000);
             $this->washPoint($uid, $source, $source_id, $attempts);
@@ -927,7 +930,7 @@ class Slot extends MachineServices implements BaseMachine
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
                         $queryIndex++;
                     } catch (\Exception $queryError) {
-                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, 'WashSurplusPoint查詢分數失敗: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '洗分留餘數-查詢分數失敗: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     }
                 }
 
@@ -1197,7 +1200,7 @@ class Slot extends MachineServices implements BaseMachine
                             );
 
                             if (bccomp($betAmount, '0', 2) > 0) {
-                                Log::channel('bet_statistics')->info('[BetStats] Slot 投递打码量', [
+                                Log::channel('bet_statistics')->info('[雙美斯洛-下注統計] Slot 投递打码量', [
                                     'machine_id' => $this->machine->id,
                                     'player_id' => $gamingUserId,
                                     'change_amount' => $changeAmount,
@@ -1215,7 +1218,7 @@ class Slot extends MachineServices implements BaseMachine
                                     'created_at' => date('Y-m-d H:i:s'),
                                 ]);
                             } else {
-                                Log::channel('bet_statistics')->debug('[BetStats] Slot 打码量为0，跳过投递', [
+                                Log::channel('bet_statistics')->debug('[雙美斯洛-下注統計] Slot 打码量为0，跳过投递', [
                                     'machine_id' => $this->machine->id,
                                     'bet_amount' => $betAmount,
                                 ]);

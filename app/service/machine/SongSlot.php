@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace app\service\machine;
 
@@ -352,7 +352,7 @@ class SongSlot extends MachineServices implements BaseMachine
                         MachineLogger::error(
                             $this->machine->toArray(),
                             'machine_lock',
-                            '心跳位元組校驗失敗-機台已鎖定 byte18=' . substr($msg, 18, 2),
+                            '心跳校驗位異常-機台已鎖定 校驗位=' . substr($msg, 18, 2),
                             $this->getMachineCache(),
                             MachineLogger::DIR_RESPONSE,
                             $msg
@@ -419,7 +419,7 @@ class SongSlot extends MachineServices implements BaseMachine
 
                     // [打码量诊断] 押分基准建立：orgBet=0 说明是本局首次有效心跳
                     if (!$betCondition1 && $nowBet > 0 && !empty($gamingUserId)) {
-                        Log::channel('bet_statistics')->info('[BetStats] 押分基准建立', [
+                        Log::channel('bet_statistics')->info('[小松斯洛-下注統計] 押分基准建立', [
                             'machine_id'   => $this->machine->id,
                             'player_id'    => $gamingUserId,
                             'baseline_bet' => (float)$nowBet,  // 机台当前累计押分（本局参考点）
@@ -446,7 +446,7 @@ class SongSlot extends MachineServices implements BaseMachine
                                 );
 
                                 if (bccomp($betAmount, '0', 2) > 0) {
-                                    Log::channel('bet_statistics')->info('[BetStats] SongSlot 投递打码量', [
+                                    Log::channel('bet_statistics')->info('[小松斯洛-下注統計] SongSlot 投递打码量', [
                                         'machine_id'         => $this->machine->id,
                                         'player_id'          => $currentGamingUserId,
                                         'org_bet'            => (float)$orgBet,
@@ -468,7 +468,7 @@ class SongSlot extends MachineServices implements BaseMachine
                                 }
                             } catch (\Exception $e) {
                                 // 投递失败不影响主业务
-                                Log::channel('bet_statistics')->error('[BetStats] SongSlot打码量投递失败', [
+                                Log::channel('bet_statistics')->error('[小松斯洛-下注統計] SongSlot打码量投递失败', [
                                     'machine_id' => $this->machine->id,
                                     'player_id' => $currentGamingUserId,
                                     'error' => $e->getMessage(),
@@ -794,7 +794,7 @@ class SongSlot extends MachineServices implements BaseMachine
             MachineLogger::error(
                 $this->machine->toArray(),
                 'send_cmd',
-                '發送指令失敗 cmd=' . $cmd . ': ' . $e->getMessage(),
+                '發送指令失敗 指令碼=' . $cmd . ': ' . $e->getMessage(),
                 $this->getMachineCache(),
                 MachineLogger::DIR_COMMAND
             );
@@ -803,19 +803,14 @@ class SongSlot extends MachineServices implements BaseMachine
         // OPEN_ANY_POINT / WASH_ZERO 已在 openPoint()/washPoint() 內部完整記錄日誌，此處跳過避免重複
         if (!in_array($cmd, [self::OPEN_ANY_POINT, self::WASH_ZERO])) {
             $operatorType = $source === 'admin' ? '【管理員操作】' : '【玩家操作】';
-            MachineLogger::log(
+            MachineLogger::sendCommand(
                 $this->machine->toArray(),
+                $this->getCmdActionName($cmd),
+                $operatorType . $this->getCmdDescription($cmd),
+                $this->getMachineCache(),
+                '',
                 $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
-                MachineLogger::STATUS_NORMAL,
-                MachineLogger::DIR_COMMAND,
-                'sendCmd',
-                $operatorType . '機台操作 cmd=' . $cmd,
-                [
-                    'player_id'   => $this->machine->gamingPlayer->id ?? 0,
-                    'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',
-                    'operator_id' => $source_id,
-                    'machine_data' => $this->getMachineCache(),
-                ]
+                ['id' => $source_id, 'uuid' => $this->machine->gamingPlayer->uuid ?? '']
             );
         }
 
@@ -872,6 +867,40 @@ class SongSlot extends MachineServices implements BaseMachine
      * @param mixed $data 数据
      * @return string
      */
+    private function getCmdActionName(string $cmd): string
+    {
+        static $map = [
+            self::OPEN_ANY_POINT => MachineLogger::ACTION_OPEN,
+            self::WASH_ZERO      => MachineLogger::ACTION_WASH,
+            self::READ_SCORE     => 'read_score',
+            self::READ_BET       => 'read_bet',
+            self::ALL_DOWN       => 'all_down',
+            self::CHECK          => 'check',
+            self::OUT_OFF        => 'auto_stop',
+            self::STOP_ONE       => 'stop_one',
+            self::STOP_TWO       => 'stop_two',
+            self::STOP_THREE     => 'stop_three',
+        ];
+        return $map[$cmd] ?? 'send_cmd';
+    }
+
+    private function getCmdDescription(string $cmd): string
+    {
+        static $map = [
+            self::OPEN_ANY_POINT => '開分',
+            self::WASH_ZERO      => '清零',
+            self::READ_SCORE     => '讀取機台分數',
+            self::READ_BET       => '讀取下注額',
+            self::ALL_DOWN       => '下轉清零',
+            self::CHECK          => '歸零結算計數器',
+            self::OUT_OFF        => '停止自動',
+            self::STOP_ONE       => '停止轉軸1',
+            self::STOP_TWO       => '停止轉軸2',
+            self::STOP_THREE     => '停止轉軸3',
+        ];
+        return $map[$cmd] ?? ('機台操作 指令碼=' . strtoupper($cmd));
+    }
+
     private function createCmd(string $cmd, mixed $data = 0): string
     {
         $hexString = '';
@@ -1023,7 +1052,7 @@ class SongSlot extends MachineServices implements BaseMachine
         MachineLogger::sendCommand(
             $this->machine->toArray(),
             MachineLogger::ACTION_OPEN,
-            '開分開始 data=' . $data,
+            '開分開始 開分量=' . $data,
             $this->getMachineCache(),
             '',
             $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
@@ -1041,7 +1070,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     MachineLogger::receiveResponse(
                         $this->machine->toArray(),
                         MachineLogger::ACTION_OPEN,
-                        '開分結束 duration_ms=' . round($handleDuration / 1000, 2),
+                        '開分結束 耗時(ms)=' . round($handleDuration / 1000, 2),
                         $this->getMachineCache()
                     );
 
@@ -1110,7 +1139,7 @@ class SongSlot extends MachineServices implements BaseMachine
             MachineLogger::sendCommand(
                 $this->machine->toArray(),
                 MachineLogger::ACTION_WASH,
-                '下分開始 data=' . $data,
+                '下分開始 清零量=' . $data,
                 $this->getMachineCache(),
                 '',
                 $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
@@ -1130,7 +1159,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     MachineLogger::receiveResponse(
                         $this->machine->toArray(),
                         MachineLogger::ACTION_WASH,
-                        '下分結束 attempts=' . ($attempts + 1) . ' duration_ms=' . round($handleDuration / 1000, 2),
+                        '下分結束 第' . ($attempts + 1) . '次 耗時(ms)=' . round($handleDuration / 1000, 2),
                         $this->getMachineCache()
                     );
 
@@ -1155,7 +1184,7 @@ class SongSlot extends MachineServices implements BaseMachine
                 MachineLogger::error(
                     $this->machine->toArray(),
                     MachineLogger::ACTION_WASH,
-                    '下分失敗-重試耗盡 attempts=' . $attempts . ': ' . $e->getMessage(),
+                    '下分失敗-重試耗盡 嘗試次數=' . $attempts . ': ' . $e->getMessage(),
                     $this->getMachineCache(),
                     MachineLogger::DIR_RESPONSE
                 );
@@ -1164,7 +1193,7 @@ class SongSlot extends MachineServices implements BaseMachine
             MachineLogger::warning(
                 $this->machine->toArray(),
                 MachineLogger::ACTION_WASH,
-                '下分重試中 attempts=' . $attempts . '/' . $maxRetries,
+                '下分重試中 第' . $attempts . '/' . $maxRetries . '次',
                 $this->getMachineCache()
             );
             usleep(50000);

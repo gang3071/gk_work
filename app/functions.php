@@ -1255,7 +1255,7 @@ function machineWash(
                 $gamingPressure = (int)bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
                 $gamingScore = (int)bcsub($services->win ?? '0', $services->player_score ?? '0');
 
-                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '下分開始', ['machine_data' => $services->getMachineCache(), 'gaming_pressure' => $gamingPressure, 'gaming_score' => $gamingScore]);
+                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '下分準備就緒 累計下注='.$gamingPressure.' 累計得分='.$gamingScore, ['machine_data' => $services->getMachineCache()]);
 
                 if (!empty($giftPoint)) {
                     if ($money < $giftPoint['open_point'] * $giftPoint['condition']) {
@@ -1267,17 +1267,17 @@ function machineWash(
 
         /** 彩金预留检查 */
         if ($hasLottery && $machine->type == GameType::TYPE_SLOT && $path == 'down' && $money > 0) {
-            MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'lottery_check', '開始彩金預留檢查 money='.$money, ['machine_data' => $services->getMachineCache()]);
+            MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'lottery_check', '開始彩金預留檢查 金額='.$money, ['machine_data' => $services->getMachineCache()]);
 
             try {
                 $playerLotteryRecord = (new LotteryServices())->setMachine($machine)->setPlayer($player)->fixedPotCheckLottery($money,
                     true);
                 if ($playerLotteryRecord) {
-                    MachineLogger::warning($machine->toArray(), 'lottery_check', '中了彩金，暫停下分 money='.$money, $services->getMachineCache(), MachineLogger::DIR_EVENT);
+                    MachineLogger::warning($machine->toArray(), 'lottery_check', '中了彩金，暫停下分 金額='.$money, $services->getMachineCache(), MachineLogger::DIR_EVENT);
                     return $playerLotteryRecord;
                 }
 
-                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'lottery_check', '彩金檢查通過繼續下分 money='.$money, ['machine_data' => $services->getMachineCache()]);
+                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'lottery_check', '彩金檢查通過繼續下分 金額='.$money, ['machine_data' => $services->getMachineCache()]);
             } catch (Exception $e) {
                 MachineLogger::error($machine->toArray(), 'lottery_check', '彩金檢查異常: '.$e->getMessage(), $services->getMachineCache(), MachineLogger::DIR_EVENT);
                 throw new Exception($e->getMessage());
@@ -1340,6 +1340,9 @@ function machineWash(
             case GameType::TYPE_STEEL_BALL:
                 $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
                 $services->sendCmd($services::CLEAR_LOG, 0, 'player', $player->id, $is_system);
+                if ($machine->control_type == Machine::CONTROL_TYPE_MEI) {
+                    MachineLogger::receiveResponse($machine->toArray(), MachineLogger::ACTION_WASH, '下分結束', $services->getMachineCache());
+                }
                 break;
             case GameType::TYPE_SLOT:
                 // ⚠️ CRITICAL：洗分前二次确认机台分数，防止竞态条件
@@ -1347,7 +1350,7 @@ function machineWash(
                 $services->sendCmd($services::READ_SCORE, 0, 'player', $player->id, $is_system);
                 $realPoint = $services->point;
 
-                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'wash_zero', '二次確認分數 realPoint='.$realPoint.' money='.$money, ['machine_data' => $services->getMachineCache()]);
+                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'wash_zero', '二次確認機台分數 實際分數='.$realPoint.' 記錄金額='.$money, ['machine_data' => $services->getMachineCache()]);
 
                 if ($money > 0 && $realPoint == 0) {
                     // 数据库记录了下分，但硬件已经是 0，数据不一致！
@@ -1356,7 +1359,7 @@ function machineWash(
 
                 if ($realPoint > 0) {
                     // 只有硬件有分数时才执行洗分指令
-                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, 'wash_zero', '開始執行WASH_ZERO realPoint='.$realPoint, ['machine_data' => $services->getMachineCache()]);
+                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, 'wash_zero', '發送清零指令 實際分數='.$realPoint, ['machine_data' => $services->getMachineCache()]);
                     $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
 
                     // 离线小淞：EA D4 已在 handleWashPoint 内轮询 D6（最长20秒）。
@@ -1378,32 +1381,32 @@ function machineWash(
                                 }
                             }
                             $cardScoreAfterWash = $services->card_score;
-                            MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'wash_zero', 'WASH_ZERO card_score兜底確認 confirmed='.($confirmed?'yes':'no').' card_score='.$cardScoreAfterWash, ['machine_data' => $services->getMachineCache()]);
+                            MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'wash_zero', '兜底確認清零 已確認='.($confirmed?'是':'否').' 卡片分數='.$cardScoreAfterWash, ['machine_data' => $services->getMachineCache()]);
                             if (!$confirmed) {
                                 throw new Exception("洗分失败：机台未确认出分（EA D4 非D6，card_score={$cardScoreAfterWash}），请重试");
                             }
                         } else {
-                            MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'wash_zero', 'WASH_ZERO D4已確認D6跳過card_score輪詢', ['machine_data' => $services->getMachineCache()]);
+                            MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'wash_zero', 'D4已確認清零，跳過兜底輪詢', ['machine_data' => $services->getMachineCache()]);
                         }
                     } else {
                         // 在线 Slot：短暂延迟，确保硬件完全清零
                         usleep(200000);  // 200ms
                         $pointAfterWash = $services->point;
-                        MachineLogger::receiveResponse($machine->toArray(), 'wash_zero', 'WASH_ZERO執行完成 point_200ms='.$pointAfterWash, $services->getMachineCache());
+                        MachineLogger::receiveResponse($machine->toArray(), 'wash_zero', '清零完成 當前分數='.$pointAfterWash, $services->getMachineCache());
                     }
                 } else {
-                    MachineLogger::warning($machine->toArray(), 'wash_zero', '跳過WASH_ZERO硬體已是0分 money='.$money, $services->getMachineCache(), MachineLogger::DIR_EVENT);
+                    MachineLogger::warning($machine->toArray(), 'wash_zero', '機台分數已是0，跳過清零指令 記錄金額='.$money, $services->getMachineCache(), MachineLogger::DIR_EVENT);
                 }
 
                 $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
-                MachineLogger::receiveResponse($machine->toArray(), 'all_down', 'ALL_DOWN執行完成', $services->getMachineCache());
+                MachineLogger::receiveResponse($machine->toArray(), 'all_down', '計數器下轉清零完成', $services->getMachineCache());
 
                 // ✅ 线下版小淞：发送 CHECK 归零 total_bet/total_win（GD收账小卡协议）
                 // CHECK(A37005E0F8CE) 回复链 a3f833→EE/EF 后机台计数器清零
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
                     $services->sendCmd($services::CHECK, 0, 'player', $player->id, $is_system);
-                    MachineLogger::receiveResponse($machine->toArray(), 'check', 'CHECK執行完成歸零total_bet/total_win', $services->getMachineCache());
+                    MachineLogger::receiveResponse($machine->toArray(), 'check', '結算計數器歸零完成', $services->getMachineCache());
                 }
 
                 // 机板保持长期登入状态，弃台时不再发登出指令
