@@ -463,7 +463,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
 
             $hasB5B7 = (stripos($msg, 'b5') !== false || stripos($msg, 'b7') !== false);
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'message_parse', '收到非標準長度訊息，嘗試解析', ['machine_data' => $this->getMachineCache(), 'length' => $len, 'has_b5_b7' => $hasB5B7]);
+            MachineLogger::receiveResponse($this->machine->toArray(), 'message_parse', '收到非標準長度訊息，嘗試解析', $this->getMachineCache());
         }
     }
 
@@ -691,14 +691,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                     $calculatedS1 = self::calculateS1($b5Content);
                     if ($s1 != $calculatedS1) {
-                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S1校驗失敗 預期=' . $calculatedS1 . ' 實際=' . $s1, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $b5Data);
+                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S1校驗失敗 預期=' . $calculatedS1 . ' 實際=' . $s1, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                         $offset += 10;
                         continue;
                     }
 
                     $calculatedS2 = self::calculateS2($b5Content, $calculatedS1);
                     if ($s2 != $calculatedS2) {
-                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S2校驗失敗 預期=' . $calculatedS2 . ' 實際=' . $s2, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $b5Data);
+                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S2校驗失敗 預期=' . $calculatedS2 . ' 實際=' . $s2, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                         $offset += 10;
                         continue;
                     }
@@ -707,7 +707,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                     // ✅ P2-5修复：检测计数器溢出（B5最大9999）
                     if ($newCount > 9999) {
-                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] 計數器溢出，資料異常 計數值=' . $newCount, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $b5Data);
+                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] 計數器溢出，資料異常 計數值=' . $newCount, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                         $offset += 10;
                         continue;
                     }
@@ -1489,8 +1489,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     private function cleanupGiftCacheIfNeeded($nowTurn, int $gamingUserId): void
     {
         if ($nowTurn <= 0 && !empty($gamingUserId)) {
-            Cache::delete('gift_cache_' . $this->machine->id . '_' . $gamingUserId);
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_cache', '[小松鋼珠線下-禮物快取] 轉數為0，清理禮物快取 玩家ID=' . $gamingUserId, ['machine_data' => $this->getMachineCache()]);
+            $cacheKey = 'gift_cache_' . $this->machine->id . '_' . $gamingUserId;
+            if (Cache::has($cacheKey)) {
+                Cache::delete($cacheKey);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_cache', '[小松鋼珠線下-禮物快取] 轉數為0，清理禮物快取 玩家ID=' . $gamingUserId, ['machine_data' => $this->getMachineCache()]);
+            }
         }
     }
 
@@ -1574,7 +1577,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $uid = $this->machine->domain . ':' . $this->machine->port;
                 Gateway::sendToUid($uid, hex2bin($cmd . $s1 . $s2));
 
-                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, 'wash_zero', '[小松鋼珠線下-下分回覆] 發送第二次握手 指令碼=' . $cmd . $s1 . $s2, ['machine_data' => $this->getMachineCache()]);
+                MachineLogger::sendCommand($this->machine->toArray(), 'wash_zero', '[小松鋼珠線下-下分回覆] 發送第二次握手', $this->getMachineCache());
                 break;
 
             // 查询分数响应
@@ -1636,7 +1639,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $point = self::parseScore(substr($msg, 4, 6));
                 $this->point = $point;
                 $this->setActionVersion(self::MACHINE_POINT);
-                MachineLogger::receiveResponse($this->machine->toArray(), 'recv_point', '[小松鋼珠線下-新版查詢] 收到分數查詢回覆 分數=' . $point, $this->getMachineCache(), $msg);
+                MachineLogger::receiveResponse($this->machine->toArray(), 'recv_point', '[小松鋼珠線下-新版查詢] 收到分數查詢回覆 分數=' . $point, $this->getMachineCache());
                 break;
 
             // 查询得分响应（新版）：46 EB xx xx xx S1 S2
@@ -2038,8 +2041,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             ]);
         }
 
-        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, ($source === 'admin' ? '管理員操作' : '玩家操作') . ' 機台操作', $this->getMachineCache(), '', $source === 'admin' ? MachineLogger::SOURCE_ADMIN : MachineLogger::SOURCE_PLAYER);
-
         return true;
     }
 
@@ -2440,9 +2441,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $cmd .= $hexString;
         $s1 = self::calculateS1($cmd);
         $s2 = self::calculateS2($cmd, $s1);
-        if (!self::isSilentAction($cmdAction)) {
-            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDesc, $this->getMachineCache());
-        }
         return $cmd . $s1 . $s2;
     }
 
