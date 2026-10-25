@@ -664,7 +664,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->prev_wash_table = $oldWashTable;
             $this->wash_table = $data['wash_table'];
             $this->external_wash_count = $data['wash_table'];  // 旧字段兼容性
-            MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分結束 舊累計量=' . $oldWashTable . ' 新累計量=' . $data['wash_table'], $this->getMachineCache());
+            MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '帳目讀取：洗分計數更新 舊累計量=' . $oldWashTable . ' 新累計量=' . $data['wash_table'], $this->getMachineCache());
         }
 
         // ✅ 更新版本号，表示收到回复
@@ -2170,6 +2170,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
             MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 心跳歸零超時（5s），強制清除洗分確認標記', $this->getMachineCache());
         }
+
+        MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分結束（EA D4確認 D6，洗分量=' . $washScore . '）', $this->getMachineCache());
 
         if ($source === 'admin') {
             $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '状态未知');
