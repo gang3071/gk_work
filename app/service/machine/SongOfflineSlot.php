@@ -512,7 +512,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // ✅ Bug #16修复：E1错误识别（可能是连续的E1，如e1e1e1e1e1e1）
             if (preg_match('/^(e1)+$/i', $msg)) {
-                MachineLogger::error($this->machine->toArray(), 'machine_lock', 'E1記憶體異常-機台已鎖定 訊息字節數=' . (strlen($msg) / 2), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
+                MachineLogger::error($this->machine->toArray(), 'machine_lock', 'E1記憶體異常-機台已鎖定 訊息字節數=' . (strlen($msg) / 2), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 $this->has_lock = 1;
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
                 $processed = true;
@@ -525,9 +525,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 // ✅ 归0成功后自动解锁机台
                 if ($oldHasLock == 1) {
                     $this->has_lock = 0;
-                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_UNLOCK, '歸0成功-機台已自動解鎖', $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
+                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_UNLOCK, '歸0成功-機台已自動解鎖', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 } else {
-                    MachineLogger::receiveResponse($this->machine->toArray(), 'all_down', '歸0完成 類型=' . $resetType, $this->getMachineCache(), $msg);
+                    MachineLogger::receiveResponse($this->machine->toArray(), 'all_down', '歸0完成 類型=' . $resetType, $this->getMachineCache());
                 }
 
                 // ✅ 更新版本号，让 sendRawCmdWithReply 等待循环能感知到回复
@@ -759,7 +759,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $version = substr($msg, 4, 2);
 
         if ($status === 'f8') {
-            MachineLogger::receiveResponse($this->machine->toArray(), 'all_down', '歸0指令已收到 版本號=' . $version, $this->getMachineCache(), $msg);
+            MachineLogger::receiveResponse($this->machine->toArray(), 'all_down', '歸0指令已收到 版本號=' . $version, $this->getMachineCache());
 
             // ✅ 更新版本号，表示收到回复
             $this->setActionVersion(self::CHECK);
@@ -1751,6 +1751,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         }
 
         // CA 全部超时 + EA D4 无法确认 → 锁机台
+        MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分失敗: 重試耗盡，機台已鎖定', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
         throw new Exception("上分失敗：{$maxAttempts}次重試（每次2s）後仍無CA回覆，機台已鎖定，已退還玩家餘額");
@@ -2004,6 +2005,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 }
                 // CA已确认但EA D4 50次内未见D7 → 机台收到指令却未执行，硬件异常，锁机台
                 MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] CA確認但EA D4無D7響應，硬體異常，鎖機台', $this->getMachineCache());
+                MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分失敗: CA確認但EA D4無D7，機台已鎖定', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 $this->has_lock = 1;
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
                 throw new Exception("下分失敗：CA已確認但機台未開始洗分（EA D4無D7），機台已鎖定");
@@ -2067,6 +2069,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] EA D4 最終確認也失敗: '.$statusEx->getMessage(), $this->getMachineCache());
         }
 
+        MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分失敗: 重試耗盡，機台已鎖定', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
         $this->has_lock = 1;
         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
         throw new Exception("下分失敗：{$maxAttempts}次重試（每次2s）後仍無CA回覆，機台已鎖定");
