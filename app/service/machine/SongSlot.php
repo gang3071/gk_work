@@ -1020,7 +1020,7 @@ class SongSlot extends MachineServices implements BaseMachine
 
         MachineLogger::sendCommand(
             $this->machine->toArray(),
-            SongSlot::OPEN_ANY_POINT,
+            MachineLogger::ACTION_OPEN,
             '上分指令 data=' . $data,
             $this->getMachineCache(),
             '',
@@ -1038,7 +1038,7 @@ class SongSlot extends MachineServices implements BaseMachine
                 if ($actionTime > $beforeActionTime) {
                     MachineLogger::receiveResponse(
                         $this->machine->toArray(),
-                        SongSlot::OPEN_ANY_POINT,
+                        MachineLogger::ACTION_OPEN,
                         '上分成功 duration_ms=' . round($handleDuration / 1000, 2),
                         $this->getMachineCache()
                     );
@@ -1107,7 +1107,7 @@ class SongSlot extends MachineServices implements BaseMachine
         if ($attempts == 0) {
             MachineLogger::sendCommand(
                 $this->machine->toArray(),
-                SongSlot::WASH_ZERO,
+                MachineLogger::ACTION_WASH,
                 '下分指令 data=' . $data,
                 $this->getMachineCache(),
                 '',
@@ -1127,7 +1127,7 @@ class SongSlot extends MachineServices implements BaseMachine
                 if ($actionTime > $beforeActionTime) {
                     MachineLogger::receiveResponse(
                         $this->machine->toArray(),
-                        SongSlot::WASH_ZERO,
+                        MachineLogger::ACTION_WASH,
                         '下分成功 attempts=' . ($attempts + 1) . ' duration_ms=' . round($handleDuration / 1000, 2),
                         $this->getMachineCache()
                     );

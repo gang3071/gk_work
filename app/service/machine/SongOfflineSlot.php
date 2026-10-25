@@ -527,7 +527,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $this->has_lock = 0;
                     MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_UNLOCK, '歸0成功-機台已自動解鎖', $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 } else {
-                    MachineLogger::receiveResponse($this->machine->toArray(), self::ALL_DOWN, '歸0完成 type=' . $resetType, $this->getMachineCache(), $msg);
+                    MachineLogger::receiveResponse($this->machine->toArray(), 'all_down', '歸0完成 type=' . $resetType, $this->getMachineCache(), $msg);
                 }
 
                 // ✅ 更新版本号，让 sendRawCmdWithReply 等待循环能感知到回复
@@ -722,7 +722,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $this->login_status = 0;
 
                     $this->logOperation('登出', '登出操作', ['result' => 'A7 C5'], true);
-                    MachineLogger::receiveResponse($this->machine->toArray(), self::LOGOUT, '收賬小卡登出成功', $this->getMachineCache());
+                    MachineLogger::receiveResponse($this->machine->toArray(), 'logout', '收賬小卡登出成功', $this->getMachineCache());
                     $this->setActionVersion(self::LOGOUT);
                 }
                 break;
@@ -759,7 +759,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $version = substr($msg, 4, 2);
 
         if ($status === 'f8') {
-            MachineLogger::receiveResponse($this->machine->toArray(), self::ALL_DOWN, '歸0指令已收到 version=' . $version, $this->getMachineCache(), $msg);
+            MachineLogger::receiveResponse($this->machine->toArray(), 'all_down', '歸0指令已收到 version=' . $version, $this->getMachineCache(), $msg);
 
             // ✅ 更新版本号，表示收到回复
             $this->setActionVersion(self::CHECK);
@@ -2826,7 +2826,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // CHECK 回复链：a3f833 → EE/EF → 机台计数器归零
             try {
                 $this->sendCmd(self::CHECK, 0, 'system');
-                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_WASH, '[線下洗分] CHECK 指令已發送，機台 total_bet/total_win 将歸零', ['machine_data' => $this->getMachineCache()]);
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_WASH, '[線下洗分] CHECK 指令已發送，機台 total_bet/total_win 將歸零', ['machine_data' => $this->getMachineCache()]);
             } catch (Exception $e) {
                 MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '[線下洗分] 發送 CHECK 指令失敗: '.$e->getMessage(), $this->getMachineCache());
             }

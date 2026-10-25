@@ -594,14 +594,14 @@ class Jackpot extends MachineServices implements BaseMachine
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
         if (!Gateway::isUidOnline($uid)) {
-            MachineLogger::error($this->machine->toArray(), self::SCORE_TO_POINT, '機台離線，跳過', $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+            MachineLogger::error($this->machine->toArray(), 'score_to_point', '機台離線，跳過', $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             return;
         }
 
         $sentVersion = $this->setActionVersion(self::SCORE_TO_POINT);
         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::SCORE_TO_POINT)));
 
-        MachineLogger::sendCommand($this->machine->toArray(), self::SCORE_TO_POINT, '異步發送 attempt=' . ($attempts + 1), $this->getMachineCache());
+        MachineLogger::sendCommand($this->machine->toArray(), 'score_to_point', '異步發送 attempt=' . ($attempts + 1), $this->getMachineCache());
 
         $machineId = $this->machine->id;
 
@@ -613,17 +613,17 @@ class Jackpot extends MachineServices implements BaseMachine
             $currentVersion = $svc->getActionVersion(self::SCORE_TO_POINT);
 
             if ($currentVersion > $sentVersion) {
-                MachineLogger::receiveResponse($svc->machine->toArray(), self::SCORE_TO_POINT, '確認成功 attempt=' . ($attempts + 1), $svc->getMachineCache());
+                MachineLogger::receiveResponse($svc->machine->toArray(), 'score_to_point', '確認成功 attempt=' . ($attempts + 1), $svc->getMachineCache());
                 return;
             }
 
             $newAttempts = $attempts + 1;
             if ($newAttempts >= $maxRetries) {
-                MachineLogger::error($svc->machine->toArray(), self::SCORE_TO_POINT, '重試耗盡，放棄 attempts=' . $newAttempts, $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                MachineLogger::error($svc->machine->toArray(), 'score_to_point', '重試耗盡，放棄 attempts=' . $newAttempts, $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 return;
             }
 
-            MachineLogger::warning($svc->machine->toArray(), self::SCORE_TO_POINT, '超時未回覆，重試 attempt=' . $newAttempts, $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
+            MachineLogger::warning($svc->machine->toArray(), 'score_to_point', '超時未回覆，重試 attempt=' . $newAttempts, $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
             $svc->sendScoreToPointAsync($gamingUserId, $newAttempts);
         }, null, false); // false = 只触发一次，不循环
     }
@@ -970,6 +970,7 @@ class Jackpot extends MachineServices implements BaseMachine
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 if ($actionTime > $beforeActionTime) {
+                    MachineLogger::receiveResponse($this->machine->toArray(), $this->getCmdActionName($cmd), '指令已確認 duration_ms=' . round($handleDuration / 1000, 2), $this->getMachineCache());
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',

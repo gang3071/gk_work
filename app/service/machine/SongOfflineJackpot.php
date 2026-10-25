@@ -905,7 +905,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $this->machine->toArray(),
             $player ? ['id' => $player->id, 'uuid' => $player->uuid ?? ''] : ['id' => 0, 'uuid' => ''],
             $type === 'open' ? MachineLogger::ACTION_OPEN : MachineLogger::ACTION_WASH,
-            "[外部按钮]{$type} times={$times} machine_point={$totalMachinePoint} wallet_amount={$walletAmount}",
+            "[外部按鈕]{$type} times={$times} machine_point={$totalMachinePoint} wallet_amount={$walletAmount}",
             $this->getMachineCache()
         );
     }
@@ -1566,7 +1566,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 Redis::publish($this->machine->domain . ':' . $this->machine->port, '设备返回的消息');
                 $cmd = substr($msg, 0, 6);
 
-                MachineLogger::receiveResponse($this->machine->toArray(), self::WASH_ZERO, '收到下分回覆', $this->getMachineCache(), $msg);
+                MachineLogger::receiveResponse($this->machine->toArray(), 'wash', '收到下分回覆', $this->getMachineCache(), $msg);
 
                 $this->setActionVersion($cmd);
                 $s1 = substr($msg, -4, 2);
@@ -1636,7 +1636,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $point = self::parseScore(substr($msg, 4, 6));
                 $this->point = $point;
                 $this->setActionVersion(self::MACHINE_POINT);
-                MachineLogger::receiveResponse($this->machine->toArray(), self::QUERY_REPLY_POINT, '[新版查詢] 收到分數查詢回覆 point=' . $point, $this->getMachineCache(), $msg);
+                MachineLogger::receiveResponse($this->machine->toArray(), 'recv_point', '[新版查詢] 收到分數查詢回覆 point=' . $point, $this->getMachineCache(), $msg);
                 break;
 
             // 查询得分响应（新版）：46 EB xx xx xx S1 S2
@@ -1644,7 +1644,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $score = self::parseScore(substr($msg, 4, 6));
                 $this->score = $score;
                 $this->setActionVersion(self::MACHINE_SCORE);
-                MachineLogger::receiveResponse($this->machine->toArray(), self::QUERY_REPLY_SCORE, '[新版查詢] 收到得分查詢回覆 score=' . $score, $this->getMachineCache(), $msg);
+                MachineLogger::receiveResponse($this->machine->toArray(), 'recv_score', '[新版查詢] 收到得分查詢回覆 score=' . $score, $this->getMachineCache(), $msg);
                 break;
 
             // 查询转数响应（新版）：46 EC xx xx S1 S2
@@ -1652,7 +1652,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                 $this->turn = $turn;
                 $this->setActionVersion(self::MACHINE_TURN);
-                MachineLogger::receiveResponse($this->machine->toArray(), self::QUERY_REPLY_TURN, '[新版查詢] 收到轉數查詢回覆 turn=' . $turn, $this->getMachineCache(), $msg);
+                MachineLogger::receiveResponse($this->machine->toArray(), 'recv_turn', '[新版查詢] 收到轉數查詢回覆 turn=' . $turn, $this->getMachineCache(), $msg);
                 break;
 
             // 查询累积转数响应（新版）：46 ED xx xx xx S1 S2
@@ -1666,7 +1666,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '[新版查詢] 檢測到異常的winNumber值，拒絕更新 old=' . $oldWinNumber . ' new=' . $winNumber . ' delta=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 } else {
                     $this->win_number = $winNumber;
-                    MachineLogger::receiveResponse($this->machine->toArray(), self::QUERY_REPLY_WIN_NUMBER, '[新版查詢] 收到累積轉數查詢回覆 win_number=' . $winNumber, $this->getMachineCache(), $msg);
+                    MachineLogger::receiveResponse($this->machine->toArray(), 'recv_win_number', '[新版查詢] 收到累積轉數查詢回覆 win_number=' . $winNumber, $this->getMachineCache(), $msg);
                 }
                 $this->setActionVersion(self::WIN_NUMBER);
                 break;
@@ -1736,7 +1736,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                     $this->setActionVersion(self::EXTERNAL_BUTTON_QUERY);
 
-                    MachineLogger::receiveResponse($this->machine->toArray(), self::QUERY_REPLY_EXTERNAL, '[新版查詢] 收到外部開洗分碼表查詢回覆 open=' . $openCount . ' wash=' . $washCount, $this->getMachineCache(), $msg);
+                    MachineLogger::receiveResponse($this->machine->toArray(), 'recv_external_open', '[新版查詢] 收到外部開洗分碼表查詢回覆 open=' . $openCount . ' wash=' . $washCount, $this->getMachineCache(), $msg);
                 } else {
                     MachineLogger::error($this->machine->toArray(), 'external_button', '[新版查詢] 外部碼表回覆格式錯誤 expected_len=20 actual_len=' . strlen($msg), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 }

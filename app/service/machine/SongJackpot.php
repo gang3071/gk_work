@@ -957,7 +957,7 @@ class SongJackpot extends MachineServices implements BaseMachine
         $operatorType = $source === 'admin' ? '【管理員操作】' : '【玩家操作】';
         MachineLogger::sendCommand(
             $this->machine->toArray(),
-            $cmd,
+            $this->getCmdActionName($cmd),
             $operatorType . $this->getDescription($cmd),
             $this->getMachineCache(),
             '',
@@ -1020,6 +1020,34 @@ class SongJackpot extends MachineServices implements BaseMachine
             usleep(50000);
             $this->machineAction($uid, $cmd, $source, $source_id, $attempts);
         }
+    }
+
+    /** 將 hex 指令常量轉換為語義化 action 名稱，用於 MachineLogger */
+    private function getCmdActionName(string $cmd): string
+    {
+        static $map = [
+            self::OPEN_ANY_POINT  => MachineLogger::ACTION_OPEN,
+            self::WASH_ZERO       => MachineLogger::ACTION_WASH,
+            self::SCORE_TO_POINT  => 'score_to_point',
+            self::AUTO_UP_TURN    => 'auto_start',
+            self::AUTO_STOP       => 'auto_stop',
+            self::TURN_DOWN_ALL   => 'turn_down_all',
+            self::TURN_UP_ALL     => 'turn_up_all',
+            self::TURN_TO_POINT   => 'turn_to_point',
+            self::POINT_TO_TURN   => 'point_to_turn',
+            self::CLEAR_LOG       => 'clear_log',
+            self::REWARD_SWITCH   => 'reward_switch',
+            self::PUSH_THREE      => 'push_three',
+            self::PUSH_ONE        => 'push_one',
+            self::CHECK           => 'check',
+            self::MACHINE_POINT   => 'read_point',
+            self::MACHINE_SCORE   => 'read_score',
+            self::MACHINE_TURN    => 'read_turn',
+            self::WIN_NUMBER      => 'read_win_number',
+            self::TESTING         => 'heartbeat',
+            self::TESTING2        => 'heartbeat',
+        ];
+        return $map[$cmd] ?? 'send_cmd';
     }
 
     /**
@@ -1142,6 +1170,15 @@ class SongJackpot extends MachineServices implements BaseMachine
     ): void
     {
         $expirationTime = 1000000;
+        MachineLogger::sendCommand(
+            $this->machine->toArray(),
+            MachineLogger::ACTION_OPEN,
+            '上分指令 data=' . $data,
+            $this->getMachineCache(),
+            '',
+            $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
+            ['id' => $source_id, 'uuid' => $this->machine->gamingPlayer->uuid ?? '']
+        );
         try {
             $beforeActionTime = $this->setActionVersion($cmd);
             Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
@@ -1150,6 +1187,12 @@ class SongJackpot extends MachineServices implements BaseMachine
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 if ($actionTime > $beforeActionTime) {
+                    MachineLogger::receiveResponse(
+                        $this->machine->toArray(),
+                        MachineLogger::ACTION_OPEN,
+                        '上分成功 duration_ms=' . round($handleDuration / 1000, 2),
+                        $this->getMachineCache()
+                    );
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -1160,13 +1203,20 @@ class SongJackpot extends MachineServices implements BaseMachine
                     return;
                 }
                 if ($handleDuration >= $expirationTime) {
+                    MachineLogger::error(
+                        $this->machine->toArray(),
+                        MachineLogger::ACTION_OPEN,
+                        '上分等待硬體回覆超時',
+                        $this->getMachineCache(),
+                        MachineLogger::DIR_RESPONSE
+                    );
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
                 usleep($sleep);
                 $handleDuration += $sleep;
             }
-        } catch (Exception) {
-            throw new Exception(trans('machine_action_fail', [], 'message'));
+        } catch (Exception $e) {
+            throw new Exception($e->getMessage());
         }
     }
 
@@ -1193,6 +1243,19 @@ class SongJackpot extends MachineServices implements BaseMachine
     {
         $maxRetries = 8;
         $expirationTime = 1000000;
+
+        if ($attempts == 0) {
+            MachineLogger::sendCommand(
+                $this->machine->toArray(),
+                MachineLogger::ACTION_WASH,
+                '下分指令 data=' . $data,
+                $this->getMachineCache(),
+                '',
+                $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
+                ['id' => $source_id, 'uuid' => $this->machine->gamingPlayer->uuid ?? '']
+            );
+        }
+
         try {
             $beforeActionTime = $this->setActionVersion($cmd);
             Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd . 'c1', 0)));
@@ -1201,6 +1264,12 @@ class SongJackpot extends MachineServices implements BaseMachine
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 if ($actionTime > $beforeActionTime) {
+                    MachineLogger::receiveResponse(
+                        $this->machine->toArray(),
+                        MachineLogger::ACTION_WASH,
+                        '下分成功 attempts=' . ($attempts + 1) . ' duration_ms=' . round($handleDuration / 1000, 2),
+                        $this->getMachineCache()
+                    );
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -1216,11 +1285,24 @@ class SongJackpot extends MachineServices implements BaseMachine
                 usleep($sleep);
                 $handleDuration += $sleep;
             }
-        } catch (Exception) {
+        } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                throw new Exception(trans('machine_action_fail', [], 'message'));
+                MachineLogger::error(
+                    $this->machine->toArray(),
+                    MachineLogger::ACTION_WASH,
+                    '下分達到最大重試次數，硬體始終未回覆 attempts=' . $attempts,
+                    $this->getMachineCache(),
+                    MachineLogger::DIR_RESPONSE
+                );
+                throw new Exception($e->getMessage());
             }
+            MachineLogger::warning(
+                $this->machine->toArray(),
+                MachineLogger::ACTION_WASH,
+                '下分重試中 attempts=' . $attempts . '/' . $maxRetries,
+                $this->getMachineCache()
+            );
             usleep(50000);
             $this->washPoint($uid, $cmd, $data, $source, $source_id, $attempts);
         }
