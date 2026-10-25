@@ -123,9 +123,6 @@ class MachineOperationService
     public function execute(string $action, array $params = []): array
     {
         try {
-            // 记录操作开始
-            $this->logOperation('start', $action, $params);
-
             // 根据操作类型分发
             $result = $this->dispatch($action, $params);
 

@@ -83,7 +83,18 @@ class MachineOperationController
             $lang = $this->setLanguage($request);
 
             // 5. 记录请求日志
-            \app\support\MachineLogger::log($machine->toArray(), $operatorType === MachineOperationService::OPERATOR_ADMIN ? \app\support\MachineLogger::SOURCE_ADMIN : ($operatorType === MachineOperationService::OPERATOR_PLAYER ? \app\support\MachineLogger::SOURCE_PLAYER : \app\support\MachineLogger::SOURCE_SYSTEM), \app\support\MachineLogger::STATUS_NORMAL, \app\support\MachineLogger::DIR_EVENT, $action, '收到请求', ['operator_id' => $operatorId]);
+            $actionLabel = match($action) {
+                'open'  => '收到開分請求',
+                'wash'  => '收到洗分請求',
+                'leave' => '收到弃台請求',
+                default => '收到操作請求：' . $action,
+            };
+            $sourceType = $operatorType === MachineOperationService::OPERATOR_ADMIN
+                ? \app\support\MachineLogger::SOURCE_ADMIN
+                : ($operatorType === MachineOperationService::OPERATOR_PLAYER
+                    ? \app\support\MachineLogger::SOURCE_PLAYER
+                    : \app\support\MachineLogger::SOURCE_SYSTEM);
+            \app\support\MachineLogger::log($machine->toArray(), $sourceType, \app\support\MachineLogger::STATUS_NORMAL, \app\support\MachineLogger::DIR_EVENT, $action, $actionLabel, ['operator_id' => $operatorId]);
 
             // 6. 创建服务实例
             $service = new MachineOperationService(
