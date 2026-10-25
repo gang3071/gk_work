@@ -831,7 +831,7 @@ class Jackpot extends MachineServices implements BaseMachine
         $cmd .= crc8(hex2bin($cmd), 0x31, 0x00, 0x00, true, true, false);
         $full = $cmd . 'DD';
         if (!self::isSilentAction($cmdAction)) {
-            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $description, $this->getMachineCache(), $full);
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $description, $this->getMachineCache());
         }
         return $full;
     }
