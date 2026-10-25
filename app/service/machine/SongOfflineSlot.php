@@ -1794,7 +1794,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] EA D4 回覆超時，重試 第'.$check.'/'.$maxChecks.'次, $this->getMachineCache());
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] EA D4 回覆超時，重試 第'.$check.'/'.$maxChecks.'次', $this->getMachineCache());
                 continue;
             }
 
@@ -2098,7 +2098,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             if (!$replied) {
-                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] EA D4 回覆超時，重試 第'.$check.'/'.$maxChecks.'次, $this->getMachineCache());
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] EA D4 回覆超時，重試 第'.$check.'/'.$maxChecks.'次', $this->getMachineCache());
                 continue;
             }
 
@@ -3448,7 +3448,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         $maxRetries = 3;
         for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-            MachineLogger::warning($this->machine->toArray(), 'login', '[小松斯洛線下-登入檢查] 機台未登入，嘗試自動登入 第'.$attempt.'/'.$maxRetries.'次, $this->getMachineCache());
+            MachineLogger::warning($this->machine->toArray(), 'login', '[小松斯洛線下-登入檢查] 機台未登入，嘗試自動登入 第'.$attempt.'/'.$maxRetries.'次', $this->getMachineCache());
 
             if ($this->loginMachine()) {
                 MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'login', '[小松斯洛線下-登入檢查] 自動登入成功', ['machine_data' => $this->getMachineCache()]);
