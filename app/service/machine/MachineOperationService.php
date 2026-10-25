@@ -126,9 +126,6 @@ class MachineOperationService
             // 根据操作类型分发
             $result = $this->dispatch($action, $params);
 
-            // 记录操作成功
-            $this->logOperation('success', $action, $params, $result);
-
             return [
                 'success' => true,
                 'message' => trans('operation_success', [], 'message', $this->lang),
@@ -1597,7 +1594,6 @@ class MachineOperationService
             $adminUsername
         );
 
-        MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分流程完成 回傳類型=' . gettype($result), $this->services->getMachineCache());
 
         // 处理返回结果
         if ($result === false) {
