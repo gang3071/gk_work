@@ -615,6 +615,13 @@ class Slot extends MachineServices implements BaseMachine
         return $map[$cmd] ?? 'send_cmd';
     }
 
+    private static function isSilentAction(string $action): bool
+    {
+        static $silent = ['read_score', 'read_credit2', 'read_bet', 'read_win', 'read_bb', 'read_rb',
+                          'read_open_table', 'read_wash_table', 'read_insert_coin', 'read_out_coin', 'read_auto_status'];
+        return in_array($action, $silent, true);
+    }
+
     private function createCmd(string $cmd, $data, int $type, string $option = '00'): string
     {
         $cmdAction = $this->getCmdActionName($cmd);
@@ -630,7 +637,9 @@ class Slot extends MachineServices implements BaseMachine
             default:
                 throw new Exception('命令錯誤');
         }
-        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '已組裝指令準備發送', $this->getMachineCache(), $cmd);
+        if (!self::isSilentAction($cmdAction)) {
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '已組裝指令準備發送', $this->getMachineCache(), $cmd);
+        }
         return $cmd;
     }
 

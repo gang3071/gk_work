@@ -788,6 +788,12 @@ class Jackpot extends MachineServices implements BaseMachine
         return $map[$cmd] ?? 'send_cmd';
     }
 
+    private static function isSilentAction(string $action): bool
+    {
+        static $silent = ['read_point', 'read_win_number', 'push', 'clear_log', 'read_score', 'read_turn', 'read_open_point', 'read_wash_point', 'read_bb_rush'];
+        return in_array($action, $silent, true);
+    }
+
     /**
      * 创建cmd
      * @param string $cmd 指令
@@ -823,7 +829,9 @@ class Jackpot extends MachineServices implements BaseMachine
         $cmd .= jackpotEncodeDataXor55($data) . '000000000000'; // 异或位处理
         $cmd .= crc8(hex2bin($cmd), 0x31, 0x00, 0x00, true, true, false);
         $full = $cmd . 'DD';
-        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $description, $this->getMachineCache(), $full);
+        if (!self::isSilentAction($cmdAction)) {
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $description, $this->getMachineCache(), $full);
+        }
         return $full;
     }
 
@@ -995,7 +1003,9 @@ class Jackpot extends MachineServices implements BaseMachine
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 if ($actionTime > $beforeActionTime) {
-                    MachineLogger::receiveResponse($this->machine->toArray(), $this->getCmdActionName($cmd), '硬體已確認 耗時(ms)=' . round($handleDuration / 1000, 2), $this->getMachineCache());
+                    if (!self::isSilentAction($this->getCmdActionName($cmd))) {
+                        MachineLogger::receiveResponse($this->machine->toArray(), $this->getCmdActionName($cmd), '硬體已確認 耗時(ms)=' . round($handleDuration / 1000, 2), $this->getMachineCache());
+                    }
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',

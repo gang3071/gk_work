@@ -2411,6 +2411,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         return $map[$cmd] ?? $map[substr($cmd, 0, 4)] ?? 'send_cmd';
     }
 
+    private static function isSilentAction(string $action): bool
+    {
+        static $silent = ['read_point', 'read_win_number', 'read_score', 'read_turn', 'clear_log',
+                          'recv_point', 'recv_score', 'recv_turn', 'recv_win_number'];
+        return in_array($action, $silent, true);
+    }
+
     /**
      * 创建指令（添加S1/S2校验）
      *
@@ -2432,7 +2439,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $cmd .= $hexString;
         $s1 = self::calculateS1($cmd);
         $s2 = self::calculateS2($cmd, $s1);
-        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '發送指令', $this->getMachineCache(), $cmd . $s1 . $s2);
+        if (!self::isSilentAction($cmdAction)) {
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '發送指令', $this->getMachineCache(), $cmd . $s1 . $s2);
+        }
         return $cmd . $s1 . $s2;
     }
 
