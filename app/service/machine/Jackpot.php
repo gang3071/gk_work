@@ -790,7 +790,7 @@ class Jackpot extends MachineServices implements BaseMachine
 
     private static function isSilentAction(string $action): bool
     {
-        static $silent = ['read_point', 'read_win_number', 'push', 'clear_log', 'read_score', 'read_turn', 'read_open_point', 'read_wash_point', 'read_bb_rush'];
+        static $silent = ['push', 'clear_log', 'read_score', 'read_turn', 'read_open_point', 'read_wash_point', 'read_bb_rush'];
         return in_array($action, $silent, true);
     }
 
@@ -813,7 +813,8 @@ class Jackpot extends MachineServices implements BaseMachine
             self::WASH_ZERO             => '發送清零指令',
             self::WASH_ZERO_REMAINDER   => '發送清零留餘數指令',
             self::CLEAR_LOG             => '發送清除日誌指令',
-            self::MACHINE_POINT         => '發送讀取機台分數指令',
+            self::MACHINE_POINT         => '讀取機台當前分數',
+            self::WIN_NUMBER            => '讀取中獎號碼（打碼轉數）',
             self::MACHINE_SCORE         => '發送讀取得分指令',
             self::MACHINE_TURN          => '發送讀取轉數指令',
             self::AUTO_UP_TURN          => '發送自動開始指令',
@@ -1003,8 +1004,14 @@ class Jackpot extends MachineServices implements BaseMachine
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 if ($actionTime > $beforeActionTime) {
-                    if (!self::isSilentAction($this->getCmdActionName($cmd))) {
-                        MachineLogger::receiveResponse($this->machine->toArray(), $this->getCmdActionName($cmd), '硬體已確認 耗時(ms)=' . round($handleDuration / 1000, 2), $this->getMachineCache());
+                    $respondAction = $this->getCmdActionName($cmd);
+                    if (!self::isSilentAction($respondAction)) {
+                        static $responseDescMap = [
+                            'read_point'      => '機台分數已讀取',
+                            'read_win_number' => '中獎號碼已讀取',
+                        ];
+                        $responseDesc = ($responseDescMap[$respondAction] ?? '硬體已確認') . ' 耗時(ms)=' . round($handleDuration / 1000, 2);
+                        MachineLogger::receiveResponse($this->machine->toArray(), $respondAction, $responseDesc, $this->getMachineCache());
                     }
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
