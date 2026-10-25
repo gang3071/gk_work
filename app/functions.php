@@ -1340,9 +1340,6 @@ function machineWash(
             case GameType::TYPE_STEEL_BALL:
                 $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
                 $services->sendCmd($services::CLEAR_LOG, 0, 'player', $player->id, $is_system);
-                if ($machine->control_type == Machine::CONTROL_TYPE_MEI) {
-                    MachineLogger::receiveResponse($machine->toArray(), MachineLogger::ACTION_WASH, '下分結束', $services->getMachineCache());
-                }
                 break;
             case GameType::TYPE_SLOT:
                 // ⚠️ CRITICAL：洗分前二次确认机台分数，防止竞态条件
