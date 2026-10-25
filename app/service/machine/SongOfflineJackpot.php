@@ -2426,6 +2426,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     private function createCmd(string $cmd, mixed $data = 0): string
     {
         $cmdAction = $this->getCmdActionName($cmd);
+        $cmdDesc = $this->getCmdDescription($cmd); // 在 $cmd 被修改前計算描述
         // ✅ 替换分机号（指令常量硬编码为46，需要替换为实际分机号）
         if (strlen($cmd) >= 2 && $this->extensionNumber !== '46') {
             $cmd = $this->extensionNumber . substr($cmd, 2);
@@ -2440,7 +2441,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $s1 = self::calculateS1($cmd);
         $s2 = self::calculateS2($cmd, $s1);
         if (!self::isSilentAction($cmdAction)) {
-            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '發送指令', $this->getMachineCache());
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDesc, $this->getMachineCache());
         }
         return $cmd . $s1 . $s2;
     }
