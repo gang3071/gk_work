@@ -874,7 +874,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $flags = $this->detectMachineStatusFlags($fields['status_value']);
 
         // 记录解析结果
-        MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[小松斯洛線下-機台情況] 查詢回覆 開分狀態='.strtoupper($fields['open_status']).' 洗分狀態='.strtoupper($fields['wash_status']).' 重試次數='.$fields['retry_count'], $this->getMachineCache());
+        MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[小松斯洛線下-機台情況] 查詢回覆 開分='.self::descStatus($fields['open_status']).' 洗分='.self::descStatus($fields['wash_status']).' 重試次數='.$fields['retry_count'], $this->getMachineCache());
 
         // ✅ 使用提取的方法更新状态
         $this->updateMachineStatus($fields, $flags);
@@ -1613,7 +1613,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         $preFields = json_decode($preRaw, true) ?: [];
                         $preStatus = $preFields['open_status'] ?? '';
 
-                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 重試前EA D4預檢 狀態碼='.$preStatus, ['machine_data' => $this->getMachineCache()]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 重試前EA D4預檢 '.self::descStatus($preStatus), ['machine_data' => $this->getMachineCache()]);
 
                         if ($preStatus === 'd3' || $preStatus === 'd2') {
                             MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 重試前EA D4確認機台已在執行，取消重發A5直接確認', $this->getMachineCache());
@@ -1675,11 +1675,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $statusFields = json_decode($statusRaw, true) ?: [];
                     $openStatus   = $statusFields['open_status'] ?? '';
 
-                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] CA超時，EA D4查詢機台狀態 狀態碼='.$openStatus, ['machine_data' => $this->getMachineCache()]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] CA超時，EA D4查詢機台狀態 '.self::descStatus($openStatus), ['machine_data' => $this->getMachineCache()]);
 
                     if ($openStatus === 'd3' || $openStatus === 'd2') {
                         // D3=开分进行中；D2=开分完成。两种状态均表示机台已收到并执行指令（CA丢包），跳过重试
-                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] CA丟包但機台已執行，跳過重試 狀態碼='.$openStatus, $this->getMachineCache());
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] CA丟包，機台已執行（'.self::descStatus($openStatus).'），跳過重試', $this->getMachineCache());
                         $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
                         return;
                     }
@@ -1724,10 +1724,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $nullFields     = json_decode($nullStatusRaw, true) ?: [];
                     $nullOpenStatus = $nullFields['open_status'] ?? '';
 
-                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 結果未知，EA D4查詢機台狀態 狀態碼='.$nullOpenStatus, ['machine_data' => $this->getMachineCache()]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 結果未知，EA D4查詢機台狀態 '.self::descStatus($nullOpenStatus), ['machine_data' => $this->getMachineCache()]);
 
                     if ($nullOpenStatus === 'd3' || $nullOpenStatus === 'd2') {
-                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 結果未知但機台已執行（D3/D2），跳過重試直接確認 狀態碼='.$nullOpenStatus, $this->getMachineCache());
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 結果未知但機台已執行（'.self::descStatus($nullOpenStatus).'），跳過重試直接確認', $this->getMachineCache());
                         $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
                         return;
                     }
@@ -1745,7 +1745,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $fields = $raw ? json_decode($raw, true) : [];
             if (($fields['open_status'] ?? '') === 'd2') {
                 // 机台已完成开分，CA 只是丢包，当作成功处理
-                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] EA D4 確認 d2，CA丟包但開分成功，跳過鎖機台', $this->getMachineCache());
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] EA D4 確認開分完成，CA丟包但開分成功，跳過鎖機台', $this->getMachineCache());
                 return;
             }
         } catch (\Exception $statusEx) {
@@ -1804,7 +1804,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $washStatus = $fields['wash_status'] ?? '';
             $retryCount = (int)($fields['retry_count'] ?? 0);
 
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] EA D4 查詢 狀態碼='.$openStatus.' 重試次數='.$retryCount, ['machine_data' => $this->getMachineCache()]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] EA D4 查詢 '.self::descStatus($openStatus).' 重試次數='.$retryCount, ['machine_data' => $this->getMachineCache()]);
 
             if ($openStatus === 'd2') {
                 // 开分完成，退出轮询
@@ -1819,7 +1819,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         }
 
         if (!$confirmed) {
-            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] EA D4 輪詢結束仍為D3或無回覆，以CA確認為準 狀態碼='.$openStatus, $this->getMachineCache());
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] EA D4 輪詢結束仍為開分中或無回覆，以CA確認為準（'.self::descStatus($openStatus).'）', $this->getMachineCache());
         }
 
         // 上分流程结束（无论D2是否确认），清除洗分保護标记，
@@ -1847,6 +1847,18 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 'description' => "上分{$openDesc}（{$times}次×" . self::OPEN_UNIT . "分={$data}分）｜{$washDesc}{$retryDesc}",
             ]);
         }
+    }
+
+    private static function descStatus(string $status): string
+    {
+        return match(strtolower($status)) {
+            'd2' => '開分完成',
+            'd3' => '開分中',
+            'd6' => '洗分完成',
+            'd7' => '洗分中',
+            ''   => '無回覆',
+            default => '未知(' . strtoupper($status) . ')',
+        };
     }
 
     /**
@@ -1894,11 +1906,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                         $preFields = json_decode($preRaw, true) ?: [];
                         $preStatus = $preFields['wash_status'] ?? '';
 
-                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 重試前EA D4預檢 狀態碼='.$preStatus, ['machine_data' => $this->getMachineCache()]);
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 重試前EA D4預檢 '.self::descStatus($preStatus), ['machine_data' => $this->getMachineCache()]);
 
                         $preScore = (int)($preFields['wash_score'] ?? 0);
                         if ($preStatus === 'd7' || ($preStatus === 'd6' && $preScore > 0)) {
-                            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 重試前EA D4確認機台已在執行，取消重發A5直接確認 狀態碼='.$preStatus, $this->getMachineCache());
+                            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 重試前EA D4確認機台已在執行（'.self::descStatus($preStatus).'），取消重發A5直接確認', $this->getMachineCache());
                             if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
                                 return;
                             }
@@ -1962,11 +1974,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $washStatus   = $statusFields['wash_status'] ?? '';
                     $washScore    = (int)($statusFields['wash_score'] ?? 0);
 
-                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] CA超時，EA D4查詢機台狀態 狀態碼='.$washStatus, ['machine_data' => $this->getMachineCache()]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] CA超時，EA D4查詢機台狀態 '.self::descStatus($washStatus), ['machine_data' => $this->getMachineCache()]);
 
                     if ($washStatus === 'd7' || ($washStatus === 'd6' && $washScore > 0)) {
                         // D7=洗分中；D6+wash_score>0=本次洗分已完成
-                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] CA丟包但機台已執行，等待D6完成，跳過重試 狀態碼='.$washStatus, $this->getMachineCache());
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] CA丟包，機台已執行（'.self::descStatus($washStatus).'），跳過重試', $this->getMachineCache());
                         if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
                             return;
                         }
@@ -1979,7 +1991,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     }
                 }
 
-                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 繼續重試A5 狀態碼='.($washStatus ?? ''), $this->getMachineCache());
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 繼續重試A5（'.self::descStatus($washStatus ?? '').'）', $this->getMachineCache());
                 continue;
             }
 
@@ -2022,10 +2034,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $nullWashStatus = $nullFields['wash_status'] ?? '';
                     $nullWashScore  = (int)($nullFields['wash_score'] ?? 0);
 
-                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 結果未知，EA D4查詢機台狀態 狀態碼='.$nullWashStatus, ['machine_data' => $this->getMachineCache()]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 結果未知，EA D4查詢機台狀態 '.self::descStatus($nullWashStatus), ['machine_data' => $this->getMachineCache()]);
 
                     if ($nullWashStatus === 'd7' || ($nullWashStatus === 'd6' && $nullWashScore > 0)) {
-                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 結果未知但機台已執行（D7/D6），嘗試確認 狀態碼='.$nullWashStatus, $this->getMachineCache());
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 結果未知但機台已執行（'.self::descStatus($nullWashStatus).'），嘗試確認', $this->getMachineCache());
                         if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
                             return;
                         }
@@ -2112,7 +2124,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $seenD7 = true;
             }
 
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] EA D4 查詢 狀態碼='.$washStatus.' 洗分量='.$washScore, ['machine_data' => $this->getMachineCache()]);
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] EA D4 查詢 '.self::descStatus($washStatus).' 洗分量='.$washScore, ['machine_data' => $this->getMachineCache()]);
 
             if ($washStatus === 'd6') {
                 if ($washScore > 0 || $seenD7) {
@@ -2137,7 +2149,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         if (!$confirmed && !$seenD7) {
             // 50次轮询内既未确认真实D6，也未见过D7 → 机台未执行本次洗分
             // 返回 false 让调用方决定（继续重试A5 或 锁机台）
-            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 確認洗分：50次輪詢内無D7/真實D6，視為過期狀態未執行 狀態碼='.$washStatus, $this->getMachineCache());
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 確認洗分：50次輪詢内無洗分中/洗分完成，視為機台未執行（'.self::descStatus($washStatus).'）', $this->getMachineCache());
             return false;
         }
 
@@ -2149,7 +2161,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->point = 0;
 
         if (!$confirmed) {
-            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] EA D4 輪詢結束仍為D7或無回覆，card_score已清零，等待A6兜底 狀態碼='.$washStatus, $this->getMachineCache());
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] EA D4 輪詢結束仍為洗分中或無回覆，card_score已清零，等待A6兜底（'.self::descStatus($washStatus).'）', $this->getMachineCache());
         }
 
         // 等待心跳最终确认机台 B1 寄存器物理归零，最多等 5s
