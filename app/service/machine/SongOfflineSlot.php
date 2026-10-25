@@ -656,7 +656,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->prev_open_table = $oldOpenTable;
             $this->open_table = $data['open_table'];
             $this->external_open_count = $data['open_table'];  // 旧字段兼容性
-            MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分結束 舊累計量=' . $oldOpenTable . ' 新累計量=' . $data['open_table'], $this->getMachineCache());
+            MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '帳目讀取：開分計數更新 舊累計量=' . $oldOpenTable . ' 新累計量=' . $data['open_table'], $this->getMachineCache());
         }
 
         if ($data['wash_table'] != $oldWashTable) {
@@ -1831,6 +1831,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $deCmd = $this->createCmd(self::ALL_DOWN);
         Gateway::sendToUid($uid, hex2bin($deCmd));
         MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分完成EA DE清除機台历史狀態', ['machine_data' => $this->getMachineCache()]);
+
+        MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分結束（EA D4確認 D2，回補次數=' . $retryCount . '）', $this->getMachineCache());
 
         if ($source === 'admin') {
             $openDesc = $openStatus === 'd2' ? '开分完成' : ($openStatus === 'd3' ? '开分中' : '状态未知');
