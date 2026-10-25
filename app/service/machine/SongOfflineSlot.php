@@ -849,8 +849,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function handleMachineStatusReply(string $msg): bool
     {
-        // ✅ 入口日志
-        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'status_query', '[小松斯洛線下-機台情況] 處理開始 長度='.strlen($msg), ['machine_data' => $this->getMachineCache()]);
 
         // A7 D2 00 01 00 00 D6 10 00 63 1E DC 1E 14 00 00 AC xx xx xx SUM1 SUM2
         // 最小长度：44字符（22字节）
