@@ -215,7 +215,7 @@ class MachineLogger
             self::STATUS_NORMAL,
             self::DIR_COMMAND,
             $cmd,
-            $cmdDesc,
+            $cmdDesc !== '' ? '↑ ' . $cmdDesc : '',
             [
                 'player_id' => $player['id'] ?? 0,
                 'player_uuid' => $player['uuid'] ?? '',
@@ -246,7 +246,7 @@ class MachineLogger
             empty($problems) ? self::STATUS_NORMAL : self::STATUS_WARNING,
             self::DIR_RESPONSE,
             $cmd,
-            $cmdDesc,
+            $cmdDesc !== '' ? '↓ ' . $cmdDesc : '',
             [
                 'has_problem' => empty($problems) ? 0 : 1,
                 'problem_desc' => implode(' | ', $problems),
