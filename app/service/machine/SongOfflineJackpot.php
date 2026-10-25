@@ -2440,7 +2440,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $s1 = self::calculateS1($cmd);
         $s2 = self::calculateS2($cmd, $s1);
         if (!self::isSilentAction($cmdAction)) {
-            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '發送指令', $this->getMachineCache(), $cmd . $s1 . $s2);
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '發送指令', $this->getMachineCache());
         }
         return $cmd . $s1 . $s2;
     }
@@ -2557,11 +2557,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     $baseCmd = substr($cmd, 0, 4); // '46ca3f' → '46ca'
                     $this->setActionVersion($baseCmd);
 
-                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'open_point', '[小松鋼珠線下-開分成功] 收到機台回覆', [
-                        'full_cmd' => $cmd,
-                        'base_cmd' => $baseCmd,
-                        'wait_time_ms' => $handleDuration / 1000,
-                    ]);
+                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分結束', $this->getMachineCache());
                     return;
                 }
 
@@ -2598,15 +2594,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $sendCmd = $this->createCmd($cmd . 'c1', 0);
 
             // ✅ 详细日志：记录下分请求
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, 'wash_point', '[小松鋼珠線下-下分請求] 發送第一次握手', [
-                'cmd' => $cmd,
-                'full_cmd' => $cmd . 'c1',
-                'hex_cmd' => $sendCmd,
-                'before_action_time' => $beforeActionTime,
-                'attempts' => $attempts,
-                'source' => $source,
-                'player_id' => $source === 'player' ? $source_id : 0,
-            ]);
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分開始', $this->getMachineCache());
 
             Gateway::sendToUid($uid, hex2bin($sendCmd));
             $handleDuration = 0;
@@ -2641,13 +2629,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     $baseCmd = substr($cmd, 0, 4); // '46cb3f' → '46cb'
                     $this->setActionVersion($baseCmd);
 
-                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'wash_point', '[小松鋼珠線下-下分成功] 收到機台回覆', [
-                        'full_cmd' => $cmd,
-                        'base_cmd' => $baseCmd,
-                        'wait_time_ms' => $handleDuration / 1000,
-                        'check_count' => $checkCount,
-                        'attempts' => $attempts,
-                    ]);
+                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分結束', $this->getMachineCache());
                     return;
                 }
 
