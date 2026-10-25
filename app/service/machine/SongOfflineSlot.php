@@ -1482,7 +1482,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 case self::SSR_SIGNAL:      // SSR讯号（EA EC）
                 // ✅ 使用 createCmd 添加校验和
                     $fullCmd = $this->createCmd($cmd);
-                    MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDescription, $this->getMachineCache(), strtoupper($fullCmd));
+                    MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDescription, $this->getMachineCache());
                     Gateway::sendToUid($uid, hex2bin($fullCmd));
                     break;
 
@@ -3596,7 +3596,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             Timer::add(1, function() use ($uid, $machineArr, $machineCache, $retryCount, $cmd) {
                 Gateway::sendToUid($uid, hex2bin($cmd));
-                MachineLogger::sendCommand($machineArr, 'ca_fault', '[小松斯洛線下] 發送重試查詢指令 重試次數='.$retryCount, $machineCache, strtoupper($cmd));
+                MachineLogger::sendCommand($machineArr, 'ca_fault', '[小松斯洛線下] 發送重試查詢指令 重試次數='.$retryCount, $machineCache);
             }, null, false);  // false表示只执行一次
 
             // 返回true，表示消息已处理（从缓冲区移除），但数据已丟棄（不更新Redis）
