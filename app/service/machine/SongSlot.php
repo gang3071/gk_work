@@ -800,22 +800,24 @@ class SongSlot extends MachineServices implements BaseMachine
             );
             throw new Exception($e->getMessage());
         }
-        // ✅ 优化：精简日志，只记录关键信息，移除冗余的 machine_data
-        $operatorType = $source === 'admin' ? '【管理員操作】' : '【玩家操作】';
-        MachineLogger::log(
-            $this->machine->toArray(),
-            $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
-            MachineLogger::STATUS_NORMAL,
-            MachineLogger::DIR_COMMAND,
-            'sendCmd',
-            $operatorType . '機台操作 cmd=' . $cmd,
-            [
-                'player_id'   => $this->machine->gamingPlayer->id ?? 0,
-                'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',
-                'operator_id' => $source_id,
-                'machine_data' => $this->getMachineCache(),
-            ]
-        );
+        // OPEN_ANY_POINT / WASH_ZERO 已在 openPoint()/washPoint() 內部完整記錄日誌，此處跳過避免重複
+        if (!in_array($cmd, [self::OPEN_ANY_POINT, self::WASH_ZERO])) {
+            $operatorType = $source === 'admin' ? '【管理員操作】' : '【玩家操作】';
+            MachineLogger::log(
+                $this->machine->toArray(),
+                $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
+                MachineLogger::STATUS_NORMAL,
+                MachineLogger::DIR_COMMAND,
+                'sendCmd',
+                $operatorType . '機台操作 cmd=' . $cmd,
+                [
+                    'player_id'   => $this->machine->gamingPlayer->id ?? 0,
+                    'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',
+                    'operator_id' => $source_id,
+                    'machine_data' => $this->getMachineCache(),
+                ]
+            );
+        }
 
         return true;
     }
