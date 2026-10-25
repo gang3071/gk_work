@@ -433,7 +433,7 @@ class Slot extends MachineServices implements BaseMachine
                     return false;
             }
         } catch (\Exception $e) {
-            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
         return true;
@@ -638,7 +638,7 @@ class Slot extends MachineServices implements BaseMachine
                 throw new Exception('命令錯誤');
         }
         if (!self::isSilentAction($cmdAction)) {
-            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '已組裝指令準備發送', $this->getMachineCache(), $cmd);
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '已組裝指令準備發送', $this->getMachineCache());
         }
         return $cmd;
     }
@@ -796,7 +796,7 @@ class Slot extends MachineServices implements BaseMachine
         $expirationTime = 1000000;
 
         if ($attempts == 0) {
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '下分開始', ['machine_data' => $this->getMachineCache()]);
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分開始', $this->getMachineCache());
         }
 
         try {
@@ -1273,7 +1273,7 @@ class Slot extends MachineServices implements BaseMachine
                     return false;
             }
         } catch (\Exception $e) {
-            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 

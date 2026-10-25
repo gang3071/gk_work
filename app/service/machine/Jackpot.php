@@ -578,7 +578,7 @@ class Jackpot extends MachineServices implements BaseMachine
                     return false;
             }
         } catch (\Exception $e) {
-            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 

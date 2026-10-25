@@ -354,8 +354,7 @@ class SongSlot extends MachineServices implements BaseMachine
                             'machine_lock',
                             '心跳校驗位異常-機台已鎖定 校驗位=' . substr($msg, 18, 2),
                             $this->getMachineCache(),
-                            MachineLogger::DIR_RESPONSE,
-                            $msg
+                            MachineLogger::DIR_RESPONSE
                         );
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
                         throw new \Exception('機台故障');
@@ -566,8 +565,7 @@ class SongSlot extends MachineServices implements BaseMachine
                             'machine_lock',
                             '機台狀態異常-機台已鎖定 故障碼=' . $machineStatus,
                             $this->getMachineCache(),
-                            MachineLogger::DIR_RESPONSE,
-                            $msg
+                            MachineLogger::DIR_RESPONSE
                         );
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
                         throw new \Exception('機台故障, 故障碼:' . $machineStatus);
@@ -600,7 +598,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     break;
             }
         } catch (\Exception $e) {
-            MachineLogger::error($this->machine->toArray(), 'message_error', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+            MachineLogger::error($this->machine->toArray(), 'message_error', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 
@@ -794,7 +792,7 @@ class SongSlot extends MachineServices implements BaseMachine
             MachineLogger::error(
                 $this->machine->toArray(),
                 'send_cmd',
-                '發送指令失敗 指令碼=' . $cmd . ': ' . $e->getMessage(),
+                '發送指令失敗: ' . $e->getMessage(),
                 $this->getMachineCache(),
                 MachineLogger::DIR_COMMAND
             );

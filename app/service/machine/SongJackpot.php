@@ -413,7 +413,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                 if (substr($msg, 18, 2) != 'da') {
                     $this->has_lock = 1;
 
-                    MachineLogger::error($this->machine->toArray(), 'machine_lock', '心跳位元組校驗失敗-機台已鎖定', $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
+                    MachineLogger::error($this->machine->toArray(), 'machine_lock', '心跳位元組校驗失敗-機台已鎖定', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
 
                     sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
                     throw new \Exception('機台故障');
@@ -609,7 +609,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                                 $this->has_lock = 1;
 
                             $faultCode = ($action == self::FAULT1_MACHINE_SCORE) ? '得分讀取一次異常' : '得分讀取持續異常';
-                            MachineLogger::error($this->machine->toArray(), 'machine_lock', '機台回報故障-機台已鎖定: ' . $faultCode, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
+                            MachineLogger::error($this->machine->toArray(), 'machine_lock', '機台回報故障-機台已鎖定: ' . $faultCode, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
 
                                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
                                 throw new \Exception('機台故障');
@@ -655,7 +655,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                                 // winNumber 在正常游戏中不应该突然变化超过100
                                 // 也不应该大幅减少（除非是机器重启，但那样应该是从0开始）
                                 if (abs($delta) > 100) {
-                                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '中洞兌獎次數異常，拒絕更新 舊值=' . $oldWinNumber . ' 新值=' . $winNumber . ' 差值=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+                                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '中洞兌獎次數異常，拒絕更新 舊值=' . $oldWinNumber . ' 新值=' . $winNumber . ' 差值=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                                     // 不更新 win_number，保持原值
                                     // 但仍然设置 action version 以免阻塞等待
                                 } else {
@@ -675,7 +675,7 @@ class SongJackpot extends MachineServices implements BaseMachine
             }
 
         } catch (\Exception $e) {
-            MachineLogger::error($this->machine->toArray(), 'message_error', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg ?? '');
+            MachineLogger::error($this->machine->toArray(), 'message_error', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 
