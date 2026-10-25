@@ -1176,7 +1176,7 @@ class SongJackpot extends MachineServices implements BaseMachine
         MachineLogger::sendCommand(
             $this->machine->toArray(),
             MachineLogger::ACTION_OPEN,
-            '上分指令 data=' . $data,
+            '開分開始 data=' . $data,
             $this->getMachineCache(),
             '',
             $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
@@ -1193,7 +1193,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                     MachineLogger::receiveResponse(
                         $this->machine->toArray(),
                         MachineLogger::ACTION_OPEN,
-                        '上分成功 duration_ms=' . round($handleDuration / 1000, 2),
+                        '開分結束 duration_ms=' . round($handleDuration / 1000, 2),
                         $this->getMachineCache()
                     );
                     if ($source == 'admin') {
@@ -1209,7 +1209,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                     MachineLogger::error(
                         $this->machine->toArray(),
                         MachineLogger::ACTION_OPEN,
-                        '上分等待硬體回覆超時',
+                        '開分失敗-等待硬體超時',
                         $this->getMachineCache(),
                         MachineLogger::DIR_RESPONSE
                     );
@@ -1251,7 +1251,7 @@ class SongJackpot extends MachineServices implements BaseMachine
             MachineLogger::sendCommand(
                 $this->machine->toArray(),
                 MachineLogger::ACTION_WASH,
-                '下分指令 data=' . $data,
+                '下分開始 data=' . $data,
                 $this->getMachineCache(),
                 '',
                 $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
@@ -1270,7 +1270,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                     MachineLogger::receiveResponse(
                         $this->machine->toArray(),
                         MachineLogger::ACTION_WASH,
-                        '下分成功 attempts=' . ($attempts + 1) . ' duration_ms=' . round($handleDuration / 1000, 2),
+                        '下分結束 attempts=' . ($attempts + 1) . ' duration_ms=' . round($handleDuration / 1000, 2),
                         $this->getMachineCache()
                     );
                     if ($source == 'admin') {
@@ -1294,7 +1294,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                 MachineLogger::error(
                     $this->machine->toArray(),
                     MachineLogger::ACTION_WASH,
-                    '下分達到最大重試次數，硬體始終未回覆 attempts=' . $attempts,
+                    '下分失敗-重試耗盡 attempts=' . $attempts,
                     $this->getMachineCache(),
                     MachineLogger::DIR_RESPONSE
                 );

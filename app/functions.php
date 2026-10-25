@@ -1255,7 +1255,7 @@ function machineWash(
                 $gamingPressure = (int)bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
                 $gamingScore = (int)bcsub($services->win ?? '0', $services->player_score ?? '0');
 
-                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, 'slot->wash開始', ['machine_data' => $services->getMachineCache(), 'gaming_pressure' => $gamingPressure, 'gaming_score' => $gamingScore]);
+                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '下分開始', ['machine_data' => $services->getMachineCache(), 'gaming_pressure' => $gamingPressure, 'gaming_score' => $gamingScore]);
 
                 if (!empty($giftPoint)) {
                     if ($money < $giftPoint['open_point'] * $giftPoint['condition']) {

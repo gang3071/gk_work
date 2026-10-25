@@ -915,7 +915,7 @@ class Jackpot extends MachineServices implements BaseMachine
                 }
 
                 if ($actionTime > $beforeActionTime && $beforePoint < $point) {
-                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分成功', $this->getMachineCache());
+                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分結束', $this->getMachineCache());
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',

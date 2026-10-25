@@ -656,7 +656,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->prev_open_table = $oldOpenTable;
             $this->open_table = $data['open_table'];
             $this->external_open_count = $data['open_table'];  // 旧字段兼容性
-            MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分碼表更新 old=' . $oldOpenTable . ' new=' . $data['open_table'], $this->getMachineCache());
+            MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分結束 old=' . $oldOpenTable . ' new=' . $data['open_table'], $this->getMachineCache());
         }
 
         if ($data['wash_table'] != $oldWashTable) {
@@ -664,7 +664,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->prev_wash_table = $oldWashTable;
             $this->wash_table = $data['wash_table'];
             $this->external_wash_count = $data['wash_table'];  // 旧字段兼容性
-            MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '洗分碼表更新 old=' . $oldWashTable . ' new=' . $data['wash_table'], $this->getMachineCache());
+            MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分結束 old=' . $oldWashTable . ' new=' . $data['wash_table'], $this->getMachineCache());
         }
 
         // ✅ 更新版本号，表示收到回复
@@ -1624,7 +1624,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
             Cache::delete($this->cacheDataKey . '_last_open_result');
 
-            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[收賬小卡-上分] 發送上分指令 attempt='.$attempt.'/'.$maxAttempts, $this->getMachineCache(), strtoupper($fullCmd));
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分開始 attempt='.$attempt.'/'.$maxAttempts, $this->getMachineCache(), strtoupper($fullCmd));
 
             Gateway::sendToUid($uid, hex2bin($fullCmd));
 
@@ -1911,7 +1911,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
             Cache::delete($this->cacheDataKey . '_last_open_result');
 
-            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_WASH, '[收賬小卡-下分] 發送下分指令 attempt='.$attempt.'/'.$maxAttempts, $this->getMachineCache(), strtoupper($fullCmd));
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分開始 attempt='.$attempt.'/'.$maxAttempts, $this->getMachineCache(), strtoupper($fullCmd));
 
             Gateway::sendToUid($uid, hex2bin($fullCmd));
 

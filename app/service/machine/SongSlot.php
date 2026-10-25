@@ -1023,7 +1023,7 @@ class SongSlot extends MachineServices implements BaseMachine
         MachineLogger::sendCommand(
             $this->machine->toArray(),
             MachineLogger::ACTION_OPEN,
-            '上分指令 data=' . $data,
+            '開分開始 data=' . $data,
             $this->getMachineCache(),
             '',
             $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
@@ -1041,7 +1041,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     MachineLogger::receiveResponse(
                         $this->machine->toArray(),
                         MachineLogger::ACTION_OPEN,
-                        '上分成功 duration_ms=' . round($handleDuration / 1000, 2),
+                        '開分結束 duration_ms=' . round($handleDuration / 1000, 2),
                         $this->getMachineCache()
                     );
 
@@ -1064,7 +1064,7 @@ class SongSlot extends MachineServices implements BaseMachine
             MachineLogger::error(
                 $this->machine->toArray(),
                 MachineLogger::ACTION_OPEN,
-                '上分超時: ' . $e->getMessage(),
+                '開分失敗: ' . $e->getMessage(),
                 $this->getMachineCache(),
                 MachineLogger::DIR_RESPONSE
             );
@@ -1110,7 +1110,7 @@ class SongSlot extends MachineServices implements BaseMachine
             MachineLogger::sendCommand(
                 $this->machine->toArray(),
                 MachineLogger::ACTION_WASH,
-                '下分指令 data=' . $data,
+                '下分開始 data=' . $data,
                 $this->getMachineCache(),
                 '',
                 $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
@@ -1130,7 +1130,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     MachineLogger::receiveResponse(
                         $this->machine->toArray(),
                         MachineLogger::ACTION_WASH,
-                        '下分成功 attempts=' . ($attempts + 1) . ' duration_ms=' . round($handleDuration / 1000, 2),
+                        '下分結束 attempts=' . ($attempts + 1) . ' duration_ms=' . round($handleDuration / 1000, 2),
                         $this->getMachineCache()
                     );
 
@@ -1155,7 +1155,7 @@ class SongSlot extends MachineServices implements BaseMachine
                 MachineLogger::error(
                     $this->machine->toArray(),
                     MachineLogger::ACTION_WASH,
-                    '下分達到最大重試次數 attempts=' . $attempts . ': ' . $e->getMessage(),
+                    '下分失敗-重試耗盡 attempts=' . $attempts . ': ' . $e->getMessage(),
                     $this->getMachineCache(),
                     MachineLogger::DIR_RESPONSE
                 );
