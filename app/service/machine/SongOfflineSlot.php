@@ -1580,7 +1580,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
         $pollInterval = 100000;        // 100ms 轮询间隔
 
-        // 開分前：EA EC 清除殘留旗標，EA D4 確認 open_status=D0，最多重試 3 次
+        // 開分前：EA EC 清除殘留旗標，EA D4 確認 open_status=D0 AND wash_status=D5，最多重試 3 次
         // EA EC 只清旗標不清分數（安全），EA D4 確認機台已就緒再發 A5
         $preEcMax      = 3;
         $preEcWait     = 300000;  // 300ms 等機台處理 EA EC
@@ -1614,8 +1614,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     ['machine_data' => $this->getMachineCache()]);
 
                 if ($preOpenStatus === 'd3') {
-                    // 機台正在開分中（異常），直接進確認流程取回結果
-                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分前發現D3（已在開分中），跳入確認流程', $this->getMachineCache());
+                    // 機台正在開分中（殘留上次 session），直接進確認流程取回結果。
+                    // 注意：傳入的 $data/$times 為本次請求金額，僅影響 admin socket 描述文字，
+                    // 實際入帳金額來自 D4 的 open_score，不影響資金正確性。
+                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分前發現D3（殘留開分中），跳入確認流程', $this->getMachineCache());
                     $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
                     return;
                 }
