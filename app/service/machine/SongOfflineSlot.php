@@ -1935,6 +1935,63 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
         $pollInterval = 100000;        // 100ms 轮询间隔
 
+        // 洗分前：EA EC 清除殘留旗標，EA D4 確認 open_status=D0 AND wash_status=D5，最多重試 3 次
+        $preEcMax      = 3;
+        $preEcWait     = 300000;  // 300ms 等機台處理 EA EC
+        $preEcD4Timout = 1000000; // 1s 等 EA D4 回覆
+        $preWashReady  = false;
+        for ($ecAttempt = 1; $ecAttempt <= $preEcMax; $ecAttempt++) {
+            Gateway::sendToUid($uid, hex2bin($this->createCmd(self::SSR_SIGNAL)));
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_WASH,
+                '[小松斯洛線下-下分] 洗分前EA EC清除殘留旗標 第'.$ecAttempt.'/'.$preEcMax.'次', ['machine_data' => $this->getMachineCache()]);
+            usleep($preEcWait);
+
+            Cache::delete($this->cacheDataKey . '_last_status_fields');
+            Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+            $ecWaited = 0;
+            $ecRaw    = null;
+            while ($ecWaited < $preEcD4Timout) {
+                usleep($pollInterval);
+                $ecWaited += $pollInterval;
+                $ecRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                if ($ecRaw !== null && $ecRaw !== false) break;
+            }
+
+            $preOpenStatus = '';
+            $preWashStatus = '';
+            if ($ecRaw !== null && $ecRaw !== false) {
+                $ecFields      = json_decode($ecRaw, true) ?: [];
+                $preOpenStatus = $ecFields['open_status'] ?? '';
+                $preWashStatus = $ecFields['wash_status'] ?? '';
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH,
+                    '[小松斯洛線下-下分] 洗分前EA D4確認 開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus),
+                    ['machine_data' => $this->getMachineCache()]);
+
+                if ($preWashStatus === 'd7') {
+                    // 機台正在洗分中（異常），直接進確認流程取回結果
+                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 洗分前發現D7（已在洗分中），跳入確認流程', $this->getMachineCache());
+                    if ($this->confirmWashPointWithStatus($uid, $source, $source_id)) {
+                        return;
+                    }
+                    break; // confirmWash 返回 false，跳出前置，繼續嘗試發 A5
+                }
+
+                // 新版協議：open_status=D0 AND wash_status=D5 同時成立才接受洗分
+                if ($preOpenStatus === 'd0' && $preWashStatus === 'd5') {
+                    $preWashReady = true;
+                    break;
+                }
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH,
+                    '[小松斯洛線下-下分] 機台未就緒（開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus).'），重試EA EC',
+                    $this->getMachineCache());
+            } else {
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 洗分前EA D4無回覆，重試EA EC', $this->getMachineCache());
+            }
+        }
+        if (!$preWashReady) {
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] EA EC清除旗標'.$preEcMax.'次後仍未就緒，繼續嘗試發A5', $this->getMachineCache());
+        }
+
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             // 重试前先查 EA D4，确认机台未在洗分中才允许重发 A5
             if ($attempt > 1) {
