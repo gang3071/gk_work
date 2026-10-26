@@ -1500,23 +1500,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     break;
 
                 case self::OPEN_ANY_POINT:      // 上分（需拼接次数）
-                    if ($this->originalCmd !== null) {
-                        // 指令測試：直接送 raw A5，跳過 EA EC 前後置確認（方便手動測試）
-                        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '[小松斯洛線下] 指令測試直接送A5（跳過EA EC）', $this->getMachineCache());
-                        Gateway::sendToUid($uid, hex2bin($this->createCmd($this->originalCmd)));
-                    } else {
-                        $this->handleOpenPoint($uid, $data, $source, $source_id);
-                    }
+                    $this->handleOpenPoint($uid, $data, $source, $source_id);
                     break;
 
                 case self::WASH_POINT:      // 下分（全部洗分）
-                    if ($this->originalCmd !== null) {
-                        // 指令測試：直接送 raw A5 00 C1，跳過 EA EC 前後置確認
-                        MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '[小松斯洛線下] 指令測試直接送A5 C1（跳過EA EC）', $this->getMachineCache());
-                        Gateway::sendToUid($uid, hex2bin($this->createCmd($this->originalCmd)));
-                    } else {
-                        $this->handleWashPoint($uid, $data, $source, $source_id);
-                    }
+                    $this->handleWashPoint($uid, $data, $source, $source_id);
                     break;
 
                 default:
