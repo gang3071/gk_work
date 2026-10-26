@@ -730,11 +730,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             case 'd8': // 读取押分回复
                 return $this->handleTotalReply($msg);
 
+            case 'd0':  // 开分闲置（EA EC 清旗标后机台回报 D0→可再接受开分）
             case 'd2':  // 开分完成
             case 'd3':  // 开分中
+            case 'd5':  // 洗分闲置（EA EC 清旗标后机台回报 D5→可再接受洗分）
             case 'd6':  // 洗分完成
             case 'd7':  // 洗分中
-                // 读取状态回复（⚠️ 当前简化处理，未解析具体状态）
                 return $this->handleMachineStatusReply($msg);
 
             default:
@@ -4078,8 +4079,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if ($subType === 'd8') {
                     return 26; // 总押分回复
                 }
-                if (in_array($subType, ['d2', 'd3', 'd6', 'd7'])) {
-                    return 44; // 机台状态回复
+                if (in_array($subType, ['d0', 'd2', 'd3', 'd5', 'd6', 'd7'])) {
+                    return 44; // 机台状态回复（含 d0/d5 EA EC 清旗标后机台主动回报）
                 }
 
                 // ✅ 优化：未知 A7 子类型，记录警告便于发现新协议
