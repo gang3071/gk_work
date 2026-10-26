@@ -731,9 +731,15 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 return $this->handleTotalReply($msg);
 
             case 'd0':  // 开分闲置（EA EC 清旗标后机台回报 D0→可再接受开分）
+            case 'd5':  // 洗分闲置（EA EC 清旗标后机台回报 D5→可再接受洗分）
+                $result = $this->handleMachineStatusReply($msg);
+                // D0/D5 是 EA EC 清旗標的回報，同步更新 SSR_SIGNAL 版本號，
+                // 讓 sendRawCmdWithReply 等待迴圈能感知到 EA EC 已被機台確認
+                $this->setActionVersion(self::SSR_SIGNAL);
+                return $result;
+
             case 'd2':  // 开分完成
             case 'd3':  // 开分中
-            case 'd5':  // 洗分闲置（EA EC 清旗标后机台回报 D5→可再接受洗分）
             case 'd6':  // 洗分完成
             case 'd7':  // 洗分中
                 return $this->handleMachineStatusReply($msg);
