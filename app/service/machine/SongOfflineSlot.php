@@ -730,16 +730,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             case 'd8': // 读取押分回复
                 return $this->handleTotalReply($msg);
 
-            case 'd0':  // 开分闲置（EA EC 清旗标后机台回报 D0→可再接受开分）
-            case 'd5':  // 洗分闲置（EA EC 清旗标后机台回报 D5→可再接受洗分）
-                $result = $this->handleMachineStatusReply($msg);
-                // D0/D5 是 EA EC 清旗標的回報，同步更新 SSR_SIGNAL 版本號，
-                // 讓 sendRawCmdWithReply 等待迴圈能感知到 EA EC 已被機台確認
-                $this->setActionVersion(self::SSR_SIGNAL);
-                return $result;
-
+            case 'd0':  // 开分闲置
             case 'd2':  // 开分完成
             case 'd3':  // 开分中
+            case 'd5':  // 洗分闲置
             case 'd6':  // 洗分完成
             case 'd7':  // 洗分中
                 return $this->handleMachineStatusReply($msg);
@@ -1486,11 +1480,19 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 case self::READ_BET:        // 读取押分（EA D8）
                 case self::READ_STATUS:     // 读取状态（EA D4）
                 case self::ALL_DOWN:        // 清除历史记录（EA DE）
-                case self::SSR_SIGNAL:      // SSR讯号（EA EC）
                 // ✅ 使用 createCmd 添加校验和
                     $fullCmd = $this->createCmd($cmd);
                     MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDescription, $this->getMachineCache());
                     Gateway::sendToUid($uid, hex2bin($fullCmd));
+                    break;
+
+                case self::SSR_SIGNAL:      // 清除開洗分旗標（EA EC）
+                    // EA EC 機台不回覆，只能事後發 EA D4 確認狀態是否清除
+                    // 發送後立即自設版本號，讓 sendRawCmdWithReply 的等待迴圈能正常返回
+                    $fullCmd = $this->createCmd($cmd);
+                    MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDescription, $this->getMachineCache());
+                    Gateway::sendToUid($uid, hex2bin($fullCmd));
+                    $this->setActionVersion(self::SSR_SIGNAL);
                     break;
 
                 case self::CHECK:           // 故排（A3 70 05 E0 F8 CE）
