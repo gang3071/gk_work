@@ -1430,9 +1430,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             // ✅ 指令测试支持：识别特殊格式的上分/下分指令
             // 前端可能发送 'a5xxc0'（上分）或 'a500c1'（下分）
             $this->originalCmd = null;  // 重置
-            if (preg_match('/^a5[0-9a-f]{2}c0$/i', $cmd)) {
-                // 上分指令格式：a5xxc0
+            if (preg_match('/^a5([0-9a-f]{2})c0$/i', $cmd, $openMatch)) {
+                // 上分指令格式：a5xxc0，從 hex 解析次數計算金額，讓 handleOpenPoint 正確執行
                 $this->originalCmd = strtolower($cmd);  // 保存原始指令（小写）
+                $data = hexdec($openMatch[1]) * self::OPEN_UNIT;
                 $cmd = self::OPEN_ANY_POINT;
 
                 // ✅ 保存到 Redis（跨请求传递，60秒过期）
