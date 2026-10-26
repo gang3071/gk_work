@@ -1604,24 +1604,30 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             $preOpenStatus = '';
+            $preWashStatus = '';
             if ($ecRaw !== null && $ecRaw !== false) {
                 $ecFields      = json_decode($ecRaw, true) ?: [];
                 $preOpenStatus = $ecFields['open_status'] ?? '';
+                $preWashStatus = $ecFields['wash_status'] ?? '';
                 MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN,
-                    '[小松斯洛線下-上分] 開分前EA D4確認 '.self::descStatus($preOpenStatus), ['machine_data' => $this->getMachineCache()]);
+                    '[小松斯洛線下-上分] 開分前EA D4確認 開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus),
+                    ['machine_data' => $this->getMachineCache()]);
 
-                if ($preOpenStatus === 'd0') {
-                    $preOpenReady = true;
-                    break;
-                }
                 if ($preOpenStatus === 'd3') {
                     // 機台正在開分中（異常），直接進確認流程取回結果
                     MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分前發現D3（已在開分中），跳入確認流程', $this->getMachineCache());
                     $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
                     return;
                 }
+
+                // 新版協議：open_status=D0 AND wash_status=D5 同時成立才接受開分
+                if ($preOpenStatus === 'd0' && $preWashStatus === 'd5') {
+                    $preOpenReady = true;
+                    break;
+                }
                 MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN,
-                    '[小松斯洛線下-上分] 開分旗標未清除（'.self::descStatus($preOpenStatus).'），重試EA EC', $this->getMachineCache());
+                    '[小松斯洛線下-上分] 機台未就緒（開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus).'），重試EA EC',
+                    $this->getMachineCache());
             } else {
                 MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分前EA D4無回覆，重試EA EC', $this->getMachineCache());
             }
