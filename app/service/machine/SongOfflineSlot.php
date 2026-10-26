@@ -131,7 +131,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     // ========================================
     const ALL_DOWN = 'eade';                // 清除历史记录（清除开洗分账+回补数）
     const CHECK = 'a37005e0f8ce';           // 故排（归0机板，固定指令）
-    const SSR_SIGNAL = 'eaec';              // SSR讯号10秒（线下特有：预留给smart-slot移出按钮）
+    const SSR_SIGNAL = 'eaec';              // EA EC：清除開洗分旗標（新版協議）/ SSR讯号10秒（线下特有）
 
     // ========================================
     // 心跳和开机（线下版特有）
@@ -1580,11 +1580,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
         $pollInterval = 100000;        // 100ms 轮询间隔
 
-        // 开分前发 EA DE 清除上次残留的 D4 状态，避免 CA 超时时误读到旧 D2
-        $dePreCmd = $this->createCmd(self::ALL_DOWN);
-        Gateway::sendToUid($uid, hex2bin($dePreCmd));
-        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分前EA DE清除機台历史狀態', ['machine_data' => $this->getMachineCache()]);
-        usleep(200000); // 等 200ms 让机台处理完 EA DE
+        // 開分前發 EA EC 清除殘留開分旗標（D2），確保機台回到 D0 可接受新開分
+        // EA EC 只清旗標不清分數，比舊版 EA DE 更安全（EA DE 會清除回補計數影響補款邏輯）
+        $ecPreCmd = $this->createCmd(self::SSR_SIGNAL);
+        Gateway::sendToUid($uid, hex2bin($ecPreCmd));
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分前EA EC清除殘留旗標', ['machine_data' => $this->getMachineCache()]);
+        usleep(200000); // 等 200ms 让机台处理完 EA EC
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             // 重试前先查 EA D4，确认机台未在开分中才允许重发 A5
@@ -1825,17 +1826,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 防止B7心跳因 _wash_confirmed 持续suppress _point 导致后续下分读到0
         \support\Cache::delete($this->cacheDataKey . '_wash_confirmed');
 
-        // 开分流程结束后发 EA DE 清除机台 D4 状态，
-        // 避免下次开分 CA 超时查询 EA D4 时误读到本次残留的 D2（开分完成）
-        $deCmd = $this->createCmd(self::ALL_DOWN);
-        Gateway::sendToUid($uid, hex2bin($deCmd));
-        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分完成EA DE清除機台历史狀態', ['machine_data' => $this->getMachineCache()]);
+        // 開分確認後發 EA EC 清除開分旗標（D2→D0），使機台可接受下次開分
+        // 新版協議：D0 AND D5 同時成立才接受開洗分；EA EC 只清旗標，不影響分數寄存器
+        $ecCmd = $this->createCmd(self::SSR_SIGNAL);
+        Gateway::sendToUid($uid, hex2bin($ecCmd));
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分完成EA EC清除開分旗標（D2→D0）', ['machine_data' => $this->getMachineCache()]);
 
         MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分結束（EA D4確認 D2，回補次數=' . $retryCount . '）', $this->getMachineCache());
 
         if ($source === 'admin') {
-            $openDesc = $openStatus === 'd2' ? '开分完成' : ($openStatus === 'd3' ? '开分中' : '状态未知');
-            $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '状态未知');
+            $openDesc = self::descStatus($openStatus);
+            $washDesc = self::descStatus($washStatus);
             $retryDesc = $retryCount > 0
                 ? "，回补{$retryCount}次（每次" . self::OPEN_UNIT . "分将退款）"
                 : '';
@@ -1853,8 +1854,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     private static function descStatus(string $status): string
     {
         return match(strtolower($status)) {
+            'd0' => '開分閒置',
             'd2' => '開分完成',
             'd3' => '開分中',
+            'd5' => '洗分閒置',
             'd6' => '洗分完成',
             'd7' => '洗分中',
             ''   => '無回覆',
@@ -2186,11 +2189,17 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 心跳歸零超時（5s），強制清除洗分確認標記', $this->getMachineCache());
         }
 
+        // 洗分確認後發 EA EC 清除洗分旗標（D6→D5），使機台可接受下次開洗分
+        // 新版協議：D0 AND D5 同時成立才接受開洗分
+        $ecWashCmd = $this->createCmd(self::SSR_SIGNAL);
+        Gateway::sendToUid($uid, hex2bin($ecWashCmd));
+        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 洗分完成EA EC清除洗分旗標（D6→D5）', ['machine_data' => $this->getMachineCache()]);
+
         MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分結束（EA D4確認 D6，洗分量=' . $washScore . '）', $this->getMachineCache());
 
         if ($source === 'admin') {
-            $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '状态未知');
-            $openDesc = $openStatus === 'd2' ? '开分完成' : ($openStatus === 'd3' ? '开分中' : '状态未知');
+            $washDesc = self::descStatus($washStatus);
+            $openDesc = self::descStatus($openStatus);
             sendSocketMessage('private-admin-1-' . $source_id, [
                 'msg_type' => 'machine_action_result',
                 'id' => $this->machine->id,
