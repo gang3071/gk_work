@@ -1594,6 +1594,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             Cache::delete($this->cacheDataKey . '_last_status_fields');
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN,
+                '[小松斯洛線下-上分] 開分前EA D4查詢機台狀態', ['machine_data' => $this->getMachineCache()]);
             $ecWaited = 0;
             $ecRaw    = null;
             while ($ecWaited < $preEcD4Timout) {
@@ -1610,7 +1612,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $preOpenStatus = $ecFields['open_status'] ?? '';
                 $preWashStatus = $ecFields['wash_status'] ?? '';
                 MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN,
-                    '[小松斯洛線下-上分] 開分前EA D4確認 開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus),
+                    '[小松斯洛線下-上分] 開分前EA D4回覆 開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus),
                     ['machine_data' => $this->getMachineCache()]);
 
                 if ($preOpenStatus === 'd3') {
@@ -1950,6 +1952,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             Cache::delete($this->cacheDataKey . '_last_status_fields');
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_WASH,
+                '[小松斯洛線下-下分] 洗分前EA D4查詢機台狀態', ['machine_data' => $this->getMachineCache()]);
             $ecWaited = 0;
             $ecRaw    = null;
             while ($ecWaited < $preEcD4Timout) {
@@ -1966,7 +1970,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $preOpenStatus = $ecFields['open_status'] ?? '';
                 $preWashStatus = $ecFields['wash_status'] ?? '';
                 MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH,
-                    '[小松斯洛線下-下分] 洗分前EA D4確認 開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus),
+                    '[小松斯洛線下-下分] 洗分前EA D4回覆 開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus),
                     ['machine_data' => $this->getMachineCache()]);
 
                 if ($preWashStatus === 'd7') {
