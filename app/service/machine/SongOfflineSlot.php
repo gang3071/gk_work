@@ -1580,12 +1580,55 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $statusReplyTimeout = 2000000; // 2s 等待EA D4回复（机台硬件响应约1s）
         $pollInterval = 100000;        // 100ms 轮询间隔
 
-        // 開分前發 EA EC 清除殘留開分旗標（D2），確保機台回到 D0 可接受新開分
-        // EA EC 只清旗標不清分數，比舊版 EA DE 更安全（EA DE 會清除回補計數影響補款邏輯）
-        $ecPreCmd = $this->createCmd(self::SSR_SIGNAL);
-        Gateway::sendToUid($uid, hex2bin($ecPreCmd));
-        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分前EA EC清除殘留旗標', ['machine_data' => $this->getMachineCache()]);
-        usleep(200000); // 等 200ms 让机台处理完 EA EC
+        // 開分前：EA EC 清除殘留旗標，EA D4 確認 open_status=D0，最多重試 3 次
+        // EA EC 只清旗標不清分數（安全），EA D4 確認機台已就緒再發 A5
+        $preEcMax      = 3;
+        $preEcWait     = 300000;  // 300ms 等機台處理 EA EC
+        $preEcD4Timout = 1000000; // 1s 等 EA D4 回覆
+        $preOpenReady  = false;
+        for ($ecAttempt = 1; $ecAttempt <= $preEcMax; $ecAttempt++) {
+            Gateway::sendToUid($uid, hex2bin($this->createCmd(self::SSR_SIGNAL)));
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN,
+                '[小松斯洛線下-上分] 開分前EA EC清除殘留旗標 第'.$ecAttempt.'/'.$preEcMax.'次', ['machine_data' => $this->getMachineCache()]);
+            usleep($preEcWait);
+
+            Cache::delete($this->cacheDataKey . '_last_status_fields');
+            Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+            $ecWaited = 0;
+            $ecRaw    = null;
+            while ($ecWaited < $preEcD4Timout) {
+                usleep($pollInterval);
+                $ecWaited += $pollInterval;
+                $ecRaw = Cache::get($this->cacheDataKey . '_last_status_fields');
+                if ($ecRaw !== null && $ecRaw !== false) break;
+            }
+
+            $preOpenStatus = '';
+            if ($ecRaw !== null && $ecRaw !== false) {
+                $ecFields      = json_decode($ecRaw, true) ?: [];
+                $preOpenStatus = $ecFields['open_status'] ?? '';
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN,
+                    '[小松斯洛線下-上分] 開分前EA D4確認 '.self::descStatus($preOpenStatus), ['machine_data' => $this->getMachineCache()]);
+
+                if ($preOpenStatus === 'd0') {
+                    $preOpenReady = true;
+                    break;
+                }
+                if ($preOpenStatus === 'd3') {
+                    // 機台正在開分中（異常），直接進確認流程取回結果
+                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分前發現D3（已在開分中），跳入確認流程', $this->getMachineCache());
+                    $this->confirmOpenPointWithStatus($uid, $data, $times, $source, $source_id);
+                    return;
+                }
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN,
+                    '[小松斯洛線下-上分] 開分旗標未清除（'.self::descStatus($preOpenStatus).'），重試EA EC', $this->getMachineCache());
+            } else {
+                MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分前EA D4無回覆，重試EA EC', $this->getMachineCache());
+            }
+        }
+        if (!$preOpenReady) {
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] EA EC清除旗標'.$preEcMax.'次後仍未D0，繼續嘗試發A5', $this->getMachineCache());
+        }
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             // 重试前先查 EA D4，确认机台未在开分中才允许重发 A5
