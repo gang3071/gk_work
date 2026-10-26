@@ -1881,9 +1881,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // 開分確認後發 EA EC 清除開分旗標（D2→D0），使機台可接受下次開分
         // 新版協議：D0 AND D5 同時成立才接受開洗分；EA EC 只清旗標，不影響分數寄存器
-        $ecCmd = $this->createCmd(self::SSR_SIGNAL);
-        Gateway::sendToUid($uid, hex2bin($ecCmd));
-        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分完成EA EC清除開分旗標（D2→D0）', ['machine_data' => $this->getMachineCache()]);
+        // confirmed=false 表示機台仍在 D3（開分中），尚未進入 D2，不干預；
+        // 殘留 D2 由下次前置 EA EC 自動清除
+        if ($confirmed) {
+            $ecCmd = $this->createCmd(self::SSR_SIGNAL);
+            Gateway::sendToUid($uid, hex2bin($ecCmd));
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN, '[小松斯洛線下-上分] 開分完成EA EC清除開分旗標（D2→D0）', ['machine_data' => $this->getMachineCache()]);
+        }
 
         MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分結束（EA D4確認 D2，回補次數=' . $retryCount . '）', $this->getMachineCache());
 
@@ -2303,9 +2307,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // 洗分確認後發 EA EC 清除洗分旗標（D6→D5），使機台可接受下次開洗分
         // 新版協議：D0 AND D5 同時成立才接受開洗分
-        $ecWashCmd = $this->createCmd(self::SSR_SIGNAL);
-        Gateway::sendToUid($uid, hex2bin($ecWashCmd));
-        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 洗分完成EA EC清除洗分旗標（D6→D5）', ['machine_data' => $this->getMachineCache()]);
+        // confirmed=false 表示50次輪詢後仍在 D7（洗分中），機台硬件尚未完成；
+        // 此時不發 EC 以免干預進行中的洗分；殘留 D6 由下次前置 EA EC 自動清除
+        if ($confirmed) {
+            $ecWashCmd = $this->createCmd(self::SSR_SIGNAL);
+            Gateway::sendToUid($uid, hex2bin($ecWashCmd));
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 洗分完成EA EC清除洗分旗標（D6→D5）', ['machine_data' => $this->getMachineCache()]);
+        }
 
         MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分結束（EA D4確認 D6，洗分量=' . $washScore . '）', $this->getMachineCache());
 
