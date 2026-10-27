@@ -1226,6 +1226,13 @@ class Slot extends MachineServices implements BaseMachine
                                     'machine_id' => $this->machine->id,
                                     'created_at' => date('Y-m-d H:i:s'),
                                 ]);
+                                Client::send('player-points', [
+                                    'player_id'        => $gamingUserId,
+                                    'platform_amounts' => [0 => floatval($betAmount)],
+                                    'source'           => 'machine',
+                                    'created_at'       => date('Y-m-d H:i:s'),
+                                    'batch_id'         => 'machine_' . $this->machine->id . '_' . $gamingUserId . '_' . time(),
+                                ]);
                             } else {
                                 Log::channel('bet_statistics')->debug('[雙美斯洛-下注統計] Slot 打码量为0，跳过投递', [
                                     'machine_id' => $this->machine->id,

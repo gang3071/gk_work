@@ -2611,6 +2611,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                                 'machine_id' => $this->machine->id,
                                 'created_at' => date('Y-m-d H:i:s'),
                             ]);
+                            \Webman\RedisQueue\Client::send('player-points', [
+                                'player_id'        => $currentGamingUserId,
+                                'platform_amounts' => [0 => floatval($betAmount)],
+                                'source'           => 'machine',
+                                'created_at'       => date('Y-m-d H:i:s'),
+                                'batch_id'         => 'machine_' . $this->machine->id . '_' . $currentGamingUserId . '_' . time(),
+                            ]);
                             MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'heartbeat', '[小松斯洛線下-心跳-打碼量] 打碼統計已投遞 金額='.$betAmount, ['machine_data' => $this->getMachineCache()]);
                         }
                     }

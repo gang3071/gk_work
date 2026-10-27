@@ -1480,6 +1480,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 'machine_id' => $this->machine->id,
                 'created_at' => date('Y-m-d H:i:s'),
             ]);
+            Client::send('player-points', [
+                'player_id'        => $gamingUserId,
+                'platform_amounts' => [0 => floatval($betAmount)],
+                'source'           => 'machine',
+                'created_at'       => date('Y-m-d H:i:s'),
+                'batch_id'         => 'machine_' . $this->machine->id . '_' . $gamingUserId . '_' . time(),
+            ]);
         }
     }
 
