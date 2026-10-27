@@ -562,7 +562,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                                     'platform_amounts' => [0 => floatval($betAmount)],
                                     'source'           => 'machine',
                                     'created_at'       => date('Y-m-d H:i:s'),
-                                    'batch_id'         => 'machine_' . $this->machine->id . '_' . $currentGamingUserId . '_' . time(),
+                                    'batch_id'         => 'machine_' . $this->machine->id . '_' . $currentGamingUserId . '_' . (int)(microtime(true) * 1000),
                                 ]);
                             } else {
                                 Log::channel('bet_statistics')->debug('[小松鋼珠-下注統計] SongJackpot 保留时打码量为0，跳过投递', [
