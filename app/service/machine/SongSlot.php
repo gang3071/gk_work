@@ -464,6 +464,13 @@ class SongSlot extends MachineServices implements BaseMachine
                                         'machine_id' => $this->machine->id,
                                         'created_at' => date('Y-m-d H:i:s'),
                                     ]);
+                                    Client::send('player-points', [
+                                        'player_id'        => $currentGamingUserId,
+                                        'platform_amounts' => [0 => floatval($betAmount)],
+                                        'source'           => 'machine',
+                                        'created_at'       => date('Y-m-d H:i:s'),
+                                        'batch_id'         => 'machine_' . $this->machine->id . '_' . $currentGamingUserId . '_' . (int)(microtime(true) * 1000),
+                                    ]);
                                 }
                             } catch (\Exception $e) {
                                 // 投递失败不影响主业务
