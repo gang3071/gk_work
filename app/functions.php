@@ -2858,19 +2858,32 @@ if (!function_exists('machineOpenAnyFree')) {
 
             DB::beginTransaction();
             try {
-                // SongOfflineSlot：客户端传的 open_point 已经是游戏分（机台积分），不需要赔率换算。
-                // 其他机台：openScore 是货币金额，需经 checkMachineOpenAny 换算成游戏分。
+                // SongOfflineSlot：openScore 是玩家金額（min_player_amount 的整數倍），
+                // 由 handleOpenPoint 除以 getOpenUnit() 得出硬件開分次數，不需要 checkMachineOpenAny 換算。
+                // 其他機台：openScore 是貨幣金額，需經 checkMachineOpenAny 換算成遊戲分。
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG
                     && $machine->type == \app\model\GameType::TYPE_SLOT) {
-                    // 直接验证是否为 OPEN_UNIT（300）的倍数
-                    $openUnit = \app\service\machine\SongOfflineSlot::OPEN_UNIT;
-                    if ($openScore <= 0 || $openScore % $openUnit !== 0) {
+                    // 根據機台比值從設定讀取 min_player_amount，作為上分單位
+                    $openUnit = null;
+                    foreach (config('machine.song_offline.open_options', []) as $opt) {
+                        if ((int)$opt['odds_x'] === (int)$machine->odds_x
+                            && (int)$opt['odds_y'] === (int)$machine->odds_y) {
+                            $openUnit = $opt['min_player_amount'];
+                            break;
+                        }
+                    }
+                    if ($openUnit === null) {
                         throw new \InvalidArgumentException(
-                            "上分必须是{$openUnit}分的整数倍（当前{$openScore}分）"
+                            "機台比值({$machine->odds_x}:{$machine->odds_y})未在設定中找到對應的上分單位"
                         );
                     }
-                    // $openScore 已是游戏分，无需换算
+                    if ($openScore <= 0 || $openScore % $openUnit !== 0) {
+                        throw new \InvalidArgumentException(
+                            "上分必須是{$openUnit}的整數倍（當前{$openScore}）"
+                        );
+                    }
+                    // $openScore 已是遊戲分，無需換算
                 } else {
             // ⚠️ checkMachineOpenAny 只验证 openScore（购买的分），不包含赠分
             // giftScore 会在硬件上分时额外加上
@@ -3278,7 +3291,7 @@ if (!function_exists('machineOpenAnyFree')) {
                     $statusFields      = $services->getLastStatusFields();
                     $batchRetryCount   = (int)($statusFields['retry_count'] ?? 0);
                     $currentReturnCount = (int)($services->return_count ?? 0);
-                    $paidTimes         = (int)($openScore / \app\service\machine\SongOfflineSlot::OPEN_UNIT);
+                    $paidTimes         = (int)($openScore / $services->getOpenUnit());
                     // 防禦：本批次失敗次數不應超過本次付款開分次數
                     $refundRetries     = min($batchRetryCount, $paidTimes);
 

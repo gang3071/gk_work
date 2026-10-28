@@ -163,7 +163,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     // 业务限制常量
     // ========================================
     const MAX_SCORE = 99999999;             // 最大分数（4字节BCD = 99,999,999）
-    const OPEN_UNIT = 300;                  // 上分单位（固定300分）
+    // OPEN_UNIT 已移除，改由 getOpenUnit() 從設定動態取得（= min_player_amount）
     const PHYSICAL_BUTTON_UNIT = 100;       // 实体按键每次上分的机台分数（与 SongOfflineJackpot 一致）
     const MAX_OPEN_TIMES = 255;             // 最大开分次数（1字节 = 0-255）
 
@@ -244,6 +244,22 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $this->lang = $lang;
         $this->cacheData = $this->getMachineCache();
         $this->log = Log::channel('song_offline_slot_machine');
+    }
+
+    /**
+     * 根據機台比值從設定讀取上分單位（= min_player_amount，玩家單次付款金額）
+     */
+    public function getOpenUnit(): int
+    {
+        foreach (config('machine.song_offline.open_options', []) as $opt) {
+            if ((int)$opt['odds_x'] === (int)$this->machine->odds_x
+                && (int)$opt['odds_y'] === (int)$this->machine->odds_y) {
+                return $opt['min_player_amount'];
+            }
+        }
+        throw new \RuntimeException(
+            "機台比值({$this->machine->odds_x}:{$this->machine->odds_y})未在設定中找到對應的上分單位"
+        );
     }
 
     /**
@@ -1057,10 +1073,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * 處理回補（開分部分失敗時退款給玩家）
      *
      * ⚠️ 回補機制說明：
-     * - A5 XX C0 指令一次可開 XX 次分（每次 OPEN_UNIT 分），機台逐次執行
+     * - A5 XX C0 指令一次可開 XX 次分（每次 getOpenUnit() 金額），機台逐次執行
      * - READ_STATUS 回傳的 retry_count 代表本批次中「部分失敗」的次數，
      *   並非全部失敗：例如發送 5 次開分而 1 次失敗，retry_count=1
-     * - 需將失敗次數 × OPEN_UNIT 分換算為金額，退回玩家錢包
+     * - 需將失敗次數 × getOpenUnit() 換算為金額，退回玩家錢包
      * - 每次 READ_STATUS 只處理新增的失敗次數（retry_count - prev），
      *   防止重複上報同一值時重複退款
      *
@@ -1082,7 +1098,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->log->info('[收帳小卡-回補] 偵測到回補次數，但無玩家使用，略過退款', [
                 'machine_code'       => $this->machine->code,
                 'retry_count'        => $retryCount,
-                'retry_score_points' => $retryCount * self::OPEN_UNIT,
+                'retry_score_points' => $retryCount * $this->getOpenUnit(),
             ]);
             return true;
         }
@@ -1117,10 +1133,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             return true;
         }
 
-        // 3. 換算退款金額：新增失敗次數 × OPEN_UNIT分 = 元（1:1，不乘 odds）
+        // 3. 換算退款金額：新增失敗次數 × getOpenUnit() = 元（1:1，不乘 odds）
         // machineOpenAnyFree 對 SongOfflineSlot 的扣款：$money = (int) $openScore（不乘 odds）
         // 退款必須採相同比例；若誤用 × (odds_x/odds_y)，當 odds_x > odds_y 時退款會超過原本扣款
-        $refundScore  = $newRetries * self::OPEN_UNIT;
+        $refundScore  = $newRetries * $this->getOpenUnit();
         $refundAmount = (string)$refundScore;
 
         if ((float) $refundAmount <= 0) {
@@ -1194,7 +1210,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->after_game_amount  = $afterBalance;
             $playerGameLog->action             = \app\model\PlayerGameLog::ACTION_DOWN;
             $playerGameLog->is_system          = 1;
-            $playerGameLog->remark             = "開分部分失敗回補（{$newRetries}次×" . self::OPEN_UNIT . "分，退款金額 {$refundAmount}）";
+            $playerGameLog->remark             = "開分部分失敗回補（{$newRetries}次×" . $this->getOpenUnit() . "，退款金額 {$refundAmount}）";
             $playerGameLog->save();
 
             // 金流記錄
@@ -1817,14 +1833,15 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function handleOpenPoint(string $uid, int $data, string $source, int $source_id): void
     {
-        if ($data % self::OPEN_UNIT != 0) {
-            throw new Exception('开分金额必须是' . self::OPEN_UNIT . '的倍数，当前：' . $data);
+        $openUnit = $this->getOpenUnit();
+        if ($data % $openUnit != 0) {
+            throw new Exception("開分金額必須是{$openUnit}的倍數，當前：{$data}");
         }
 
-        $times = intval($data / self::OPEN_UNIT);
+        $times = intval($data / $openUnit);
 
         if ($times <= 0 || $times > self::MAX_OPEN_TIMES) {
-            throw new Exception('开分次数超出范围（1-' . self::MAX_OPEN_TIMES . '），当前：' . $times);
+            throw new Exception('開分次數超出範圍（1-' . self::MAX_OPEN_TIMES . '），當前：' . $times);
         }
 
         $timesHex  = str_pad(dechex($times), 2, '0', STR_PAD_LEFT);
@@ -1909,7 +1926,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 'machine_code'  => $this->machine->code,
                 'machine_score' => $data,
                 'times'         => $times,
-                'unit'          => self::OPEN_UNIT,
+                'unit'          => $openUnit,
                 'cmd'           => strtoupper($fullCmd),
                 'attempt'       => "$attempt/$maxAttempts",
                 'current_card_score' => $this->card_score ?? 0,
@@ -2081,6 +2098,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      */
     private function confirmOpenPointWithStatus(string $uid, int $data, int $times, string $source, int $source_id): void
     {
+        $openUnit = $this->getOpenUnit();
+
         // 最多查询25次（每次：发EA D4→等回复最长0.3s→若D3等0.3s再查），总计最长约15s
         $maxChecks = 25;
         $replyTimeout = 300000;   // 0.3s 等回复
@@ -2165,10 +2184,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         ]);
 
         if ($source === 'admin') {
-            $openDesc = $openStatus === 'd2' ? '开分完成' : ($openStatus === 'd3' ? '开分中' : '状态未知');
-            $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '状态未知');
+            $openDesc = $openStatus === 'd2' ? '開分完成' : ($openStatus === 'd3' ? '開分中' : '狀態未知');
+            $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '狀態未知');
             $retryDesc = $retryCount > 0
-                ? "，回补{$retryCount}次（每次" . self::OPEN_UNIT . "分将退款）"
+                ? "，回補{$retryCount}次（每次{$openUnit}將退款）"
                 : '';
             sendSocketMessage('private-admin-1-' . $source_id, [
                 'msg_type'    => 'machine_action_result',
@@ -2176,7 +2195,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 'open_status' => $openStatus,
                 'wash_status' => $washStatus,
                 'retry_count' => $retryCount,
-                'description' => "上分{$openDesc}（{$times}次×" . self::OPEN_UNIT . "分={$data}分）｜{$washDesc}{$retryDesc}",
+                'description' => "上分{$openDesc}（{$times}次×{$openUnit}={$data}）｜{$washDesc}{$retryDesc}",
             ]);
         }
     }
