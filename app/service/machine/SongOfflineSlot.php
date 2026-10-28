@@ -3710,19 +3710,35 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerDeliveryRecord->remark = '线下实体按键洗分';
             $playerDeliveryRecord->save();
 
-            // 5. 更新游戏记录
-            if ($gameRecord) {
-                $gameRecord->wash_point = bcadd($gameRecord->wash_point, $washedScore, 2);
-                $gameRecord->wash_amount = bcadd($gameRecord->wash_amount, $washedAmount, 2);
-                $gameRecord->after_game_amount = $afterBalance;
-                $gameRecord->save();
-            }
-
-            // 6. 更新 Redis 记录
+            // 5. 更新 Redis 记录
             $this->last_point_at = time();
             $this->player_wash_point = bcadd($this->player_wash_point ?? '0', $washedScore, 2);
 
+            // ⚠️ player_game_record 更新（wash_point/wash_amount）移到 commit 之后执行。
+            // 原因：若在事务内，与 machineWash() 的 machineWashZero() 并发时两个事务
+            // 同时持有/等待该行排他锁，导致 Lock wait timeout (1205)。
+            // game_record 的 wash_point/wash_amount 仅用于报表，非资金关键路径，
+            // commit 后以 best-effort 方式更新即可。
             \support\Db::commit();
+
+            // 5.5 ✅ commit 后更新游戏记录（非关键，best-effort）
+            // 不在事务内执行，防止与 machineWash() 并发时产生行锁等待超时
+            if ($gameRecord) {
+                try {
+                    $gameRecord->wash_point = bcadd($gameRecord->wash_point, $washedScore, 2);
+                    $gameRecord->wash_amount = bcadd($gameRecord->wash_amount, $washedAmount, 2);
+                    $gameRecord->after_game_amount = $afterBalance;
+                    $gameRecord->save();
+                } catch (Exception $grEx) {
+                    $this->log->warning('[线下洗分] 游戏记录更新失败（非关键，资金已到账）', [
+                        'player_id'        => $playerId,
+                        'game_record_id'   => $gameRecord->id,
+                        'washed_score'     => $washedScore,
+                        'washed_amount'    => $washedAmount,
+                        'error'            => $grEx->getMessage(),
+                    ]);
+                }
+            }
 
             // 6.5 ✅ 清理玩家游戏数据（洗分后归零）
             // now_turn 仅在 reward_status 切换时归零，洗分不会触发切换，
