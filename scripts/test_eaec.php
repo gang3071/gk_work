@@ -89,8 +89,8 @@ $fieldsKey       = $cacheDataKey . '_last_status_fields';
 $rawKey          = $cacheDataKey . '_last_status_raw';
 
 // ─── 步骤 1：发送 EA EC ───────────────────────────────────────────────────────
-echo "\n[1] 发送 EA EC (ecea) ...\n";
-\GatewayWorker\Lib\Gateway::sendToUid($uid, hex2bin('ecea'));
+echo "\n[1] 发送 EA EC (eaec) ...\n";
+\GatewayWorker\Lib\Gateway::sendToUid($uid, hex2bin('eaec'));
 echo "    已发送（机台不回复，等待 500ms）\n";
 usleep(500000);
 
