@@ -12,6 +12,7 @@ use Exception;
 use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
 use support\Cache;
+use support\Log;
 use Webman\RedisQueue\Client;
 use Workerman\Timer;
 use yzh52521\WebmanLock\Locker;
@@ -388,7 +389,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         try {
             $msg = strtolower(trim($msg));
             $machineId = $this->machine->id;
-
+            Log::error('收到指令', [$msg]);
             // ✅ 步骤0：TCP分包处理 - 拼接到缓冲区
             if (!isset(self::$msgBuffer[$machineId])) {
                 self::$msgBuffer[$machineId] = '';
