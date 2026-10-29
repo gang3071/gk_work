@@ -151,7 +151,7 @@ class Events
                 switch ($machine->control_type) {
                     case Machine::CONTROL_TYPE_MEI:
                         $msg = strtoupper(bin2hex($message));
-                        Log::channel('slot_machine')->info('收到双美Slot消息', [
+                        Log::channel('machine_ctrl')->info('收到双美Slot消息', [
                             'code' => $machine->code,
                             'remote_addr' => $domain,
                             'remote_port' => $port,
@@ -165,8 +165,7 @@ class Events
                         return true;
                     case Machine::CONTROL_TYPE_SONG:
                         $hex = bin2hex($message);
-                        $channel = $isOffline ? 'song_offline_slot_machine' : 'song_slot_machine';
-                        Log::channel($channel)->info($isOffline ? '收到小淞线下Slot消息' : '收到小淞Slot消息', [
+                        Log::channel('machine_ctrl')->info($isOffline ? '收到小淞线下Slot消息' : '收到小淞Slot消息', [
                             'code' => $machine->code,
                             'remote_addr' => $domain,
                             'remote_port' => $port,

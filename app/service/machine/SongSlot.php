@@ -6,6 +6,7 @@ use app\model\GameType;
 use app\model\Machine;
 use app\model\MachineLotteryRecord;
 use app\model\Notice;
+use app\support\MachineLogger;
 use Exception;
 use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
@@ -82,7 +83,6 @@ class SongSlot extends MachineServices implements BaseMachine
 
     public $expirationTime = 5000000; // 3秒内返回
 
-    public $log = null;
 
     public function __construct(Machine $machine, $lang = 'zh_CN')
     {
@@ -126,7 +126,6 @@ class SongSlot extends MachineServices implements BaseMachine
         ];
         $this->lang = $lang;
         $this->cacheData = $this->getMachineCache();
-        $this->log = Log::channel('song_slot_machine');
     }
 
     /**
@@ -256,7 +255,7 @@ class SongSlot extends MachineServices implements BaseMachine
                         ]);
                     }
 
-                    throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
+                    throw new \Exception("Redis关键字段保存失敗: {$name}，请立即檢查Redis服务");
                 }
 
                 // 其他重要字段只记录日志
@@ -325,7 +324,7 @@ class SongSlot extends MachineServices implements BaseMachine
         try {
             $len = mb_strlen($msg);
             if ($len != 30 && $len != 10 && $len != 16 && $len != 14 && $len != 12 && $len != 22) {
-                throw new \Exception('指令错误');
+                throw new \Exception('指令錯誤');
             }
             $s1 = substr($msg, -4, 2);
             $s2 = substr($msg, -2, 2);
@@ -333,11 +332,11 @@ class SongSlot extends MachineServices implements BaseMachine
             $data = substr($msg, 0, -4);
             $calculatedS1 = self::calculateS1($data);
             if ($s1 != $calculatedS1) {
-                throw new \Exception('指令s1校验失败');
+                throw new \Exception('指令S1校驗失敗');
             }
             $calculatedS2 = self::calculateS2($data, $calculatedS1);
             if ($s2 != $calculatedS2) {
-                throw new \Exception('指令s2校验失败');
+                throw new \Exception('指令S2校驗失敗');
             }
             $fun = substr($msg, 0, 4);
             $gamingUserId = $this->gaming_user_id; // ✅ 从 Redis 读取（实时数据），不从缓存的 Machine 对象读取
@@ -350,34 +349,15 @@ class SongSlot extends MachineServices implements BaseMachine
                     $orgNowTurn = $this->now_turn;
                     if (substr($msg, 18, 2) != 'da') {
                         $this->has_lock = 1;
-
-                        // 详细记录机台锁的原因
-                        Log::channel('machine_operations')->error('[SongSlot-MachineLock] 机台被锁', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'machine_name' => $this->machine->name,
-                            'lock_reason' => '心跳数据异常',
-                            'exception_message' => '机台故障 - 心跳字节校验失败',
-                            'heartbeat_msg' => $msg,
-                            'expected_byte_18' => 'da',
-                            'actual_byte_18' => substr($msg, 18, 2),
-                            'player_id' => $gamingUserId,
-                            'player_info' => $this->machine->gamingPlayer ? [
-                                'uuid' => $this->machine->gamingPlayer->uuid,
-                                'name' => $this->machine->gamingPlayer->name,
-                                'phone' => $this->machine->gamingPlayer->phone,
-                            ] : null,
-                            'machine_state' => [
-                                'point' => $this->point,
-                                'bet' => $this->bet,
-                                'win' => $this->win,
-                                'auto' => $this->auto,
-                            ],
-                            'timestamp' => date('Y-m-d H:i:s'),
-                        ]);
-
+                        MachineLogger::error(
+                            $this->machine->toArray(),
+                            'machine_lock',
+                            '心跳校驗位異常-機台已鎖定 校驗位=' . substr($msg, 18, 2),
+                            $this->getMachineCache(),
+                            MachineLogger::DIR_RESPONSE
+                        );
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
-                        throw new \Exception('机台故障');
+                        throw new \Exception('機台故障');
                     }
                     [$nowPoint, $nowBet, $nowWin] = self::parseHeartbeat($msg);
 
@@ -438,7 +418,7 @@ class SongSlot extends MachineServices implements BaseMachine
 
                     // [打码量诊断] 押分基准建立：orgBet=0 说明是本局首次有效心跳
                     if (!$betCondition1 && $nowBet > 0 && !empty($gamingUserId)) {
-                        Log::channel('bet_statistics')->info('[BetStats] 押分基准建立', [
+                        Log::channel('bet_statistics')->info('[小松斯洛-下注統計] 押分基准建立', [
                             'machine_id'   => $this->machine->id,
                             'player_id'    => $gamingUserId,
                             'baseline_bet' => (float)$nowBet,  // 机台当前累计押分（本局参考点）
@@ -465,7 +445,7 @@ class SongSlot extends MachineServices implements BaseMachine
                                 );
 
                                 if (bccomp($betAmount, '0', 2) > 0) {
-                                    Log::channel('bet_statistics')->info('[BetStats] SongSlot 投递打码量', [
+                                    Log::channel('bet_statistics')->info('[小松斯洛-下注統計] SongSlot 投递打码量', [
                                         'machine_id'         => $this->machine->id,
                                         'player_id'          => $currentGamingUserId,
                                         'org_bet'            => (float)$orgBet,
@@ -484,10 +464,17 @@ class SongSlot extends MachineServices implements BaseMachine
                                         'machine_id' => $this->machine->id,
                                         'created_at' => date('Y-m-d H:i:s'),
                                     ]);
+                                    Client::send('player-points', [
+                                        'player_id'        => $currentGamingUserId,
+                                        'platform_amounts' => [0 => floatval($betAmount)],
+                                        'source'           => 'machine',
+                                        'created_at'       => date('Y-m-d H:i:s'),
+                                        'batch_id'         => 'machine_' . $this->machine->id . '_' . $currentGamingUserId . '_' . (int)(microtime(true) * 1000),
+                                    ]);
                                 }
                             } catch (\Exception $e) {
                                 // 投递失败不影响主业务
-                                Log::channel('bet_statistics')->error('[BetStats] SongSlot打码量投递失败', [
+                                Log::channel('bet_statistics')->error('[小松斯洛-下注統計] SongSlot打码量投递失败', [
                                     'machine_id' => $this->machine->id,
                                     'player_id' => $currentGamingUserId,
                                     'error' => $e->getMessage(),
@@ -538,6 +525,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     $this->auto = $nowAuto;  // ✅ __set() 会自动推送（通过 machineInfo 机制）
                     $this->reward_status = $nowRewardStatus;  // ✅ __set() 会自动推送（通过 machineInfo 机制）
                     $this->sendMachineNowStatusMessage($this->machine->id);
+                MachineLogger::heartbeat($this->machine->toArray(), $this->getMachineCache());
                     break;
                 case self::WASH_ZERO:
                     Redis::publish($domain . ':' . $port, '设备返回的消息');
@@ -546,7 +534,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     $washPoint = self::parseScore(substr($msg, 6, 6));
                     $preWashPoint = $this->pre_wash_point;
                     if ($preWashPoint != $washPoint) {
-                        throw new \Exception('预下分不等于实际下分,请稍后尝试');
+                        throw new \Exception('预下分不等于实际下分,請稍後嘗試');
                     }
                     $this->pre_wash_point = 0;
                     self::sendCmd($cmd);
@@ -579,34 +567,15 @@ class SongSlot extends MachineServices implements BaseMachine
                     $machineStatus = substr($msg, 8, 2);
                     if ($machineStatus != 'da') {
                         $this->has_lock = 1;
-
-                        // 详细记录机台锁的原因
-                        Log::channel('machine_operations')->error('[SongSlot-MachineLock] 机台被锁', [
-                            'machine_id' => $this->machine->id,
-                            'machine_code' => $this->machine->code,
-                            'machine_name' => $this->machine->name,
-                            'lock_reason' => '机台状态异常',
-                            'exception_message' => '机台故障, 故障码: ' . $machineStatus,
-                            'expected_status' => 'da',
-                            'actual_status' => $machineStatus,
-                            'status_msg' => $msg,
-                            'player_id' => $gamingUserId,
-                            'player_info' => $this->machine->gamingPlayer ? [
-                                'uuid' => $this->machine->gamingPlayer->uuid,
-                                'name' => $this->machine->gamingPlayer->name,
-                                'phone' => $this->machine->gamingPlayer->phone,
-                            ] : null,
-                            'machine_state' => [
-                                'point' => $this->point,
-                                'bet' => $this->bet,
-                                'win' => $this->win,
-                                'auto' => $this->auto,
-                            ],
-                            'timestamp' => date('Y-m-d H:i:s'),
-                        ]);
-
+                        MachineLogger::error(
+                            $this->machine->toArray(),
+                            'machine_lock',
+                            '機台狀態異常-機台已鎖定 故障碼=' . $machineStatus,
+                            $this->getMachineCache(),
+                            MachineLogger::DIR_RESPONSE
+                        );
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $gamingUserId);
-                        throw new \Exception('机台故障, 故障码:' . $machineStatus);
+                        throw new \Exception('機台故障, 故障碼:' . $machineStatus);
                     }
                     $nowAuto = substr($msg, 4, 2) == 'c0' ? 0 : 1;
                     $nowRewardStatus = substr($msg, 6, 2) == 'd0' ? 0 : 1;
@@ -636,14 +605,7 @@ class SongSlot extends MachineServices implements BaseMachine
                     break;
             }
         } catch (\Exception $e) {
-            $this->log->error('消息处理错误: ', [
-                $e->getMessage(),
-                [
-                    'msg' => $msg,
-                    'action' => $fun ?? '',
-                    'machine_code' => $this->machine->code
-                ]
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'message_error', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 
@@ -825,62 +787,37 @@ class SongSlot extends MachineServices implements BaseMachine
                 // 确定指令类型
                 $cmdType = $cmd == self::OPEN_ANY_POINT ? '上分' : '下分';
 
-                // 详细记录机台锁的原因
-                Log::channel('machine_operations')->error("[SongSlot-MachineLock] {$cmdType}失败，机台被锁", [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'machine_name' => $this->machine->name,
-                    'cmd' => $cmd,
-                    'cmd_type' => $cmdType,
-                    'cmd_data' => $data ?? 0,
-                    'lock_reason' => '指令执行异常',
-                    'exception_message' => $e->getMessage(),
-                    'exception_file' => $e->getFile(),
-                    'exception_line' => $e->getLine(),
-                    'operator_type' => $source,
-                    'operator_id' => $source_id,
-                    'player_id' => $this->machine->gaming_user_id,
-                    'player_info' => $this->machine->gamingPlayer ? [
-                        'uuid' => $this->machine->gamingPlayer->uuid,
-                        'name' => $this->machine->gamingPlayer->name,
-                        'phone' => $this->machine->gamingPlayer->phone,
-                    ] : null,
-                    'machine_state' => [
-                        'point' => $this->point,
-                        'bet' => $this->bet,
-                        'win' => $this->win,
-                        'auto' => $this->auto,
-                    ],
-                    'timestamp' => date('Y-m-d H:i:s'),
-                ]);
-
+                MachineLogger::error(
+                    $this->machine->toArray(),
+                    'machine_lock',
+                    "{$cmdType}失敗-機台已鎖定: " . $e->getMessage(),
+                    $this->getMachineCache(),
+                    MachineLogger::DIR_COMMAND
+                );
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
             }
-            $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
-            $this->log->error($operatorType . '发送指令异常', [
-                'operator_type' => $source,
-                'operator_id' => $source_id,
-                'cmd' => $cmd,
-                'cmd_data' => $data ?? 0,
-                'machine_code' => $this->machine->code,
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error(
+                $this->machine->toArray(),
+                'send_cmd',
+                '發送指令失敗: ' . $e->getMessage(),
+                $this->getMachineCache(),
+                MachineLogger::DIR_COMMAND
+            );
             throw new Exception($e->getMessage());
         }
-        // ✅ 优化：精简日志，只记录关键信息，移除冗余的 machine_data
-        $operatorType = $source === 'admin' ? '【管理员操作】' : '【玩家操作】';
-        $this->log->info($operatorType . '机台操作', [
-            'operator_type' => $source,
-            'operator_id' => $source_id,
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'player_id' => $this->machine->gamingPlayer->id ?? 0,
-            'player_uuid' => $this->machine->gamingPlayer->uuid ?? '',
-            'action' => $cmd,
-            'action_desc' => $this->getDescription($cmd),
-            'point' => $data,
-            // 移除 machine_data（几千字节的冗余数据）
-        ]);
+        // OPEN_ANY_POINT / WASH_ZERO 已在 openPoint()/washPoint() 內部完整記錄日誌，此處跳過避免重複
+        if (!in_array($cmd, [self::OPEN_ANY_POINT, self::WASH_ZERO])) {
+            $operatorType = $source === 'admin' ? '【管理員操作】' : '【玩家操作】';
+            MachineLogger::sendCommand(
+                $this->machine->toArray(),
+                $this->getCmdActionName($cmd),
+                $operatorType . $this->getCmdDescription($cmd),
+                $this->getMachineCache(),
+                '',
+                $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
+                ['id' => $source_id, 'uuid' => $this->machine->gamingPlayer->uuid ?? '']
+            );
+        }
 
         return true;
     }
@@ -924,10 +861,7 @@ class SongSlot extends MachineServices implements BaseMachine
             // 推送格式见 pushAutoStatus() 方法
 
         } catch (Exception $e) {
-            $this->log->error('开启自动指令发送失败', [
-                'machine_code' => $this->machine->code,
-                'error' => $e->getMessage()
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'auto_cmd', '開啟自動指令發送失敗: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             throw new Exception(trans('machine_action_fail', [], 'message'));
         }
     }
@@ -938,6 +872,40 @@ class SongSlot extends MachineServices implements BaseMachine
      * @param mixed $data 数据
      * @return string
      */
+    private function getCmdActionName(string $cmd): string
+    {
+        static $map = [
+            self::OPEN_ANY_POINT => MachineLogger::ACTION_OPEN,
+            self::WASH_ZERO      => MachineLogger::ACTION_WASH,
+            self::READ_SCORE     => 'read_score',
+            self::READ_BET       => 'read_bet',
+            self::ALL_DOWN       => 'all_down',
+            self::CHECK          => 'check',
+            self::OUT_OFF        => 'auto_stop',
+            self::STOP_ONE       => 'stop_one',
+            self::STOP_TWO       => 'stop_two',
+            self::STOP_THREE     => 'stop_three',
+        ];
+        return $map[$cmd] ?? 'send_cmd';
+    }
+
+    private function getCmdDescription(string $cmd): string
+    {
+        static $map = [
+            self::OPEN_ANY_POINT => '開分',
+            self::WASH_ZERO      => '清零',
+            self::READ_SCORE     => '讀取機台分數',
+            self::READ_BET       => '讀取下注額',
+            self::ALL_DOWN       => '下轉清零',
+            self::CHECK          => '歸零結算計數器',
+            self::OUT_OFF        => '停止自動',
+            self::STOP_ONE       => '停止轉軸1',
+            self::STOP_TWO       => '停止轉軸2',
+            self::STOP_THREE     => '停止轉軸3',
+        ];
+        return $map[$cmd] ?? ('機台操作 指令碼=' . strtoupper($cmd));
+    }
+
     private function createCmd(string $cmd, mixed $data = 0): string
     {
         $hexString = '';
@@ -1060,10 +1028,7 @@ class SongSlot extends MachineServices implements BaseMachine
             // 推送格式见 pushAutoStatus() 方法
 
         } catch (Exception $e) {
-            $this->log->error('关闭自动指令发送失败', [
-                'machine_code' => $this->machine->code,
-                'error' => $e->getMessage()
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'auto_cmd', '關閉自動指令發送失敗: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             throw new Exception(trans('machine_action_fail', [], 'message'));
         }
     }
@@ -1089,15 +1054,15 @@ class SongSlot extends MachineServices implements BaseMachine
     {
         $expirationTime = 1000000;
 
-        $this->log->info('[SongSlot-上分开始]', [
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'cmd' => $cmd,
-            'data' => $data,
-            'source' => $source,
-            'source_id' => $source_id,
-            'before_point' => $this->point,
-        ]);
+        MachineLogger::sendCommand(
+            $this->machine->toArray(),
+            MachineLogger::ACTION_OPEN,
+            '開分開始 開分量=' . $data,
+            $this->getMachineCache(),
+            '',
+            $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
+            ['id' => $source_id, 'uuid' => $this->machine->gamingPlayer->uuid ?? '']
+        );
 
         try {
             $beforeActionTime = $this->setActionVersion($cmd);
@@ -1107,13 +1072,12 @@ class SongSlot extends MachineServices implements BaseMachine
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 if ($actionTime > $beforeActionTime) {
-                    $this->log->info('[SongSlot-上分成功]', [
-                        'machine_code' => $this->machine->code,
-                        'cmd' => $cmd,
-                        'data' => $data,
-                        'after_point' => $this->point,
-                        'duration_ms' => round($handleDuration / 1000, 2),
-                    ]);
+                    MachineLogger::receiveResponse(
+                        $this->machine->toArray(),
+                        MachineLogger::ACTION_OPEN,
+                        '開分結束 耗時(ms)=' . round($handleDuration / 1000, 2),
+                        $this->getMachineCache()
+                    );
 
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
@@ -1131,13 +1095,13 @@ class SongSlot extends MachineServices implements BaseMachine
                 $handleDuration += $sleep;
             }
         } catch (Exception $e) {
-            $this->log->error('[SongSlot-上分失败]', [
-                'machine_code' => $this->machine->code,
-                'cmd' => $cmd,
-                'data' => $data,
-                'error' => $e->getMessage(),
-                'before_point' => $this->point,
-            ]);
+            MachineLogger::error(
+                $this->machine->toArray(),
+                MachineLogger::ACTION_OPEN,
+                '開分失敗: ' . $e->getMessage(),
+                $this->getMachineCache(),
+                MachineLogger::DIR_RESPONSE
+            );
             throw new Exception(trans('machine_action_fail', [], 'message'));
         }
     }
@@ -1177,15 +1141,15 @@ class SongSlot extends MachineServices implements BaseMachine
         $expirationTime = 1000000;
 
         if ($attempts == 0) {
-            $this->log->info('[SongSlot-下分开始]', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'cmd' => $cmd,
-                'data' => $data,
-                'source' => $source,
-                'source_id' => $source_id,
-                'before_point' => $this->point,
-            ]);
+            MachineLogger::sendCommand(
+                $this->machine->toArray(),
+                MachineLogger::ACTION_WASH,
+                '下分開始 清零量=' . $data,
+                $this->getMachineCache(),
+                '',
+                $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN,
+                ['id' => $source_id, 'uuid' => $this->machine->gamingPlayer->uuid ?? '']
+            );
         }
 
         try {
@@ -1197,14 +1161,12 @@ class SongSlot extends MachineServices implements BaseMachine
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
                 if ($actionTime > $beforeActionTime) {
-                    $this->log->info('[SongSlot-下分成功]', [
-                        'machine_code' => $this->machine->code,
-                        'cmd' => $cmd,
-                        'data' => $data,
-                        'after_point' => $this->point,
-                        'attempts' => $attempts + 1,
-                        'duration_ms' => round($handleDuration / 1000, 2),
-                    ]);
+                    MachineLogger::receiveResponse(
+                        $this->machine->toArray(),
+                        MachineLogger::ACTION_WASH,
+                        '下分結束 第' . ($attempts + 1) . '次 耗時(ms)=' . round($handleDuration / 1000, 2),
+                        $this->getMachineCache()
+                    );
 
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
@@ -1224,22 +1186,21 @@ class SongSlot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('[SongSlot-下分失败]', [
-                    'machine_code' => $this->machine->code,
-                    'cmd' => $cmd,
-                    'data' => $data,
-                    'error' => $e->getMessage(),
-                    'attempts' => $attempts,
-                    'before_point' => $this->point,
-                ]);
+                MachineLogger::error(
+                    $this->machine->toArray(),
+                    MachineLogger::ACTION_WASH,
+                    '下分失敗-重試耗盡 嘗試次數=' . $attempts . ': ' . $e->getMessage(),
+                    $this->getMachineCache(),
+                    MachineLogger::DIR_RESPONSE
+                );
                 throw new Exception(trans('machine_connect_timeout', [], 'message'));
             }
-            $this->log->warning('[SongSlot-下分重试]', [
-                'machine_code' => $this->machine->code,
-                'cmd' => $cmd,
-                'attempts' => $attempts,
-                'max_retries' => $maxRetries,
-            ]);
+            MachineLogger::warning(
+                $this->machine->toArray(),
+                MachineLogger::ACTION_WASH,
+                '下分重試中 第' . $attempts . '/' . $maxRetries . '次',
+                $this->getMachineCache()
+            );
             usleep(50000);
             $this->washPoint($uid, $cmd, $data, $source, $source_id, $attempts);
         }
@@ -1292,7 +1253,7 @@ class SongSlot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                $this->log->error('指令超时异常', ['slot -> machineAction', [$this->machine->code], 'error' => $e->getMessage()]);
+                MachineLogger::error($this->machine->toArray(), 'action_timeout', '指令超時異常: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
                 throw new Exception(trans('machine_connect_timeout', [], 'message'));
             }
             usleep(50000);

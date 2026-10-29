@@ -6,6 +6,7 @@ use app\model\GameType;
 use app\model\Machine;
 use app\model\MachineLotteryRecord;
 use app\model\Notice;
+use app\support\MachineLogger;
 use Exception;
 use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
@@ -122,7 +123,6 @@ class Slot extends MachineServices implements BaseMachine
 
     public $expirationTime = 8000000; // 8秒内返回
 
-    public $log = null;
 
     public function __construct(Machine $machine, $lang = 'zh_CN')
     {
@@ -177,7 +177,6 @@ class Slot extends MachineServices implements BaseMachine
         ];
         $this->lang = $lang;
         $this->cacheData = $this->getMachineCache();
-        $this->log = Log::channel('slot_machine');
     }
 
     /**
@@ -276,7 +275,7 @@ class Slot extends MachineServices implements BaseMachine
                         'value' => $value
                     ]);
 
-                    throw new \Exception("Redis关键字段保存失败: {$name}，请立即检查Redis服务");
+                    throw new \Exception("Redis关键字段保存失敗: {$name}，请立即檢查Redis服务");
                 }
 
                 // 其他重要字段只记录日志
@@ -428,12 +427,13 @@ class Slot extends MachineServices implements BaseMachine
                 case Slot::STOP_TWO:
                 case Slot::STOP_THREE:
                 case Slot::TESTING:
+                    MachineLogger::heartbeat($this->machine->toArray(), $this->getMachineCache());
                     break;
                 default:
                     return false;
             }
         } catch (\Exception $e) {
-            $this->log->error('消息处理错误: ', [$msg, $e->getTraceAsString(), $e->getMessage()]);
+            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
         return true;
@@ -552,35 +552,7 @@ class Slot extends MachineServices implements BaseMachine
                 self::WASH_ZERO
             ])) {
                 $this->has_lock = 1;
-
-                // 详细记录机台锁的原因
-                Log::channel('machine_operations')->error('[Slot-MachineLock] 机台被锁', [
-                    'machine_id' => $this->machine->id,
-                    'machine_code' => $this->machine->code,
-                    'machine_name' => $this->machine->name,
-                    'cmd' => $cmd,
-                    'cmd_desc' => $this->getDescription($cmd),
-                    'lock_reason' => '指令执行异常',
-                    'exception_message' => $e->getMessage(),
-                    'exception_file' => $e->getFile(),
-                    'exception_line' => $e->getLine(),
-                    'operator_type' => $source,
-                    'operator_id' => $source_id,
-                    'player_id' => $this->machine->gaming_user_id,
-                    'player_info' => $this->machine->gamingPlayer ? [
-                        'uuid' => $this->machine->gamingPlayer->uuid,
-                        'name' => $this->machine->gamingPlayer->name,
-                        'phone' => $this->machine->gamingPlayer->phone,
-                    ] : null,
-                    'machine_state' => [
-                        'point' => $this->point,
-                        'bet' => $this->bet,
-                        'win' => $this->win,
-                        'auto' => $this->auto,
-                        'reward_status' => $this->reward_status,
-                    ],
-                    'timestamp' => date('Y-m-d H:i:s'),
-                ]);
+                MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令執行異常-機台已鎖定: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
 
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
             }
@@ -599,8 +571,60 @@ class Slot extends MachineServices implements BaseMachine
      * @return string
      * @throws Exception
      */
+    /** 将 hex 指令常量转换为语义化 action 名称，用于 MachineLogger */
+    private function getCmdActionName(string $cmd): string
+    {
+        static $map = [
+            self::OPEN_ONE          => 'open_one',
+            self::OPEN_TEN          => 'open_ten',
+            self::WASH_ZERO         => 'wash_zero',
+            self::WASH_POINT        => 'wash',
+            self::MOVE_POINT_ON     => 'move_point_on',
+            self::MOVE_POINT_OFF    => 'move_point_off',
+            self::ALL_DOWN          => 'all_down',
+            self::OPEN_FIVE         => 'open_five',
+            self::OPEN_ANY_POINT    => 'open',
+            self::REWARD_SWITCH     => 'reward_switch',
+            self::REWARD_SWITCH_OPT => 'reward_switch_opt',
+            self::MACHINE_BUSY      => 'machine_busy',
+            self::OUTPUT            => 'output',
+            self::ALL_UP            => 'all_up',
+            self::OPEN_TESTING      => 'open_testing',
+            self::READ_SCORE        => 'read_score',
+            self::READ_CREDIT2      => 'read_credit2',
+            self::READ_BET          => 'read_bet',
+            self::READ_WIN          => 'read_win',
+            self::READ_BB           => 'read_bb',
+            self::READ_RB           => 'read_rb',
+            self::OPEN_TABLE        => 'read_open_table',
+            self::WASH_TABLE        => 'read_wash_table',
+            self::INSERT_COIN_TABLE => 'read_insert_coin',
+            self::OUT_COIN_TABLE    => 'read_out_coin',
+            self::OUT_ON            => 'auto_out_start',
+            self::OUT_OFF           => 'auto_out_stop',
+            self::PRESSURE          => 'pressure',
+            self::START             => 'auto_start',
+            self::STOP_ONE          => 'stop_one',
+            self::STOP_TWO          => 'stop_two',
+            self::STOP_THREE        => 'stop_three',
+            self::TESTING           => 'heartbeat',
+            self::GET_AUTO_STATUS   => 'read_auto_status',
+            self::AUTO_START        => 'auto_start',
+            self::AUTO_STOP         => 'auto_stop',
+        ];
+        return $map[$cmd] ?? 'send_cmd';
+    }
+
+    private static function isSilentAction(string $action): bool
+    {
+        static $silent = ['read_score', 'read_credit2', 'read_bet', 'read_win', 'read_bb', 'read_rb',
+                          'read_open_table', 'read_wash_table', 'read_insert_coin', 'read_out_coin', 'read_auto_status'];
+        return in_array($action, $silent, true);
+    }
+
     private function createCmd(string $cmd, $data, int $type, string $option = '00'): string
     {
+        $cmdAction = $this->getCmdActionName($cmd);
         switch ($type) {
             case self::TYPE_OPEN_CARD:
                 $decodeData = encodeData($data);
@@ -611,12 +635,11 @@ class Slot extends MachineServices implements BaseMachine
             case self::TYPE_OUT_CARD:
                 break;
             default:
-                throw new Exception('命令错误');
+                throw new Exception('命令錯誤');
         }
-        Log::channel('slot_machine')->info('[Slot-sendCmd] 组装指令', [
-            'machine_code' => $this->machine->code,
-            'cmd' => $cmd,
-        ]);
+        if (!self::isSilentAction($cmdAction)) {
+            MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, '已組裝指令準備發送', $this->getMachineCache());
+        }
         return $cmd;
     }
 
@@ -641,6 +664,7 @@ class Slot extends MachineServices implements BaseMachine
     {
         try {
             $beforePoint = $this->point;
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分開始 前分數=' . $beforePoint, $this->getMachineCache());
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . $cmd, $data, self::TYPE_OPEN_CARD)));
             $beforeActionTime = $this->action_time;
             $handleDuration = 0;
@@ -661,14 +685,12 @@ class Slot extends MachineServices implements BaseMachine
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
                         $queryIndex++;
                     } catch (\Exception $queryError) {
-                        Log::channel('slot_machine')->warning('[Slot-OpenPoint] 查询分数失败', [
-                            'machine_code' => $this->machine->code,
-                            'error' => $queryError->getMessage(),
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '查詢分數失敗: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     }
                 }
 
                 if ($actionTime > $beforeActionTime && $beforePoint < $point) {
+                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分結束 後分數=' . $point, $this->getMachineCache());
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
                             'msg_type' => 'machine_action_result',
@@ -685,14 +707,7 @@ class Slot extends MachineServices implements BaseMachine
                 $handleDuration += $sleep;
             }
         } catch (Exception $e) {
-            // 追踪日志：开分失败
-            Log::channel('machine_operations')->error('[Slot-OpenPoint] 开分失败', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'cmd' => $cmd,
-                'current_point' => $this->point,
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分失敗: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             throw new Exception($e->getMessage());
         }
     }
@@ -781,13 +796,7 @@ class Slot extends MachineServices implements BaseMachine
         $expirationTime = 1000000;
 
         if ($attempts == 0) {
-            Log::channel('slot_machine')->info('[Slot-下分开始]', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'source' => $source,
-                'source_id' => $source_id,
-                'before_point' => $this->point,
-            ]);
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分開始', $this->getMachineCache());
         }
 
         try {
@@ -815,31 +824,17 @@ class Slot extends MachineServices implements BaseMachine
                 // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
                 if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
                     try {
-                        Log::channel('slot_machine')->debug('[Slot-WashPoint] 主动查询分数', [
-                            'machine_code' => $this->machine->code,
-                            'query_count' => $queryIndex + 1,
-                            'elapsed_ms' => round($handleDuration / 1000, 2),
-                        ]);
-
+                        MachineLogger::sendCommand($this->machine->toArray(), 'query_score', '主動查詢分數 第' . ($queryIndex + 1) . '次', $this->getMachineCache());
                         // 发送查询分数指令（READ_SCORE = '21'）
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
                         $queryIndex++;
                     } catch (\Exception $queryError) {
-                        Log::channel('slot_machine')->warning('[Slot-WashPoint] 查询分数失败', [
-                            'machine_code' => $this->machine->code,
-                            'error' => $queryError->getMessage(),
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '查詢分數失敗: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     }
                 }
 
                 if ($actionTime > $beforeActionTime && $point == 0) {
-                    Log::channel('slot_machine')->info('[Slot-下分成功]', [
-                        'machine_code' => $this->machine->code,
-                        'before_point' => $beforePoint,
-                        'after_point' => $point,
-                        'attempts' => $attempts + 1,
-                        'duration_ms' => round($handleDuration / 1000, 2),
-                    ]);
+                    MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分結束', $this->getMachineCache());
 
                     if ($source == 'admin') {
                         sendSocketMessage('private-admin-1-' . $source_id, [
@@ -884,28 +879,17 @@ class Slot extends MachineServices implements BaseMachine
                         ]);
                     }
                 } catch (\Exception $telegramError) {
-                    Log::error('[TelegramAlert] 发送告警失败', [
+                    Log::error('[雙美斯洛-電報警報] 发送告警失败', [
                         'error' => $telegramError->getMessage(),
                     ]);
                 }
 
-                Log::channel('slot_machine')->error('[Slot-下分失败]', [
-                    'machine_code' => $this->machine->code,
-                    'error' => $e->getMessage(),
-                    'attempts' => $attempts,
-                    'before_point' => $beforePoint ?? $this->point,
-                    'current_point' => $this->point,
-                ]);
+                MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分失敗: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
 
                 throw new Exception(trans('machine_action_fail', [], 'message'));
             }
 
-            Log::channel('slot_machine')->warning('[Slot-下分重试]', [
-                'machine_code' => $this->machine->code,
-                'attempts' => $attempts,
-                'max_retries' => $maxRetries,
-                'current_point' => $this->point,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分重試 嘗試次數=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_EVENT);
 
             usleep(50000);
             $this->washPoint($uid, $source, $source_id, $attempts);
@@ -955,10 +939,7 @@ class Slot extends MachineServices implements BaseMachine
                         Gateway::sendToUid($uid, hex2bin($this->createCmd(self::PREFIX . self::READ_SCORE, 0, self::TYPE_OPEN_CARD)));
                         $queryIndex++;
                     } catch (\Exception $queryError) {
-                        Log::channel('slot_machine')->warning('[Slot-WashSurplusPoint] 查询分数失败', [
-                            'machine_code' => $this->machine->code,
-                            'error' => $queryError->getMessage(),
-                        ]);
+                        MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '洗分留餘數-查詢分數失敗: ' . $queryError->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     }
                 }
 
@@ -979,13 +960,7 @@ class Slot extends MachineServices implements BaseMachine
                 $handleDuration += $sleep;
             }
         } catch (Exception $e) {
-            // 追踪日志：洗分(留分)失败
-            Log::channel('machine_operations')->error('[Slot-WashSurplusPoint] 洗分(留分)失败', [
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'current_point' => $this->point,
-                'error' => $e->getMessage(),
-            ]);
+            MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '洗分留分失敗: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
             throw new Exception($e->getMessage());
         }
     }
@@ -1234,7 +1209,7 @@ class Slot extends MachineServices implements BaseMachine
                             );
 
                             if (bccomp($betAmount, '0', 2) > 0) {
-                                Log::channel('bet_statistics')->info('[BetStats] Slot 投递打码量', [
+                                Log::channel('bet_statistics')->info('[雙美斯洛-下注統計] Slot 投递打码量', [
                                     'machine_id' => $this->machine->id,
                                     'player_id' => $gamingUserId,
                                     'change_amount' => $changeAmount,
@@ -1251,8 +1226,15 @@ class Slot extends MachineServices implements BaseMachine
                                     'machine_id' => $this->machine->id,
                                     'created_at' => date('Y-m-d H:i:s'),
                                 ]);
+                                Client::send('player-points', [
+                                    'player_id'        => $gamingUserId,
+                                    'platform_amounts' => [0 => floatval($betAmount)],
+                                    'source'           => 'machine',
+                                    'created_at'       => date('Y-m-d H:i:s'),
+                                    'batch_id'         => 'machine_' . $this->machine->id . '_' . $gamingUserId . '_' . (int)(microtime(true) * 1000),
+                                ]);
                             } else {
-                                Log::channel('bet_statistics')->debug('[BetStats] Slot 打码量为0，跳过投递', [
+                                Log::channel('bet_statistics')->debug('[雙美斯洛-下注統計] Slot 打码量为0，跳过投递', [
                                     'machine_id' => $this->machine->id,
                                     'bet_amount' => $betAmount,
                                 ]);
@@ -1298,14 +1280,7 @@ class Slot extends MachineServices implements BaseMachine
                     return false;
             }
         } catch (\Exception $e) {
-            $this->log->error('消息处理错误: ', [
-                $e->getMessage(),
-                [
-                    'msg' => $msg,
-                    'action' => $fun ?? '',
-                    'machine_code' => $this->machine->code
-                ]
-            ]);
+            MachineLogger::error($this->machine->toArray(), 'message_handle', '訊息處理錯誤: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
             return false;
         }
 
