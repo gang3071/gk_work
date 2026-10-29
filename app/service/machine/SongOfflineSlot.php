@@ -12,7 +12,6 @@ use Exception;
 use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
 use support\Cache;
-use support\Log;
 use Webman\RedisQueue\Client;
 use Workerman\Timer;
 use yzh52521\WebmanLock\Locker;
@@ -1016,34 +1015,34 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->remark             = "開分部分失敗回補（{$newRetries}次×" . $this->getOpenUnit() . "，退款金額 {$refundAmount}）";
             $playerGameLog->save();
 
-            // 金流記錄
-            $delivery                   = new \app\model\PlayerDeliveryRecord();
-            $delivery->player_id        = $gamingUserId;
-            $delivery->department_id    = $player->department_id;
-            $delivery->target           = $playerGameLog->getTable();
-            $delivery->target_id        = $playerGameLog->id;
-            $delivery->machine_id       = $this->machine->id;
-            $delivery->machine_name     = $this->machine->name;
-            $delivery->machine_type     = $this->machine->type;
-            $delivery->code             = $this->machine->code;
-            $delivery->type             = \app\model\PlayerDeliveryRecord::TYPE_REFUND;
-            $delivery->source           = 'retry_refund';
-            $delivery->amount           = $refundAmount;
-            $delivery->amount_before    = $beforeBalance;
-            $delivery->amount_after     = $afterBalance;
-            $delivery->tradeno          = $playerGameLog->tradeno ?? '';
-            $delivery->remark           = "開分部分失敗回補（{$newRetries}次）";
-            $delivery->save();
+                // 金流記錄
+                $delivery = new \app\model\PlayerDeliveryRecord();
+                $delivery->player_id = $gamingUserId;
+                $delivery->department_id = $player->department_id;
+                $delivery->target = $playerGameLog->getTable();
+                $delivery->target_id = $playerGameLog->id;
+                $delivery->machine_id = $this->machine->id;
+                $delivery->machine_name = $this->machine->name;
+                $delivery->machine_type = $this->machine->type;
+                $delivery->code = $this->machine->code;
+                $delivery->type = \app\model\PlayerDeliveryRecord::TYPE_REFUND;
+                $delivery->source = 'retry_refund';
+                $delivery->amount = $refundAmount;
+                $delivery->amount_before = $beforeBalance;
+                $delivery->amount_after = $afterBalance;
+                $delivery->tradeno = $playerGameLog->tradeno ?? '';
+                $delivery->remark = "開分部分失敗回補（{$newRetries}次）";
+                $delivery->save();
 
-            \support\Db::commit();
-        } catch (Exception $e) {
-            \support\Db::rollback();
-            // 玩家不存在是永久性錯誤，回 true 讓 return_count 更新以停止重試
-            // 其他 DB 錯誤（Deadlock、連線中斷）屬暫時性，回 false 讓心跳路徑自動重試
-            $isPermanent = str_contains($e->getMessage(), '玩家不存在');
-            MachineLogger::error($this->machine->toArray(), 'ca_replenish', '[小松斯洛線下-回補] 退款事務失敗: '.$e->getMessage().' 是否重試='.(!$isPermanent?'是':'否'), $this->getMachineCache(), MachineLogger::DIR_EVENT);
-            return $isPermanent;
-        }
+                \support\Db::commit();
+            } catch (Exception $e) {
+                \support\Db::rollback();
+                // 玩家不存在是永久性錯誤，回 true 讓 return_count 更新以停止重試
+                // 其他 DB 錯誤（Deadlock、連線中斷）屬暫時性，回 false 讓心跳路徑自動重試
+                $isPermanent = str_contains($e->getMessage(), '玩家不存在');
+                MachineLogger::error($this->machine->toArray(), 'ca_replenish', '[小松斯洛線下-回補] 退款事務失敗: ' . $e->getMessage() . ' 是否重試=' . (!$isPermanent ? '是' : '否'), $this->getMachineCache(), MachineLogger::DIR_EVENT);
+                return $isPermanent;
+            }
         } // end else（非重試路徑）
 
         // 5. 錢包加款（事務外執行，與 returnBalanceToPlayer 一致）
@@ -1499,7 +1498,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 case self::ALL_DOWN:        // 清除历史记录（EA DE）
                 // ✅ 使用 createCmd 添加校验和
                     $fullCmd = $this->createCmd($cmd);
-                    MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDescription, $this->getMachineCache());
+                MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDescription, $this->getMachineCache());
                     Gateway::sendToUid($uid, hex2bin($fullCmd));
                     break;
 
@@ -1616,7 +1615,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         for ($ecAttempt = 1; $ecAttempt <= $preEcMax; $ecAttempt++) {
             Gateway::sendToUid($uid, hex2bin($this->createCmd(self::SSR_SIGNAL)));
             MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN,
-                '[小松斯洛線下-上分] 開分前EA EC清除殘留旗標 第'.$ecAttempt.'/'.$preEcMax.'次', ['machine_data' => $this->getMachineCache()]);
+                '[小松斯洛線下-上分] 開分前EA EC清除殘留旗標 第' . $ecAttempt . '/' . $preEcMax . '次', ['machine_data' => $this->getMachineCache()]);
             usleep($preEcWait);
 
             Cache::delete($this->cacheDataKey . '_last_status_fields');
@@ -1632,8 +1631,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if ($ecRaw !== null && $ecRaw !== false) break;
             }
 
-            $preOpenStatus = '';
-            $preWashStatus = '';
             if ($ecRaw !== null && $ecRaw !== false) {
                 $ecFields      = json_decode($ecRaw, true) ?: [];
                 $preOpenStatus = $ecFields['open_status'] ?? '';
@@ -3682,6 +3679,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         }
 
         $cmd .= $hexString;
+
+        // 只有 OPEN_ANY_POINT（A5）指令需要 SUM1/SUM2 校验
+        // EA 系列指令（EA EC、EA D4、EA C4 等）机台不校验，直接返回原始 hex
+        if (!str_starts_with(strtolower($cmd), self::OPEN_ANY_POINT)) {
+            return $cmd;
+        }
+
         $sum1 = $this->calculateSUM1($cmd);
         $sum2 = $this->calculateSUM2($cmd, $sum1);
 
