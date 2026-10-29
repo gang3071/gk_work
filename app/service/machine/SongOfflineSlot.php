@@ -1449,7 +1449,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if (preg_match('/^a5([0-9a-f]{2})c0$/i', $cmd, $openMatch)) {
                 // 上分指令格式：a5xxc0，從 hex 解析次數計算金額，讓 handleOpenPoint 正確執行
                 $this->originalCmd = strtolower($cmd);  // 保存原始指令（小写）
-                $data = hexdec($openMatch[1]) * self::OPEN_UNIT;
+                $data = hexdec($openMatch[1]) * $this->getOpenUnit();
                 $cmd = self::OPEN_ANY_POINT;
 
                 // ✅ 保存到 Redis（跨请求传递，60秒过期）
@@ -1716,7 +1716,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
             Cache::delete($this->cacheDataKey . '_last_open_result');
 
-            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, $attempt === 1 ? '開分開始 '.$times.'次×'.self::OPEN_UNIT.'分 共'.$data.'分' : '開分重試 第'.$attempt.'/'.$maxAttempts.'次 共'.$data.'分', $this->getMachineCache());
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, $attempt === 1 ? '開分開始 '.$times.'次×'.$this->getOpenUnit().'分 共'.$data.'分' : '開分重試 第'.$attempt.'/'.$maxAttempts.'次 共'.$data.'分', $this->getMachineCache());
 
             Gateway::sendToUid($uid, hex2bin($fullCmd));
 
@@ -3141,18 +3141,29 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->remark = '线下实体按键开分（现金投币）';
             $playerGameLog->save();
 
-            // 5. 更新遊戲记录
-            if ($gameRecord) {
-                $gameRecord->open_point = bcadd($gameRecord->open_point, $openedScore, 2);
-                $gameRecord->open_amount = bcadd($gameRecord->open_amount, $openAmount, 2);
-                $gameRecord->save();
-            }
-
-            // 6. 更新 Redis 记录
+            // 5. 更新 Redis 记录
             $this->last_point_at = time();
             $this->player_open_point = bcadd($this->player_open_point ?? '0', $openedScore, 2);
 
+            // ⚠️ player_game_record 更新移到 commit 之后，避免与 machineWash() 并发时产生 1205 锁等待
             \support\Db::commit();
+
+            // ✅ commit 後更新遊戲記錄（非關鍵，best-effort）
+            if ($gameRecord) {
+                try {
+                    $gameRecord->open_point = bcadd($gameRecord->open_point, $openedScore, 2);
+                    $gameRecord->open_amount = bcadd($gameRecord->open_amount, $openAmount, 2);
+                    $gameRecord->save();
+                } catch (Exception $grEx) {
+                    $this->log->warning('[线下开分] 游戏记录更新失败（非关键，记录已建立）', [
+                        'player_id'      => $playerId,
+                        'game_record_id' => $gameRecord->id,
+                        'opened_score'   => $openedScore,
+                        'open_amount'    => $openAmount,
+                        'error'          => $grEx->getMessage(),
+                    ]);
+                }
+            }
 
             MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '[小松斯洛線下-開分] 玩家開分記錄建立成功 分數='.$openedScore.' 玩家ID='.$playerId, ['machine_data' => $this->getMachineCache()]);
 
