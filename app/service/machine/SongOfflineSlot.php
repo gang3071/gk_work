@@ -12,7 +12,6 @@ use Exception;
 use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
 use support\Cache;
-use support\Log;
 use Webman\RedisQueue\Client;
 use Workerman\Timer;
 use yzh52521\WebmanLock\Locker;
@@ -868,13 +867,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // 存入 Redis 供 HTTP worker（handleOpenPoint/confirmOpenPointWithStatus）读取
         Cache::set($this->cacheDataKey . '_last_status_fields', json_encode($fields), 10);
-        Cache::set($this->cacheDataKey . '_last_status_raw', $msg, 10); // 原始 hex，供日志诊断
 
         // ✅ 使用提取的方法检测标志
         $flags = $this->detectMachineStatusFlags($fields['status_value']);
 
         // 记录解析结果
-        MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[小松斯洛線下-機台情況] 查詢回覆 開分=' . self::descStatus($fields['open_status']) . ' 洗分=' . self::descStatus($fields['wash_status']) . ' 重試次數=' . $fields['retry_count'], $this->getMachineCache(), $msg);
+        MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[小松斯洛線下-機台情況] 查詢回覆 開分=' . self::descStatus($fields['open_status']) . ' 洗分=' . self::descStatus($fields['wash_status']) . ' 重試次數=' . $fields['retry_count'], $this->getMachineCache());
 
         // ✅ 使用提取的方法更新状态
         $this->updateMachineStatus($fields, $flags);
@@ -965,70 +963,70 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeBalance = $existingDelivery->amount_before;
             MachineLogger::warning($this->machine->toArray(), 'ca_replenish', '[小松斯洛線下-回補] 偵測到待重試退款記錄，跳過重複建立，直接重試加款 退款單ID='.$existingDelivery->id, $this->getMachineCache(), MachineLogger::DIR_EVENT);
         } else {
-        \support\Db::beginTransaction();
-        try {
-            $player = \app\model\Player::find($gamingUserId);
-            if (!$player) {
-                throw new Exception("玩家不存在: {$gamingUserId}");
+            \support\Db::beginTransaction();
+            try {
+                $player = \app\model\Player::find($gamingUserId);
+                if (!$player) {
+                    throw new Exception("玩家不存在: {$gamingUserId}");
+                }
+
+                $gameRecord = \app\model\PlayerGameRecord::query()
+                    ->where('machine_id', $this->machine->id)
+                    ->where('player_id', $gamingUserId)
+                    ->where('status', \app\model\PlayerGameRecord::STATUS_START)
+                    ->orderBy('created_at', 'desc')
+                    ->first();
+
+                $beforeBalance = \app\service\WalletService::getBalance($gamingUserId);
+                $afterBalance = bcadd($beforeBalance, $refundAmount, 2);
+
+                // 遊戲日誌（退款按下分記錄）
+                $playerGameLog = addPlayerGameLog(
+                    $player,
+                    $this->machine,
+                    $gameRecord,
+                    $this->machine->control_open_point ?? 0
+                );
+                // wash_point / game_amount 設為 0，避免觸發 PlayerGameLog booted created 事件
+                // 將退款誤計入 MachineReport.wash_point / wash_amount；
+                // 實際金額由 PlayerDeliveryRecord 承載，餘額變化由 before/after_game_amount 記錄。
+                $playerGameLog->wash_point = 0;
+                $playerGameLog->game_amount = 0;
+                $playerGameLog->before_game_amount = $beforeBalance;
+                $playerGameLog->after_game_amount = $afterBalance;
+                $playerGameLog->action = \app\model\PlayerGameLog::ACTION_DOWN;
+                $playerGameLog->is_system = 1;
+                $playerGameLog->remark = "開分部分失敗回補（{$newRetries}次×" . self::OPEN_UNIT . "分，退款金額 {$refundAmount}）";
+                $playerGameLog->save();
+
+                // 金流記錄
+                $delivery = new \app\model\PlayerDeliveryRecord();
+                $delivery->player_id = $gamingUserId;
+                $delivery->department_id = $player->department_id;
+                $delivery->target = $playerGameLog->getTable();
+                $delivery->target_id = $playerGameLog->id;
+                $delivery->machine_id = $this->machine->id;
+                $delivery->machine_name = $this->machine->name;
+                $delivery->machine_type = $this->machine->type;
+                $delivery->code = $this->machine->code;
+                $delivery->type = \app\model\PlayerDeliveryRecord::TYPE_REFUND;
+                $delivery->source = 'retry_refund';
+                $delivery->amount = $refundAmount;
+                $delivery->amount_before = $beforeBalance;
+                $delivery->amount_after = $afterBalance;
+                $delivery->tradeno = $playerGameLog->tradeno ?? '';
+                $delivery->remark = "開分部分失敗回補（{$newRetries}次）";
+                $delivery->save();
+
+                \support\Db::commit();
+            } catch (Exception $e) {
+                \support\Db::rollback();
+                // 玩家不存在是永久性錯誤，回 true 讓 return_count 更新以停止重試
+                // 其他 DB 錯誤（Deadlock、連線中斷）屬暫時性，回 false 讓心跳路徑自動重試
+                $isPermanent = str_contains($e->getMessage(), '玩家不存在');
+                MachineLogger::error($this->machine->toArray(), 'ca_replenish', '[小松斯洛線下-回補] 退款事務失敗: ' . $e->getMessage() . ' 是否重試=' . (!$isPermanent ? '是' : '否'), $this->getMachineCache(), MachineLogger::DIR_EVENT);
+                return $isPermanent;
             }
-
-            $gameRecord = \app\model\PlayerGameRecord::query()
-                ->where('machine_id', $this->machine->id)
-                ->where('player_id', $gamingUserId)
-                ->where('status', \app\model\PlayerGameRecord::STATUS_START)
-                ->orderBy('created_at', 'desc')
-                ->first();
-
-            $beforeBalance = \app\service\WalletService::getBalance($gamingUserId);
-            $afterBalance  = bcadd($beforeBalance, $refundAmount, 2);
-
-            // 遊戲日誌（退款按下分記錄）
-            $playerGameLog = addPlayerGameLog(
-                $player,
-                $this->machine,
-                $gameRecord,
-                $this->machine->control_open_point ?? 0
-            );
-            // wash_point / game_amount 設為 0，避免觸發 PlayerGameLog booted created 事件
-            // 將退款誤計入 MachineReport.wash_point / wash_amount；
-            // 實際金額由 PlayerDeliveryRecord 承載，餘額變化由 before/after_game_amount 記錄。
-            $playerGameLog->wash_point         = 0;
-            $playerGameLog->game_amount        = 0;
-            $playerGameLog->before_game_amount = $beforeBalance;
-            $playerGameLog->after_game_amount  = $afterBalance;
-            $playerGameLog->action             = \app\model\PlayerGameLog::ACTION_DOWN;
-            $playerGameLog->is_system          = 1;
-            $playerGameLog->remark             = "開分部分失敗回補（{$newRetries}次×" . self::OPEN_UNIT . "分，退款金額 {$refundAmount}）";
-            $playerGameLog->save();
-
-            // 金流記錄
-            $delivery                   = new \app\model\PlayerDeliveryRecord();
-            $delivery->player_id        = $gamingUserId;
-            $delivery->department_id    = $player->department_id;
-            $delivery->target           = $playerGameLog->getTable();
-            $delivery->target_id        = $playerGameLog->id;
-            $delivery->machine_id       = $this->machine->id;
-            $delivery->machine_name     = $this->machine->name;
-            $delivery->machine_type     = $this->machine->type;
-            $delivery->code             = $this->machine->code;
-            $delivery->type             = \app\model\PlayerDeliveryRecord::TYPE_REFUND;
-            $delivery->source           = 'retry_refund';
-            $delivery->amount           = $refundAmount;
-            $delivery->amount_before    = $beforeBalance;
-            $delivery->amount_after     = $afterBalance;
-            $delivery->tradeno          = $playerGameLog->tradeno ?? '';
-            $delivery->remark           = "開分部分失敗回補（{$newRetries}次）";
-            $delivery->save();
-
-            \support\Db::commit();
-        } catch (Exception $e) {
-            \support\Db::rollback();
-            // 玩家不存在是永久性錯誤，回 true 讓 return_count 更新以停止重試
-            // 其他 DB 錯誤（Deadlock、連線中斷）屬暫時性，回 false 讓心跳路徑自動重試
-            $isPermanent = str_contains($e->getMessage(), '玩家不存在');
-            MachineLogger::error($this->machine->toArray(), 'ca_replenish', '[小松斯洛線下-回補] 退款事務失敗: '.$e->getMessage().' 是否重試='.(!$isPermanent?'是':'否'), $this->getMachineCache(), MachineLogger::DIR_EVENT);
-            return $isPermanent;
-        }
         } // end else（非重試路徑）
 
         // 5. 錢包加款（事務外執行，與 returnBalanceToPlayer 一致）
@@ -1398,7 +1396,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     ): bool
     {
         $uid = $this->machine->domain . ':' . $this->machine->port;
-        Log::error('发送指令', [$cmd]);
 
         try {
             if (!Gateway::isUidOnline($uid)) {
@@ -1485,7 +1482,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 case self::ALL_DOWN:        // 清除历史记录（EA DE）
                 // ✅ 使用 createCmd 添加校验和
                     $fullCmd = $this->createCmd($cmd);
-                MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDescription, $this->getMachineCache(), $fullCmd);
+                MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDescription, $this->getMachineCache());
                     Gateway::sendToUid($uid, hex2bin($fullCmd));
                     break;
 
@@ -1493,7 +1490,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     // EA EC 機台不回覆，只能事後發 EA D4 確認狀態是否清除
                     // 發送後立即自設版本號，讓 sendRawCmdWithReply 的等待迴圈能正常返回
                     $fullCmd = $this->createCmd($cmd);
-                    MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDescription, $this->getMachineCache(), $fullCmd);
+                    MachineLogger::sendCommand($this->machine->toArray(), $cmdAction, $cmdDescription, $this->getMachineCache());
                     Gateway::sendToUid($uid, hex2bin($fullCmd));
                     $this->setActionVersion(self::SSR_SIGNAL);
                     break;
@@ -1599,19 +1596,15 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $preEcD4Timout = 1000000; // 1s 等 EA D4 回覆
         $preOpenReady  = false;
         for ($ecAttempt = 1; $ecAttempt <= $preEcMax; $ecAttempt++) {
-            $ecCmd = $this->createCmd(self::SSR_SIGNAL);
-            Gateway::sendToUid($uid, hex2bin($ecCmd));
-            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN,
-                '[小松斯洛線下-上分] 開分前EA EC清除殘留旗標 第' . $ecAttempt . '/' . $preEcMax . '次',
-                $this->getMachineCache(), $ecCmd);
+            Gateway::sendToUid($uid, hex2bin($this->createCmd(self::SSR_SIGNAL)));
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN,
+                '[小松斯洛線下-上分] 開分前EA EC清除殘留旗標 第' . $ecAttempt . '/' . $preEcMax . '次', ['machine_data' => $this->getMachineCache()]);
             usleep($preEcWait);
 
-            $d4Cmd = $this->createCmd(self::READ_STATUS);
             Cache::delete($this->cacheDataKey . '_last_status_fields');
-            Gateway::sendToUid($uid, hex2bin($d4Cmd));
-            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN,
-                '[小松斯洛線下-上分] 開分前EA D4查詢機台狀態',
-                $this->getMachineCache(), $d4Cmd);
+            Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN,
+                '[小松斯洛線下-上分] 開分前EA D4查詢機台狀態', ['machine_data' => $this->getMachineCache()]);
             $ecWaited = 0;
             $ecRaw    = null;
             while ($ecWaited < $preEcD4Timout) {
@@ -1621,16 +1614,13 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if ($ecRaw !== null && $ecRaw !== false) break;
             }
 
-            $preOpenStatus = '';
-            $preWashStatus = '';
             if ($ecRaw !== null && $ecRaw !== false) {
                 $ecFields      = json_decode($ecRaw, true) ?: [];
                 $preOpenStatus = $ecFields['open_status'] ?? '';
                 $preWashStatus = $ecFields['wash_status'] ?? '';
-                $ecRawHex = Cache::get($this->cacheDataKey . '_last_status_raw') ?? '(无)';
                 MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN,
                     '[小松斯洛線下-上分] 開分前EA D4回覆 開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus),
-                    ['machine_data' => $this->getMachineCache(), 'raw_recv' => $ecRawHex]);
+                    ['machine_data' => $this->getMachineCache()]);
 
                 if ($preOpenStatus === 'd3') {
                     // 機台正在開分中（殘留上次 session），直接進確認流程取回結果。
@@ -3659,8 +3649,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         }
 
         $cmd .= $hexString;
+
+        // 只有 OPEN_ANY_POINT（A5）指令需要 SUM1/SUM2 校验
+        // EA 系列指令（EA EC、EA D4、EA C4 等）机台不校验，直接返回原始 hex
+        if (!str_starts_with(strtolower($cmd), self::OPEN_ANY_POINT)) {
+            return $cmd;
+        }
+
         $sum1 = $this->calculateSUM1($cmd);
         $sum2 = $this->calculateSUM2($cmd, $sum1);
+
         return $cmd . $sum1 . $sum2;
     }
 
