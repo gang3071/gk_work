@@ -5,6 +5,7 @@ namespace app\service\machine;
 use app\model\GameType;
 use app\model\Machine;
 use app\model\Player;
+use app\support\MachineLogger;
 use Exception;
 use GatewayWorker\Lib\Gateway;
 use support\Log;
@@ -85,17 +86,6 @@ class MachineOperationService
      */
     private function initServices(): void
     {
-        // 🔍 调试日志：记录机台配置
-        Log::channel('machine_operations')->debug('[MachineOperationService] 初始化服务', [
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'type' => $this->machine->type,
-            'control_type' => $this->machine->control_type,
-            'machine_source' => $this->machine->machine_source,
-            'CONTROL_TYPE_MEI' => Machine::CONTROL_TYPE_MEI,
-            'CONTROL_TYPE_SONG' => Machine::CONTROL_TYPE_SONG,
-        ]);
-
         if ($this->machine->type == GameType::TYPE_SLOT) {
             // ✅ Bug #17修复：Slot机也需要区分线上/线下
             if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
@@ -120,12 +110,6 @@ class MachineOperationService
             }
         }
 
-        // 🔍 调试日志：记录选择的服务类
-        Log::channel('machine_operations')->debug('[MachineOperationService] 服务类选择', [
-            'machine_id' => $this->machine->id,
-            'service_class' => $serviceClass,
-        ]);
-
         $this->services = new $serviceClass($this->machine, $this->lang);
     }
 
@@ -139,14 +123,8 @@ class MachineOperationService
     public function execute(string $action, array $params = []): array
     {
         try {
-            // 记录操作开始
-            $this->logOperation('start', $action, $params);
-
             // 根据操作类型分发
             $result = $this->dispatch($action, $params);
-
-            // 记录操作成功
-            $this->logOperation('success', $action, $params, $result);
 
             return [
                 'success' => true,
@@ -565,15 +543,7 @@ class MachineOperationService
         // ✅ 使用服务类的方法获取发送前的版本号（而不是直接访问Redis）
         $beforeVersion = (int)($this->services->getActionVersion($actionKey) ?: 0);
 
-        Log::channel('machine_operations')->info('[sendRawCmdWithReply] 准备发送指令', [
-            'machine_id' => $machineId,
-            'cmd' => $cmd,
-            'cmd_normalized' => $cmdNormalized,
-            'action_key' => $actionKey,
-            'before_version' => $beforeVersion,
-            'machine_type' => $this->machine->type,
-            'control_type' => $this->machine->control_type,
-        ]);
+        MachineLogger::sendCommand($this->machine->toArray(), $actionKey, '準備發送', $this->services->getMachineCache());
 
         // ✅ 重要：发送指令时使用处理后的指令码（去掉前缀、统一大小写）
         // 这样 Slot::sendCmd() 中的 $cmd 参数才能正确匹配常量定义
@@ -584,14 +554,6 @@ class MachineOperationService
             $this->operatorId,
             $isSystem
         );
-
-        Log::channel('machine_operations')->info('[sendRawCmdWithReply] 指令已发送', [
-            'machine_id' => $machineId,
-            'original_cmd' => $cmd,
-            'send_cmd' => $actionKey,
-            'action_key' => $actionKey,
-            'send_result' => $sendResult,
-        ]);
 
         if (!$sendResult) {
             throw new Exception(trans('send_cmd_failed', [], 'message', $this->lang));
@@ -607,14 +569,7 @@ class MachineOperationService
 
             if ($currentVersion > $beforeVersion) {
                 $replied = true;
-                Log::channel('machine_operations')->info('[sendRawCmdWithReply] 收到回复', [
-                    'machine_id' => $machineId,
-                    'cmd' => $cmd,
-                    'action_key' => $actionKey,
-                    'before_version' => $beforeVersion,
-                    'current_version' => $currentVersion,
-                    'elapsed_time' => time() - $startTime,
-                ]);
+                MachineLogger::receiveResponse($this->machine->toArray(), $actionKey, '收到回覆 耗時(秒)=' . (time() - $startTime), $this->services->getMachineCache());
                 break;
             }
 
@@ -622,12 +577,7 @@ class MachineOperationService
         }
 
         if (!$replied) {
-            Log::channel('machine_operations')->warning('[sendRawCmdWithReply] 等待回复超时', [
-                'machine_id' => $machineId,
-                'cmd' => $cmd,
-                'action_key' => $actionKey,
-                'timeout' => $timeout,
-            ]);
+            MachineLogger::warning($this->machine->toArray(), $actionKey, '等待回覆超時 超時設定(秒)=' . $timeout, $this->services->getMachineCache(), MachineLogger::DIR_RESPONSE);
 
             return [
                 'success' => false,
@@ -1138,9 +1088,7 @@ class MachineOperationService
                 // 移分OFF（仅双美斯洛）
                 if ($controlType === Machine::CONTROL_TYPE_MEI) {
                     $this->sendCmd($this->services::MOVE_POINT_OFF);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 MOVE_POINT_OFF (双美)', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_OFF, '關閉移分開關 (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
                 break;
 
@@ -1149,14 +1097,10 @@ class MachineOperationService
                 // 先关闭移分，再发送压分指令
                 if ($controlType === Machine::CONTROL_TYPE_MEI) {
                     $this->sendCmd($this->services::MOVE_POINT_OFF);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 MOVE_POINT_OFF (双美)', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_OFF, '押分-關閉移分開關 (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
 
                     $this->sendCmd($this->services::PRESSURE);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 PRESSURE (双美)', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::PRESSURE, '押分-讀取壓分 (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
                 break;
 
@@ -1164,17 +1108,13 @@ class MachineOperationService
                 // 条件1: 移分开关（仅双美斯洛）
                 if ($controlType === Machine::CONTROL_TYPE_MEI && $movePoint == 0) {
                     $this->sendCmd($this->services::MOVE_POINT_ON);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 MOVE_POINT_ON (双美)', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_ON, '啟動前-開啟移分開關 (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
 
                 // 条件2: 压分读取（仅双美斯洛）
                 if ($controlType === Machine::CONTROL_TYPE_MEI) {
                     $this->sendCmd($this->services::PRESSURE);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 PRESSURE (双美)', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::PRESSURE, '啟動前-讀取壓分 (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
 
                 // 条件3: 开始指令（除线下小淞外的斯洛机）
@@ -1184,14 +1124,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::START);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 START', [
-                        'machine_id' => $this->machine->id,
-                        'control_type' => $controlType === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞',
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::START, '啟動遊戲', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 START 指令', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞不支援 START（啟動遊戲），略過', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1199,9 +1134,7 @@ class MachineOperationService
                 // 条件1: 移分开关（仅双美斯洛）
                 if ($controlType === Machine::CONTROL_TYPE_MEI && $movePoint == 0) {
                     $this->sendCmd($this->services::MOVE_POINT_ON);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 MOVE_POINT_ON (双美)', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::MOVE_POINT_ON, '開啟自動-開啟移分開關 (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
 
                 // 条件2: 开启自动出分（除线下小淞外的斯洛机）
@@ -1211,14 +1144,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::OUT_ON);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 OUT_ON', [
-                        'machine_id' => $this->machine->id,
-                        'control_type' => $controlType === Machine::CONTROL_TYPE_MEI ? '双美' : '小淞',
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::OUT_ON, '開啟自動出分', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 OUT_ON 指令', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞不支援 OUT_ON（自動出分），略過', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1230,13 +1158,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::OUT_OFF);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 OUT_OFF', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::OUT_OFF, '關閉自動出分', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 OUT_OFF 指令', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞不支援 OUT_OFF（停止出分），略過', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1245,15 +1169,11 @@ class MachineOperationService
                 if ($controlType === Machine::CONTROL_TYPE_SONG) {
                     // 小淞：REWARD_SWITCH
                     $this->sendCmd($this->services::REWARD_SWITCH);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 REWARD_SWITCH (小淞)', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::REWARD_SWITCH, '出1脈衝-獎品切換 (小淞)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
                     // 双美：OUTPUT + U1_PULSE
                     $this->sendCmd($this->services::OUTPUT . $this->services::U1_PULSE);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 OUTPUT+U1_PULSE (双美)', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::OUTPUT . $this->services::U1_PULSE, '出1脈衝-OUTPUT+U1 (雙美)', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 }
                 break;
 
@@ -1265,13 +1185,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::STOP_ONE);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_ONE', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::STOP_ONE, '停止轉軸1', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 STOP_ONE 指令', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞不支援 STOP_ONE（停轉軸1），略過', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1283,13 +1199,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::STOP_TWO);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_TWO', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::STOP_TWO, '停止轉軸2', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 STOP_TWO 指令', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞不支援 STOP_TWO（停轉軸2），略過', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1301,13 +1213,9 @@ class MachineOperationService
 
                 if (!$isOfflineSong) {
                     $this->sendCmd($this->services::STOP_THREE);
-                    Log::channel('machine_operations')->info('[SlotControl] 发送 STOP_THREE', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::sendCommand($this->machine->toArray(), $this->services::STOP_THREE, '停止轉軸3', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 } else {
-                    Log::channel('machine_operations')->warning('[SlotControl] 线下小淞机台不支持 STOP_THREE 指令', [
-                        'machine_id' => $this->machine->id,
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), $action, '線下小淞不支援 STOP_THREE（停轉軸3），略過', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
                 }
                 break;
 
@@ -1335,17 +1243,13 @@ class MachineOperationService
         switch ($action) {
             case 'reward_switch':
                 $this->sendCmd($this->services::REWARD_SWITCH);
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 REWARD_SWITCH', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::REWARD_SWITCH, '切換彩金開關', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'plc_start_or_stop':
                 // 自动上转（开始游戏）
                 $this->sendCmd($this->services::AUTO_UP_TURN);
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 AUTO_UP_TURN', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::AUTO_UP_TURN, '自動上轉（開始遊戲）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'plc_push_5hz':
@@ -1357,10 +1261,7 @@ class MachineOperationService
                     // 小淞：直接发送 PUSH_THREE
                     $this->sendCmd($this->services::PUSH_THREE);
                 }
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 PUSH_THREE（连发）', [
-                    'machine_id' => $this->machine->id,
-                    'control_type' => $this->machine->control_type,
-                ]);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::PUSH_THREE, '連發 PUSH（5Hz）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'plc_push_stop':
@@ -1372,42 +1273,31 @@ class MachineOperationService
                     // 小淞：PUSH_ONE（单发 PUSH）
                     $this->sendCmd($this->services::PUSH_ONE);
                 }
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 PUSH_STOP 指令', [
-                    'machine_id' => $this->machine->id,
-                    'control_type' => $this->machine->control_type,
-                ]);
+                MachineLogger::sendCommand($this->machine->toArray(), 'push_stop', '停止 PUSH 連發', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'plc_down_turn':
                 // 下转一次（转数转分数）
                 $this->sendCmd($this->services::TURN_TO_POINT);
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 TURN_TO_POINT（下转一次）', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::TURN_TO_POINT, '下轉一次（轉數→分數）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'all_down_turn':
                 // 全部下转
                 $this->sendCmd($this->services::TURN_DOWN_ALL);
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 TURN_DOWN_ALL（全部下转）', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::TURN_DOWN_ALL, '全部下轉（轉數歸零）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'plc_up_turn_100':
                 // 上转一次（分数转转数）
                 $this->sendCmd($this->services::POINT_TO_TURN);
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 POINT_TO_TURN（上转一次）', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::POINT_TO_TURN, '上轉一次（分數→轉數）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             case 'all_up_turn':
                 // 全部上转
                 $this->sendCmd($this->services::TURN_UP_ALL);
-                Log::channel('machine_operations')->info('[JackpotControl] 发送 TURN_UP_ALL（全部上转）', [
-                    'machine_id' => $this->machine->id,
-                ]);
+                MachineLogger::sendCommand($this->machine->toArray(), $this->services::TURN_UP_ALL, '全部上轉（分數→轉數）', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
                 break;
 
             default:
@@ -1474,10 +1364,7 @@ class MachineOperationService
     private function kickPlayer(array $params): array
     {
         // TODO: 从 AdminMachineController 迁移实现
-        Log::channel('machine_operations')->warning('[AdvancedOperation] kickPlayer 尚未实现', [
-            'machine_id' => $this->machine->id,
-            'params' => $params,
-        ]);
+        MachineLogger::warning($this->machine->toArray(), 'kick_player', '踢出玩家功能尚未實現，待遷移', $this->services->getMachineCache(), MachineLogger::DIR_EVENT);
 
         throw new Exception(trans('kick_player_not_migrated', [], 'message', $this->lang));
     }
@@ -1490,10 +1377,7 @@ class MachineOperationService
     private function forceKickPlayer(array $params): array
     {
         // TODO: 从 AdminMachineController 迁移实现
-        Log::channel('machine_operations')->warning('[AdvancedOperation] forceKickPlayer 尚未实现', [
-            'machine_id' => $this->machine->id,
-            'params' => $params,
-        ]);
+        MachineLogger::warning($this->machine->toArray(), 'force_kick_player', '強制踢出玩家功能尚未實現，待遷移', $this->services->getMachineCache(), MachineLogger::DIR_EVENT);
 
         throw new Exception(trans('force_kick_player_not_migrated', [], 'message', $this->lang));
     }
@@ -1506,10 +1390,7 @@ class MachineOperationService
     private function customOpenScore(array $params): array
     {
         // TODO: 从 AdminMachineController 迁移实现
-        Log::channel('machine_operations')->warning('[AdvancedOperation] customOpenScore 尚未实现', [
-            'machine_id' => $this->machine->id,
-            'params' => $params,
-        ]);
+        MachineLogger::warning($this->machine->toArray(), 'custom_open_score', '自定義開分功能尚未實現，待遷移', $this->services->getMachineCache(), MachineLogger::DIR_EVENT);
 
         throw new Exception(trans('custom_open_score_not_migrated', [], 'message', $this->lang));
     }
@@ -1527,12 +1408,7 @@ class MachineOperationService
         // 更新数据库（只更新单个字段，减少锁竞争）
         Machine::where('id', $this->machine->id)->update(['has_lock' => 0]);
 
-        Log::channel('machine_operations')->info('[AdvancedOperation] 机台解锁成功', [
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'operator_type' => $this->operatorType,
-            'operator_id' => $this->operatorId,
-        ]);
+        MachineLogger::adminEvent($this->machine->toArray(), ['id' => $this->operatorId], MachineLogger::ACTION_UNLOCK, '機台解鎖成功', $this->services->getMachineCache());
 
         return [
             'machine_id' => $this->machine->id,
@@ -1561,19 +1437,12 @@ class MachineOperationService
         ];
 
         if (!in_array(get_class($this->services), $supportedClasses)) {
-            throw new Exception('归0操作仅支持小淞线下版机台（收账小卡协议）');
+            throw new Exception('歸0操作僅支援小松線下版機台（小松斯洛線下 / 小松鋼珠線下）');
         }
 
         // 发送归0指令（通过sendCmd调用handleCheckCommand）
         // ✅ 修复：重构后使用 CHECK 常量代替 RESET_BOARD
-        Log::channel('machine_operations')->info('[AdvancedOperation] 准备发送归0指令', [
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'operator_type' => $this->operatorType,
-            'operator_id' => $this->operatorId,
-            'cmd' => $this->services::CHECK,
-            'has_lock' => $this->machine->has_lock,
-        ]);
+        MachineLogger::sendCommand($this->machine->toArray(), $this->services::CHECK, '準備歸0', $this->services->getMachineCache(), '', MachineLogger::SOURCE_ADMIN);
 
         $this->services->sendCmd(
             $this->services::CHECK,
@@ -1587,13 +1456,7 @@ class MachineOperationService
         $this->machine->has_lock = 0;
         $this->machine->save();
 
-        Log::channel('machine_operations')->info('[AdvancedOperation] 机台归0成功', [
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'operator_type' => $this->operatorType,
-            'operator_id' => $this->operatorId,
-            'note' => '已发送归0指令并解锁机台',
-        ]);
+        MachineLogger::adminEvent($this->machine->toArray(), ['id' => $this->operatorId], 'reset', '機台歸0成功', $this->services->getMachineCache());
 
         return [
             'machine_id' => $this->machine->id,
@@ -1643,14 +1506,10 @@ class MachineOperationService
         ];
 
         if ($exception) {
-            $context['error'] = $exception->getMessage();
-            $context['trace'] = $exception->getTraceAsString();
-            Log::channel('machine_operations')->error('[MachineOperationService] 操作失败', $context);
+            MachineLogger::error($this->machine->toArray(), $action, '操作失敗: ' . $exception->getMessage(), $this->services->getMachineCache(), MachineLogger::DIR_EVENT);
         } else {
-            if ($stage === 'success') {
-                $context['result'] = $result;
-            }
-            Log::channel('machine_operations')->info("[MachineOperationService] {$stage}", $context);
+            $sourceType = $this->operatorType === 'admin' ? MachineLogger::SOURCE_ADMIN : ($this->operatorType === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_SYSTEM);
+            MachineLogger::log($this->machine->toArray(), $sourceType, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, $action, $stage, ['machine_data' => $this->services->getMachineCache(), 'operator_id' => $this->operatorId]);
         }
     }
 
@@ -1735,16 +1594,6 @@ class MachineOperationService
             $adminUsername
         );
 
-        // 记录 machineWash 返回结果
-        Log::channel('machine_operations')->info('[MachineOperationService::wash] machineWash 返回结果', [
-            'machine_id' => $this->machine->id,
-            'machine_code' => $this->machine->code,
-            'player_id' => $player->id,
-            'action' => $action,
-            'has_lottery' => $hasLottery,
-            'result_type' => gettype($result),
-            'result' => $result instanceof \app\model\PlayerLotteryRecord ? $result->toArray() : $result,
-        ]);
 
         // 处理返回结果
         if ($result === false) {

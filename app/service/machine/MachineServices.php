@@ -430,10 +430,10 @@ class MachineServices
 
     /**
      * 获取机台数据缓存
-     * @return iterable
+     * @return array
      */
-    public function getMachineCache(): iterable
+    public function getMachineCache(): array
     {
-        return Cache::getMultiple($this->cacheDataKeyArr);
+        return (array) Cache::getMultiple($this->cacheDataKeyArr);
     }
 }

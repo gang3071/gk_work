@@ -32,7 +32,7 @@ return [
     ],
     'register' => [
         'handler' => Register::class,
-        'listen' => 'text://0.0.0.0:1236',  // 允许外部 BusinessWorker 连接
+        'listen' => 'text://127.0.0.1:1236',  // 仅本机内部通信，不对外暴露
         'count' => 1, // Must be 1
         'constructor' => []
     ],
