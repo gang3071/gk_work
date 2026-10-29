@@ -12,6 +12,7 @@ use Exception;
 use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
 use support\Cache;
+use support\Log;
 use Webman\RedisQueue\Client;
 use Workerman\Timer;
 use yzh52521\WebmanLock\Locker;
@@ -404,7 +405,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         try {
             $msg = strtolower(trim($msg));
             $machineId = $this->machine->id;
-
+            Log::error('收到指令', [$msg]);
             // ✅ 步骤0：TCP分包处理 - 拼接到缓冲区
             if (!isset(self::$msgBuffer[$machineId])) {
                 self::$msgBuffer[$machineId] = '';
@@ -883,6 +884,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
         // 存入 Redis 供 HTTP worker（handleOpenPoint/confirmOpenPointWithStatus）读取
         Cache::set($this->cacheDataKey . '_last_status_fields', json_encode($fields), 10);
+        Cache::set($this->cacheDataKey . '_last_status_raw', $msg, 10); // 原始 hex，供诊断脚本和日志读取
 
         // ✅ 使用提取的方法检测标志
         $flags = $this->detectMachineStatusFlags($fields['status_value']);
@@ -1613,15 +1615,19 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $preEcD4Timout = 1000000; // 1s 等 EA D4 回覆
         $preOpenReady  = false;
         for ($ecAttempt = 1; $ecAttempt <= $preEcMax; $ecAttempt++) {
-            Gateway::sendToUid($uid, hex2bin($this->createCmd(self::SSR_SIGNAL)));
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN,
-                '[小松斯洛線下-上分] 開分前EA EC清除殘留旗標 第' . $ecAttempt . '/' . $preEcMax . '次', ['machine_data' => $this->getMachineCache()]);
+            $ecCmd = $this->createCmd(self::SSR_SIGNAL);
+            Gateway::sendToUid($uid, hex2bin($ecCmd));
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN,
+                '[小松斯洛線下-上分] 開分前EA EC清除殘留旗標 第' . $ecAttempt . '/' . $preEcMax . '次',
+                $this->getMachineCache(), $ecCmd);
             usleep($preEcWait);
 
             Cache::delete($this->cacheDataKey . '_last_status_fields');
-            Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_OPEN,
-                '[小松斯洛線下-上分] 開分前EA D4查詢機台狀態', ['machine_data' => $this->getMachineCache()]);
+            Cache::delete($this->cacheDataKey . '_last_status_raw');
+            $d4Cmd = $this->createCmd(self::READ_STATUS);
+            Gateway::sendToUid($uid, hex2bin($d4Cmd));
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN,
+                '[小松斯洛線下-上分] 開分前EA D4查詢機台狀態', $this->getMachineCache(), $d4Cmd);
             $ecWaited = 0;
             $ecRaw    = null;
             while ($ecWaited < $preEcD4Timout) {
@@ -1635,9 +1641,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $ecFields      = json_decode($ecRaw, true) ?: [];
                 $preOpenStatus = $ecFields['open_status'] ?? '';
                 $preWashStatus = $ecFields['wash_status'] ?? '';
-                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_OPEN,
+                $ecRawHex      = Cache::get($this->cacheDataKey . '_last_status_raw') ?? '';
+                MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN,
                     '[小松斯洛線下-上分] 開分前EA D4回覆 開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus),
-                    ['machine_data' => $this->getMachineCache()]);
+                    $this->getMachineCache(), $ecRawHex);
 
                 if ($preOpenStatus === 'd3') {
                     // 機台正在開分中（殘留上次 session），直接進確認流程取回結果。
@@ -1975,15 +1982,19 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $preEcD4Timout = 1000000; // 1s 等 EA D4 回覆
         $preWashReady  = false;
         for ($ecAttempt = 1; $ecAttempt <= $preEcMax; $ecAttempt++) {
-            Gateway::sendToUid($uid, hex2bin($this->createCmd(self::SSR_SIGNAL)));
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_WASH,
-                '[小松斯洛線下-下分] 洗分前EA EC清除殘留旗標 第'.$ecAttempt.'/'.$preEcMax.'次', ['machine_data' => $this->getMachineCache()]);
+            $ecCmd = $this->createCmd(self::SSR_SIGNAL);
+            Gateway::sendToUid($uid, hex2bin($ecCmd));
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_WASH,
+                '[小松斯洛線下-下分] 洗分前EA EC清除殘留旗標 第'.$ecAttempt.'/'.$preEcMax.'次',
+                $this->getMachineCache(), $ecCmd);
             usleep($preEcWait);
 
             Cache::delete($this->cacheDataKey . '_last_status_fields');
-            Gateway::sendToUid($uid, hex2bin($this->createCmd(self::READ_STATUS)));
-            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_COMMAND, MachineLogger::ACTION_WASH,
-                '[小松斯洛線下-下分] 洗分前EA D4查詢機台狀態', ['machine_data' => $this->getMachineCache()]);
+            Cache::delete($this->cacheDataKey . '_last_status_raw');
+            $d4Cmd = $this->createCmd(self::READ_STATUS);
+            Gateway::sendToUid($uid, hex2bin($d4Cmd));
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_WASH,
+                '[小松斯洛線下-下分] 洗分前EA D4查詢機台狀態', $this->getMachineCache(), $d4Cmd);
             $ecWaited = 0;
             $ecRaw    = null;
             while ($ecWaited < $preEcD4Timout) {
@@ -1999,9 +2010,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $ecFields      = json_decode($ecRaw, true) ?: [];
                 $preOpenStatus = $ecFields['open_status'] ?? '';
                 $preWashStatus = $ecFields['wash_status'] ?? '';
-                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, MachineLogger::ACTION_WASH,
+                $ecRawHex      = Cache::get($this->cacheDataKey . '_last_status_raw') ?? '';
+                MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_WASH,
                     '[小松斯洛線下-下分] 洗分前EA D4回覆 開分='.self::descStatus($preOpenStatus).' 洗分='.self::descStatus($preWashStatus),
-                    ['machine_data' => $this->getMachineCache()]);
+                    $this->getMachineCache(), $ecRawHex);
 
                 if ($preWashStatus === 'd7') {
                     // 機台正在洗分中（異常），直接進確認流程取回結果
