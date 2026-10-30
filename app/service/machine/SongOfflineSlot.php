@@ -12,7 +12,6 @@ use Exception;
 use GatewayWorker\Lib\Gateway;
 use Illuminate\Support\Str;
 use support\Cache;
-use support\Log;
 use Webman\RedisQueue\Client;
 use Workerman\Timer;
 use yzh52521\WebmanLock\Locker;
@@ -151,8 +150,9 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
     // ========================================
     // 回复状态
     // ========================================
-    const RESET_COMPLETE = 'ef';            // 完整归0完成（E1时发归0指令）
-    const RESET_CLEAR = 'ee';               // 清除账目完成（未有E1时发归0指令）
+    const RESET_COMPLETE  = 'ef';           // 完整归0完成（E1锁机后发归0指令，机台回复 EF）
+    const ALL_DOWN_OK     = 'ec';           // EA DE 正常清除成功（机台回复 EC）
+    const ALL_DOWN_ERR    = 'ee';           // EA DE 异常（机台回复 EE，内部有异常状态）
 
     // ========================================
     // 状态标志（异常状态检测用）
@@ -269,12 +269,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $key = $this->cacheDataKey . '_' . $name;
         if (in_array($key, $this->cacheDataKeyArr)) {
             try {
-                $value = Cache::get($key, 0);
-                return $value;
+                return Cache::get($key, 0);
             } catch (\Exception $e) {
                 try {
-                    $value = Cache::get($key, 0);
-                    return $value;
+                    return Cache::get($key, 0);
                 } catch (\Exception $e2) {
                     return 0;
                 }
@@ -405,7 +403,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         try {
             $msg = strtolower(trim($msg));
             $machineId = $this->machine->id;
-            Log::error('收到指令', [$msg]);
             // ✅ 步骤0：TCP分包处理 - 拼接到缓冲区
             if (!isset(self::$msgBuffer[$machineId])) {
                 self::$msgBuffer[$machineId] = '';
@@ -533,22 +530,28 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->gaming_user_id);
                 $processed = true;
             }
-            // 归0回复（EF=完整归0，EE=清除账目）
-            elseif ($msg === self::RESET_COMPLETE || $msg === self::RESET_CLEAR) {
-                $resetType = $msg === self::RESET_COMPLETE ? '完整歸0' : '清除帳目';
+            // EA DE 正常清除成功（EC）
+            elseif ($msg === self::ALL_DOWN_OK) {
+                MachineLogger::receiveResponse($this->machine->toArray(), 'all_down', '[小松斯洛線下] EA DE 清除成功 (EC)', $this->getMachineCache());
+                $this->setActionVersion(self::ALL_DOWN);
+                $processed = true;
+            }
+            // EA DE 异常回复（EE）：机台内部有异常，清除失败
+            elseif ($msg === self::ALL_DOWN_ERR) {
+                MachineLogger::error($this->machine->toArray(), 'all_down', '[小松斯洛線下] EA DE 清除異常 (EE)，機台內部有異常狀態', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                $this->setActionVersion(self::ALL_DOWN); // 仍需解除等待循环
+                $processed = true;
+            }
+            // 完整归0完成（EF）：E1锁机后发归0指令的回复
+            elseif ($msg === self::RESET_COMPLETE) {
                 $oldHasLock = $this->has_lock ?? 0;
-
-                // ✅ 归0成功后自动解锁机台
                 if ($oldHasLock == 1) {
                     $this->has_lock = 0;
                     MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_UNLOCK, '歸0成功-機台已自動解鎖', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                 } else {
-                    MachineLogger::receiveResponse($this->machine->toArray(), 'all_down', '歸0完成 類型=' . $resetType, $this->getMachineCache());
+                    MachineLogger::receiveResponse($this->machine->toArray(), 'all_down', '[小松斯洛線下] 完整歸0完成 (EF)', $this->getMachineCache());
                 }
-
-                // ✅ 更新版本号，让 sendRawCmdWithReply 等待循环能感知到回复
                 $this->setActionVersion(self::ALL_DOWN);
-
                 $processed = true;
             }
             // 根据头部识别消息类型
@@ -2834,6 +2837,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *
      * @param string $scoreSection 6个hex字符（3字节）
      * @return int 分数值
+     * @throws Exception
      */
     private function parseScore3Byte(string $scoreSection): int
     {
@@ -3483,6 +3487,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * @return int 解析后的数值
      *
      * 示例：'1e14' → 0x1E=30, 0x14=20 → 30*100 + 20 = 3020
+     * @throws Exception
      */
     private function parseScore2Byte(string $scoreSection): int
     {
@@ -3721,6 +3726,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *
      * @param string $msg 完整消息
      * @return array ['open_table', 'wash_table', 'card_score', 'machine_score', 'open_flag', 'wash_flag', 'card_flag']
+     * @throws Exception
      */
     private function parseAccountData(string $msg): array
     {
@@ -3865,6 +3871,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *
      * @param string $msg 完整消息
      * @return array 解析后的字段数组
+     * @throws Exception
      */
     private function parseMachineStatusFields(string $msg): array
     {
@@ -4171,7 +4178,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             case 'a5':
                 return 6;  // 操作回复（A5 + 状态2字符 + 校验和2字符）
 
-            case 'ee':  // RESET_CLEAR（清除账目完成，单字节回复）
+            case 'ec':  // ALL_DOWN_OK（EA DE 正常清除成功，单字节回复）
+            case 'ee':  // ALL_DOWN_ERR（EA DE 异常，单字节回复）
             case 'ef':  // RESET_COMPLETE（完整归0完成，单字节回复）
                 return 2;
 
