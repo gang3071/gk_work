@@ -20,6 +20,8 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
  */
 class TNineSlotServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
+    use LimitGroupTrait;
+
     public string $method = 'POST';
     public string $successCode = '0';
     private mixed $apiDomain;
@@ -204,6 +206,19 @@ class TNineSlotServiceInterface extends GameServiceFactory implements GameServic
             'language' => 'zh_TW',
             'isMobileLogin' => true,
         ];
+
+        // T9 電子限紅：店家分配的限紅組 → 否則平台預設限紅組
+        $limitGroupConfig = $this->getLimitGroupConfig('tnine_slot_server');
+        if ($this->hasLimitGroupConfigData($limitGroupConfig)) {
+            $configData = $limitGroupConfig->config_data;
+            if (isset($configData['min']) && $configData['min'] !== '') {
+                $params['minBetLimit'] = $configData['min'];
+            }
+            if (isset($configData['max']) && $configData['max'] !== '') {
+                $params['maxBetLimit'] = $configData['max'];
+            }
+        }
+
         $res = $this->doCurl('/Login', $params);
         $this->log->info('lobbyLogin', [$res]);
 
