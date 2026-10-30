@@ -562,6 +562,7 @@ class MachineOperationService
         // ✅ 等待回复（监听版本变化）- 使用服务类方法而不是直接访问Redis
         $startTime = time();
         $replied = false;
+        $retried = false;
 
         while (time() - $startTime < $timeout) {
             // 使用服务类的 getActionVersion 方法获取当前版本号
@@ -571,6 +572,14 @@ class MachineOperationService
                 $replied = true;
                 MachineLogger::receiveResponse($this->machine->toArray(), $actionKey, '收到回覆 耗時(秒)=' . (time() - $startTime), $this->services->getMachineCache());
                 break;
+            }
+
+            // 超过一半超时时间仍无回复，重发一次查询命令（仅限 EA 前缀的安全查询指令）
+            // 不对上分/洗分等操作类指令重试，避免重复执行
+            if (!$retried && str_starts_with($actionKey, 'ea') && (time() - $startTime) >= (int)($timeout / 2)) {
+                $retried = true;
+                MachineLogger::warning($this->machine->toArray(), $actionKey, '等待回覆已過半，重發指令一次', $this->services->getMachineCache(), MachineLogger::DIR_COMMAND);
+                $this->services->sendCmd($actionKey, $data, $this->operatorType, $this->operatorId, $isSystem);
             }
 
             usleep(200000); // 等待 200ms

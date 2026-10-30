@@ -900,11 +900,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 记录解析结果
         MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[小松斯洛線下-機台情況] 查詢回覆 開分=' . self::descStatus($fields['open_status']) . ' 洗分=' . self::descStatus($fields['wash_status']) . ' 重試次數=' . $fields['retry_count'], $this->getMachineCache());
 
+        // ✅ 提前更新版本号：让 sendRawCmdWithReply 轮询立即感知到回复，
+        // 避免 updateMachineStatus（含钱包操作）延迟导致轮询超时
+        $this->setActionVersion(self::READ_STATUS);
+
         // ✅ 使用提取的方法更新状态
         $this->updateMachineStatus($fields, $flags);
-
-        // ✅ 更新版本号，表示收到回复
-        $this->setActionVersion(self::READ_STATUS);
 
         return true;
     }
