@@ -1252,8 +1252,15 @@ function machineWash(
                 // 短暂延迟，确保 READ_BET 响应也稳定
                 usleep(100000);  // 100ms
 
-                $gamingPressure = (int)bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
-                $gamingScore = (int)bcsub($services->win ?? '0', $services->player_score ?? '0');
+                // offline SONG Slot：READ_BET 回复只更新 total_bet/total_win，
+                // $services->bet 仅由心跳维护，有竞态导致第二次下分读到旧值
+                if ($isOfflineSong) {
+                    $gamingPressure = (int)($services->total_bet ?? 0);
+                    $gamingScore    = (int)($services->total_win ?? 0);
+                } else {
+                    $gamingPressure = (int)bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
+                    $gamingScore    = (int)bcsub($services->win ?? '0', $services->player_score ?? '0');
+                }
 
                 MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '下分準備就緒 累計下注='.$gamingPressure.' 累計得分='.$gamingScore, ['machine_data' => $services->getMachineCache()]);
 
@@ -1467,6 +1474,10 @@ function machineWash(
                 $services->player_pressure = 0;
                 $services->player_score = 0;
                 $services->bet = 0;
+                if ($isOfflineSong) {
+                    $services->total_bet = 0;
+                    $services->total_win = 0;
+                }
                 break;
         }
 
