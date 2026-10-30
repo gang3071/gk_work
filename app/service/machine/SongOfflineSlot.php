@@ -253,12 +253,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $key = $this->cacheDataKey . '_' . $name;
         if (in_array($key, $this->cacheDataKeyArr)) {
             try {
-                $value = Cache::get($key, 0);
-                return $value;
+                return Cache::get($key, 0);
             } catch (\Exception $e) {
                 try {
-                    $value = Cache::get($key, 0);
-                    return $value;
+                    return Cache::get($key, 0);
                 } catch (\Exception $e2) {
                     return 0;
                 }
@@ -2820,6 +2818,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *
      * @param string $scoreSection 6个hex字符（3字节）
      * @return int 分数值
+     * @throws Exception
      */
     private function parseScore3Byte(string $scoreSection): int
     {
@@ -3458,6 +3457,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      * @return int 解析后的数值
      *
      * 示例：'1e14' → 0x1E=30, 0x14=20 → 30*100 + 20 = 3020
+     * @throws Exception
      */
     private function parseScore2Byte(string $scoreSection): int
     {
@@ -3696,6 +3696,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *
      * @param string $msg 完整消息
      * @return array ['open_table', 'wash_table', 'card_score', 'machine_score', 'open_flag', 'wash_flag', 'card_flag']
+     * @throws Exception
      */
     private function parseAccountData(string $msg): array
     {
@@ -3840,6 +3841,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
      *
      * @param string $msg 完整消息
      * @return array 解析后的字段数组
+     * @throws Exception
      */
     private function parseMachineStatusFields(string $msg): array
     {
