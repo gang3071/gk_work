@@ -767,6 +767,27 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // ✅ 更新版本号，表示收到回复
             $this->setActionVersion(self::CHECK);
+
+            // ✅ CHECK ACK 收到后立即重置 Redis 中的压分和得分，
+            // 不等心跳带回 0，消除 EE/EF 到达前的竞态窗口
+            $oldTotalBet = $this->total_bet ?? 0;
+            $oldTotalWin = $this->total_win ?? 0;
+            $this->total_bet = 0;
+            $this->total_win = 0;
+            $this->bet       = 0;
+            $this->win       = 0;
+            MachineLogger::log(
+                $this->machine->toArray(),
+                MachineLogger::SOURCE_SYSTEM,
+                MachineLogger::STATUS_NORMAL,
+                MachineLogger::DIR_RESPONSE,
+                'check_reset',
+                '[小松斯洛線下-CHECK] 收到 A3 F8 歸0確認，重置壓分/得分'
+                    . ' total_bet: ' . $oldTotalBet . '→0'
+                    . ' total_win: ' . $oldTotalWin . '→0',
+                ['machine_data' => $this->getMachineCache()]
+            );
+
             return true;
         }
 
