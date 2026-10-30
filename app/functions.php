@@ -33,8 +33,8 @@ use app\service\LotteryServices;
 use app\service\machine\Jackpot;
 use app\service\machine\MachineServices;
 use app\service\machine\Slot;
-use app\support\MachineLogger;
 use app\service\MediaServer;
+use app\support\MachineLogger;
 use GatewayWorker\Lib\Gateway;
 use support\Cache;
 use support\Db;
@@ -1395,15 +1395,15 @@ function machineWash(
                     MachineLogger::warning($machine->toArray(), 'wash_zero', '機台分數已是0，跳過清零指令 記錄金額='.$money, $services->getMachineCache(), MachineLogger::DIR_EVENT);
                 }
 
-                $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
-                MachineLogger::receiveResponse($machine->toArray(), 'all_down', '計數器下轉清零完成', $services->getMachineCache());
-
                 // ✅ 线下版小淞：发送 CHECK 归零 total_bet/total_win（GD收账小卡协议）
                 // CHECK(A37005E0F8CE) 回复链 a3f833→EE/EF 后机台计数器清零
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
                     $services->sendCmd($services::CHECK, 0, 'player', $player->id, $is_system);
                     MachineLogger::receiveResponse($machine->toArray(), 'check', '結算計數器歸零完成', $services->getMachineCache());
+                } else {
+                    $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
+                    MachineLogger::receiveResponse($machine->toArray(), 'all_down', '計數器下轉清零完成', $services->getMachineCache());
                 }
 
                 // 机板保持长期登入状态，弃台时不再发登出指令
