@@ -2552,7 +2552,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // ========== 异常高压分保护（心跳 BA 单次增量 > 100 视为异常） ==========
             $betJump = $totalBet - $oldTotalBet;
-            $betAnomalyThreshold = 100;
+            $betAnomalyThreshold = 150;
             $betAnomalyDetected = ($oldTotalBet > 0 && $betJump > $betAnomalyThreshold);
             if ($betAnomalyDetected) {
                 MachineLogger::warning(
