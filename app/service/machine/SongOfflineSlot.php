@@ -1475,7 +1475,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if (preg_match('/^a5([0-9a-f]{2})c0$/i', $cmd, $openMatch)) {
                 // 上分指令格式：a5xxc0，從 hex 解析次數計算金額，讓 handleOpenPoint 正確執行
                 $this->originalCmd = strtolower($cmd);  // 保存原始指令（小写）
-                $data = hexdec($openMatch[1]) * self::OPEN_UNIT;
+                $data = hexdec($openMatch[1]) * $this->getOpenUnit();
                 $cmd = self::OPEN_ANY_POINT;
 
                 // ✅ 保存到 Redis（跨请求传递，60秒过期）
@@ -1745,7 +1745,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
             Cache::delete($this->cacheDataKey . '_last_open_result');
 
-            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, $attempt === 1 ? '開分開始 '.$times.'次×'.self::OPEN_UNIT.'分 共'.$data.'分' : '開分重試 第'.$attempt.'/'.$maxAttempts.'次 共'.$data.'分', $this->getMachineCache());
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, $attempt === 1 ? '開分開始 '.$times.'次×'.$openUnit.'分 共'.$data.'分' : '開分重試 第'.$attempt.'/'.$maxAttempts.'次 共'.$data.'分', $this->getMachineCache());
 
             Gateway::sendToUid($uid, hex2bin($fullCmd));
 
