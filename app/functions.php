@@ -3638,10 +3638,19 @@ if (!function_exists('resetMachineTrans')) {
                 }
             }
             // ✅ 记录清零前的机台分数（用于审计）
-            $confiscatedPoint = $services->point;  // 即将被没收的分数
+            // SongOfflineSlot：point=B1(card_score) + machine_score=B2，两者都是硬件分，需合计
+            $confiscatedPoint = $services->point;
+            $isSongOfflineSlotForConfiscate = (
+                $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                && $machine->control_type == Machine::CONTROL_TYPE_SONG
+                && $machine->type == GameType::TYPE_SLOT
+            );
+            if ($isSongOfflineSlotForConfiscate) {
+                $confiscatedPoint += (int)($services->machine_score ?? 0);
+            }
             $confiscatedAmount = 0;
             if ($confiscatedPoint > 0 && $machine->odds_y > 0 && $machine->odds_x > 0) {
-                $confiscatedAmount = floor($confiscatedPoint / $machine->odds_y * $machine->odds_x);
+                $confiscatedAmount = floor($confiscatedPoint * $machine->odds_x / $machine->odds_y);
             }
 
             // ✅ 记录详细的强制踢出日志（包含被没收的金额）
