@@ -503,13 +503,12 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
     }
 
     /**
-     * 按 bettingId（即 order_no）查询单笔注单，用于补单场景
-     * @param string $bettingId  数据库中存储的 order_no
-     * @param int    $createdAt  我方记录创建时间戳（Unix）；下注发生在此之前，窗口向前取 5 分钟
-     * @return array|null        找到则返回原始注单数组，否则 null
+     * 查询时间窗口内所有注单（用于补单调试或过滤），用于补单场景
+     * @param int $createdAt  我方存库时间戳（Unix），以此为中心 ±2.5 分钟（ATG 最长 5 分钟）
+     * @return array          原始注单列表（空数组表示无数据或查询失败）
      * @throws GameException
      */
-    public function queryTransactionByBettingId(string $bettingId, int $createdAt): ?array
+    public function queryTransactionsByWindow(int $createdAt): array
     {
         $sDate  = date('Y-m-d H:i:s', $createdAt - 150);
         $eDate  = date('Y-m-d H:i:s', $createdAt + 150);
@@ -518,14 +517,24 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
             'Key'      => $this->config['key'],
             'SDate'    => $sDate,
             'EDate'    => $eDate,
-            'Type'     => 'bettingdate',  // 按下注时间查，未结算订单也能找到
+            'Type'     => 'bettingdate',
         ];
-        $items = $this->doCurl($this->createUrl('getGameHistories'), $params);
-        foreach ((array)$items as $item) {
-            if (isset($item['bettingid']) && strtolower($item['bettingid']) === strtolower($bettingId)) {
-                return $item;
-            }
-            if (isset($item['bettingId']) && strtolower($item['bettingId']) === strtolower($bettingId)) {
+        $result = $this->doCurl($this->createUrl('getGameHistories'), $params);
+        return is_array($result) ? $result : [];
+    }
+
+    /**
+     * 按 bettingId（即 order_no）查询单笔注单，用于补单场景
+     * @param string $bettingId  数据库中存储的 order_no
+     * @param int    $createdAt  我方存库时间戳（Unix）
+     * @return array|null        找到则返回原始注单数组，否则 null
+     * @throws GameException
+     */
+    public function queryTransactionByBettingId(string $bettingId, int $createdAt): ?array
+    {
+        foreach ($this->queryTransactionsByWindow($createdAt) as $item) {
+            $id = (string)($item['bettingid'] ?? $item['bettingId'] ?? '');
+            if (strtolower($id) === strtolower($bettingId)) {
                 return $item;
             }
         }

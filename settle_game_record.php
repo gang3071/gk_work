@@ -234,7 +234,23 @@ if ($platformCode === 'BTG') {
                 info("解析结果 → win={$apiWin} 元  bet={$apiBet} 元  diff={$apiDiff} 元");
             }
         } else {
-            warn("时间窗口内未找到 bettingId=[{$record->order_no}]，请检查订单时间或手动输入。");
+            warn("{$platformCode} 未找到 bettingId=[{$record->order_no}]，打印窗口内全部数据供排查：");
+            line();
+            $allItems = $service->queryTransactionsByWindow($createdAt);
+            if (empty($allItems)) {
+                warn("窗口内无任何数据（API 返回空）。可能：时间窗口偏差、时区问题或该订单不在此平台。");
+            } else {
+                line("  ── 窗口内共 " . count($allItems) . " 条记录 ──────────────");
+                foreach ($allItems as $i => $item) {
+                    $bid = $item['bettingid'] ?? $item['bettingId'] ?? '?';
+                    $st  = $item['status']      ?? '?';
+                    $bd  = $item['bettingdate'] ?? '?';
+                    line("  [{$i}] bettingId={$bid}  status={$st}  bettingdate={$bd}");
+                }
+                line("  ─────────────────────────────────────────");
+                line();
+                warn("若上方有匹配订单请手动输入 win 金额；若无数据请确认 created_at 是否正确。");
+            }
         }
     } catch (\Throwable $e) {
         warn("{$platformCode} API 调用失败: " . $e->getMessage());
