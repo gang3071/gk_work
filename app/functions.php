@@ -3650,7 +3650,7 @@ if (!function_exists('resetMachineTrans')) {
             }
             $confiscatedAmount = 0;
             if ($confiscatedPoint > 0 && $machine->odds_y > 0 && $machine->odds_x > 0) {
-                $confiscatedAmount = floor($confiscatedPoint * $machine->odds_x / $machine->odds_y);
+                $confiscatedAmount = floor($confiscatedPoint / $machine->odds_y * $machine->odds_x);
             }
 
             // ✅ 记录详细的强制踢出日志（包含被没收的金额）
