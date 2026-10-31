@@ -33,8 +33,8 @@ use app\service\LotteryServices;
 use app\service\machine\Jackpot;
 use app\service\machine\MachineServices;
 use app\service\machine\Slot;
-use app\support\MachineLogger;
 use app\service\MediaServer;
+use app\support\MachineLogger;
 use GatewayWorker\Lib\Gateway;
 use support\Cache;
 use support\Db;
@@ -1252,8 +1252,15 @@ function machineWash(
                 // 短暂延迟，确保 READ_BET 响应也稳定
                 usleep(100000);  // 100ms
 
-                $gamingPressure = (int)bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
-                $gamingScore = (int)bcsub($services->win ?? '0', $services->player_score ?? '0');
+                // offline SONG Slot：READ_BET 回复只更新 total_bet/total_win，
+                // $services->bet 仅由心跳维护，有竞态导致第二次下分读到旧值
+                if ($isOfflineSong) {
+                    $gamingPressure = (int)($services->total_bet ?? 0);
+                    $gamingScore    = (int)($services->total_win ?? 0);
+                } else {
+                    $gamingPressure = (int)bcsub($services->bet ?? '0', $services->player_pressure ?? '0');
+                    $gamingScore    = (int)bcsub($services->win ?? '0', $services->player_score ?? '0');
+                }
 
                 MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '下分準備就緒 累計下注='.$gamingPressure.' 累計得分='.$gamingScore, ['machine_data' => $services->getMachineCache()]);
 
@@ -1395,15 +1402,15 @@ function machineWash(
                     MachineLogger::warning($machine->toArray(), 'wash_zero', '機台分數已是0，跳過清零指令 記錄金額='.$money, $services->getMachineCache(), MachineLogger::DIR_EVENT);
                 }
 
-                $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
-                MachineLogger::receiveResponse($machine->toArray(), 'all_down', '計數器下轉清零完成', $services->getMachineCache());
-
                 // ✅ 线下版小淞：发送 CHECK 归零 total_bet/total_win（GD收账小卡协议）
                 // CHECK(A37005E0F8CE) 回复链 a3f833→EE/EF 后机台计数器清零
                 if ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
                     $services->sendCmd($services::CHECK, 0, 'player', $player->id, $is_system);
                     MachineLogger::receiveResponse($machine->toArray(), 'check', '結算計數器歸零完成', $services->getMachineCache());
+                } else {
+                    $services->sendCmd($services::ALL_DOWN, 0, 'player', $player->id, $is_system);
+                    MachineLogger::receiveResponse($machine->toArray(), 'all_down', '計數器下轉清零完成', $services->getMachineCache());
                 }
 
                 // 机板保持长期登入状态，弃台时不再发登出指令
@@ -1467,6 +1474,10 @@ function machineWash(
                 $services->player_pressure = 0;
                 $services->player_score = 0;
                 $services->bet = 0;
+                if ($isOfflineSong) {
+                    $services->total_bet = 0;
+                    $services->total_win = 0;
+                }
                 break;
         }
 

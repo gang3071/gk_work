@@ -783,6 +783,27 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
 
             // ✅ 更新版本号，表示收到回复
             $this->setActionVersion(self::CHECK);
+
+            // ✅ CHECK ACK 收到后立即重置 Redis 中的压分和得分，
+            // 不等心跳带回 0，消除 EE/EF 到达前的竞态窗口
+            $oldTotalBet = $this->total_bet ?? 0;
+            $oldTotalWin = $this->total_win ?? 0;
+            $this->total_bet = 0;
+            $this->total_win = 0;
+            $this->bet       = 0;
+            $this->win       = 0;
+            MachineLogger::log(
+                $this->machine->toArray(),
+                MachineLogger::SOURCE_SYSTEM,
+                MachineLogger::STATUS_NORMAL,
+                MachineLogger::DIR_RESPONSE,
+                'check_reset',
+                '[小松斯洛線下-CHECK] 收到 A3 F8 歸0確認，重置壓分/得分'
+                    . ' total_bet: ' . $oldTotalBet . '→0'
+                    . ' total_win: ' . $oldTotalWin . '→0',
+                ['machine_data' => $this->getMachineCache()]
+            );
+
             return true;
         }
 
@@ -895,11 +916,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         // 记录解析结果
         MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[小松斯洛線下-機台情況] 查詢回覆 開分='.self::descStatus($fields['open_status']).' 洗分='.self::descStatus($fields['wash_status']).' 重試次數='.$fields['retry_count'], $this->getMachineCache());
 
+        // ✅ 提前更新版本号：让 sendRawCmdWithReply 轮询立即感知到回复，
+        // 避免 updateMachineStatus（含钱包操作）延迟导致轮询超时
+        $this->setActionVersion(self::READ_STATUS);
+
         // ✅ 使用提取的方法更新状态
         $this->updateMachineStatus($fields, $flags);
-
-        // ✅ 更新版本号，表示收到回复
-        $this->setActionVersion(self::READ_STATUS);
 
         return true;
     }
@@ -2007,8 +2029,6 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 if ($ecRaw !== null && $ecRaw !== false) break;
             }
 
-            $preOpenStatus = '';
-            $preWashStatus = '';
             if ($ecRaw !== null && $ecRaw !== false) {
                 $ecFields      = json_decode($ecRaw, true) ?: [];
                 $preOpenStatus = $ecFields['open_status'] ?? '';
@@ -2570,8 +2590,30 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->card_score = $cardScore;           // 开分卡分数（心跳B1字段）
             }
             $this->machine_score = $machineScore;     // 机台分数（心跳B2字段）
-            $this->total_bet = $totalBet;             // 总押分数（心跳BA字段）
-            $this->total_win = $totalWin;             // 总得分数（心跳BB字段）
+
+            // ========== 异常高压分保护（心跳 BA 单次增量 > 100 视为异常） ==========
+            $betJump = $totalBet - $oldTotalBet;
+            $betAnomalyThreshold = 150;
+            $betAnomalyDetected = ($oldTotalBet > 0 && $betJump > $betAnomalyThreshold);
+            if ($betAnomalyDetected) {
+                MachineLogger::warning(
+                    $this->machine->toArray(),
+                    'heartbeat_bet_anomaly',
+                    '[小松斯洛線下-心跳-異常壓分] 單次壓分增量異常，跳過寫入並發送 CHECK 歸零'
+                        . ' 舊值=' . $oldTotalBet . ' 新值=' . $totalBet . ' 增量=' . $betJump,
+                    $this->getMachineCache(),
+                    MachineLogger::DIR_EVENT
+                );
+                try {
+                    $this->sendCmd(self::CHECK, 0, 'system');
+                } catch (\Exception $e) {
+                    MachineLogger::error($this->machine->toArray(), 'heartbeat_bet_anomaly', '[小松斯洛線下-心跳-異常壓分] 發送 CHECK 失敗: ' . $e->getMessage(), $this->getMachineCache());
+                }
+                // 跳过本次 total_bet/total_win/bet 写入及打码量统计，保留旧值
+            } else {
+                $this->total_bet = $totalBet;             // 总押分数（心跳BA字段）
+                $this->total_win = $totalWin;             // 总得分数（心跳BB字段）
+            }
 
             // ========== 打码量统计（心跳 BA 押分增量触发） ==========
             // total_bet 是机台累计押分（单位：分），增加时说明有新押注
@@ -2584,7 +2626,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
 
             // CHECK 在每次开分前归零 total_bet，每局从 0 开始，直接用增量判断
-            if (!empty($currentGamingUserId) && $totalBet > $oldTotalBet) {
+            // 异常高压分时跳过打码量统计，防止异常数据入队
+            if (!$betAnomalyDetected && !empty($currentGamingUserId) && $totalBet > $oldTotalBet) {
                 $betIncrement = $totalBet - $oldTotalBet;  // 增量（转）
 
                 // 累加机台转数（開獎中不累加，与线上版一致）
@@ -2673,8 +2716,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $this->point = $cardScore;                // point = card_score（开分卡分数）
             }
             $this->score = $machineScore;             // score = machine_score（机台分数）
-            $this->win = $totalWin;                   // win = total_win（兼容线上版）
-            $this->bet = $totalBet;                   // bet = total_bet（兼容客户端 WS machineInfo）
+            // 异常高压分时 total_bet/total_win 已跳过写入，win/bet 同步跳过，保留旧值
+            if (!($oldTotalBet > 0 && $betJump > $betAnomalyThreshold)) {
+                $this->win = $totalWin;               // win = total_win（兼容线上版）
+                $this->bet = $totalBet;               // bet = total_bet（兼容客户端 WS machineInfo）
+            }
 
             // ✅ 优化：心跳更新数据时同步更新 actionVersion，避免查询指令等待超时
             // 场景：发送查询指令后，心跳先到达并包含最新数据，此时应解除等待
