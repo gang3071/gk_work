@@ -1023,24 +1023,24 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                 $beforeBalance = \app\service\WalletService::getBalance($gamingUserId);
                 $afterBalance = bcadd($beforeBalance, $refundAmount, 2);
 
-            // 遊戲日誌（退款按下分記錄）
-            $playerGameLog = addPlayerGameLog(
-                $player,
-                $this->machine,
-                $gameRecord,
-                $this->machine->control_open_point ?? 0
-            );
-            // wash_point / game_amount 設為 0，避免觸發 PlayerGameLog booted created 事件
-            // 將退款誤計入 MachineReport.wash_point / wash_amount；
-            // 實際金額由 PlayerDeliveryRecord 承載，餘額變化由 before/after_game_amount 記錄。
-            $playerGameLog->wash_point         = 0;
-            $playerGameLog->game_amount        = 0;
-            $playerGameLog->before_game_amount = $beforeBalance;
-            $playerGameLog->after_game_amount  = $afterBalance;
-            $playerGameLog->action             = \app\model\PlayerGameLog::ACTION_DOWN;
-            $playerGameLog->is_system          = 1;
-            $playerGameLog->remark             = "開分部分失敗回補（{$newRetries}次×" . $this->getOpenUnit() . "，退款金額 {$refundAmount}）";
-            $playerGameLog->save();
+                // 遊戲日誌（退款按下分記錄）
+                $playerGameLog = addPlayerGameLog(
+                    $player,
+                    $this->machine,
+                    $gameRecord,
+                    $this->machine->control_open_point ?? 0
+                );
+                // wash_point / game_amount 設為 0，避免觸發 PlayerGameLog booted created 事件
+                // 將退款誤計入 MachineReport.wash_point / wash_amount；
+                // 實際金額由 PlayerDeliveryRecord 承載，餘額變化由 before/after_game_amount 記錄。
+                $playerGameLog->wash_point         = 0;
+                $playerGameLog->game_amount        = 0;
+                $playerGameLog->before_game_amount = $beforeBalance;
+                $playerGameLog->after_game_amount  = $afterBalance;
+                $playerGameLog->action             = \app\model\PlayerGameLog::ACTION_DOWN;
+                $playerGameLog->is_system          = 1;
+                $playerGameLog->remark             = "開分部分失敗回補（{$newRetries}次×" . $this->getOpenUnit() . "，退款金額 {$refundAmount}）";
+                $playerGameLog->save();
 
                 // 金流記錄
                 $delivery = new \app\model\PlayerDeliveryRecord();
@@ -1950,8 +1950,8 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         MachineLogger::receiveResponse($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分結束（EA D4確認 D2，回補次數=' . $retryCount . '）', $this->getMachineCache());
 
         if ($source === 'admin') {
-            $openDesc = $openStatus === 'd2' ? '開分完成' : ($openStatus === 'd3' ? '開分中' : '狀態未知');
-            $washDesc = $washStatus === 'd6' ? '洗分完成' : ($washStatus === 'd7' ? '洗分中' : '狀態未知');
+            $openDesc = self::descStatus($openStatus);
+            $washDesc = self::descStatus($washStatus);
             $retryDesc = $retryCount > 0
                 ? "，回補{$retryCount}次（每次{$openUnit}將退款）"
                 : '';
@@ -3366,13 +3366,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $gameRecord->after_game_amount = $afterBalance;
                     $gameRecord->save();
                 } catch (Exception $grEx) {
-                    $this->log->warning('[线下洗分] 游戏记录更新失败（非关键，资金已到账）', [
-                        'player_id'        => $playerId,
-                        'game_record_id'   => $gameRecord->id,
-                        'washed_score'     => $washedScore,
-                        'washed_amount'    => $washedAmount,
-                        'error'            => $grEx->getMessage(),
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_WASH, '[小松斯洛線下-下分] 遊戲記錄更新失敗（非關鍵，資金已到帳）: ' . $grEx->getMessage(), $this->getMachineCache(), MachineLogger::DIR_EVENT);
                 }
             }
 

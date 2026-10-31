@@ -2836,9 +2836,9 @@ if (!function_exists('machineOpenAnyFree')) {
                     }
                     // $openScore 已是遊戲分，無需換算
                 } else {
-            // ⚠️ checkMachineOpenAny 只验证 openScore（购买的分），不包含赠分
-            // giftScore 会在硬件上分时额外加上
-                $openScore = checkMachineOpenAny($machine, $openScore, 0);
+                    // ⚠️ checkMachineOpenAny 只验证 openScore（购买的分），不包含赠分
+                    // giftScore 会在硬件上分时额外加上
+                    $openScore = checkMachineOpenAny($machine, $openScore, 0);
                 }
 
             // ✅ 计算总上分（购买分 + 赠送分）
