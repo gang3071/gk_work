@@ -511,8 +511,8 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
      */
     public function queryTransactionByBettingId(string $bettingId, int $createdAt): ?array
     {
-        $sDate  = date('Y-m-d H:i:s', $createdAt - 300);
-        $eDate  = date('Y-m-d H:i:s', $createdAt);
+        $sDate  = date('Y-m-d H:i:s', $createdAt - 150);
+        $eDate  = date('Y-m-d H:i:s', $createdAt + 150);
         $params = [
             'Operator' => $this->config['operator'],
             'Key'      => $this->config['key'],

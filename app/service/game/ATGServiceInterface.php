@@ -511,9 +511,9 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
      */
     public function queryTransactionByBettingId(string $bettingId, int $createdAt): ?array
     {
-        // 下注时间 ≤ 我方存库时间；SDate 向前取 5 分钟覆盖整个可能区间（ATG 最长 5 分钟）
-        $sDate  = date('Y-m-d H:i:s', $createdAt - 300);
-        $eDate  = date('Y-m-d H:i:s', $createdAt);
+        // 以 created_at 为中心各取 2.5 分钟（ATG 查询区间最长 5 分钟）
+        $sDate  = date('Y-m-d H:i:s', $createdAt - 150);
+        $eDate  = date('Y-m-d H:i:s', $createdAt + 150);
         $params = [
             'Operator' => $this->config['operator'],
             'Key'      => $this->config['key'],
