@@ -241,12 +241,7 @@ if ($platformCode === 'BTG') {
                 warn("窗口内无任何数据（API 返回空）。可能：时间窗口偏差、时区问题或该订单不在此平台。");
             } else {
                 line("  ── 窗口内共 " . count($allItems) . " 条记录 ──────────────");
-                foreach ($allItems as $i => $item) {
-                    $bid = $item['bettingid'] ?? $item['bettingId'] ?? '?';
-                    $st  = $item['status']      ?? '?';
-                    $bd  = $item['bettingdate'] ?? '?';
-                    line("  [{$i}] bettingId={$bid}  status={$st}  bettingdate={$bd}");
-                }
+                line(json_encode($allItems, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
                 line("  ─────────────────────────────────────────");
                 line();
                 warn("若上方有匹配订单请手动输入 win 金额；若无数据请确认 created_at 是否正确。");
