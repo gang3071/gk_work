@@ -213,13 +213,22 @@ if ($platformCode === 'BTG') {
             'ATG3'  => new ATG3ServiceInterface(),
             default => new ATGServiceInterface(),
         };
-        // 传入我方存库时间（created_at）；下注必然发生在此之前，service 内向前取 5 分钟
+        // 只调一次 API（ATG 限频 3 秒/次），本地过滤 bettingId
         $createdAt = strtotime($record->created_at ?? $record->order_time ?? 'now');
-        $txData    = $service->queryTransactionByBettingId($record->order_no, $createdAt);
-        $apiRaw  = $txData;
+        $allItems  = $service->queryTransactionsByWindow($createdAt);
+
+        $txData = null;
+        foreach ($allItems as $item) {
+            $id = (string)($item['bettingid'] ?? $item['bettingId'] ?? '');
+            if (strtolower($id) === strtolower($record->order_no)) {
+                $txData = $item;
+                break;
+            }
+        }
+        $apiRaw = $txData;
 
         if ($txData) {
-            line("  ── 原始响应 ─────────────────────────────");
+            line("  ── 匹配到的注单 ──────────────────────────");
             line(json_encode($txData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
             line("  ─────────────────────────────────────────");
             line();
@@ -236,7 +245,6 @@ if ($platformCode === 'BTG') {
         } else {
             warn("{$platformCode} 未找到 bettingId=[{$record->order_no}]，打印窗口内全部数据供排查：");
             line();
-            $allItems = $service->queryTransactionsByWindow($createdAt);
             if (empty($allItems)) {
                 warn("窗口内无任何数据（API 返回空）。可能：时间窗口偏差、时区问题或该订单不在此平台。");
             } else {
