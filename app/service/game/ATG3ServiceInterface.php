@@ -518,6 +518,7 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
             'Key'      => $this->config['key'],
             'SDate'    => $sDate,
             'EDate'    => $eDate,
+            'Type'     => 'bettingdate',  // 按下注时间查，未结算订单也能找到
         ];
         $items = $this->doCurl($this->createUrl('getGameHistories'), $params);
         foreach ((array)$items as $item) {
