@@ -2853,7 +2853,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 && $machine->control_type == Machine::CONTROL_TYPE_SONG
                 && $machine->type == \app\model\GameType::TYPE_SLOT);
             $totalOpenScoreForCheck = ($isSongOfflineSlot && $machine->odds_x > 0)
-                ? intdiv($totalOpenScore, $machine->odds_x)
+                ? intdiv($totalOpenScore * (int)$machine->odds_y, $machine->odds_x)
                 : $totalOpenScore;
 
             // SongOfflineSlot：card_score（B1）+ machine_score（B2）直接叠加作为当前持有量
@@ -2890,7 +2890,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 && $machine->control_type == Machine::CONTROL_TYPE_SONG
                 && $machine->type == \app\model\GameType::TYPE_SLOT) {
                 $money = (int) $openScore;
-                $logOpenScore = ($machine->odds_x > 0) ? intdiv($openScore, $machine->odds_x) : $openScore;
+                $logOpenScore = ($machine->odds_x > 0) ? intdiv($openScore * (int)$machine->odds_y, $machine->odds_x) : $openScore;
             } else {
                 $money = floor($openScore / $machine->odds_y * $machine->odds_x);
                 $logOpenScore = $openScore;
