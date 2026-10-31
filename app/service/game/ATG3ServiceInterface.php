@@ -505,14 +505,14 @@ class ATG3ServiceInterface extends GameServiceFactory implements GameServiceInte
     /**
      * 按 bettingId（即 order_no）查询单笔注单，用于补单场景
      * @param string $bettingId  数据库中存储的 order_no
-     * @param int    $orderTime  订单时间戳（Unix），用于构造查询窗口
+     * @param int    $createdAt  我方记录创建时间戳（Unix）；下注发生在此之前，窗口向前取 5 分钟
      * @return array|null        找到则返回原始注单数组，否则 null
      * @throws GameException
      */
-    public function queryTransactionByBettingId(string $bettingId, int $orderTime): ?array
+    public function queryTransactionByBettingId(string $bettingId, int $createdAt): ?array
     {
-        $sDate  = date('Y-m-d H:i:s', $orderTime - 150);
-        $eDate  = date('Y-m-d H:i:s', $orderTime + 150);
+        $sDate  = date('Y-m-d H:i:s', $createdAt - 300);
+        $eDate  = date('Y-m-d H:i:s', $createdAt);
         $params = [
             'Operator' => $this->config['operator'],
             'Key'      => $this->config['key'],

@@ -213,8 +213,9 @@ if ($platformCode === 'BTG') {
             'ATG3'  => new ATG3ServiceInterface(),
             default => new ATGServiceInterface(),
         };
-        $orderTs = strtotime($record->order_time ?? $record->created_at ?? 'now');
-        $txData  = $service->queryTransactionByBettingId($record->order_no, $orderTs);
+        // 传入我方存库时间（created_at）；下注必然发生在此之前，service 内向前取 5 分钟
+        $createdAt = strtotime($record->created_at ?? $record->order_time ?? 'now');
+        $txData    = $service->queryTransactionByBettingId($record->order_no, $createdAt);
         $apiRaw  = $txData;
 
         if ($txData) {
