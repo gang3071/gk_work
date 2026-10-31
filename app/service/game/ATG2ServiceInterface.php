@@ -510,8 +510,8 @@ class ATG2ServiceInterface extends GameServiceFactory implements GameServiceInte
      */
     public function queryTransactionsByWindow(int $createdAt): array
     {
-        $sDate  = date('Y-m-d H:i:s', $createdAt - 150);
-        $eDate  = date('Y-m-d H:i:s', $createdAt + 150);
+        $sDate  = date('Y-m-d H:i:s', $createdAt - 300);
+        $eDate  = date('Y-m-d H:i:s', $createdAt);
         $params = [
             'Operator' => $this->config['operator'],
             'Key'      => $this->config['key'],

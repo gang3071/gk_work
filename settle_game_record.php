@@ -205,7 +205,7 @@ if ($platformCode === 'BTG') {
 
 // ── ATG / ATG2 / ATG3 ────────────────────────
 } elseif (in_array($platformCode, ['ATG', 'ATG2', 'ATG3'])) {
-    info("{$platformCode}：按 bettingId 在订单时间窗口（±2.5 分钟）内查询 ...");
+    info("{$platformCode}：按 bettingId 查询（SDate = created_at - 5min，EDate = created_at）...");
     line();
     try {
         $service = match ($platformCode) {
