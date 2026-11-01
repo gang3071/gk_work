@@ -939,8 +939,6 @@ class SongJackpot extends MachineServices implements BaseMachine
                     break;
                 case self::CLEAR_LOG:
                     MachineLogger::sendCommand($this->machine->toArray(), 'clear_log', '清除日誌開始', $this->getMachineCache(), '', $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN, ['id' => $source_id, 'uuid' => $this->machine->gamingPlayer->uuid ?? '']);
-                    $this->machineAction($uid, $cmd, $source, $source_id);
-                    MachineLogger::receiveResponse($this->machine->toArray(), 'clear_log', '清除日誌完成', $this->getMachineCache());
                     break;
                 default:
                     Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
