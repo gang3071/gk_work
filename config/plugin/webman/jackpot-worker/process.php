@@ -15,6 +15,7 @@ return [
             'lanIp' => '127.0.0.1',  // 自动获取局域网 IP
             'startPort' => 2300,
             'pingInterval' => 10,
+            'pingNotResponseLimit' => 2,
             'pingData' => hex2bin('A22000000000005500000000000082DD'),
             'registerAddress' => '127.0.0.1:1236',
             'onConnect' => function () {

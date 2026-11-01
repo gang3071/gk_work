@@ -207,7 +207,31 @@ class Events
     {
         $domain = $_SERVER['REMOTE_ADDR'];
         $port = $_SERVER['REMOTE_PORT'];
-        // 1解绑设备
+        // 解绑设备
         Gateway::unbindUid($client_id, $domain . ':' . $port);
+
+        // 断线时记录日志，has_lock 不自动清除（需人工核查后台解锁）
+        try {
+            $gatewayPort = $_SERVER['GATEWAY_PORT'] ?? '';
+            $machine = self::getMachine($gatewayPort, $domain, $port, $client_id);
+            if ($machine) {
+                $services = MachineServices::createServices($machine);
+                Log::channel('machine')->warning('机台TCP断线', [
+                    'machine_id'   => $machine->id,
+                    'machine_code' => $machine->code,
+                    'domain'       => $domain,
+                    'port'         => $port,
+                    'has_lock'     => $services->has_lock,
+                    'gaming'       => $services->gaming,
+                    'gaming_user_id' => $services->gaming_user_id,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::channel('machine')->error('onClose记录失败', [
+                'domain' => $domain,
+                'port'   => $port,
+                'error'  => $e->getMessage(),
+            ]);
+        }
     }
 }
