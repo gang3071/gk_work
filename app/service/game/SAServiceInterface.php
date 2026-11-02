@@ -183,7 +183,7 @@ class SAServiceInterface extends GameServiceFactory implements GameServiceInterf
             throw new GameException($res['ErrorMsg'], 0);
         }
 
-        return $res['GameLaunchURL'];
+        return $res['GameLaunchURL'].'&lang=zh-hant';
     }
 
     /**
