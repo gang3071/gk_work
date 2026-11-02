@@ -3214,7 +3214,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $gameRecord->open_amount = bcadd($gameRecord->open_amount, $openAmount, 2);
                     $gameRecord->save();
                 } catch (Exception $grEx) {
-                    $this->log->warning('[线下开分] 游戏记录更新失败（非关键，记录已建立）', [
+                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '[线下开分] 游戏记录更新失败（非关键，记录已建立）', [
                         'player_id'      => $playerId,
                         'game_record_id' => $gameRecord->id,
                         'opened_score'   => $openedScore,
