@@ -216,17 +216,9 @@ function machineKeepOutPlayer(): void
                 continue;
             }
             // 钢珠机开奖中不扣时间、不踢人
-            // 超过30分钟仍为开奖中，视为TCP断线后 reward_status 残留，不再保护
             if ($services->reward_status == 1 && $machine->type == GameType::TYPE_STEEL_BALL) {
-                $rewardKeepingDuration = ($services->last_keep_at > 0) ? time() - $services->last_keep_at : 0;
-                if ($rewardKeepingDuration < 1800) {
-                    $log->info('PlayOutMachine: ' . $machine->code . '开奖中跳过保留时间处理');
-                    continue;
-                }
-                $log->warning('PlayOutMachine: ' . $machine->code . '开奖中保护超时，疑似断线残留，继续踢人流程', [
-                    'keeping_duration' => $rewardKeepingDuration,
-                    'reward_status'    => $services->reward_status,
-                ]);
+                $log->info('PlayOutMachine: ' . $machine->code . '开奖中跳过保留时间处理');
+                continue;
             }
             $keepSeconds = $services->keep_seconds;
             if ($keepSeconds > 0) {
@@ -335,66 +327,13 @@ function machineKeepOutPlayer(): void
                     Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
 
                 } catch (Exception $washException) {
+                    // ❌ 退分失败，记录详细错误
                     $log->error('PlayOutMachine: 踢出玩家时退分失败', array_merge($machineStatus, [
+                        'kick_reason' => '保留时间耗尽（系统自动踢出）',
                         'error' => $washException->getMessage(),
                         'trace' => $washException->getTraceAsString(),
                     ]));
-
-                    // 连续失败计数（TTL=120s，避免跨会话累积）
-                    $failKey = 'machine_wash_fail_' . $machine->id;
-                    $failCount = (int)Cache::get($failKey, 0) + 1;
-                    Cache::set($failKey, $failCount, 120);
-
-                    // last_keep_at=0 表示数据不完整，不信任 keepingDuration，仅依赖 failCount
-                    $keepingDuration = ($services->last_keep_at > 0)
-                        ? time() - $services->last_keep_at
-                        : 0;
-                    // 硬件长时间失联（保留超1小时），或连续3次失败（硬件反复无响应）→ 强制清除
-                    if ($keepingDuration > 3600 || $failCount >= 3) {
-                        try {
-                            $services->gaming = 0;
-                            $services->gaming_user_id = 0;
-                            $services->keeping = 0;
-                            $services->keep_seconds = 0;
-                            $services->keeping_user_id = 0;
-                            $machine->gaming = 0;
-                            $machine->gaming_user_id = 0;
-                            $machine->save();
-                            updateKeepingLog($machine->id, $player->id);
-                            Cache::delete($failKey);
-                            $log->warning('PlayOutMachine: 强制清除保留状态（has_lock残留需后台手动解锁）', [
-                                'machine_id'       => $machine->id,
-                                'machine_code'     => $machine->code,
-                                'player_id'        => $player->id,
-                                'keeping_duration' => $keepingDuration,
-                                'fail_count'       => $failCount,
-                                'has_lock'         => $services->has_lock,
-                                'need_unlock'      => ($services->has_lock == 1),
-                                'wash_error'       => $washException->getMessage(),
-                            ]);
-                            // 通知客户端已被强制踢出
-                            sendSocketMessage('player-' . $player->id . '-' . $machine->id, [
-                                'msg_type'   => 'kick_out',
-                                'machine_id' => $machine->id,
-                                'machine_name' => $machine->name,
-                                'machine_code' => $machine->code,
-                                'wash_point' => 0,
-                            ]);
-                            sendSocketMessage('player-' . $player->id, [
-                                'msg_type'   => 'player_machine_keeping',
-                                'player_id'  => $player->id,
-                                'machine_id' => $machine->id,
-                                'keep_seconds' => '0',
-                                'keeping'    => '0',
-                            ]);
-                        } catch (Exception $forceCleanException) {
-                            $log->error('PlayOutMachine: 强制清除失败', [
-                                'machine_id' => $machine->id,
-                                'error'      => $forceCleanException->getMessage(),
-                            ]);
-                        }
-                        continue;
-                    }
+                    // 重新抛出异常，让外层catch捕获
                     throw $washException;
                 }
             }
