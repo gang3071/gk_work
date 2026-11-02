@@ -2914,7 +2914,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 && $machine->control_type == Machine::CONTROL_TYPE_SONG
                 && $machine->type == \app\model\GameType::TYPE_SLOT);
             $totalOpenScoreForCheck = ($isSongOfflineSlot && $machine->odds_x > 0)
-                ? intdiv($totalOpenScore, $machine->odds_x)
+                ? intdiv($totalOpenScore * (int)$machine->odds_y, $machine->odds_x)
                 : $totalOpenScore;
 
             // SongOfflineSlot：card_score（B1）+ machine_score（B2）直接叠加作为当前持有量
@@ -2951,7 +2951,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 && $machine->control_type == Machine::CONTROL_TYPE_SONG
                 && $machine->type == \app\model\GameType::TYPE_SLOT) {
                 $money = (int) $openScore;
-                $logOpenScore = ($machine->odds_x > 0) ? intdiv($openScore, $machine->odds_x) : $openScore;
+                $logOpenScore = ($machine->odds_x > 0) ? intdiv($openScore * (int)$machine->odds_y, $machine->odds_x) : $openScore;
             } else {
                 $money = floor($openScore / $machine->odds_y * $machine->odds_x);
                 $logOpenScore = $openScore;
@@ -3699,10 +3699,20 @@ if (!function_exists('resetMachineTrans')) {
                 }
             }
             // ✅ 记录清零前的机台分数（用于审计）
-            $confiscatedPoint = $services->point;  // 即将被没收的分数
+            // SongOfflineSlot：point=B1(card_score) + machine_score=B2，两者都是硬件分，需合计
+            $confiscatedPoint = $services->point;
+            $isSongOfflineSlotForConfiscate = (
+                $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                && $machine->control_type == Machine::CONTROL_TYPE_SONG
+                && $machine->type == GameType::TYPE_SLOT
+            );
+            if ($isSongOfflineSlotForConfiscate) {
+                $confiscatedPoint += (int)($services->machine_score ?? 0);
+            }
             $confiscatedAmount = 0;
             if ($confiscatedPoint > 0 && $machine->odds_y > 0 && $machine->odds_x > 0) {
-                $confiscatedAmount = floor($confiscatedPoint / $machine->odds_y * $machine->odds_x);
+                // intdiv 先乘再整除，避免 odds_y=3/5/10 时浮点除法出现 N-epsilon 被 floor 错舍
+                $confiscatedAmount = intdiv((int)$confiscatedPoint * (int)$machine->odds_x, (int)$machine->odds_y);
             }
 
             // ✅ 记录详细的强制踢出日志（包含被没收的金额）

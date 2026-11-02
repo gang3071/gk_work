@@ -298,6 +298,38 @@ class MTServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
+     * 按 sn（order_no）查询单笔注单，用于补单场景
+     * @param string $sn        数据库中存储的 order_no
+     * @param int    $orderTime 订单时间戳（Unix），用于构造查询窗口
+     * @return array|null       找到则返回原始注单数组，否则 null
+     * @throws GameException
+     */
+    public function queryTransactionBySn(string $sn, int $orderTime): ?array
+    {
+        // 以订单时间为中心各取 5 分钟（MT 支持最大 24 小时，建议 10 分钟）
+        $sDate  = date('Y-m-d H:i:s', $orderTime - 300);
+        $eDate  = date('Y-m-d H:i:s', $orderTime + 300);
+        $params = [
+            'system_code' => $this->config['system_code'],
+            'web_id'      => $this->config['web_id'],
+            'start_time'  => $sDate,
+            'end_time'    => $eDate,
+            'page'        => 1,
+            'page_size'   => 100,
+        ];
+        $res = $this->doCurl($this->apiDomain . '/Report/GetBetRecord', $params);
+        if (($res['code'] ?? '') !== '00000') {
+            throw new GameException($res['message'] ?? 'MT API error', 0);
+        }
+        foreach ((array)($res['data']['list'] ?? []) as $item) {
+            if (($item['sn'] ?? '') === $sn) {
+                return $item;
+            }
+        }
+        return null;
+    }
+
+    /**
      * 取得區間內遊戲紀錄
      * @return array
      * @throws Exception

@@ -914,7 +914,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $flags = $this->detectMachineStatusFlags($fields['status_value']);
 
         // 记录解析结果
-        MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[小松斯洛線下-機台情況] 查詢回覆 開分=' . self::descStatus($fields['open_status']) . ' 洗分=' . self::descStatus($fields['wash_status']) . ' 重試次數=' . $fields['retry_count'], $this->getMachineCache());
+        MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[小松斯洛線下-機台情況] 查詢回覆 開分='.self::descStatus($fields['open_status']).' 洗分='.self::descStatus($fields['wash_status']).' 重試次數='.$fields['retry_count'], $this->getMachineCache());
 
         // ✅ 提前更新版本号：让 sendRawCmdWithReply 轮询立即感知到回复，
         // 避免 updateMachineStatus（含钱包操作）延迟导致轮询超时
@@ -1006,19 +1006,19 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeBalance = $existingDelivery->amount_before;
             MachineLogger::warning($this->machine->toArray(), 'ca_replenish', '[小松斯洛線下-回補] 偵測到待重試退款記錄，跳過重複建立，直接重試加款 退款單ID='.$existingDelivery->id, $this->getMachineCache(), MachineLogger::DIR_EVENT);
         } else {
-            \support\Db::beginTransaction();
-            try {
-                $player = \app\model\Player::find($gamingUserId);
-                if (!$player) {
-                    throw new Exception("玩家不存在: {$gamingUserId}");
-                }
+        \support\Db::beginTransaction();
+        try {
+            $player = \app\model\Player::find($gamingUserId);
+            if (!$player) {
+                throw new Exception("玩家不存在: {$gamingUserId}");
+            }
 
-                $gameRecord = \app\model\PlayerGameRecord::query()
-                    ->where('machine_id', $this->machine->id)
-                    ->where('player_id', $gamingUserId)
-                    ->where('status', \app\model\PlayerGameRecord::STATUS_START)
-                    ->orderBy('created_at', 'desc')
-                    ->first();
+            $gameRecord = \app\model\PlayerGameRecord::query()
+                ->where('machine_id', $this->machine->id)
+                ->where('player_id', $gamingUserId)
+                ->where('status', \app\model\PlayerGameRecord::STATUS_START)
+                ->orderBy('created_at', 'desc')
+                ->first();
 
                 $beforeBalance = \app\service\WalletService::getBalance($gamingUserId);
                 $afterBalance = bcadd($beforeBalance, $refundAmount, 2);
@@ -1745,7 +1745,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $beforeVersion = $this->getActionVersion(self::OPEN_ANY_POINT);
             Cache::delete($this->cacheDataKey . '_last_open_result');
 
-            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, $attempt === 1 ? '開分開始 '.$times.'次×'.$openUnit.'分 共'.$data.'分' : '開分重試 第'.$attempt.'/'.$maxAttempts.'次 共'.$data.'分', $this->getMachineCache());
+            MachineLogger::sendCommand($this->machine->toArray(), MachineLogger::ACTION_OPEN, $attempt === 1 ? '開分開始 '.$times.'次×'.$this->getOpenUnit().'分 共'.$data.'分' : '開分重試 第'.$attempt.'/'.$maxAttempts.'次 共'.$data.'分', $this->getMachineCache());
 
             Gateway::sendToUid($uid, hex2bin($fullCmd));
 
@@ -3200,18 +3200,29 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $playerGameLog->remark = '线下实体按键开分（现金投币）';
             $playerGameLog->save();
 
-            // 5. 更新遊戲记录
-            if ($gameRecord) {
-                $gameRecord->open_point = bcadd($gameRecord->open_point, $openedScore, 2);
-                $gameRecord->open_amount = bcadd($gameRecord->open_amount, $openAmount, 2);
-                $gameRecord->save();
-            }
-
-            // 6. 更新 Redis 记录
+            // 5. 更新 Redis 记录
             $this->last_point_at = time();
             $this->player_open_point = bcadd($this->player_open_point ?? '0', $openedScore, 2);
 
+            // ⚠️ player_game_record 更新移到 commit 之后，避免与 machineWash() 并发时产生 1205 锁等待
             \support\Db::commit();
+
+            // ✅ commit 後更新遊戲記錄（非關鍵，best-effort）
+            if ($gameRecord) {
+                try {
+                    $gameRecord->open_point = bcadd($gameRecord->open_point, $openedScore, 2);
+                    $gameRecord->open_amount = bcadd($gameRecord->open_amount, $openAmount, 2);
+                    $gameRecord->save();
+                } catch (Exception $grEx) {
+                    $this->log->warning('[线下开分] 游戏记录更新失败（非关键，记录已建立）', [
+                        'player_id'      => $playerId,
+                        'game_record_id' => $gameRecord->id,
+                        'opened_score'   => $openedScore,
+                        'open_amount'    => $openAmount,
+                        'error'          => $grEx->getMessage(),
+                    ]);
+                }
+            }
 
             MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '[小松斯洛線下-開分] 玩家開分記錄建立成功 分數='.$openedScore.' 玩家ID='.$playerId, ['machine_data' => $this->getMachineCache()]);
 

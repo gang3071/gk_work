@@ -503,6 +503,45 @@ class ATGServiceInterface extends GameServiceFactory implements GameServiceInter
     }
 
     /**
+     * 查询时间窗口内所有注单（用于补单调试或过滤），用于补单场景
+     * @param int $createdAt  我方存库时间戳（Unix），以此为中心 ±2.5 分钟（ATG 最长 5 分钟）
+     * @return array          原始注单列表（空数组表示无数据或查询失败）
+     * @throws GameException
+     */
+    public function queryTransactionsByWindow(int $createdAt): array
+    {
+        $sDate  = date('Y-m-d H:i:s', $createdAt - 300);
+        $eDate  = date('Y-m-d H:i:s', $createdAt);
+        $params = [
+            'Operator' => $this->config['operator'],
+            'Key'      => $this->config['key'],
+            'SDate'    => $sDate,
+            'EDate'    => $eDate,
+            'Type'     => 'bettingdate',
+        ];
+        $result = $this->doCurl($this->createUrl('getGameHistories'), $params);
+        return is_array($result) ? $result : [];
+    }
+
+    /**
+     * 按 bettingId（即 order_no）查询单笔注单，用于补单场景
+     * @param string $bettingId  数据库中存储的 order_no
+     * @param int    $createdAt  我方存库时间戳（Unix）
+     * @return array|null        找到则返回原始注单数组，否则 null
+     * @throws GameException
+     */
+    public function queryTransactionByBettingId(string $bettingId, int $createdAt): ?array
+    {
+        foreach ($this->queryTransactionsByWindow($createdAt) as $item) {
+            $id = (string)($item['bettingid'] ?? $item['bettingId'] ?? '');
+            if (strtolower($id) === strtolower($bettingId)) {
+                return $item;
+            }
+        }
+        return null;
+    }
+
+    /**
      * 进入游戏
      * @param Game $game
      * @param string $lang
