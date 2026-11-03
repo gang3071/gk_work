@@ -4,13 +4,12 @@ name: Work
 on:
   push:
     branches:
-      - super9-main  # 正式线
-      - jin  # 金尊
-      - fix-high-score  # 金尊
-      - fix/**       # 测试线（所有 fix 开头的分支）
-      - feature/**   # 测试线（所有 feature 开头的分支）
-      - test/**      # 测试线（所有 test 开头的分支）
-      - release/**   # 发布分支（所有 release 开头的分支）
+      - 'release/**'  # 仅发布分支触发（如 release/super9/v1.0.0、release/hotfix-login）
+
+# 🔒 并发控制：防止多个 release 分支同时部署导致覆盖
+concurrency:
+  group: gk-work-deploy-${{ github.ref }}  # 按分支分组（不同 release 分支排队）
+  cancel-in-progress: true  # 新推送自动取消旧的部署任务
 
 jobs:
   deploy:
@@ -33,18 +32,10 @@ jobs:
           echo "   URL参数: $BRANCH_PARAM"
 
           # 根据分支名判断环境
-          if [ "${{ env.BRANCH_NAME }}" == "super9-main" ]; then
-            echo ""
-            echo "🚀 目标环境: 正式线 (Production)"
-            echo "   服务器: 34.80.234.173"
-            WEBHOOK_URL="https://34.80.234.173:35812/hook?access_key=rMlbPzdFL295OEzGrgLIkTEvEoxqgMln1ZoN0JTY8VBZghzA&param=$BRANCH_PARAM"
-          else
-            echo ""
-            echo "🧪 目标环境: 测试线 (Test)"
-            echo "   服务器: 34.81.124.226"
-            WEBHOOK_URL="https://34.81.124.226:14842/hook?access_key=VA7Uj5LdFuBkmsnUB4bdw64ji89fffYF9Yb1N71i4OLpCPEE&param=$BRANCH_PARAM"
-          fi
-
+          echo ""
+          echo "🧪 目标环境: 测试线 (Test)"
+          echo "   服务器: 35.220.185.208"
+          WEBHOOK_URL="https://35.220.185.208:14843/hook?access_key=VA7Uj5LdFuBkmsnUB4bdw64ji89fffYF9Yb1N71i4OLpCPEE&param=$BRANCH_PARAM"
           echo ""
           echo "📡 触发 Webhook..."
           if curl -k -X GET "$WEBHOOK_URL" -w "\n状态码: %{http_code}\n"; then
