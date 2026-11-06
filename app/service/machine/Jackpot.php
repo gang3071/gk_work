@@ -401,6 +401,9 @@ class Jackpot extends MachineServices implements BaseMachine
                         'gaming_user_id' => $this->machine->gaming_user_id,
                     ]);
                     $this->sendScoreToPointAsync($this->machine->gaming_user_id);
+
+                    // 钢珠报喜：检测珠数是否达到阈值并广播
+                    \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $this->score);
                 }
             }
             if ($orgBbStatus == 0 && $orgRushStatus == 0 && $this->bb_status == 1 && $this->rush_status == 1 && $this->now_turn > 0) {
