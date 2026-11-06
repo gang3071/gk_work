@@ -9,6 +9,7 @@ use app\model\PlayGameRecord;
 use app\service\GameRecordCacheService;
 use app\service\HighScoreBroadcastService;
 use app\service\MergeBetPlatformHelper;
+use app\service\PlayerPointsQueueService;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use support\Db;
@@ -669,7 +670,7 @@ class GameRecordSyncWorker
                 // ✅ 新增：同时发送积分队列（跨项目投递到 gk_api）
                 // 注意：gk_api 和 gk_work 共用同一个 Redis，队列可以跨项目
                 // platform_amounts: { platform_id => bet_amount }，消费者按各平台积分基数分别计算
-                \Webman\RedisQueue\Client::send('player-points', [
+                PlayerPointsQueueService::send([
                     'player_id'        => $groupData['player_id'],
                     'platform_amounts' => $groupData['platform_amounts'],
                     'source'           => 'betting',

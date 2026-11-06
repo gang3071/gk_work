@@ -6,6 +6,7 @@ use app\model\GameType;
 use app\model\Machine;
 use app\model\MachineLotteryRecord;
 use app\model\Notice;
+use app\service\PlayerPointsQueueService;
 use app\support\MachineLogger;
 use Exception;
 use GatewayWorker\Lib\Gateway;
@@ -464,7 +465,7 @@ class SongSlot extends MachineServices implements BaseMachine
                                         'machine_id' => $this->machine->id,
                                         'created_at' => date('Y-m-d H:i:s'),
                                     ]);
-                                    Client::send('player-points', [
+                                    PlayerPointsQueueService::send([
                                         'player_id'        => $currentGamingUserId,
                                         'platform_amounts' => [0 => floatval($betAmount)],
                                         'source'           => 'machine',
