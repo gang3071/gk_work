@@ -7,6 +7,7 @@ use app\model\Machine;
 use app\model\MachineLotteryRecord;
 use app\model\Notice;
 use app\service\LotteryServices;
+use app\service\PlayerPointsQueueService;
 use app\support\MachineLogger;
 use Exception;
 use GatewayWorker\Lib\Gateway;
@@ -400,6 +401,9 @@ class Jackpot extends MachineServices implements BaseMachine
                         'gaming_user_id' => $this->machine->gaming_user_id,
                     ]);
                     $this->sendScoreToPointAsync($this->machine->gaming_user_id);
+
+                    // 钢珠报喜：检测珠数是否达到阈值并广播
+                    \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $this->score);
                 }
             }
             if ($orgBbStatus == 0 && $orgRushStatus == 0 && $this->bb_status == 1 && $this->rush_status == 1 && $this->now_turn > 0) {
@@ -520,7 +524,7 @@ class Jackpot extends MachineServices implements BaseMachine
                                         'machine_id' => $this->machine->id,
                                         'created_at' => date('Y-m-d H:i:s'),
                                     ]);
-                                    Client::send('player-points', [
+                                    PlayerPointsQueueService::send([
                                         'player_id'        => $currentGamingUserId,
                                         'platform_amounts' => [0 => floatval($betAmount)],
                                         'source'           => 'machine',

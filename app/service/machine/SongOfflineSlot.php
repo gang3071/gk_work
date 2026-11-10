@@ -7,6 +7,7 @@ use app\model\Machine;
 use app\model\MachineLotteryRecord;
 use app\model\Notice;
 use app\model\PlayerGameRecord;
+use app\service\PlayerPointsQueueService;
 use app\support\MachineLogger;
 use Exception;
 use GatewayWorker\Lib\Gateway;
@@ -2685,7 +2686,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                                 'machine_id' => $this->machine->id,
                                 'created_at' => date('Y-m-d H:i:s'),
                             ]);
-                            \Webman\RedisQueue\Client::send('player-points', [
+                            PlayerPointsQueueService::send([
                                 'player_id'        => $currentGamingUserId,
                                 'platform_amounts' => [0 => floatval($betAmount)],
                                 'source'           => 'machine',
