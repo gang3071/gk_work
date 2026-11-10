@@ -68,6 +68,9 @@ use yzh52521\WebmanLock\Locker;
  * @property int $action_time 操作时间
  * @property int $now_turn 当前累积转数
  * @property int $has_lock 机台锁定状态
+ * @property int $start_score 开奖开始时机台得分（临时状态，存 Redis）
+ * @property int $start_bet 开奖开始时机台压分（临时状态，存 Redis）
+ * @property int $lottery_record_id 本次开奖记录ID（临时状态，存 Redis）
  * @property int $keep_seconds 保留剩余时长
  * @property int $keeping 保留状态（0=未保留 1=保留中）
  * @property int $keeping_user_id 保留玩家ID
@@ -224,6 +227,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_turn',                 // 转数（查询机台情况回复）
             $this->cacheDataKey . '_return_count',         // 回补次数（查询机台情况回复）
             $this->cacheDataKey . '_table_miss',           // 码表少跳数（查询机台情况回复）
+
+            // ========== 开奖期间临时快照（用于计算 lottery_win / lottery_bet）==========
+            $this->cacheDataKey . '_start_score',          // 开奖开始时机台得分
+            $this->cacheDataKey . '_start_bet',            // 开奖开始时机台压分
+            $this->cacheDataKey . '_lottery_record_id',    // 本次开奖记录ID（防止中断后更新错记录）
         ];
 
         // 推送到前端的关键字段（WebSocket实时同步）
@@ -292,9 +300,10 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
                 Cache::set($this->cacheDataKey . '_last_play_time', time());
             }
-            // 玩家离开时重置转数（新玩家从0开始），走 __set 路径保证有重试逻辑
+            // 玩家离开时重置转数和开奖记录ID（新玩家从0开始），走 __set 路径保证有重试逻辑
             if ($name === 'gaming_user_id' && empty($value) && !empty($this->gaming_user_id)) {
                 $this->now_turn = 0;
+                $this->lottery_record_id = 0;
             }
 
             try {
@@ -2800,7 +2809,12 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                             $lotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
                             $lotteryRecord->draw_bet = $this->bet;
                             $lotteryRecord->use_turn = $this->now_turn;
+                            $lotteryRecord->odds_x = $this->machine->odds_x ?? 1;
+                            $lotteryRecord->odds_y = $this->machine->odds_y ?? 1;
                             $lotteryRecord->save();
+                            $this->lottery_record_id = $lotteryRecord->id;
+                            $this->start_score = $this->score;
+                            $this->start_bet = $this->bet;
                         } catch (\Throwable $e) {
                             MachineLogger::error($this->machine->toArray(), 'heartbeat', '[小松斯洛線下-心跳] 寫入開獎記錄失敗: '.$e->getMessage(), $this->getMachineCache());
                         }
@@ -2813,7 +2827,16 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
                     $gamingUserId = $this->gaming_user_id ?? 0;
                     if (!empty($gamingUserId)) {
                         $this->last_play_time = time();
+                        MachineLotteryRecord::query()
+                            ->where('id', $this->lottery_record_id)
+                            ->whereNull('lottery_win')
+                            ->first()
+                            ?->update([
+                                'lottery_win' => $this->score - $this->start_score,
+                                'lottery_bet' => $this->bet - $this->start_bet,
+                            ]);
                     }
+                    $this->lottery_record_id = 0;
                 }
 
                 // 開獎状态切换时重置转数（開獎开始/结束都归零）

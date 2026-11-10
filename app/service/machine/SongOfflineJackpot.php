@@ -74,6 +74,7 @@ use yzh52521\WebmanLock\Locker;
  * @property int $keeping 保留状态（0=未保留 1=保留中）
  * @property int $keeping_user_id 保留玩家ID
  * @property int $last_keep_at 最后进入保留时间
+ * @property int $lottery_record_id 本次开奖记录ID（临时状态，存 Redis）
  *
  * @package app\service\machine
  * @author Claude Code
@@ -189,6 +190,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_keeping',        // 保留状态（0=未保留 1=保留中）
             $this->cacheDataKey . '_keeping_user_id',// 保留玩家ID
             $this->cacheDataKey . '_last_keep_at',   // 最后进入保留时间
+            $this->cacheDataKey . '_lottery_record_id',    // 本次开奖记录ID（防止中断后更新错记录）
         ];
 
         // 推送到前端的关键字段
@@ -250,6 +252,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // ⚠️ CRITICAL：上分成功时（gaming_user_id 从0变为非0），立即更新 last_play_time
             if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
                 Cache::set($this->cacheDataKey . '_last_play_time', time());
+            }
+            if ($name === 'gaming_user_id' && empty($value) && !empty($this->gaming_user_id)) {
+                $this->lottery_record_id = 0;
             }
 
             try {
@@ -1251,7 +1256,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $machineLotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
             $machineLotteryRecord->draw_bet = $this->win_number;
             $machineLotteryRecord->use_turn = $this->now_turn;
+            $machineLotteryRecord->odds_x = $this->machine->odds_x ?? 1;
+            $machineLotteryRecord->odds_y = $this->machine->odds_y ?? 1;
             $machineLotteryRecord->save();
+            $this->lottery_record_id = $machineLotteryRecord->id;
         }
     }
 
@@ -1292,6 +1300,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 // 钢珠报喜：检测珠数是否达到阈值并广播
                 \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $nowScore);
             }
+
+            // 记录开奖结果得分
+            MachineLotteryRecord::query()
+                ->where('id', $this->lottery_record_id)
+                ->whereNull('lottery_win')
+                ->first()
+                ?->update(['lottery_win' => $nowScore]);
+            $this->lottery_record_id = 0;
 
             // 通知前端开奖结束
             sendSocketMessage('group-' . $this->machine->id, [

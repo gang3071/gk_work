@@ -14,6 +14,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int player_id 玩家id
  * @property int draw_bet 中奖分数
  * @property int use_turn 使用转数
+ * @property int lottery_win 中奖得分（钢珠=中奖珠数；Slot=中奖期间净得分）
+ * @property int lottery_bet Slot开奖期间总压分变化量（结束时 bet - start_bet）
+ * @property int odds_x 机台比值分子
+ * @property int odds_y 机台比值分母
  * @property int has_rush 是否rush
  * @property string created_at 创建时间
  * @property string updated_at 更新时间
@@ -27,6 +31,7 @@ class MachineLotteryRecord extends Model
     use HasDateTimeFormatter;
 
     protected $table = 'machine_lottery_record';
+    protected $guarded = [];
 
     /**
      * 渠道信息
