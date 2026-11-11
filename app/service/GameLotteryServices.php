@@ -1492,6 +1492,9 @@ LUA;
         );
 
         // 发送全频道广播
+        if (!$this->player->relationLoaded('storeAdmin')) {
+            $this->player->load('storeAdmin');
+        }
         $broadcastMessage = [
             'msg_type' => 'game_lottery_win_broadcast',
             'lottery_id' => $lottery->id,
@@ -1500,6 +1503,7 @@ LUA;
             'player_id' => $this->player->id,
             'player_name' => $this->player->name ?? $this->player->uuid,
             'player_uuid' => $this->player->uuid,
+            'store_name' => $this->player->storeAdmin?->nickname ?? ($this->player->storeAdmin?->username ?? ''),
             'amount' => $record->amount,
             'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
             'lottery_pool_amount' => $lottery->amount,
