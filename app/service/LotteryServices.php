@@ -1583,7 +1583,21 @@ LUA;
                 // 增加业务锁（参考随机彩金逻辑）
                 $actionLockerKey = 'machine_lottery_pool_fixed_locker_' . $fixedAllowLottery['lottery_id'];
                 $lock = Locker::lock($actionLockerKey, 2, true);
-                if (!$lock->acquire()) {
+                $acquired = false;
+                for ($i = 0; $i < 5; $i++) {
+                    if ($lock->acquire()) {
+                        $acquired = true;
+                        break;
+                    }
+                    usleep(200000); // 200ms，等待 sync worker 释放锁
+                }
+                if (!$acquired) {
+                    \support\Log::warning('[fixedPotCheckLottery] 业务锁获取超时，彩金检查跳过', [
+                        'lottery_id' => $fixedAllowLottery['lottery_id'],
+                        'player_id'  => $this->player->id,
+                        'machine_id' => $this->machine->id,
+                        'condition'  => $condition,
+                    ]);
                     return null;
                 }
                 DB::beginTransaction();
