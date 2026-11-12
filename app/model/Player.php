@@ -287,6 +287,15 @@ class Player extends Model
     }
 
     /**
+     * 所属VIP等级
+     * @return BelongsTo
+     */
+    public function vipLevel(): BelongsTo
+    {
+        return $this->belongsTo(VipLevel::class, 'vip_level_id', 'id');
+    }
+
+    /**
      * 玩家全民代理
      * @return HasOne
      */
