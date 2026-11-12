@@ -1316,6 +1316,9 @@ LUA;
         ]);
 
         // 发送全频道广播（新增）
+        if (!$this->player->relationLoaded('storeAdmin')) {
+            $this->player->load('storeAdmin');
+        }
         $broadcastMessage = [
             'msg_type' => 'machine_lottery_win_broadcast',
             'lottery_id' => $lottery->id,
@@ -1328,6 +1331,7 @@ LUA;
             'player_id' => $this->player->id,
             'player_name' => $this->player->name ?? $this->player->uuid,
             'player_uuid' => $this->player->uuid,
+            'store_name' => $this->player->storeAdmin?->nickname ?? ($this->player->storeAdmin?->username ?? ''),
             'amount' => $record->amount,
             'lottery_pool_amount' => $lottery->amount,
             'created_at' => date('Y-m-d H:i:s', strtotime($record->created_at)),
@@ -1579,7 +1583,21 @@ LUA;
                 // 增加业务锁（参考随机彩金逻辑）
                 $actionLockerKey = 'machine_lottery_pool_fixed_locker_' . $fixedAllowLottery['lottery_id'];
                 $lock = Locker::lock($actionLockerKey, 2, true);
-                if (!$lock->acquire()) {
+                $acquired = false;
+                for ($i = 0; $i < 5; $i++) {
+                    if ($lock->acquire()) {
+                        $acquired = true;
+                        break;
+                    }
+                    usleep(200000); // 200ms，等待 sync worker 释放锁
+                }
+                if (!$acquired) {
+                    \support\Log::warning('[fixedPotCheckLottery] 业务锁获取超时，彩金检查跳过', [
+                        'lottery_id' => $fixedAllowLottery['lottery_id'],
+                        'player_id'  => $this->player->id,
+                        'machine_id' => $this->machine->id,
+                        'condition'  => $condition,
+                    ]);
                     return null;
                 }
                 DB::beginTransaction();
@@ -1836,6 +1854,9 @@ LUA;
                     ]);
 
                     // 发送全频道广播
+                    if (!$this->player->relationLoaded('storeAdmin')) {
+                        $this->player->load('storeAdmin');
+                    }
                     $broadcastMessage = [
                         'msg_type' => 'machine_lottery_win_broadcast',
                         'lottery_id' => $playerLotteryRecord->lottery_id,
@@ -1848,6 +1869,7 @@ LUA;
                         'player_id' => $this->player->id,
                         'player_name' => $this->player->name ?? $this->player->uuid,
                         'player_uuid' => $this->player->uuid,
+                        'store_name' => $this->player->storeAdmin?->nickname ?? ($this->player->storeAdmin?->username ?? ''),
                         'amount' => $playerLotteryRecord->amount,
                         'lottery_pool_amount' => $lotteryModel->amount,
                         'lottery_rate' => $playerLotteryRecord->lottery_rate,

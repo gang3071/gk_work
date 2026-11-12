@@ -291,7 +291,7 @@ class GameRecordSyncWorker
                 // 电子游戏：RSG, MT, ATG, O8(含STM/HS), BTG, SP, KT, TNINE_SLOT, QT
                 // 真人：DG, RSGLIVE, SA, TNINE
                 $fastSettlePlatforms = [
-                    'RSG', 'RSGLIVE', 'MT', 'ATG', 'O8', 'STM', 'HS',  // O8及其供应商
+                    'RSG', 'RSGLIVE', 'MT', 'ATG', 'ATG2', 'ATG3', 'O8', 'STM', 'HS',  // O8及其供应商
                     'BTG', 'SP', 'KT', 'DG', 'SA', 'TNINE', 'TNINE_SLOT', 'QT'
                 ];
                 $isFastSettle = in_array($platform, $fastSettlePlatforms);
