@@ -390,8 +390,6 @@ class Jackpot extends MachineServices implements BaseMachine
                             'player_id' => $this->machine->gaming_user_id,
                             'point' => $this->score,
                         ]);
-                        // 钢珠报喜：检测珠数是否达到阈值并广播
-                        \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $this->score);
                     }
                     // 开奖结束后需剔除其他观看中玩家
                     sendSocketMessage('group-' . $this->machine->id, [
@@ -400,10 +398,23 @@ class Jackpot extends MachineServices implements BaseMachine
                         'machine_code' => $this->machine->code,
                         'gaming_user_id' => $this->machine->gaming_user_id,
                     ]);
+                    // 钢珠报喜：检测珠数是否达到阈值并广播
+                    $broadcastResult = \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $this->score);
+                    MachineLogger::log(
+                        $this->machine->toArray(),
+                        MachineLogger::SOURCE_SYSTEM,
+                        $broadcastResult ? MachineLogger::STATUS_NORMAL : MachineLogger::STATUS_WARNING,
+                        MachineLogger::DIR_EVENT,
+                        '钢珠报喜',
+                        $broadcastResult ? '已触发广播' : '未触发广播',
+                        [
+                            'score' => $this->score,
+                            'gaming_user_id' => $this->machine->gaming_user_id,
+                            'machine_data' => $this->getMachineCache(),
+                        ]
+                    );
                     $this->sendScoreToPointAsync($this->machine->gaming_user_id);
 
-                    // 钢珠报喜：检测珠数是否达到阈值并广播
-                    \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $this->score);
                 }
             }
             if ($orgBbStatus == 0 && $orgRushStatus == 0 && $this->bb_status == 1 && $this->rush_status == 1 && $this->now_turn > 0) {
