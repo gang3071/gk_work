@@ -460,6 +460,15 @@ class SongJackpot extends MachineServices implements BaseMachine
                             ]);
                             // 钢珠报喜：检测珠数是否达到阈值并广播
                             \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $nowScore);
+
+                            // 钢珠下珠赠送积分（由 gk_admin 消费者根据门店开关决定是否发放）
+                            Client::send('steel-ball-points-gift', [
+                                'player_id'      => $gamingUserId,
+                                'machine_id'     => $this->machine->id,
+                                'department_id'  => $this->machine->department_id,
+                                'store_admin_id' => $this->machine->gamingPlayer?->store_admin_id ?? 0,
+                                'score'          => $nowScore,
+                            ]);
                         }
                         // 记录开奖结果得分
                         MachineLotteryRecord::query()
