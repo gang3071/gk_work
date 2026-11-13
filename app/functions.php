@@ -403,6 +403,25 @@ function sendSocketMessage($channels, $content, string $form = 'system'): bool|s
             'content' => json_encode($content)
         ]);
 
+        // 广播类消息异步触发语音播报（仅限 group-lottery-pool 频道，避免多频道重复入队）
+        if ($channels === 'group-lottery-pool' && is_array($content) && !empty($content['department_id'])) {
+            static $voiceMsgTypes = ['high_score_broadcast', 'machine_lottery_win_broadcast', 'steel_ball_broadcast'];
+            if (in_array($content['msg_type'] ?? '', $voiceMsgTypes, true)) {
+                try {
+                    \Webman\RedisQueue\Client::send('voice-broadcast', [
+                        'msg_type'       => $content['msg_type'],
+                        'title'          => $content['title'] ?? '',
+                        'voice_text'     => $content['content'] ?? '',
+                        'department_id'  => (int)($content['department_id'] ?? 0),
+                        'store_admin_id' => (int)($content['store_admin_id'] ?? 0),
+                        'timestamp'      => time(),
+                    ]);
+                } catch (\Throwable $e2) {
+                    Log::warning('sendSocketMessage: 语音播报队列推送失败', ['error' => $e2->getMessage()]);
+                }
+            }
+        }
+
         return $result;
     } catch (Exception $e) {
         Log::error('sendSocketMessage: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);

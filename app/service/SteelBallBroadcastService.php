@@ -98,7 +98,7 @@ class SteelBallBroadcastService
             $messageData = self::buildMessage($player, $channel, $machine, $ballCount);
 
             // 8. 执行广播
-            self::broadcast($channel->department_id, $messageData['message'], $messageData['lang']);
+            self::broadcast($channel->department_id, $player->store_admin_id ?? 0, $messageData['message'], $messageData['lang']);
 
             Log::info('钢珠报喜成功', [
                 'player_id' => $machine->gaming_user_id,
@@ -292,11 +292,12 @@ class SteelBallBroadcastService
      * 执行全频道广播
      *
      * @param int $departmentId 渠道ID
+     * @param int $storeAdminId 门店后台账号ID
      * @param string $message 广播消息
      * @param string $lang 语言代码
      * @return void
      */
-    private static function broadcast(int $departmentId, string $message, string $lang = 'zh-TW'): void
+    private static function broadcast(int $departmentId, int $storeAdminId, string $message, string $lang = 'zh-TW'): void
     {
         try {
             // 转换语言格式：zh-TW -> zh_TW
@@ -316,6 +317,7 @@ class SteelBallBroadcastService
                 'content' => $message,
                 'timestamp' => time(),
                 'department_id' => $departmentId,
+                'store_admin_id' => $storeAdminId,
             ];
 
             // 使用全局广播频道（与彩金通知一致）

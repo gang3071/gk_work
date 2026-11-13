@@ -1335,6 +1335,8 @@ LUA;
             'burst_multiplier' => $burstInfo['multiplier'],
             'is_doubled' => $isDoubled ? 1 : 0,
             'lottery_rate' => $record->lottery_rate,
+            'department_id' => $this->player->department_id,
+            'store_admin_id' => $this->player->store_admin_id,
             'title' => '🎊 恭喜玩家中獎！',
             'content' => sprintf(
                 '恭喜玩家在%s機台 %s 中贏得 %s%d 彩金！',
@@ -1852,6 +1854,8 @@ LUA;
                         'lottery_pool_amount' => $lotteryModel->amount,
                         'lottery_rate' => $playerLotteryRecord->lottery_rate,
                         'is_doubled' => $fixedAllowLottery['is_doubled'],
+                        'department_id' => $this->player->department_id,
+                        'store_admin_id' => $this->player->store_admin_id,
                         'title' => '🎊 恭喜玩家中奖！',
                         'content' => sprintf(
                             '恭喜玩家在%s机台 %s 中赢得 %s%d 彩金！',
