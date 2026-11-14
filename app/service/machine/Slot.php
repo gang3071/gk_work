@@ -427,8 +427,41 @@ class Slot extends MachineServices implements BaseMachine
                 case Slot::STOP_ONE:
                 case Slot::STOP_TWO:
                 case Slot::STOP_THREE:
-                case Slot::TESTING:
                     MachineLogger::heartbeat($this->machine->toArray(), $this->getMachineCache());
+                    break;
+                case Slot::TESTING:
+                    $testingCache = $this->getMachineCache(); // 缓存一次，避免两次 Redis MGET
+                    MachineLogger::heartbeat($this->machine->toArray(), $testingCache);
+                    if ($this->gaming == 1) {
+                        MachineLogger::log(
+                            $this->machine->toArray(),
+                            MachineLogger::SOURCE_HEARTBEAT,
+                            MachineLogger::STATUS_NORMAL,
+                            MachineLogger::DIR_RESPONSE,
+                            MachineLogger::ACTION_HEARTBEAT,
+                            '心跳 BET 状态',
+                            [
+                                'player_id'            => $this->gaming_user_id,
+                                'machine_data'         => $testingCache,
+                                'bet'                  => $this->bet,
+                                'player_pressure'      => $this->player_pressure,
+                                'gaming_pressure'      => max(0, $this->bet - $this->player_pressure),
+                                'chip_amount_snapshot' => bcmul(
+                                    (string) max(0, (int) bcsub((string) $this->bet, (string) $this->player_pressure)),
+                                    bcdiv(
+                                        (string) ($this->machine->odds_x ?? 1),
+                                        (string) max(1, (int) ($this->machine->odds_y ?? 1)),
+                                        8
+                                    ),
+                                    2
+                                ),
+                                'win'                  => $this->win,
+                                'player_score'         => $this->player_score,
+                                'now_turn'             => $this->now_turn,
+                                'reward_status'        => $this->reward_status,
+                            ]
+                        );
+                    }
                     break;
                 default:
                     return false;
@@ -801,8 +834,6 @@ class Slot extends MachineServices implements BaseMachine
         }
 
         try {
-            $beforePoint = $this->point;
-
             // ⚠️ 移除静默返回逻辑！
             // 原因：machineWash 已经做了二次确认，如果还能调用到这里说明应该执行清零
             // 如果此时 point = 0，可能是心跳在发送指令前更新了 Redis
@@ -855,36 +886,6 @@ class Slot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
-                // ✅ 发送 Telegram 告警：硬件清零指令失败
-                try {
-                    $telegramConfig = config('telegram');
-                    if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
-                        $telegram = new \app\service\TelegramService(
-                            $telegramConfig['bot_token'],
-                            $telegramConfig['chat_id']
-                        );
-                        $telegram->sendAlert([
-                            'datetime' => new \DateTime(),
-                            'level_name' => 'CRITICAL',
-                            'message' => '硬件清零指令失败（超过最大重试次数）',
-                            'context' => [
-                                'machine_id' => $this->machine->id,
-                                'machine_code' => $this->machine->code,
-                                'machine_type' => 'Slot',
-                                'attempts' => $attempts,
-                                'max_retries' => $maxRetries,
-                                'current_point' => $this->point,
-                                'error' => $e->getMessage(),
-                                'action' => '请手动检查机台硬件状态',
-                            ],
-                        ]);
-                    }
-                } catch (\Exception $telegramError) {
-                    Log::error('[雙美斯洛-電報警報] 发送告警失败', [
-                        'error' => $telegramError->getMessage(),
-                    ]);
-                }
-
                 MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_WASH, '下分失敗: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
 
                 throw new Exception(trans('machine_action_fail', [], 'message'));
@@ -1154,7 +1155,59 @@ class Slot extends MachineServices implements BaseMachine
                     $this->setActionVersion($fun);
                     break;
                 case Slot::READ_BET:
+                    $machineCache = $this->getMachineCache(); // 缓存一次，避免多次 Redis MGET
+                    $oddsRatio = bcdiv(
+                        (string) ($this->machine->odds_x ?? 1),
+                        (string) max(1, (int) ($this->machine->odds_y ?? 1)), // 防 odds_y=0 除零
+                        8
+                    );
+                    MachineLogger::log(
+                        $this->machine->toArray(),
+                        MachineLogger::SOURCE_HEARTBEAT,
+                        MachineLogger::STATUS_NORMAL,
+                        MachineLogger::DIR_RESPONSE,
+                        'read_bet',
+                        'READ_BET 硬件上报',
+                        [
+                            'player_id'            => $gamingUserId,
+                            'machine_data'         => $machineCache,
+                            'hardware_bet'         => $data,
+                            'redis_bet'            => $this->bet,
+                            'player_pressure'      => $this->player_pressure,
+                            'gaming_pressure'      => max(0, $this->bet - $this->player_pressure),
+                            'chip_amount_snapshot' => bcmul(
+                                (string) max(0, (int) bcsub((string) $this->bet, (string) $this->player_pressure)),
+                                $oddsRatio,
+                                2
+                            ),
+                            'win'                  => $this->win,
+                            'player_score'         => $this->player_score,
+                            'gaming_score'         => max(0, $this->win - $this->player_score),
+                        ]
+                    );
                     if ($this->bet > 0 && $this->bet > $data && $this->change_point_card_status == 0) {
+                        MachineLogger::log(
+                            $this->machine->toArray(),
+                            MachineLogger::SOURCE_HEARTBEAT,
+                            MachineLogger::STATUS_WARNING,
+                            MachineLogger::DIR_RESPONSE,
+                            'read_bet',
+                            'BET值下降异常，重置 player_pressure 基准',
+                            [
+                                'player_id'            => $gamingUserId,
+                                'machine_data'         => $machineCache,
+                                'has_problem'          => 1,
+                                'problem_desc'         => 'BET值下降',
+                                'old_bet'              => $this->bet,
+                                'new_bet'              => $data,
+                                'old_player_pressure'  => $this->player_pressure,
+                                'new_player_pressure'  => $data,
+                                'lost_gaming_pressure' => max(0, $this->bet - $this->player_pressure),
+                                'win'                  => $this->win,
+                                'player_score'         => $this->player_score,
+                                'gaming_score'         => max(0, $this->win - $this->player_score),
+                            ]
+                        );
                         sendMachineException($this->machine, Notice::TYPE_MACHINE_BET);
                         $this->bet = $data;
                         if ($this->gaming == 1) {
@@ -1188,6 +1241,32 @@ class Slot extends MachineServices implements BaseMachine
                             ]);
                         }
                         $changeAmount = abs($data - $this->bet);
+
+                        MachineLogger::log(
+                            $this->machine->toArray(),
+                            MachineLogger::SOURCE_HEARTBEAT,
+                            MachineLogger::STATUS_NORMAL,
+                            MachineLogger::DIR_RESPONSE,
+                            'read_bet',
+                            'BET变动 打码量快照',
+                            [
+                                'player_id'                 => $gamingUserId,
+                                'machine_data'              => $machineCache,
+                                'old_bet'                   => $this->bet,
+                                'new_bet'                   => $data,
+                                'change_amount'             => $changeAmount,
+                                'player_pressure'           => $this->player_pressure,
+                                'gaming_pressure_after'     => max(0, $data - $this->player_pressure),
+                                'chip_amount_if_settle_now' => bcmul(
+                                    (string) max(0, (int) bcsub((string) $data, (string) $this->player_pressure)),
+                                    $oddsRatio,
+                                    2
+                                ),
+                                'win'                       => $this->win,
+                                'player_score'              => $this->player_score,
+                                'gaming_score'              => max(0, $this->win - $this->player_score),
+                            ]
+                        );
 
                         Client::send('play-keep-machine', [
                             'change_amount' => $changeAmount,
