@@ -1337,13 +1337,31 @@ LUA;
             'department_id' => $this->player->department_id,
             'store_admin_id' => $this->player->store_admin_id,
             'title' => '🎊 恭喜玩家中獎！',
-            'content' => sprintf(
-                '恭喜玩家在%s機台 %s 中贏得 %s%d 彩金！',
-                $this->machine->code,
-                $lottery->name,
-                $isDoubled ? '【雙倍】' : '',
-                $record->amount
-            ),
+            'content' => (function () use ($record, $lottery, $isDoubled): string {
+                $playerName = $this->player->name ?? $this->player->uuid ?? 'Unknown';
+                $storeName  = $this->player->storeAdmin?->nickname ?? ($this->player->storeAdmin?->username ?? '');
+                $machineName = $this->machine->name ?: $this->machine->code;
+                $doubled    = $isDoubled ? '【雙倍】' : '';
+                if (!empty($storeName)) {
+                    return sprintf(
+                        '🎊 恭喜【%s】的玩家 %s 在 %s 機台摘得 %s%s 彩金 %d 元！',
+                        $storeName,
+                        $playerName,
+                        $machineName,
+                        $lottery->name,
+                        $doubled,
+                        $record->amount
+                    );
+                }
+                return sprintf(
+                    '🎊 恭喜玩家 %s 在 %s 機台摘得 %s%s 彩金 %d 元！',
+                    $playerName,
+                    $machineName,
+                    $lottery->name,
+                    $doubled,
+                    $record->amount
+                );
+            })(),
         ];
 
         // 发送到广播频道
@@ -1966,13 +1984,31 @@ LUA;
                         'department_id' => $this->player->department_id,
                         'store_admin_id' => $this->player->store_admin_id,
                         'title' => '🎊 恭喜玩家中奖！',
-                        'content' => sprintf(
-                            '恭喜玩家在%s机台 %s 中赢得 %s%d 彩金！',
-                            $this->machine->code,
-                            $playerLotteryRecord->lottery_name,
-                            $fixedAllowLottery['is_doubled'] ? '【双倍】' : '',
-                            $playerLotteryRecord->amount
-                        ),
+                        'content' => (function () use ($playerLotteryRecord, $fixedAllowLottery): string {
+                            $playerName = $this->player->name ?? $this->player->uuid ?? 'Unknown';
+                            $storeName  = $this->player->storeAdmin?->nickname ?? ($this->player->storeAdmin?->username ?? '');
+                            $machineName = $this->machine->name ?: $this->machine->code;
+                            $doubled    = $fixedAllowLottery['is_doubled'] ? '【双倍】' : '';
+                            if (!empty($storeName)) {
+                                return sprintf(
+                                    '🎊 恭喜【%s】的玩家 %s 在 %s 机台摘得 %s%s 彩金 %d 元！',
+                                    $storeName,
+                                    $playerName,
+                                    $machineName,
+                                    $playerLotteryRecord->lottery_name,
+                                    $doubled,
+                                    $playerLotteryRecord->amount
+                                );
+                            }
+                            return sprintf(
+                                '🎊 恭喜玩家 %s 在 %s 机台摘得 %s%s 彩金 %d 元！',
+                                $playerName,
+                                $machineName,
+                                $playerLotteryRecord->lottery_name,
+                                $doubled,
+                                $playerLotteryRecord->amount
+                            );
+                        })(),
                     ];
 
                     // 发送到广播频道
