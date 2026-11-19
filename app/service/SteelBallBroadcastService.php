@@ -344,6 +344,7 @@ class SteelBallBroadcastService
             // 构建推送数据
             $data = [
                 'msg_type' => 'high_score_broadcast',
+                'broadcast_source' => 'steel_ball',
                 'title' => $title,
                 'content' => $message,
                 'timestamp' => time(),

@@ -405,8 +405,8 @@ function sendSocketMessage($channels, $content, string $form = 'system'): bool|s
 
         // 广播类消息异步触发语音播报（仅限 group-lottery-pool 频道，避免多频道重复入队）
         if ($channels === 'group-lottery-pool' && is_array($content) && !empty($content['department_id'])) {
-            static $voiceMsgTypes = ['high_score_broadcast', 'machine_lottery_win_broadcast', 'steel_ball_broadcast'];
-            if (in_array($content['msg_type'] ?? '', $voiceMsgTypes, true)) {
+            if (($content['msg_type'] ?? '') === 'high_score_broadcast'
+                && ($content['broadcast_source'] ?? '') === 'steel_ball') {
                 try {
                     \Webman\RedisQueue\Client::send('voice-broadcast', [
                         'msg_type'       => $content['msg_type'],
