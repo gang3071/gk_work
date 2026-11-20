@@ -58,7 +58,7 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
         $url = $this->config['api_domain'] . $this->path[$path];
 
         $username = $params['username'] ?? '';
-        $time = Carbon::now('UTC-04:00')->format('Ymd');  // 美東時間 GMT-4
+        $time = Carbon::now('-04:00')->format('Ymd');  // 美東時間 GMT-4
         $stringB = md5($this->config['website'] . $username . $this->config['key'] . $time);
         $stringA = $this->randomString();  // 8-16 位隨機字串
         $stringC = $this->randomString();  // 8-16 位隨機字串
