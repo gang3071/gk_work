@@ -15,7 +15,7 @@
 return [
     'slot_port' => '8855',
     'slot_auto_port' => '8866',
-    'jackpot_port' => '8888',
+    'jackpot_port' => env('GATEWAY_JACKPOT_PORT', '8888'),
     'whitelist' => [
         '10.10.0.2',   // 金樽店 WireGuard
         '10.10.0.3',   // 金曜店 WireGuard

@@ -173,4 +173,13 @@ return [
         'hash_key' => env('KT_HASH_KEY'),
         'agent' => env('KT_AGENT'),
     ],
+    'PP' => [
+        'api_domain' => env('PP_API_DOMAIN'),
+        'secure_login' => env('PP_SECURE_LOGIN'),
+        'secret' => env('PP_SECRET'),
+        'provider_id' => env('PP_PROVIDER_ID'),
+        'game_url_path' => env('PP_GAME_URL_PATH'),
+        'country' => env('PP_COUNTRY'),
+        'promo_available' => env('PP_PROMO_AVAILABLE'),
+    ],
 ];

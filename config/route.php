@@ -228,5 +228,18 @@ Route::group('/single-wallet', function () {
         Route::post('/bonus/status', [\app\wallet\controller\game\QTGameController::class, 'promotionStatus']);
         Route::post('/bonus/rewards', [\app\wallet\controller\game\QTGameController::class, 'rewards']);
     });
+    Route::group('/pp-solt-channel', function () {
+        // Pragmatic Play 单一钱包回调（Integration API Specification v3, Seamless Wallet 3.4-3.15）
+        Route::post('/authenticate', [\app\wallet\controller\game\PPGameController::class, 'authenticate']);
+        Route::post('/balance', [\app\wallet\controller\game\PPGameController::class, 'balance']);
+        Route::post('/bet', [\app\wallet\controller\game\PPGameController::class, 'bet']);
+        Route::post('/result', [\app\wallet\controller\game\PPGameController::class, 'result']);
+        Route::post('/bonusWin', [\app\wallet\controller\game\PPGameController::class, 'bonusWin']);
+        Route::post('/jackpotWin', [\app\wallet\controller\game\PPGameController::class, 'jackpotWin']);
+        Route::post('/promoWin', [\app\wallet\controller\game\PPGameController::class, 'promoWin']);
+        Route::post('/endRound', [\app\wallet\controller\game\PPGameController::class, 'endRound']);
+        Route::post('/refund', [\app\wallet\controller\game\PPGameController::class, 'refund']);
+        Route::post('/adjustment', [\app\wallet\controller\game\PPGameController::class, 'adjustment']);
+    });
 });
 Route::disableDefaultRoute();
