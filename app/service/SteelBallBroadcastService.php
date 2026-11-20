@@ -283,7 +283,7 @@ class SteelBallBroadcastService
         $lang = str_replace('-', '_', $channelLang);
 
         // 格式化珠数
-        $formattedBallCount = number_format($ballCount, 0);
+        $formattedBallCount = (string)(int)$ballCount;
 
         // 根据语言构建VIP文本（避免翻译占位符边界问题，在代码中拼接）
         $vipText = match($lang) {
