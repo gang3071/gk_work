@@ -32,6 +32,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int lottery_type 彩金类型
  * @property int lottery_multiple 彩金倍数
  * @property int lottery_sort 排序
+ * @property int win_condition 中彩金时触发条件值（Slot=card_score；钢珠=打分）
  * @property float cate_rate 派彩系数
  * @property int user_id 管理员id
  * @property int user_name 管理员名称
