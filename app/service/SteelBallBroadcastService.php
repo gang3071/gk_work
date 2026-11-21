@@ -130,7 +130,7 @@ class SteelBallBroadcastService
             $messageData = self::buildMessage($player, $channel, $machine, $ballCount);
 
             // 9. 执行广播
-            self::broadcast($channel->department_id, (int)($player->store_admin_id ?? 0), $messageData['message'], $messageData['lang']);
+            self::broadcast($channel->department_id, (int)($player->store_admin_id ?? 0), $messageData['message'], $messageData['lang'], $messageData['voice_text'] ?? '');
 
             Log::info('钢珠报喜成功', [
                 'player_id' => $machine->gaming_user_id,
@@ -312,10 +312,18 @@ class SteelBallBroadcastService
             ]);
         }
 
+        // 构建TTS专用文本：去除装饰符号，数字转中文万位，机台名称只出现一次
+        // 语音只取标签（label通常是完整描述名），无标签才用名称，避免 name+label 拼接导致重复播报
+        $ballCountTts = self::formatNumberForTTS($ballCount);
+        $voiceMachineName = !empty($machineLabel) ? $machineLabel : ($machineName ?: $machineCode);
+        $storePrefix = $storeName ? "在{$storeName}" : '';
+        $voiceText = "恭喜{$vipText}{$deviceName}{$storePrefix}{$voiceMachineName}高中{$ballCountTts}珠";
+
         return [
-            'message' => $message,
-            'lang' => $channelLang,
-            'device_name' => $deviceName, // 返回脱敏后的名称用于日志
+            'message'     => $message,
+            'voice_text'  => $voiceText,
+            'lang'        => $channelLang,
+            'device_name' => $deviceName,
         ];
     }
 
@@ -328,7 +336,7 @@ class SteelBallBroadcastService
      * @param string $lang 语言代码
      * @return void
      */
-    private static function broadcast(int $departmentId, int $storeAdminId, string $message, string $lang = 'zh-TW'): void
+    private static function broadcast(int $departmentId, int $storeAdminId, string $message, string $lang = 'zh-TW', string $voiceText = ''): void
     {
         try {
             // 转换语言格式：zh-TW -> zh_TW
@@ -343,13 +351,14 @@ class SteelBallBroadcastService
 
             // 构建推送数据
             $data = [
-                'msg_type' => 'high_score_broadcast',
+                'msg_type'        => 'high_score_broadcast',
                 'broadcast_source' => 'steel_ball',
-                'title' => $title,
-                'content' => $message,
-                'timestamp' => time(),
-                'department_id' => $departmentId,
-                'store_admin_id' => $storeAdminId,
+                'title'           => $title,
+                'content'         => $message,
+                'voice_text'      => $voiceText ?: $message,
+                'timestamp'       => time(),
+                'department_id'   => $departmentId,
+                'store_admin_id'  => $storeAdminId,
             ];
 
             // 使用全局广播频道（与彩金通知一致）
@@ -365,9 +374,66 @@ class SteelBallBroadcastService
         } catch (\Throwable $e) {
             Log::error('推送钢珠报喜失败', [
                 'department_id' => $departmentId,
-                'message' => $message,
-                'error' => $e->getMessage(),
+                'message'       => $message,
+                'error'         => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * 将数字格式化为TTS友好的中文大写表达，避免被误读
+     * 例：10050 → "一万零五十"，20000 → "二万"，15000 → "一万五千"，1023456 → "一百零二万三千四百五十六"
+     */
+    private static function formatNumberForTTS(int $number): string
+    {
+        if ($number === 0) return '零';
+        if ($number < 10000) {
+            return self::below10000ToChinese($number);
+        }
+        $wan = intdiv($number, 10000);
+        $remainder = $number % 10000;
+        $wanStr = self::below10000ToChinese($wan);
+        // 十万/十一万 等：万位以"一十"开头时去掉前缀"一"，符合中文习惯
+        if (mb_substr($wanStr, 0, 2) === '一十') {
+            $wanStr = mb_substr($wanStr, 1);
+        }
+        $result = $wanStr . '万';
+        if ($remainder === 0) {
+            return $result;
+        }
+        if ($remainder < 1000) {
+            $result .= '零';
+        }
+        return $result . self::below10000ToChinese($remainder);
+    }
+
+    /**
+     * 万以内数字转中文（千/百/十/个），内部有零时自动补"零"
+     */
+    private static function below10000ToChinese(int $n): string
+    {
+        static $d = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+        $result = '';
+
+        $qian = intdiv($n, 1000);
+        $n %= 1000;
+        if ($qian > 0) {
+            $result .= $d[$qian] . '千';
+            if ($n > 0 && $n < 100) $result .= '零';
+        }
+
+        $bai = intdiv($n, 100);
+        $n %= 100;
+        if ($bai > 0) {
+            $result .= $d[$bai] . '百';
+            if ($n > 0 && $n < 10) $result .= '零';
+        }
+
+        $shi = intdiv($n, 10);
+        $ge  = $n % 10;
+        if ($shi > 0) $result .= $d[$shi] . '十';
+        if ($ge > 0)  $result .= $d[$ge];
+
+        return $result;
     }
 }
