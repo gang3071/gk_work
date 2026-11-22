@@ -35,6 +35,8 @@ use WebmanTech\LaravelHttpClient\Facades\Http;
  */
 class TNineSlotV2ServiceInterface extends GameServiceFactory implements GameServiceInterface, SingleWalletServiceInterface
 {
+    use LimitGroupTrait;
+
     public string $method = 'POST';
     public string $successCode = '0';
 
@@ -85,13 +87,19 @@ class TNineSlotV2ServiceInterface extends GameServiceFactory implements GameServ
             'body' => $response->body(),
         ]);
 
+        $res = json_decode($response->body(), true);
+
         if (!$response->ok()) {
+            // T9 錯誤時可能回 HTTP 4xx/5xx，業務碼放在 body 的 statusCode
+            // 例如 create-player 重複建立會回 HTTP 400 + statusCode=103，需先判斷 acceptCodes
+            $statusCode = is_array($res) ? ($res['statusCode'] ?? null) : null;
+            if ($statusCode !== null && in_array($statusCode, $acceptCodes, true)) {
+                return $res;
+            }
             $msg = '[V2] T9 API HTTP错误 ' . $response->status() . ': ' . $response->body();
             $this->log->error($msg, ['url' => $fullUrl, 'params' => $params]);
             throw new GameException($msg);
         }
-
-        $res = json_decode($response->body(), true);
 
         if (empty($res)) {
             $msg = '[V2] T9 API响应为空: ' . $response->body();
@@ -154,6 +162,18 @@ class TNineSlotV2ServiceInterface extends GameServiceFactory implements GameServ
             'language' => $this->resolveLang($lang),
             'isMobileLogin' => true,  // TODO: 由调用方传入设备类型
         ];
+
+        // T9 電子限紅：店家分配的限紅組 → 否則平台預設限紅組
+        $limitGroupConfig = $this->getLimitGroupConfig('tnine_slot_server');
+        if ($this->hasLimitGroupConfigData($limitGroupConfig)) {
+            $configData = $limitGroupConfig->config_data;
+            if (isset($configData['min']) && $configData['min'] !== '') {
+                $params['minBetLimit'] = $configData['min'];
+            }
+            if (isset($configData['max']) && $configData['max'] !== '') {
+                $params['maxBetLimit'] = $configData['max'];
+            }
+        }
 
         $res = $this->doCurl('/t9-slot/login', $params); // V2 路径
         $this->log->info('[V2] gameLogin', ['response' => $res]);
