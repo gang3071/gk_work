@@ -551,7 +551,12 @@ class SongJackpot extends MachineServices implements BaseMachine
                     }
                 }
                 if ($nowTurn <= 0 && !empty($gamingUserId)) {
-                    Cache::delete('gift_cache_' . $this->machine->id . '_' . $gamingUserId);
+                    $giftCacheKey = 'gift_cache_' . $this->machine->id . '_' . $gamingUserId;
+                    $giftCacheData = Cache::get($giftCacheKey);
+                    if (!empty($giftCacheData)) {
+                        MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_cache', '轉數打完，清理禮物快取 玩家ID=' . $gamingUserId . ' gift_point=' . ($giftCacheData['gift_point'] ?? 0), ['machine_data' => $this->getMachineCache()]);
+                        Cache::delete($giftCacheKey);
+                    }
                 }
 
                 // ⚠️ CRITICAL：重新读取 gaming_user_id，防止使用已被踢出的玩家ID
