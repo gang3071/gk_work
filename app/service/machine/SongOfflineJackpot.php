@@ -1259,6 +1259,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     private function handleLotteryStart(int $nowRewardStatus, int $orgRewardStatus, int $gamingUserId): void
     {
         if ($nowRewardStatus == 1 && $orgRewardStatus == 0) {
+            $this->lottery_score = 0; // 新一轮开奖开始，清除上轮残留（双保险）
             $machineLotteryRecord = new MachineLotteryRecord();
             $machineLotteryRecord->machine_id = $this->machine->id;
             $machineLotteryRecord->player_id = $gamingUserId;
