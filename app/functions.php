@@ -411,7 +411,7 @@ function sendSocketMessage($channels, $content, string $form = 'system'): bool|s
                     \Webman\RedisQueue\Client::send('voice-broadcast', [
                         'msg_type'       => $content['msg_type'],
                         'title'          => $content['title'] ?? '',
-                        'voice_text'     => $content['content'] ?? '',
+                        'voice_text'     => $content['voice_text'] ?? $content['content'] ?? '',
                         'department_id'  => (int)($content['department_id'] ?? 0),
                         'store_admin_id' => (int)($content['store_admin_id'] ?? 0),
                         'timestamp'      => time(),

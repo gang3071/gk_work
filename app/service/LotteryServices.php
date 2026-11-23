@@ -1706,14 +1706,26 @@ LUA;
                     $fixedAllowLottery['amount'] = $freshAmount;
 
                     if ($lotteryModel->amount < $fixedAllowLottery['amount']) {
-                        DB::rollback();
-                        \support\Log::warning('固定彩金：彩池余额不足，中奖触发被放弃（可能因并发派彩）', [
-                            'lottery_id'   => $lotteryModel->id,
-                            'pool_amount'  => $lotteryModel->amount,
-                            'prize_amount' => $fixedAllowLottery['amount'],
-                            'player_id'    => $this->player->id,
+                        // 彩池余额不足以支付完整奖金（通常因机台分类倍率放大了奖金）
+                        // 按实际余额发放，而非直接放弃
+                        $cappedAmount = floor((float)$lotteryModel->amount);
+                        if ($cappedAmount <= 0) {
+                            DB::rollback();
+                            \support\Log::warning('固定彩金：彩池已耗尽，跳过派彩', [
+                                'lottery_id'  => $lotteryModel->id,
+                                'pool_amount' => $lotteryModel->amount,
+                                'player_id'   => $this->player->id,
+                            ]);
+                            return null;
+                        }
+                        \support\Log::info('固定彩金：彩池余额不足，按实际余额派发', [
+                            'lottery_id'    => $lotteryModel->id,
+                            'pool_amount'   => $lotteryModel->amount,
+                            'full_amount'   => $fixedAllowLottery['amount'],
+                            'actual_amount' => $cappedAmount,
+                            'player_id'     => $this->player->id,
                         ]);
-                        return null;
+                        $fixedAllowLottery['amount'] = $cappedAmount;
                     }
 
                     // 記錄中獎前彩池快照
@@ -1775,6 +1787,7 @@ LUA;
                     $playerLotteryRecord->lottery_type = Lottery::LOTTERY_TYPE_FIXED;
                     $playerLotteryRecord->lottery_multiple = $fixedAllowLottery['lottery_multiple'];
                     $playerLotteryRecord->lottery_sort = $fixedAllowLottery['lottery_sort'];
+                    $playerLotteryRecord->win_condition = (int)$condition;
                     $playerLotteryRecord->status = PlayerLotteryRecord::STATUS_COMPLETE;
                     $playerLotteryRecord->player_game_record_id = $playerGameRecord ? $playerGameRecord->id : 0;
                     $playerLotteryRecord->save();
