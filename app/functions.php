@@ -3190,10 +3190,13 @@ if (!function_exists('machineOpenAnyFree')) {
                     $playersGiftRecord->updated_at = date('Y-m-d H:i:s');
                     $playersGiftRecord->save();
 
+                    // 允许多次开分：累加赠点，不覆盖（防止前次赠点被后次覆盖导致扣回金额偏小）
+                    $existingGiftCache = Cache::get('gift_cache_' . $machine->id . '_' . $player->id);
+                    $accumulatedGiftPoint = ($existingGiftCache['gift_point'] ?? 0) + $giftScore;
                     Cache::set(
                         'gift_cache_' . $machine->id . '_' . $player->id,
                         [
-                            'gift_point' => $giftScore,
+                            'gift_point' => $accumulatedGiftPoint,
                             'open_point' => $machineCategoryGiveRule->open_num,
                             'condition'  => $machineCategoryGiveRule->condition,
                         ],
