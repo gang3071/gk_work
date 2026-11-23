@@ -1226,6 +1226,12 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $this->last_play_time = time();
         }
 
+        // 开奖中途帧会携带非零 score，但结束帧（nowRewardStatus=0）的 score 为 0。
+        // 把开奖期间最后一个非零 score 存入 lottery_score，供 handleLotteryEnd 使用。
+        if ($nowRewardStatus == 1 && $nowScore > 0) {
+            $this->lottery_score = $nowScore;
+        }
+
         // 设置查询指令的actionVersion（心跳包含所有查询数据）
         $this->setActionVersion(self::MACHINE_POINT);
         $this->setActionVersion(self::MACHINE_SCORE);
@@ -1292,19 +1298,24 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // 彩金检查、积分通知等非核心操作隔离在独立 try-catch 中，
             // 任何失败都不能阻止后续的下珠指令。
             try {
+                // 结束帧的 nowScore 通常为 0（硬件不在结束帧重复发得分）。
+                // 用开奖过程中累积的 lottery_score 兜底，确保彩金检查使用真实得分。
+                $lotteryScore = ($nowScore > 0) ? $nowScore : (int)($this->lottery_score ?? 0);
+                $this->lottery_score = 0; // 本轮使用完毕，重置防止下轮污染
+
                 // 触发彩池抽奖
                 if (!empty($this->machine->gamingPlayer)) {
                     (new LotteryServices())
                         ->setMachine($this->machine)
                         ->setPlayer($this->machine->gamingPlayer)
-                        ->fixedPotCheckLottery($nowScore);
+                        ->fixedPotCheckLottery($lotteryScore);
                 }
 
                 // 线下版钢珠机不参与机台活动，不发送 play-activity 队列
                 // 但保留钢珠报喜功能（广播功能，非活动）
-                if ($nowScore > 0) {
+                if ($lotteryScore > 0) {
                     // 钢珠报喜：检测珠数是否达到阈值并广播
-                    \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $nowScore);
+                    \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $lotteryScore);
 
                     // 钢珠下珠赠送积分（由 gk_admin 消费者根据门店开关决定是否发放）
                     \Webman\RedisQueue\Client::send('steel-ball-points-gift', [
@@ -1312,7 +1323,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         'machine_id'     => $this->machine->id,
                         'department_id'  => $this->machine->department_id,
                         'store_admin_id' => $this->machine->gamingPlayer?->store_admin_id ?? 0,
-                        'score'          => $nowScore,
+                        'score'          => $lotteryScore,
                     ]);
                 }
 
@@ -1321,7 +1332,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     ->where('id', $this->lottery_record_id)
                     ->whereNull('lottery_win')
                     ->first()
-                    ?->update(['lottery_win' => $nowScore]);
+                    ?->update(['lottery_win' => $lotteryScore]);
                 $this->lottery_record_id = 0;
 
                 // 通知前端开奖结束
