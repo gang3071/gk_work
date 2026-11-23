@@ -3695,30 +3695,6 @@ if (!function_exists('machineOpenAnyFree')) {
                             'action' => '请客服人工补偿玩家并解锁机台' . (!empty($giftScore) ? '（gift_cache 已自动清除）' : ''),
                         ]);
 
-                        // 发送 Telegram CRITICAL 告警
-                        try {
-                            $telegramConfig = config('telegram');
-                            if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
-                                $telegram = new \app\service\TelegramService($telegramConfig['bot_token'], $telegramConfig['chat_id']);
-                                $telegram->sendAlert([
-                                    'datetime' => new \DateTime(),
-                                    'level_name' => 'CRITICAL',
-                                    'message' => '上分失败，机台已锁定',
-                                    'context' => [
-                                        'player_id' => $player->id,
-                                        'machine_id' => $machine->id,
-                                        'machine_code' => $machine->code,
-                                        'deducted_amount' => $money,
-                                        'action' => '请客服人工补偿玩家并解锁机台',
-                                    ],
-                                ]);
-                            }
-                        } catch (\Exception $telegramError) {
-                            Log::error('[machineOpenAnyFree] Telegram 告警发送失败', [
-                                'error' => $telegramError->getMessage(),
-                            ]);
-                        }
-
                     } catch (\Exception $lockError) {
                         Log::critical('[machineOpenAnyFree] 锁机台失败，双重故障', [
                             'player_id' => $player->id,
