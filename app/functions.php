@@ -3587,6 +3587,12 @@ if (!function_exists('machineOpenAnyFree')) {
                             $playerGameLog->save();
                         }
 
+                        // 赠点开分失败：删除 PlayerGiftRecord，退还当天次数配额
+                        // 硬件未开分，礼物实际未发出，不应消耗每日次数
+                        if (isset($playersGiftRecord) && $playersGiftRecord->id) {
+                            $playersGiftRecord->delete();
+                        }
+
                         // 回滚 PlayerGameRecord 中的上分统计
                         if (isset($gameRecord)) {
                             if ($gameRecordIsNew ?? false) {
@@ -3676,12 +3682,17 @@ if (!function_exists('machineOpenAnyFree')) {
                     try {
                         $services->has_lock = 1;
 
+                        // 锁机台后仍需清除 gift_cache，否则人工解锁后玩家无法再使用赠点
+                        if (!empty($giftScore)) {
+                            Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+                        }
+
                         Log::critical('[machineOpenAnyFree] 上分失败，机台已锁定（Redis），需人工补偿', [
                             'player_id' => $player->id,
                             'machine_id' => $machine->id,
                             'machine_code' => $machine->code,
                             'deducted_amount' => $money,
-                            'action' => '请客服人工补偿玩家并解锁机台',
+                            'action' => '请客服人工补偿玩家并解锁机台' . (!empty($giftScore) ? '（gift_cache 已自动清除）' : ''),
                         ]);
 
                         // 发送 Telegram CRITICAL 告警
