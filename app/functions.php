@@ -1236,7 +1236,9 @@ function machineWash(
                 $gamingTurnPoint = $services->player_win_number ?? 0;
                 $money = $services->point ?? 0;
                 if (!empty($giftPoint) && $path == 'leave') {
+                    $moneyBeforeGift = $money;
                     $money = max($money - $giftPoint['gift_point'], 0);
+                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_deduct', '弃台扣回赠點 gift_point=' . $giftPoint['gift_point'] . ' 扣前=' . $moneyBeforeGift . ' 扣後=' . $money, ['gift_cache' => $giftPoint]);
                 }
                 break;
             case GameType::TYPE_SLOT:
