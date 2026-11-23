@@ -3185,6 +3185,15 @@ if (!function_exists('machineOpenAnyFree')) {
             // 记录赠点信息（如果有赠点规则）
             if ($giveRuleId && $giftScore > 0) {
                 $machineCategoryGiveRule = MachineCategoryGiveRule::find($giveRuleId);
+                // 防御：即使绕过 MachineOperationService 直接调用，也做完整校验
+                if (!$machineCategoryGiveRule
+                    || (int)$machineCategoryGiveRule->status !== 1
+                    || (int)$machineCategoryGiveRule->machine_category_id !== (int)$machine->cate_id) {
+                    throw new Exception(trans('give_rule_not_found', [], 'message'));
+                }
+                if (!empty(Cache::get('gift_cache_' . $machine->id . '_' . $player->id))) {
+                    throw new Exception(trans('give_point_session_active', [], 'message'));
+                }
                 if ($machineCategoryGiveRule) {
                     $playersGiftRecord = new PlayerGiftRecord();
                     $playersGiftRecord->player_game_log_id = $playerGameLog->id;
@@ -3229,7 +3238,7 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerDeliveryRecord->amount_before = $beforeGameAmount;
             $playerDeliveryRecord->amount_after = $afterGameAmount;
             $playerDeliveryRecord->tradeno = '';
-            $playerDeliveryRecord->remark = '';
+            $playerDeliveryRecord->remark = $giftScore > 0 ? '含開分贈點 ' . $giftScore . ' 分' : '';
             $playerDeliveryRecord->user_id = $adminId;
             $playerDeliveryRecord->user_name = $adminUsername;
             $playerDeliveryRecord->save();
