@@ -1195,6 +1195,7 @@ function machineWash(
         $gamingPressure = 0; // 压分
         $gamingScore = 0; // 得分
         $money = 0; // 机台下分
+        $washRemark = ''; // 下分备注（有赠点扣回时填充）
         //斯洛 需要判斷下分限制
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
@@ -1238,6 +1239,7 @@ function machineWash(
                 if (!empty($giftPoint) && $path == 'leave') {
                     $moneyBeforeGift = $money;
                     $money = max($money - $giftPoint['gift_point'], 0);
+                    $washRemark = '弃台扣回开分赠点 ' . $giftPoint['gift_point'] . ' 分，扣前 ' . $moneyBeforeGift . ' 分，实退 ' . $money . ' 分';
                     MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_deduct', '弃台扣回赠點 gift_point=' . $giftPoint['gift_point'] . ' 扣前=' . $moneyBeforeGift . ' 扣後=' . $money, ['gift_cache' => $giftPoint]);
                 }
                 break;
@@ -1318,7 +1320,7 @@ function machineWash(
             // 防止竞态条件导致创建 0 分记录但硬件有分的情况
             if ($money >= 0) {
                 $washResult = machineWashZero($player, $machine, $money, $is_system, (int)max($gamingPressure, 0),
-                    (int)max($gamingScore, 0), (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername);
+                    (int)max($gamingScore, 0), (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername, $washRemark);
                 $machine = $washResult['machine'];
             } elseif ($money == 0 && $path == 'leave') {
                 // 0 分弃台，只清理状态，不创建记录
@@ -1709,7 +1711,8 @@ function machineWashZero(
     int     $gamingTurnPoint = 0,
     string  $action = 'leave',
     int     $adminId = 0,
-    string  $adminUsername = ''
+    string  $adminUsername = '',
+    string  $remark = ''
 ): array
 {
     try {
@@ -1767,6 +1770,9 @@ function machineWashZero(
                 $playerGameLog->chip_amount = bcmul($gamingPressure, $ratio, 2);
             } elseif ($machine->type == GameType::TYPE_STEEL_BALL) {
                 $playerGameLog->chip_amount = bcmul($machine->machineCategory?->turn_used_point ?? 0, $gamingTurnPoint);
+            }
+            if (!empty($remark)) {
+                $playerGameLog->remark = $remark;
             }
 
             // 🔍 DEBUG: 下分操作 - 保存前的完整字段值
@@ -1828,6 +1834,9 @@ function machineWashZero(
                 $playerGameLog->chip_amount = bcmul($gamingPressure, $ratio, 2);
             } elseif ($machine->type == GameType::TYPE_STEEL_BALL) {
                 $playerGameLog->chip_amount = bcmul($machine->machineCategory?->turn_used_point ?? 0, $gamingTurnPoint);
+            }
+            if (!empty($remark)) {
+                $playerGameLog->remark = $remark;
             }
             extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint, $adminId, $adminUsername);
 
