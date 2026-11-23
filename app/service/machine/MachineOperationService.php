@@ -4,7 +4,9 @@ namespace app\service\machine;
 
 use app\model\GameType;
 use app\model\Machine;
+use app\model\MachineCategoryGiveRule;
 use app\model\Player;
+use app\model\PlayerGiftRecord;
 use app\support\MachineLogger;
 use Exception;
 use GatewayWorker\Lib\Gateway;
@@ -1673,10 +1675,37 @@ class MachineOperationService
 
         // 准备参数
         $openScore = (int) $params['open_score'];
-        $giftScore = (int) ($params['gift_score'] ?? 0);
+        $giftScore = 0;
         $giveRuleId = isset($params['give_rule_id']) ? (int) $params['give_rule_id'] : null;
         $adminId = $this->operatorType === self::OPERATOR_ADMIN ? $this->operatorId : 0;
         $adminUsername = $params['admin_username'] ?? '';
+
+        // P2 + P0-2：赠点规则合法性校验及每日次数限制
+        if ($giveRuleId) {
+            $giveRule = MachineCategoryGiveRule::find($giveRuleId);
+            if (!$giveRule) {
+                throw new Exception(trans('give_rule_not_found', [], 'message', $this->lang));
+            }
+            if ((int) $giveRule->status !== 1) {
+                throw new Exception(trans('give_rule_disabled', [], 'message', $this->lang));
+            }
+            if ((int) $giveRule->machine_category_id !== (int) $this->machine->cate_id) {
+                throw new Exception(trans('give_rule_category_mismatch', [], 'message', $this->lang));
+            }
+            // 强制使用规则值，拒绝前端传入的 gift_score
+            $giftScore = (int) $giveRule->give_num;
+
+            // P0-2：每日次数限制
+            if ((int) $giveRule->give_rule_num > 0) {
+                $todayCount = PlayerGiftRecord::where('player_id', $player->id)
+                    ->where('machine_category_give_rule_id', $giveRuleId)
+                    ->whereDate('created_at', date('Y-m-d'))
+                    ->count();
+                if ($todayCount >= (int) $giveRule->give_rule_num) {
+                    throw new Exception(trans('give_rule_daily_limit_exceeded', [], 'message', $this->lang));
+                }
+            }
+        }
 
         // 调用完整的 machineOpenAnyFree 函数
         $result = \machineOpenAnyFree(

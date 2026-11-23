@@ -3160,7 +3160,7 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerGameLog->control_open_point = $machine->control_open_point;
             $playerGameLog->open_point = $logOpenScore;
             $playerGameLog->wash_point = 0;
-            $playerGameLog->gift_point = 0;
+            $playerGameLog->gift_point = $giftScore;
             $playerGameLog->game_amount = $money;  // ✅ 修复：实际扣款金额
             $playerGameLog->before_game_amount = $beforeGameAmount;
             $playerGameLog->after_game_amount = $afterGameAmount;  // ✅ 修复：扣款后余额
@@ -3189,6 +3189,16 @@ if (!function_exists('machineOpenAnyFree')) {
                     $playersGiftRecord->created_at = date('Y-m-d H:i:s');
                     $playersGiftRecord->updated_at = date('Y-m-d H:i:s');
                     $playersGiftRecord->save();
+
+                    Cache::set(
+                        'gift_cache_' . $machine->id . '_' . $player->id,
+                        [
+                            'gift_point' => $giftScore,
+                            'open_point' => $machineCategoryGiveRule->open_num,
+                            'condition'  => $machineCategoryGiveRule->condition,
+                        ],
+                        86400 * 7
+                    );
                 }
             }
 
