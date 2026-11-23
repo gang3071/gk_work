@@ -90,6 +90,18 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
     /** 游戏连结 sid 有效期（秒） */
     public const SESSION_TTL = 28800; // 8 小时
 
+    /** 入站 ts 有效窗口（秒）。文档仅要求 10 位时间戳；结合「重试一律返回原始的响应」放宽到 300 秒 */
+    public const TS_MAX_WINDOW = 300;
+
+    /** 出站签名布尔值拼串风格（文档未明示，按 JSON 字面 true/false） */
+    public const BOOL_SIGN_STYLE = 'json';
+
+    /** 入站验签布尔值候选拼串风格（文档未明示，多风格回退兼容 AS 实现） */
+    private const BOOL_SIGN_STYLES = ['json', 'num', 'php', 'cs'];
+
+    /** 已记录过的入站布尔值拼串风格（每进程每风格只记一次日志） */
+    private static array $boolStyleLogged = [];
+
     /** 移动端进入（is_mobile） */
     public int $isMobile = 0;
 
@@ -120,9 +132,10 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
     /**
      * hash 加密前的字串（AS 疑难排查要求提供的资讯之一）
      * @param array $params
+     * @param string $boolStyle 布尔值拼串风格
      * @return string
      */
-    public function makeSignSource(array $params): string
+    public function makeSignSource(array $params, string $boolStyle = self::BOOL_SIGN_STYLE): string
     {
         unset($params['hash'], $params['ts']);
         ksort($params, SORT_STRING);
@@ -132,7 +145,7 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
                 continue;
             }
             if (is_bool($value)) {
-                $value = $value ? 'true' : 'false';
+                $value = $this->renderBool($value, $boolStyle);
             }
             $pairs[] = $key . '=' . $value;
         }
@@ -141,7 +154,25 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
-     * 校验入站钱包请求签名（与出站同一规则）
+     * 布尔值拼串（文档未明示）：json=true/false，num=1/0，php=1/空串，cs=True/False
+     * @param bool $value
+     * @param string $style
+     * @return string
+     */
+    private function renderBool(bool $value, string $style): string
+    {
+        return match ($style) {
+            'num' => $value ? '1' : '0',
+            'php' => $value ? '1' : '',
+            'cs' => $value ? 'True' : 'False',
+            default => $value ? 'true' : 'false',
+        };
+    }
+
+    /**
+     * 校验入站钱包请求签名（与出站同一规则；布尔值多拼串风格回退）
+     * 文档未明示布尔值拼串方式，若仅按出站风格校验，AS 风格不同时会拒绝其
+     * withdraw/deposit（携带 completed 布尔值）导致卡单，故逐风格尝试。
      * @param array $params
      * @return bool
      */
@@ -151,7 +182,29 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
         if ($hash === '') {
             return false;
         }
-        return hash_equals($this->makeSign($params), $hash);
+        foreach (self::BOOL_SIGN_STYLES as $style) {
+            if (hash_equals($this->makeSignSource($params, $style), $hash)) {
+                if ($style !== self::BOOL_SIGN_STYLE) {
+                    $this->logBoolStyleOnce($style);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 记录与出站不同布尔值拼串风格（学习 AS 的实际约定）
+     * @param string $style
+     * @return void
+     */
+    private function logBoolStyleOnce(string $style): void
+    {
+        if (isset(self::$boolStyleLogged[$style])) {
+            return;
+        }
+        self::$boolStyleLogged[$style] = true;
+        $this->log->info('AS入站布尔值拼串风格与出站不同', ['style' => $style]);
     }
 
     /**
@@ -546,7 +599,7 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
-     * 解析并验证入站钱包请求（JSON + md5 签名 + ts 20 秒窗口），绑定会员
+     * 解析并验证入站钱包请求（JSON + md5 签名 + ts 窗口），绑定会员
      * 成功返回参数数组；失败返回错误码字符串并置 $this->error
      * @param $data 原始请求体
      * @return mixed
@@ -564,9 +617,9 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
             return $this->error = ASGameController::CODE_INVALID_TOKEN;
         }
 
-        // ts 必须 20 秒内有效
+        // ts 窗口校验（文档仅要求 10 位时间戳；结合「重试一律返回原始的响应」放宽到 300 秒）
         $ts = (int)($params['ts'] ?? 0);
-        if ($ts <= 0 || abs(time() - $ts) > 20) {
+        if ($ts <= 0 || abs(time() - $ts) > self::TS_MAX_WINDOW) {
             $this->log->warning('AS入站时间戳过期', ['ts' => $ts]);
             return $this->error = ASGameController::CODE_INVALID_TOKEN;
         }
@@ -574,11 +627,15 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
         // 会员解析：verify-session 走 session，其余走 playerId
         if (isset($params['session']) && !isset($params['playerId'])) {
             $player = $this->getPlayerBySession((string)$params['session']);
+            if (empty($player)) {
+                // 文档：会话令牌缺失、无效或已过期 => INVALID_TOKEN
+                return $this->error = ASGameController::CODE_INVALID_TOKEN;
+            }
         } else {
             $player = Player::query()->where('uuid', (string)($params['playerId'] ?? ''))->first();
-        }
-        if (empty($player)) {
-            return $this->error = ASGameController::CODE_LOGIN_FAILED;
+            if (empty($player)) {
+                return $this->error = ASGameController::CODE_LOGIN_FAILED;
+            }
         }
 
         // 帐号状态

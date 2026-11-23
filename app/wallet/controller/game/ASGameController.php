@@ -17,17 +17,17 @@ use support\Response;
 /**
  * AS电子（AS Gaming）Seamless Wallet 回调（AS 调我们）
  *
- * 端点（POST，全部在 /single-wallet/as-channel 组下）:
+ * 端点（POST，全部在 /single-wallet/as-channel 组下，成功响应一律带 code:"OK"）:
  *   /verify-session  {session,gameId,hash,ts}
- *                    -> {playerId,balance,currency}
+ *                    -> {code,playerId,balance,currency}
  *   /balance         {playerId,hash,ts}
- *                    -> {balance,currency}
+ *                    -> {code,balance,currency}
  *   /withdraw        {playerId,txnId,roundId,amount,currency,gameId,created,session,completed,hash,ts}
- *                    -> {balance}   （下注扣款）
+ *                    -> {code,balance}   （下注扣款）
  *   /deposit         同 withdraw 参数
- *                    -> {balance}   （派彩加款，同一 roundId 可多次 deposit）
+ *                    -> {code,balance}   （派彩加款，同一 roundId 可多次 deposit）
  *   /refund          {playerId,txnId,betTxnId,roundId,created,hash,ts}
- *                    -> {balance}   （撤销原 withdraw 注单，找不到原注单也返回成功+余额）
+ *                    -> {code,balance}   （撤销原 withdraw 注单，找不到原注单也返回成功+余额）
  *
  * 错误响应 {code,message} + HTTP 状态：
  *   INVALID_TOKEN(400) LOGIN_FAILED(401) REQUEST_DECLINED(400)
@@ -70,6 +70,18 @@ class ASGameController
         self::CODE_MAINTENANCE => 'maintenance',
     ];
 
+    /** 各端点文档「可能的错误」白名单（白名单外的错误码按兜底码收敛） */
+    public const ENDPOINT_ERRORS = [
+        'verifySession' => [self::CODE_INVALID_TOKEN, self::CODE_LOGIN_FAILED, self::CODE_UNKNOWN_ERROR, self::CODE_MAINTENANCE],
+        'balance' => [self::CODE_UNKNOWN_ERROR, self::CODE_MAINTENANCE],
+        'withdraw' => [self::CODE_REQUEST_DECLINED, self::CODE_INSUFFICIENT_FUNDS, self::CODE_ACCOUNT_BLOCKED, self::CODE_UNKNOWN_ERROR, self::CODE_MAINTENANCE],
+        'deposit' => [self::CODE_REQUEST_DECLINED, self::CODE_ACCOUNT_BLOCKED, self::CODE_UNKNOWN_ERROR, self::CODE_MAINTENANCE],
+        'refund' => [self::CODE_REQUEST_DECLINED, self::CODE_ACCOUNT_BLOCKED, self::CODE_UNKNOWN_ERROR, self::CODE_MAINTENANCE],
+    ];
+
+    /** 原始响应/回合关闭标记 TTL（秒） */
+    public const MARK_TTL = 86400;
+
     private GameServiceInterface|SingleWalletServiceInterface $service;
 
     public function __construct()
@@ -90,7 +102,7 @@ class ASGameController
             $data = $this->service->decrypt($request->rawBody());
             Log::channel('as_server')->info('AS验证session记录', ['params' => $data]);
             if ($this->service->error) {
-                return $this->error((string)$this->service->error);
+                return $this->endpointError('verifySession', (string)$this->service->error);
             }
 
             $player = $this->service->player;
@@ -119,7 +131,7 @@ class ASGameController
             $data = $this->service->decrypt($request->rawBody());
             Log::channel('as_server')->info('AS余额查询记录', ['params' => $data]);
             if ($this->service->error) {
-                return $this->error((string)$this->service->error);
+                return $this->endpointError('balance', (string)$this->service->error);
             }
 
             $player = $this->service->player;
@@ -149,21 +161,28 @@ class ASGameController
             $data = $this->service->decrypt($request->rawBody());
             Log::channel('as_server')->info('AS下注请求（Lua原子）', ['params' => $data]);
             if ($this->service->error) {
-                return $this->error((string)$this->service->error);
+                return $this->endpointError('withdraw', (string)$this->service->error);
             }
 
             $player = $this->service->player;
             $orderNo = (string)($data['txnId'] ?? '');
-            $amount = round((float)($data['amount'] ?? 0), 2);
+            $roundId = (string)($data['roundId'] ?? '');
+            $amount = $this->parseAmount($data['amount'] ?? 0);
 
-            // 参数校验：txnId 必填、amount > 0 且不超过 2 位小数
-            if ($orderNo === '' || $amount <= 0) {
+            // 参数校验：txnId/roundId 必填、amount > 0 且最多 2 位小数（文档）
+            if ($orderNo === '' || $roundId === '' || $amount === null || $amount <= 0) {
+                return $this->error(self::CODE_REQUEST_DECLINED);
+            }
+
+            // 文档：completed=true 后不再允许新的扣款/派彩/回滚（幂等重试除外）
+            if ($this->isRoundClosed($roundId) && !$this->isWalletRetry($orderNo, "game:record:bet:AS:{$orderNo}")) {
+                Log::channel('as_server')->warning('AS扣款拒绝：回合已结束', ['txnId' => $orderNo, 'roundId' => $roundId]);
                 return $this->error(self::CODE_REQUEST_DECLINED);
             }
 
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
-                return $this->error((string)$this->service->error);
+                return $this->endpointError('withdraw', (string)$this->service->error);
             }
 
             // Lua 原子下注
@@ -213,10 +232,10 @@ class ASGameController
             // 处理结果
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
-                    // 幂等：同 txnId 重试返回原结果不产生新交易
+                    // 幂等：重试一律返回原始的响应（文档）
                     Log::channel('as_server')->info('AS下注重复请求（Lua检测）', ['txnId' => $orderNo]);
-                    $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
-                    return $this->success(['balance' => $this->formatBalance($currentBalance)]);
+                    $currentBalance = (float)($result['balance'] ?? WalletService::getBalance($player->id));
+                    return $this->respondRetry($orderNo, $roundId, $data, $currentBalance);
                 }
                 if ($result['error'] === 'insufficient_balance') {
                     return $this->error(self::CODE_INSUFFICIENT_FUNDS);
@@ -226,7 +245,7 @@ class ASGameController
 
             Log::channel('as_server')->info('AS下注成功（Lua原子）', ['txnId' => $orderNo]);
 
-            return $this->success(['balance' => $this->formatBalance($result['balance'])]);
+            return $this->respondSuccess($orderNo, $roundId, $data, (float)$result['balance']);
         } catch (Exception $e) {
             Log::channel('as_server')->error('AS withdraw failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('AS', '下注异常', $e, ['params' => $request->rawBody()]);
@@ -248,15 +267,22 @@ class ASGameController
             $data = $this->service->decrypt($request->rawBody());
             Log::channel('as_server')->info('AS派彩请求（Lua原子）', ['params' => $data]);
             if ($this->service->error) {
-                return $this->error((string)$this->service->error);
+                return $this->endpointError('deposit', (string)$this->service->error);
             }
 
             $player = $this->service->player;
             $orderNo = (string)($data['txnId'] ?? '');
-            $amount = round((float)($data['amount'] ?? 0), 2);
+            $roundId = (string)($data['roundId'] ?? '');
+            $amount = $this->parseAmount($data['amount'] ?? 0);
 
-            // 参数校验：txnId 必填、amount >= 0（Loss 场景存在 Deposit(0) 收单）
-            if ($orderNo === '' || $amount < 0) {
+            // 参数校验：txnId/roundId 必填、amount >= 0 且最多 2 位小数（文档；Loss 场景存在 Deposit(0) 收单）
+            if ($orderNo === '' || $roundId === '' || $amount === null || $amount < 0) {
+                return $this->error(self::CODE_REQUEST_DECLINED);
+            }
+
+            // 文档：completed=true 后不再允许新的扣款/派彩/回滚（幂等重试除外）
+            if ($this->isRoundClosed($roundId) && !$this->isWalletRetry($orderNo, "game:record:settle:AS:{$orderNo}")) {
+                Log::channel('as_server')->warning('AS派彩拒绝：回合已结束', ['txnId' => $orderNo, 'roundId' => $roundId]);
                 return $this->error(self::CODE_REQUEST_DECLINED);
             }
 
@@ -316,17 +342,17 @@ class ASGameController
             // 处理结果
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_settle' || $result['error'] === 'duplicate_order') {
-                    // 幂等：同 txnId 重试返回原结果不产生新交易
+                    // 幂等：重试一律返回原始的响应（文档）
                     Log::channel('as_server')->info('AS派彩重复请求（Lua检测）', ['txnId' => $orderNo]);
-                    $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
-                    return $this->success(['balance' => $this->formatBalance($currentBalance)]);
+                    $currentBalance = (float)($result['balance'] ?? WalletService::getBalance($player->id));
+                    return $this->respondRetry($orderNo, $roundId, $data, $currentBalance);
                 }
                 return $this->error(self::CODE_UNKNOWN_ERROR);
             }
 
             Log::channel('as_server')->info('AS派彩成功（Lua原子）', ['txnId' => $orderNo]);
 
-            return $this->success(['balance' => $this->formatBalance($result['balance'])]);
+            return $this->respondSuccess($orderNo, $roundId, $data, (float)$result['balance']);
         } catch (Exception $e) {
             Log::channel('as_server')->error('AS deposit failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('AS', '派彩异常', $e, ['params' => $request->rawBody()]);
@@ -348,12 +374,21 @@ class ASGameController
             $data = $this->service->decrypt($request->rawBody());
             Log::channel('as_server')->info('AS退款请求（Lua原子）', ['params' => $data]);
             if ($this->service->error) {
-                return $this->error((string)$this->service->error);
+                return $this->endpointError('refund', (string)$this->service->error);
             }
 
             $player = $this->service->player;
             $orderNo = (string)($data['betTxnId'] ?? ''); // 原 withdraw 的 txnId
-            if ($orderNo === '') {
+            $txnId = (string)($data['txnId'] ?? '');      // 本笔回滚的 txnId
+            $roundId = (string)($data['roundId'] ?? '');
+            // 参数校验（文档）：txnId/betTxnId/roundId 必填
+            if ($orderNo === '' || $txnId === '' || $roundId === '') {
+                return $this->error(self::CODE_REQUEST_DECLINED);
+            }
+
+            // 文档：completed=true 后不再允许新的扣款/派彩/回滚（幂等重试除外）
+            if ($this->isRoundClosed($roundId) && !$this->isWalletRetry($txnId)) {
+                Log::channel('as_server')->warning('AS退款拒绝：回合已结束', ['txnId' => $txnId, 'roundId' => $roundId]);
                 return $this->error(self::CODE_REQUEST_DECLINED);
             }
 
@@ -368,10 +403,10 @@ class ASGameController
                 // ✅ 找不到原注单也返回成功 + 当前余额（AS 文档规定）
                 Log::channel('as_server')->warning('AS退款：原注单不存在，按文档返回成功', [
                     'betTxnId' => $orderNo,
-                    'txnId' => (string)($data['txnId'] ?? ''),
+                    'txnId' => $txnId,
                 ]);
                 $currentBalance = WalletService::getBalance($player->id);
-                return $this->success(['balance' => $this->formatBalance($currentBalance)]);
+                return $this->respondRetry($txnId, $roundId, $data, (float)$currentBalance);
             }
 
             // Lua 原子取消（退款）
@@ -428,26 +463,162 @@ class ASGameController
                 if ($result['error'] === 'order_not_found') {
                     // ✅ 找不到原注单也返回成功 + 当前余额（AS 文档规定）
                     Log::channel('as_server')->warning('AS退款：原注单不存在（Lua检测）', ['betTxnId' => $orderNo]);
-                    $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
-                    return $this->success(['balance' => $this->formatBalance($currentBalance)]);
+                    $currentBalance = (float)($result['balance'] ?? WalletService::getBalance($player->id));
+                    return $this->respondRetry($txnId, $roundId, $data, $currentBalance);
                 }
                 if ($result['error'] === 'duplicate_cancel') {
-                    // 幂等：同 txnId 重试返回原结果不产生新交易
+                    // 幂等：重试一律返回原始的响应（文档）
                     Log::channel('as_server')->info('AS退款重复请求（Lua检测）', ['betTxnId' => $orderNo]);
-                    $currentBalance = $result['balance'] ?? WalletService::getBalance($player->id);
-                    return $this->success(['balance' => $this->formatBalance($currentBalance)]);
+                    $currentBalance = (float)($result['balance'] ?? WalletService::getBalance($player->id));
+                    return $this->respondRetry($txnId, $roundId, $data, $currentBalance);
                 }
                 return $this->error(self::CODE_UNKNOWN_ERROR);
             }
 
             Log::channel('as_server')->info('AS退款成功（Lua原子）', ['betTxnId' => $orderNo]);
 
-            return $this->success(['balance' => $this->formatBalance($result['balance'])]);
+            return $this->respondSuccess($txnId, $roundId, $data, (float)$result['balance']);
         } catch (Exception $e) {
             Log::channel('as_server')->error('AS refund failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $this->sendTelegramAlert('AS', '退款异常', $e, ['params' => $request->rawBody()]);
             return $this->error(self::CODE_UNKNOWN_ERROR);
         }
+    }
+
+    /**
+     * 按端点错误码表收敛响应码（文档「可能的错误」之外的码收敛为兜底码）
+     * @param string $op 端点：verifySession/balance/withdraw/deposit/refund
+     * @param string $code 原错误码
+     * @return Response
+     */
+    private function endpointError(string $op, string $code): Response
+    {
+        $allowed = self::ENDPOINT_ERRORS[$op] ?? [];
+        if (!in_array($code, $allowed, true)) {
+            $code = in_array(self::CODE_REQUEST_DECLINED, $allowed, true)
+                ? self::CODE_REQUEST_DECLINED
+                : self::CODE_UNKNOWN_ERROR;
+        }
+        return $this->error($code);
+    }
+
+    /**
+     * 解析金额：文档规定 decimal 最多 2 位小数，超出精度返回 null
+     * @param mixed $raw
+     * @return float|null
+     */
+    private function parseAmount(mixed $raw): ?float
+    {
+        if (!is_numeric($raw)) {
+            return null;
+        }
+        $amount = (float)$raw;
+        if (abs($amount * 100 - round($amount * 100)) > 0.00001) {
+            return null;
+        }
+        return round($amount, 2);
+    }
+
+    /**
+     * 记住原始响应（文档：重试一律返回原始的响应）
+     * @param string $txnId
+     * @param array $payload
+     * @return void
+     */
+    private function rememberResponse(string $txnId, array $payload): void
+    {
+        \support\Redis::setex('as:resp:' . $txnId, self::MARK_TTL, json_encode($payload));
+    }
+
+    /**
+     * 读取原始响应
+     * @param string $txnId
+     * @return array|null
+     */
+    private function originalResponse(string $txnId): ?array
+    {
+        $raw = \support\Redis::get('as:resp:' . $txnId);
+        if (!is_string($raw) || $raw === '') {
+            return null;
+        }
+        $payload = json_decode($raw, true);
+        return is_array($payload) ? $payload : null;
+    }
+
+    /**
+     * 幂等重试判定（已存在原始响应或本交易的处理记录）
+     * @param string $txnId
+     * @param string $recordKey 本交易的记录键（可空）
+     * @return bool
+     */
+    private function isWalletRetry(string $txnId, string $recordKey = ''): bool
+    {
+        if (\support\Redis::exists('as:resp:' . $txnId)) {
+            return true;
+        }
+        return $recordKey !== '' && (bool)\support\Redis::exists($recordKey);
+    }
+
+    /**
+     * 标记回合已结束（completed=true 且本次交易已生效）
+     * @param string $roundId
+     * @return void
+     */
+    private function setRoundClosed(string $roundId): void
+    {
+        if ($roundId === '') {
+            return;
+        }
+        \support\Redis::setex('as:round:closed:' . $roundId, self::MARK_TTL, 1);
+    }
+
+    /**
+     * 回合是否已结束（文档：completed=true 后不再允许扣款、派彩或回滚）
+     * @param string $roundId
+     * @return bool
+     */
+    private function isRoundClosed(string $roundId): bool
+    {
+        return (bool)\support\Redis::exists('as:round:closed:' . $roundId);
+    }
+
+    /**
+     * 首次成功响应：记忆原始响应、按需关闭回合
+     * @param string $txnId
+     * @param string $roundId
+     * @param array $data 原请求（取 completed）
+     * @param float $balance 生效后的余额（元）
+     * @return Response
+     */
+    private function respondSuccess(string $txnId, string $roundId, array $data, float $balance): Response
+    {
+        $payload = ['balance' => $this->formatBalance($balance)];
+        $this->rememberResponse($txnId, $payload);
+        if (!empty($data['completed'])) {
+            $this->setRoundClosed($roundId);
+        }
+        return $this->success($payload);
+    }
+
+    /**
+     * 幂等重试响应：一律返回原始响应（文档），无记忆时回退当前余额
+     * @param string $txnId
+     * @param string $roundId
+     * @param array $data 原请求（取 completed）
+     * @param float $fallbackBalance 当前余额（元）
+     * @return Response
+     */
+    private function respondRetry(string $txnId, string $roundId, array $data, float $fallbackBalance): Response
+    {
+        $payload = $this->originalResponse($txnId);
+        if ($payload === null) {
+            $payload = ['balance' => $this->formatBalance($fallbackBalance)];
+            $this->rememberResponse($txnId, $payload);
+        }
+        if (!empty($data['completed'])) {
+            $this->setRoundClosed($roundId);
+        }
+        return $this->success($payload);
     }
 
     /**
@@ -461,7 +632,7 @@ class ASGameController
     }
 
     /**
-     * 成功响应（{balance} 或 {playerId,balance,currency} 等）
+     * 成功响应（文档：成功响应一律带 code:"OK"，如 {code,balance}、{code,playerId,balance,currency}）
      * @param array $data
      * @param int $httpCode
      * @return Response
@@ -471,7 +642,7 @@ class ASGameController
         return new Response(
             $httpCode,
             ['Content-Type' => 'application/json'],
-            json_encode($data, JSON_UNESCAPED_UNICODE)
+            json_encode(['code' => 'OK'] + $data, JSON_UNESCAPED_UNICODE)
         );
     }
 
