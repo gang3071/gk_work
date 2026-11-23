@@ -3522,6 +3522,15 @@ if (!function_exists('machineOpenAnyFree')) {
                     'player_id' => $player->id,
                     'machine_id' => $machine->id,
                 ]);
+                // gift_cache 是 Redis 操作，不受 DB 事务控制，回滚时必须手动清除
+                // 否则 PlayerGiftRecord 已回滚但 gift_cache 仍存在，玩家被永久拦截
+                if (!empty($giftScore)) {
+                    Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+                    Log::info('[machineOpenAnyFree] 事务回滚后清除 gift_cache', [
+                        'machine_id' => $machine->id,
+                        'player_id' => $player->id,
+                    ]);
+                }
             } else {
                 Log::warning('[machineOpenAnyFree] 事务已提交，无法回滚（异常发生在硬件指令阶段）', [
                     'player_id' => $player->id,
@@ -3620,6 +3629,16 @@ if (!function_exists('machineOpenAnyFree')) {
                         if ($gameRecordIsNew ?? false) {
                             $services->gaming = 0;
                             $services->gaming_user_id = 0;
+                        }
+
+                        // 首次赠点开分失败退款后，清除 gift_cache，玩家可重新尝试赠点上分
+                        // （追加上分不涉及 gift_cache 写入，无需清除）
+                        if (!empty($giftScore) && ($gameRecordIsNew ?? false)) {
+                            Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+                            Log::info('[machineOpenAnyFree] 硬件开分失败退款后清除 gift_cache', [
+                                'machine_id' => $machine->id,
+                                'player_id' => $player->id,
+                            ]);
                         }
 
                         Log::info('[machineOpenAnyFree] 上分失败已自动退款' . (($gameRecordIsNew ?? false) ? '并解锁机台' : '（追加上分，机台保持锁定）'), [
