@@ -228,5 +228,12 @@ Route::group('/single-wallet', function () {
         Route::post('/bonus/status', [\app\wallet\controller\game\QTGameController::class, 'promotionStatus']);
         Route::post('/bonus/rewards', [\app\wallet\controller\game\QTGameController::class, 'rewards']);
     });
+    Route::group('/as-channel', function () {
+        Route::post('/verify-session', [\app\wallet\controller\game\ASGameController::class, 'verifySession']);
+        Route::post('/balance', [\app\wallet\controller\game\ASGameController::class, 'balance']);
+        Route::post('/withdraw', [\app\wallet\controller\game\ASGameController::class, 'withdraw']);
+        Route::post('/deposit', [\app\wallet\controller\game\ASGameController::class, 'deposit']);
+        Route::post('/refund', [\app\wallet\controller\game\ASGameController::class, 'refund']);
+    });
 });
 Route::disableDefaultRoute();
