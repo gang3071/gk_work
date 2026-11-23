@@ -2898,6 +2898,25 @@ if (!function_exists('machineOpenAnyFree')) {
             $walletDeducted = false;  // 标记钱包是否已扣款（提前初始化，确保 catch 块可引用）
             $money = 0;  // ✅ 初始化，避免异常处理时 Undefined variable
 
+            // 赠点防御校验（事务前提前拦截，避免无效事务）
+            if ($giveRuleId && $giftScore > 0) {
+                // 活跃赠点会话检查
+                if (!empty(Cache::get('gift_cache_' . $machine->id . '_' . $player->id))) {
+                    throw new Exception(trans('give_point_session_active', [], 'message'));
+                }
+                // 每日次数限制（防止绕过 MachineOperationService 直接调用超限）
+                $giveRuleForCheck = MachineCategoryGiveRule::find($giveRuleId);
+                if ($giveRuleForCheck && (int)$giveRuleForCheck->give_rule_num > 0) {
+                    $todayGiftCount = PlayerGiftRecord::where('player_id', $player->id)
+                        ->where('machine_category_give_rule_id', $giveRuleId)
+                        ->whereDate('created_at', date('Y-m-d'))
+                        ->count();
+                    if ($todayGiftCount >= (int)$giveRuleForCheck->give_rule_num) {
+                        throw new Exception(trans('give_rule_daily_limit_exceeded', [], 'message'));
+                    }
+                }
+            }
+
             DB::beginTransaction();
             try {
                 // SongOfflineSlot：openScore 是玩家金額（min_player_amount 的整數倍），
@@ -3191,34 +3210,35 @@ if (!function_exists('machineOpenAnyFree')) {
                     || (int)$machineCategoryGiveRule->machine_category_id !== (int)$machine->cate_id) {
                     throw new Exception(trans('give_rule_not_found', [], 'message'));
                 }
-                if (!empty(Cache::get('gift_cache_' . $machine->id . '_' . $player->id))) {
-                    throw new Exception(trans('give_point_session_active', [], 'message'));
-                }
-                if ($machineCategoryGiveRule) {
-                    $playersGiftRecord = new PlayerGiftRecord();
-                    $playersGiftRecord->player_game_log_id = $playerGameLog->id;
-                    $playersGiftRecord->machine_category_give_rule_id = $machineCategoryGiveRule->id;
-                    $playersGiftRecord->machine_id = $machine->id;
-                    $playersGiftRecord->player_id = $player->id;
-                    $playersGiftRecord->player_name = $player->name;
-                    $playersGiftRecord->machine_name = $machine->name;
-                    $playersGiftRecord->machine_type = $machine->type;
-                    $playersGiftRecord->open_num = $machineCategoryGiveRule->open_num;
-                    $playersGiftRecord->give_num = $machineCategoryGiveRule->give_num;
-                    $playersGiftRecord->condition = $machineCategoryGiveRule->condition;
-                    $playersGiftRecord->created_at = date('Y-m-d H:i:s');
-                    $playersGiftRecord->updated_at = date('Y-m-d H:i:s');
-                    $playersGiftRecord->save();
 
-                    Cache::set(
-                        'gift_cache_' . $machine->id . '_' . $player->id,
-                        [
-                            'gift_point' => $giftScore,
-                            'open_point' => $machineCategoryGiveRule->open_num,
-                            'condition'  => $machineCategoryGiveRule->condition,
-                        ],
-                        86400 * 7
-                    );
+                $playersGiftRecord = new PlayerGiftRecord();
+                $playersGiftRecord->player_game_log_id = $playerGameLog->id;
+                $playersGiftRecord->machine_category_give_rule_id = $machineCategoryGiveRule->id;
+                $playersGiftRecord->machine_id = $machine->id;
+                $playersGiftRecord->player_id = $player->id;
+                $playersGiftRecord->player_name = $player->name;
+                $playersGiftRecord->machine_name = $machine->name;
+                $playersGiftRecord->machine_type = $machine->type;
+                $playersGiftRecord->open_num = $machineCategoryGiveRule->open_num;
+                $playersGiftRecord->give_num = $machineCategoryGiveRule->give_num;
+                $playersGiftRecord->condition = $machineCategoryGiveRule->condition;
+                $playersGiftRecord->created_at = date('Y-m-d H:i:s');
+                $playersGiftRecord->updated_at = date('Y-m-d H:i:s');
+                $playersGiftRecord->save();
+
+                // Cache::set 失败（返回 false）时必须抛出异常，否则 DB 记录落库但 Redis 无 cache，
+                // 导致玩家拿到赠点但弃台时无法扣回
+                $cacheWritten = Cache::set(
+                    'gift_cache_' . $machine->id . '_' . $player->id,
+                    [
+                        'gift_point' => $giftScore,
+                        'open_point' => $machineCategoryGiveRule->open_num,
+                        'condition'  => $machineCategoryGiveRule->condition,
+                    ],
+                    86400 * 7
+                );
+                if (!$cacheWritten) {
+                    throw new Exception('gift_cache 写入 Redis 失败，终止上分');
                 }
             }
 
