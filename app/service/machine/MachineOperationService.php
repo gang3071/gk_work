@@ -1695,6 +1695,12 @@ class MachineOperationService
             // 强制使用规则值，拒绝前端传入的 gift_score
             $giftScore = (int) $giveRule->give_num;
 
+            // 赠点会话进行中拦截：转数未打完或条件未达成时不允许再次使用赠点
+            $activeGiftCache = \support\Cache::get('gift_cache_' . $this->machine->id . '_' . $player->id);
+            if (!empty($activeGiftCache)) {
+                throw new Exception(trans('give_point_session_active', [], 'message', $this->lang));
+            }
+
             // P0-2：每日次数限制
             if ((int) $giveRule->give_rule_num > 0) {
                 $todayCount = PlayerGiftRecord::where('player_id', $player->id)
