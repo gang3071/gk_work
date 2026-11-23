@@ -1549,9 +1549,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $cacheKey = 'gift_cache_' . $this->machine->id . '_' . $gamingUserId;
             if (Cache::has($cacheKey)) {
                 $giftCache = Cache::get($cacheKey);
-                // ⚠️ P4-B：转数归零由此路径清缓存，不执行赠点扣回（扣回依赖 machineWashFreeAction leave 路径）
-                // 若玩家在转数归零后通过 leave 正常离台，gift_cache 已不存在，赠点将不被扣回（漏洞）
-                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_WARNING, MachineLogger::DIR_EVENT, 'gift_cache', '[小松鋼珠線下-禮物快取] 轉數為0，清理禮物快取但未扣回賠點 玩家ID=' . $gamingUserId . ' gift_point=' . ($giftCache['gift_point'] ?? 'unknown'), ['machine_data' => $this->getMachineCache(), 'gift_cache' => $giftCache]);
+                // 玩家打完转数，属正常结束，赠点无需扣回，清理缓存
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_cache', '[小松鋼珠線下-禮物快取] 轉數打完，清理禮物快取 玩家ID=' . $gamingUserId . ' gift_point=' . ($giftCache['gift_point'] ?? 0), ['machine_data' => $this->getMachineCache()]);
                 Cache::delete($cacheKey);
             }
         }
