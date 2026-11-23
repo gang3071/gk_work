@@ -1236,7 +1236,8 @@ function machineWash(
                 $services->sendCmd($services::WIN_NUMBER, 0, 'player', $player->id, $is_system);
                 $gamingTurnPoint = $services->player_win_number ?? 0;
                 $money = $services->point ?? 0;
-                if (!empty($giftPoint) && $path == 'leave') {
+                // switch（换台）同样是放弃当前机台，赠点扣回逻辑与 leave 一致
+                if (!empty($giftPoint) && in_array($path, ['leave', 'switch'])) {
                     $moneyBeforeGift = $money;
                     $money = max($money - $giftPoint['gift_point'], 0);
                     $washRemark = '弃台扣回开分赠点 ' . $giftPoint['gift_point'] . ' 分，扣前 ' . $moneyBeforeGift . ' 分，实退 ' . $money . ' 分';
@@ -1657,7 +1658,8 @@ function machineWash(
         }
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
-                if ($path == 'leave') {
+                // switch（换台）同样是放弃当前机台，gift_cache 应与 leave 一同清除
+                if (in_array($path, ['leave', 'switch'])) {
                     $services->gift_bet = 0;
                     Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
                 }
@@ -3685,6 +3687,17 @@ if (!function_exists('machineOpenAnyFree')) {
                         // 锁机台后仍需清除 gift_cache，否则人工解锁后玩家无法再使用赠点
                         if (!empty($giftScore)) {
                             Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+                            // 删除 PlayerGiftRecord，退还当天次数配额（硬件未开分，礼物未发出）
+                            if (isset($playersGiftRecord) && $playersGiftRecord->id) {
+                                try {
+                                    $playersGiftRecord->delete();
+                                } catch (\Exception $deleteErr) {
+                                    Log::error('[machineOpenAnyFree] 删除 PlayerGiftRecord 失败', [
+                                        'record_id' => $playersGiftRecord->id,
+                                        'error' => $deleteErr->getMessage(),
+                                    ]);
+                                }
+                            }
                         }
 
                         Log::critical('[machineOpenAnyFree] 上分失败，机台已锁定（Redis），需人工补偿', [
