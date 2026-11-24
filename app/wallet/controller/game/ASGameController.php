@@ -186,6 +186,9 @@ class ASGameController
                 return $this->error(self::CODE_REQUEST_DECLINED);
             }
 
+            // 记录该局下注单号：后续派彩合并进此单（一笔下注只产一条订单）
+            \support\Redis::setex('as:round:bet:' . $roundId, self::MARK_TTL, $orderNo);
+
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
                 return $this->endpointError('withdraw', (string)$this->service->error);
@@ -226,6 +229,15 @@ class ASGameController
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
                 ]);
+
+                // completed=true 表示回合到此结束且无后续派彩：按 win=0 收口结算
+                if (!empty($data['completed'])) {
+                    GameRecordCacheService::saveSettleIntoBet('AS', $orderNo, [
+                        'amount' => 0,
+                        'is_final' => true,
+                        'original_data' => $data,
+                    ]);
+                }
             }
 
             // 游戏交互日志
@@ -318,18 +330,44 @@ class ASGameController
             logLuaScriptCall('settle', 'AS', $player->id, $luaParams);
 
             if ($result['ok'] === 1) {
-                // 保存结算记录到 Redis（供 GameRecordSyncWorker 同步和推送）
-                GameRecordCacheService::saveSettle('AS', [
-                    'order_no' => $orderNo,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'amount' => $amount,
-                    'diff' => $amount,
-                    'game_code' => (string)($data['gameId'] ?? ''),
-                    'original_data' => $data,
-                    'balance_before' => $result['old_balance'] ?? 0,
-                    'balance_after' => $result['balance'],
-                ]);
+                // 派彩合并进该局下注记录：一笔下注只产一条订单，多段派彩（Free Game）win 累加，
+                // 回合最后一笔（completed=true）标记已结算——避免下注单停留在未结算
+                $betOrderNo = (string)\support\Redis::get('as:round:bet:' . $roundId);
+                $merged = false;
+                if ($betOrderNo !== '') {
+                    $merged = GameRecordCacheService::saveSettleIntoBet('AS', $betOrderNo, [
+                        'amount' => $amount,
+                        'settle_type' => 'settle',
+                        'is_final' => !empty($data['completed']),
+                        'original_data' => $data,
+                    ]);
+                }
+                if ($merged) {
+                    Log::channel('as_server')->info('AS派彩合并进下注单', [
+                        'txnId' => $orderNo,
+                        'betOrderNo' => $betOrderNo,
+                        'amount' => $amount,
+                        'is_final' => !empty($data['completed']),
+                    ]);
+                } else {
+                    // 找不到该局下注记录：回退独立结算单（旧行为）
+                    Log::channel('as_server')->warning('AS派彩合并失败：下注记录不存在，回退独立结算单', [
+                        'txnId' => $orderNo,
+                        'roundId' => $roundId,
+                        'betOrderNo' => $betOrderNo,
+                    ]);
+                    GameRecordCacheService::saveSettle('AS', [
+                        'order_no' => $orderNo,
+                        'player_id' => $player->id,
+                        'platform_id' => $this->service->platform->id,
+                        'amount' => $amount,
+                        'diff' => $amount,
+                        'game_code' => (string)($data['gameId'] ?? ''),
+                        'original_data' => $data,
+                        'balance_before' => $result['old_balance'] ?? 0,
+                        'balance_after' => $result['balance'],
+                    ]);
+                }
 
                 // 加款成功后检查是否爆机，如果爆机则更新状态
                 WalletService::checkMachineCrashAfterTransaction(
