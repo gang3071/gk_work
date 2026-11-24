@@ -350,7 +350,7 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
      */
     public function walletCurrency(): string
     {
-        $currency = (string)($this->player->currency ?? '');
+        $currency = 'TWD';
         return strtoupper($this->currency[$currency] ?? $currency);
     }
 
