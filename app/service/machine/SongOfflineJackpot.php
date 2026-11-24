@@ -699,14 +699,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                     $calculatedS1 = self::calculateS1($b5Content);
                     if ($s1 != $calculatedS1) {
-                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S1校驗失敗 預期=' . $calculatedS1 . ' 實際=' . $s1, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S1校驗失敗 預期=' . $calculatedS1 . ' 實際=' . $s1, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $data);
                         $offset += 10;
                         continue;
                     }
 
                     $calculatedS2 = self::calculateS2($b5Content, $calculatedS1);
                     if ($s2 != $calculatedS2) {
-                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S2校驗失敗 預期=' . $calculatedS2 . ' 實際=' . $s2, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S2校驗失敗 預期=' . $calculatedS2 . ' 實際=' . $s2, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $data);
                         $offset += 10;
                         continue;
                     }
@@ -1302,7 +1302,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 // 结束帧的 nowScore 通常为 0（硬件不在结束帧重复发得分）。
                 // 用开奖过程中累积的 lottery_score 兜底，确保彩金检查使用真实得分。
                 $lotteryScore = ($nowScore > 0) ? $nowScore : (int)($this->lottery_score ?? 0);
-                $this->lottery_score = 0; // 本轮使用完毕，重置防止下轮污染
+                $this->lottery_score = 0; // 本轮使用完毕，重置防止下轮污染（先重置再记日志，避免异常导致残留）
+                // 记录结束帧原始数据，用于确认硬件实际发来的 score 值
+                MachineLogger::receiveResponse($this->machine->toArray(), 'lottery_end_score', '開獎結束幀得分原始數據 nowScore=' . $nowScore . ' lotteryScore=' . $lotteryScore, $this->getMachineCache());
 
                 // 触发彩池抽奖
                 if (!empty($this->machine->gamingPlayer)) {
@@ -1693,7 +1695,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 // 防止异常值
                 if (abs($delta) > 100) {
-                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '檢測到異常的中洞兌獎次數，拒絕更新 舊值=' . $oldWinNumber . ' 新值=' . $winNumber . ' 差值=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '檢測到異常的中洞兌獎次數，拒絕更新 舊值=' . $oldWinNumber . ' 新值=' . $winNumber . ' 差值=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 } else {
                     $this->win_number = $winNumber;
                 }
@@ -1735,7 +1737,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 // 防止异常值
                 if (abs($delta) > 100) {
-                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '[小松鋼珠線下-新版查詢] 檢測到異常的中洞兌獎次數，拒絕更新 舊值=' . $oldWinNumber . ' 新值=' . $winNumber . ' 差值=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '[小松鋼珠線下-新版查詢] 檢測到異常的中洞兌獎次數，拒絕更新 舊值=' . $oldWinNumber . ' 新值=' . $winNumber . ' 差值=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 } else {
                     $this->win_number = $winNumber;
                     MachineLogger::receiveResponse($this->machine->toArray(), 'recv_win_number', '[小松鋼珠線下-新版查詢] 收到累積中洞兌獎次數回覆 次數=' . $winNumber, $this->getMachineCache());
