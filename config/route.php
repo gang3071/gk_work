@@ -229,9 +229,9 @@ Route::group('/single-wallet', function () {
         Route::post('/bonus/rewards', [\app\wallet\controller\game\QTGameController::class, 'rewards']);
     });
     Route::group('/gk-channel', function () {
-        Route::post('/api/getUsrBalance', [\app\wallet\controller\game\GKGameController::class, 'getUsrBalance']);
-        Route::post('/api/transfer2', [\app\wallet\controller\game\GKGameController::class, 'transfer']);
-        Route::post('/api/cancelTransfer2', [\app\wallet\controller\game\GKGameController::class, 'cancelTransfer']);
+        Route::post('/getUsrBalance', [\app\wallet\controller\game\GKGameController::class, 'getUsrBalance']);
+        Route::post('/transfer2', [\app\wallet\controller\game\GKGameController::class, 'transfer']);
+        Route::post('/cancelTransfer2', [\app\wallet\controller\game\GKGameController::class, 'cancelTransfer']);
     });
 });
 Route::disableDefaultRoute();
