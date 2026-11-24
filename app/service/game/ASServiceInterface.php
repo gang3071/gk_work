@@ -187,7 +187,7 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
             return false;
         }
         foreach (self::BOOL_SIGN_STYLES as $style) {
-            if (hash_equals($this->makeSignSource($params, $style), $hash)) {
+            if (hash_equals(md5($this->makeSignSource($params, $style)), $hash)) {
                 if ($style !== self::BOOL_SIGN_STYLE) {
                     $this->logBoolStyleOnce($style);
                 }
