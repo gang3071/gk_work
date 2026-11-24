@@ -84,6 +84,9 @@ class ASGameController
 
     private GameServiceInterface|SingleWalletServiceInterface $service;
 
+    /** 当前端点名（响应日志用） */
+    private string $op = '';
+
     public function __construct()
     {
         $this->service = GameServiceFactory::createService(GameServiceFactory::TYPE_AS);
@@ -98,6 +101,7 @@ class ASGameController
      */
     public function verifySession(Request $request): Response
     {
+        $this->op = __FUNCTION__;
         try {
             $data = $this->service->decrypt($request->rawBody());
             Log::channel('as_server')->info('AS验证session记录', ['params' => $data]);
@@ -127,6 +131,7 @@ class ASGameController
      */
     public function balance(Request $request): Response
     {
+        $this->op = __FUNCTION__;
         try {
             $data = $this->service->decrypt($request->rawBody());
             Log::channel('as_server')->info('AS余额查询记录', ['params' => $data]);
@@ -157,6 +162,7 @@ class ASGameController
      */
     public function withdraw(Request $request): Response
     {
+        $this->op = __FUNCTION__;
         try {
             $data = $this->service->decrypt($request->rawBody());
             Log::channel('as_server')->info('AS下注请求（Lua原子）', ['params' => $data]);
@@ -263,6 +269,7 @@ class ASGameController
      */
     public function deposit(Request $request): Response
     {
+        $this->op = __FUNCTION__;
         try {
             $data = $this->service->decrypt($request->rawBody());
             Log::channel('as_server')->info('AS派彩请求（Lua原子）', ['params' => $data]);
@@ -370,6 +377,7 @@ class ASGameController
      */
     public function refund(Request $request): Response
     {
+        $this->op = __FUNCTION__;
         try {
             $data = $this->service->decrypt($request->rawBody());
             Log::channel('as_server')->info('AS退款请求（Lua原子）', ['params' => $data]);
@@ -639,10 +647,17 @@ class ASGameController
      */
     public function success(array $data = [], int $httpCode = 200): Response
     {
+        $body = json_encode(['code' => 'OK'] + $data, JSON_UNESCAPED_UNICODE);
+        Log::channel('as_server')->info('AS钱包响应', [
+            'op' => $this->op,
+            'http_status' => $httpCode,
+            'body' => $body,
+        ]);
+
         return new Response(
             $httpCode,
             ['Content-Type' => 'application/json'],
-            json_encode(['code' => 'OK'] + $data, JSON_UNESCAPED_UNICODE)
+            $body
         );
     }
 
@@ -660,11 +675,17 @@ class ASGameController
             'code' => $code,
             'message' => $message !== '' ? $message : (self::CODE_MESSAGE_MAP[$code] ?? $code),
         ];
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
+        Log::channel('as_server')->warning('AS钱包响应', [
+            'op' => $this->op,
+            'http_status' => $httpCode,
+            'body' => $body,
+        ]);
 
         return new Response(
             $httpCode,
             ['Content-Type' => 'application/json'],
-            json_encode($payload, JSON_UNESCAPED_UNICODE)
+            $body
         );
     }
 }
