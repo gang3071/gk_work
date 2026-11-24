@@ -152,7 +152,7 @@ class ASGameController
     }
 
     /**
-     * 下注扣款 Withdraw（Lua 原子操作，幂等键 txnId）
+     * 下注扣款 Withdraw（Lua 原子操作，注单单号=局号 roundId，幂等键 roundId）
      * 场景：Loss = Withdraw(10, round 2) + Deposit(0, round 2)
      *       Win  = Withdraw(10, round 2) + Deposit(100, round 2)
      * POST /single-wallet/as-channel/withdraw
@@ -171,23 +171,22 @@ class ASGameController
             }
 
             $player = $this->service->player;
-            $orderNo = (string)($data['txnId'] ?? '');
+            $txnId = (string)($data['txnId'] ?? '');
             $roundId = (string)($data['roundId'] ?? '');
+            // 注单单号 = 局号：一局一单，派彩结算按单号直接更新
+            $orderNo = $roundId;
             $amount = $this->parseAmount($data['amount'] ?? 0);
 
             // 参数校验：txnId/roundId 必填、amount > 0 且最多 2 位小数（文档）
-            if ($orderNo === '' || $roundId === '' || $amount === null || $amount <= 0) {
+            if ($txnId === '' || $roundId === '' || $amount === null || $amount <= 0) {
                 return $this->error(self::CODE_REQUEST_DECLINED);
             }
 
             // 文档：completed=true 后不再允许新的扣款/派彩/回滚（幂等重试除外）
             if ($this->isRoundClosed($roundId) && !$this->isWalletRetry($orderNo, "game:record:bet:AS:{$orderNo}")) {
-                Log::channel('as_server')->warning('AS扣款拒绝：回合已结束', ['txnId' => $orderNo, 'roundId' => $roundId]);
+                Log::channel('as_server')->warning('AS扣款拒绝：回合已结束', ['txnId' => $txnId, 'roundId' => $roundId]);
                 return $this->error(self::CODE_REQUEST_DECLINED);
             }
-
-            // 记录该局下注单号：后续派彩合并进此单（一笔下注只产一条订单）
-            \support\Redis::setex('as:round:bet:' . $roundId, self::MARK_TTL, $orderNo);
 
             //判断当前设备是否爆机
             if ($this->service->checkAndHandleMachineCrash()) {
@@ -251,7 +250,7 @@ class ASGameController
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'duplicate_order') {
                     // 幂等：重试一律返回原始的响应（文档）
-                    Log::channel('as_server')->info('AS下注重复请求（Lua检测）', ['txnId' => $orderNo]);
+                    Log::channel('as_server')->info('AS下注重复请求（Lua检测）', ['txnId' => $txnId, 'orderNo' => $orderNo]);
                     $currentBalance = (float)($result['balance'] ?? WalletService::getBalance($player->id));
                     return $this->respondRetry($orderNo, $roundId, $data, $currentBalance);
                 }
@@ -261,7 +260,7 @@ class ASGameController
                 return $this->error(self::CODE_UNKNOWN_ERROR);
             }
 
-            Log::channel('as_server')->info('AS下注成功（Lua原子）', ['txnId' => $orderNo]);
+            Log::channel('as_server')->info('AS下注成功（Lua原子）', ['txnId' => $txnId, 'orderNo' => $orderNo]);
 
             return $this->respondSuccess($orderNo, $roundId, $data, (float)$result['balance']);
         } catch (Exception $e) {
@@ -272,7 +271,7 @@ class ASGameController
     }
 
     /**
-     * 派彩加款 Deposit（Lua 原子操作，幂等键 txnId）
+     * 派彩加款 Deposit（Lua 原子操作，资金幂等键 txnId；记录按单号 roundId 合并进下注单）
      * 同一 roundId 可多次 deposit（Free Game 多段派彩：Withdraw(10)+Deposit(20)+Deposit(5)）
      * POST /single-wallet/as-channel/deposit
      * @param Request $request
@@ -330,22 +329,18 @@ class ASGameController
             logLuaScriptCall('settle', 'AS', $player->id, $luaParams);
 
             if ($result['ok'] === 1) {
-                // 派彩合并进该局下注记录：一笔下注只产一条订单，多段派彩（Free Game）win 累加，
-                // 回合最后一笔（completed=true）标记已结算——避免下注单停留在未结算
-                $betOrderNo = (string)\support\Redis::get('as:round:bet:' . $roundId);
-                $merged = false;
-                if ($betOrderNo !== '') {
-                    $merged = GameRecordCacheService::saveSettleIntoBet('AS', $betOrderNo, [
-                        'amount' => $amount,
-                        'settle_type' => 'settle',
-                        'is_final' => !empty($data['completed']),
-                        'original_data' => $data,
-                    ]);
-                }
+                // 派彩按注单单号（=局号）直接合并进下注单：一笔下注只产一条订单，
+                // 多段派彩（Free Game）win 累加，回合最后一笔（completed=true）标记已结算
+                $merged = GameRecordCacheService::saveSettleIntoBet('AS', $roundId, [
+                    'amount' => $amount,
+                    'settle_type' => 'settle',
+                    'is_final' => !empty($data['completed']),
+                    'original_data' => $data,
+                ]);
                 if ($merged) {
                     Log::channel('as_server')->info('AS派彩合并进下注单', [
                         'txnId' => $orderNo,
-                        'betOrderNo' => $betOrderNo,
+                        'orderNo' => $roundId,
                         'amount' => $amount,
                         'is_final' => !empty($data['completed']),
                     ]);
@@ -353,8 +348,7 @@ class ASGameController
                     // 找不到该局下注记录：回退独立结算单（旧行为）
                     Log::channel('as_server')->warning('AS派彩合并失败：下注记录不存在，回退独立结算单', [
                         'txnId' => $orderNo,
-                        'roundId' => $roundId,
-                        'betOrderNo' => $betOrderNo,
+                        'orderNo' => $roundId,
                     ]);
                     GameRecordCacheService::saveSettle('AS', [
                         'order_no' => $orderNo,
@@ -406,7 +400,7 @@ class ASGameController
     }
 
     /**
-     * 退款 Refund（Lua 原子操作，撤销原 withdraw 注单，幂等键 betTxnId）
+     * 退款 Refund（Lua 原子操作，注单单号=局号，按单号就地撤销，幂等键 roundId）
      * 文档规定：找不到原注单也返回成功 + 当前余额
      * POST /single-wallet/as-channel/refund
      * @param Request $request
@@ -424,11 +418,13 @@ class ASGameController
             }
 
             $player = $this->service->player;
-            $orderNo = (string)($data['betTxnId'] ?? ''); // 原 withdraw 的 txnId
-            $txnId = (string)($data['txnId'] ?? '');      // 本笔回滚的 txnId
+            $txnId = (string)($data['txnId'] ?? '');       // 本笔回滚的 txnId
+            $betTxnId = (string)($data['betTxnId'] ?? ''); // 原 withdraw 的 txnId（文档必填）
             $roundId = (string)($data['roundId'] ?? '');
+            // 注单单号 = 局号：退款按单号就地撤销/更新
+            $orderNo = $roundId;
             // 参数校验（文档）：txnId/betTxnId/roundId 必填
-            if ($orderNo === '' || $txnId === '' || $roundId === '') {
+            if ($txnId === '' || $betTxnId === '' || $roundId === '') {
                 return $this->error(self::CODE_REQUEST_DECLINED);
             }
 
@@ -448,8 +444,8 @@ class ASGameController
             if ($refundAmount <= 0) {
                 // ✅ 找不到原注单也返回成功 + 当前余额（AS 文档规定）
                 Log::channel('as_server')->warning('AS退款：原注单不存在，按文档返回成功', [
-                    'betTxnId' => $orderNo,
                     'txnId' => $txnId,
+                    'orderNo' => $orderNo,
                 ]);
                 $currentBalance = WalletService::getBalance($player->id);
                 return $this->respondRetry($txnId, $roundId, $data, (float)$currentBalance);
@@ -508,20 +504,20 @@ class ASGameController
             if ($result['ok'] === 0) {
                 if ($result['error'] === 'order_not_found') {
                     // ✅ 找不到原注单也返回成功 + 当前余额（AS 文档规定）
-                    Log::channel('as_server')->warning('AS退款：原注单不存在（Lua检测）', ['betTxnId' => $orderNo]);
+                    Log::channel('as_server')->warning('AS退款：原注单不存在（Lua检测）', ['txnId' => $txnId, 'orderNo' => $orderNo]);
                     $currentBalance = (float)($result['balance'] ?? WalletService::getBalance($player->id));
                     return $this->respondRetry($txnId, $roundId, $data, $currentBalance);
                 }
                 if ($result['error'] === 'duplicate_cancel') {
                     // 幂等：重试一律返回原始的响应（文档）
-                    Log::channel('as_server')->info('AS退款重复请求（Lua检测）', ['betTxnId' => $orderNo]);
+                    Log::channel('as_server')->info('AS退款重复请求（Lua检测）', ['txnId' => $txnId, 'orderNo' => $orderNo]);
                     $currentBalance = (float)($result['balance'] ?? WalletService::getBalance($player->id));
                     return $this->respondRetry($txnId, $roundId, $data, $currentBalance);
                 }
                 return $this->error(self::CODE_UNKNOWN_ERROR);
             }
 
-            Log::channel('as_server')->info('AS退款成功（Lua原子）', ['betTxnId' => $orderNo]);
+            Log::channel('as_server')->info('AS退款成功（Lua原子）', ['txnId' => $txnId, 'orderNo' => $orderNo]);
 
             return $this->respondSuccess($txnId, $roundId, $data, (float)$result['balance']);
         } catch (Exception $e) {
