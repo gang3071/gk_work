@@ -102,6 +102,9 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
     /** 已记录过的入站布尔值拼串风格（每进程每风格只记一次日志） */
     private static array $boolStyleLogged = [];
 
+    /** 验签环境基线日志是否已记录（每进程一次） */
+    private static bool $signEnvLogged = false;
+
     /** 移动端进入（is_mobile） */
     public int $isMobile = 0;
 
@@ -150,7 +153,7 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
             $pairs[] = $key . '=' . $value;
         }
         $str = implode('&', $pairs);
-        return ($str === '' ? '' : $str . '&') . 'shared_key=' . ($this->config['share_key'] ?? '');
+        return ($str === '' ? '' : $str . '&') . 'shared_key=' . trim((string)($this->config['share_key'] ?? ''));
     }
 
     /**
@@ -178,6 +181,7 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
      */
     public function verifySign(array $params): bool
     {
+        $this->logSignEnvOnce();
         $hash = strtolower((string)($params['hash'] ?? ''));
         if ($hash === '') {
             return false;
@@ -191,6 +195,35 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
             }
         }
         return false;
+    }
+
+    /**
+     * 验签环境基线日志（每进程一次）：key 指纹用于跨环境比对，不暴露密钥本身
+     * @return void
+     */
+    private function logSignEnvOnce(): void
+    {
+        if (self::$signEnvLogged) {
+            return;
+        }
+        self::$signEnvLogged = true;
+        $key = trim((string)($this->config['share_key'] ?? ''));
+        $this->log->info('AS验签环境', [
+            'key_configured' => $key !== '',
+            'key_fingerprint' => substr(md5($key), 0, 8),
+            'bool_sign_style' => self::BOOL_SIGN_STYLE,
+            'ts_window' => self::TS_MAX_WINDOW,
+        ]);
+    }
+
+    /**
+     * sign 原串脱敏（shared_key 部分遮蔽，供日志排查/提供给 AS 客服）
+     * @param string $signSource
+     * @return string
+     */
+    public function maskSignSource(string $signSource): string
+    {
+        return preg_replace('/shared_key=[^&]*$/', 'shared_key=***', $signSource);
     }
 
     /**
@@ -219,6 +252,7 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
         $params['ts'] = time();
         $signSource = $this->makeSignSource($params);
         $params['hash'] = md5($signSource);
+        $signSourceMasked = $this->maskSignSource($signSource);
 
         $response = Http::timeout(7)
             ->withHeaders([
@@ -229,7 +263,7 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
             ->post($this->apiDomain . $url, $params);
 
         if (!$response->ok()) {
-            $this->log->error("AS请求失败 {$url}", ['params' => $params, 'sign' => $signSource, 'response' => $response->body()]);
+            $this->log->error("AS请求失败 {$url}", ['params' => $params, 'sign' => $signSourceMasked, 'response' => $response->body()]);
             throw new GameException(trans('system_busy', [], 'message'));
         }
 
@@ -238,7 +272,7 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
             throw new Exception(trans('system_busy', [], 'message'));
         }
         if (($res['error_code'] ?? '') != $this->successCode) {
-            $this->log->info("AS业务失败 {$url}", ['params' => $params, 'sign' => $signSource, 'res' => $res]);
+            $this->log->info("AS业务失败 {$url}", ['params' => $params, 'sign' => $signSourceMasked, 'res' => $res]);
             throw new GameException((($res['error_text'] ?? '') ?: trans('system_busy', [], 'message')), 0);
         }
 
@@ -608,19 +642,39 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
     {
         $params = json_decode((string)$data, true);
         if (empty($params) || !is_array($params)) {
+            $this->log->warning('AS入站请求体解析失败', ['raw' => mb_substr((string)$data, 0, 500)]);
             return $this->error = ASGameController::CODE_INVALID_TOKEN;
         }
 
         // 签名校验（出入站同一规则）
         if (!$this->verifySign($params)) {
-            $this->log->warning('AS入站签名校验失败', ['params' => $params]);
+            // 完整判定信息：脱敏签名原串、各布尔风格期望 hash、key 指纹、时间基准
+            $styleHashes = [];
+            foreach (self::BOOL_SIGN_STYLES as $s) {
+                $styleHashes[$s] = md5($this->makeSignSource($params, $s));
+            }
+            $key = trim((string)($this->config['share_key'] ?? ''));
+            $this->log->warning('AS入站签名校验失败', [
+                'params' => $params,
+                'sign_source' => $this->maskSignSource($this->makeSignSource($params)),
+                'received_hash' => strtolower((string)($params['hash'] ?? '')),
+                'style_hashes' => $styleHashes,
+                'key_configured' => $key !== '',
+                'key_fingerprint' => substr(md5($key), 0, 8),
+                'server_time' => time(),
+            ]);
             return $this->error = ASGameController::CODE_INVALID_TOKEN;
         }
 
         // ts 窗口校验（文档仅要求 10 位时间戳；结合「重试一律返回原始的响应」放宽到 300 秒）
         $ts = (int)($params['ts'] ?? 0);
         if ($ts <= 0 || abs(time() - $ts) > self::TS_MAX_WINDOW) {
-            $this->log->warning('AS入站时间戳过期', ['ts' => $ts]);
+            $this->log->warning('AS入站时间戳过期', [
+                'ts' => $ts,
+                'server_time' => time(),
+                'drift' => time() - $ts,
+                'window' => self::TS_MAX_WINDOW,
+            ]);
             return $this->error = ASGameController::CODE_INVALID_TOKEN;
         }
 
@@ -629,17 +683,24 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
             $player = $this->getPlayerBySession((string)$params['session']);
             if (empty($player)) {
                 // 文档：会话令牌缺失、无效或已过期 => INVALID_TOKEN
+                $this->log->warning('AS入站会话无效或已过期', ['session' => (string)($params['session'] ?? '')]);
                 return $this->error = ASGameController::CODE_INVALID_TOKEN;
             }
         } else {
             $player = Player::query()->where('uuid', (string)($params['playerId'] ?? ''))->first();
             if (empty($player)) {
+                $this->log->warning('AS入站玩家不存在', ['playerId' => (string)($params['playerId'] ?? '')]);
                 return $this->error = ASGameController::CODE_LOGIN_FAILED;
             }
         }
 
         // 帐号状态
         if ($player->trashed() || (int)$player->status !== 1) {
+            $this->log->warning('AS入站帐号状态异常', [
+                'playerId' => (string)$player->uuid,
+                'status' => $player->status,
+                'trashed' => $player->trashed(),
+            ]);
             return $this->error = ASGameController::CODE_ACCOUNT_BLOCKED;
         }
 
@@ -649,6 +710,11 @@ class ASServiceInterface extends GameServiceFactory implements GameServiceInterf
             $expect = $this->walletCurrency();
             if (strtoupper((string)$params['currency']) !== $expect) {
                 $this->player = null;
+                $this->log->warning('AS入站币种不匹配', [
+                    'playerId' => (string)$player->uuid,
+                    'expect' => $expect,
+                    'got' => strtoupper((string)$params['currency']),
+                ]);
                 return $this->error = ASGameController::CODE_REQUEST_DECLINED;
             }
         }
