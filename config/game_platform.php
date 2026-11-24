@@ -178,6 +178,5 @@ return [
         'website' => env('GK_WEBSITE'),
         'uppername' => env('GK_UPPERNAME'),
         'key' => env('GK_KEY'),
-        'debug' => env('GK_DEBUG'),
     ],
 ];

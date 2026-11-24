@@ -9,6 +9,9 @@ use app\model\GamePlatform;
 use app\model\GameType;
 use app\model\Player;
 use app\model\PlayerGamePlatform;
+use app\service\PlayerCacheService;
+use app\service\WalletService;
+use app\wallet\controller\game\GKGameController;
 use Carbon\Carbon;
 use Exception;
 use support\Log;
@@ -88,19 +91,10 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
                 'url' => $url,
                 'params' => $params,
                 'status' => $response->status(),
-                'response' => $response->body(),
-                'result' => $result
+                'response' => $response->body()
             ]);
 
             throw new GameException(trans('system_busy', [], 'message'));
-        }
-
-        if ($this->config['debug']) {
-            $this->log->error('GK 測試回調全紀錄', [
-                'url' => $url,
-                'params' => $params,
-                'result' => $result
-            ]);
         }
 
         return $result;
@@ -185,6 +179,15 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
         self::doCurl('createPlayer', $params);
 
         return true;
+    }
+
+    /**
+     * 查詢餘額
+     * @return mixed
+     */
+    public function balance(): mixed
+    {
+        return WalletService::getBalance($this->player->id);
     }
 
     /**
@@ -293,6 +296,44 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
     }
 
     /**
+     * 解密
+     * @param $data
+     * @return bool|int
+     */
+    public function decrypt($data)
+    {
+        if (empty($data['website']) || empty($data['uppername']) || empty($data['username']) || empty($data['key'])) {
+            return $this->error = GKGameController::API_CODE_INVALID_PARAM;
+        }
+
+        if ($data['website'] != $this->config['website']) {
+            return $this->error = GKGameController::API_CODE_INVALID_PARAM;
+        }
+
+        if ($data['uppername'] != $this->config['uppername']) {
+            return $this->error = GKGameController::API_CODE_INVALID_PARAM;
+        }
+
+        $remitno = $data['remitno'] ?? '';
+        $time = Carbon::now('-04:00')->format('Ymd');  // 美東時間 GMT-4
+        $md5 = md5($data['website'] . $data['username'] . $remitno . $this->config['key'] . $time);
+
+        if (strpos($data['key'], $md5) === false) {
+            return $this->error = GKGameController::API_CODE_DECRYPT_ERROR;
+        }
+
+        $player = PlayerCacheService::getByUuid($data['username']);
+
+        if (! $player) {
+            return $this->error = GKGameController::API_CODE_PLAYER_NOT_EXIST;
+        }
+
+        $this->player = $player;
+
+        return true;
+    }
+
+    /**
      * 產生隨機字串
      * @param $length
      * @return string
@@ -352,10 +393,5 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
     public function gift($data)
     {
         // TODO: Implement gift() method.
-    }
-
-    public function decrypt($data)
-    {
-        // TODO: Implement decrypt() method.
     }
 }
