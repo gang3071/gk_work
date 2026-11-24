@@ -231,7 +231,7 @@ Route::group('/single-wallet', function () {
     Route::group('/gk-channel', function () {
         Route::post('/api/getUsrBalance', [\app\wallet\controller\game\GKGameController::class, 'getUsrBalance']);
         Route::post('/api/transfer2', [\app\wallet\controller\game\GKGameController::class, 'transfer']);
-        Route::post('/api/cancelTransfer2', [\app\wallet\controller\game\KTGameController::class, 'cancelTransfer']);
+        Route::post('/api/cancelTransfer2', [\app\wallet\controller\game\GKGameController::class, 'cancelTransfer']);
     });
 });
 Route::disableDefaultRoute();

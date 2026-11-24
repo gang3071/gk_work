@@ -73,7 +73,7 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
         $response = Http::asForm()->timeout(30)->post($url, $params);
 
         if (! $response->ok()) {
-            $this->log->error('GK 接口請求失敗', [
+            $this->log->error('接口請求失敗', [
                 'url' => $url,
                 'params' => $params,
                 'status' => $response->status(),
@@ -87,7 +87,7 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
         $success = $result['result'] ?? false;
 
         if (! $success) {
-            $this->log->error('GK 返回數據無效', [
+            $this->log->error('回調數據無效', [
                 'url' => $url,
                 'params' => $params,
                 'status' => $response->status(),
@@ -102,8 +102,8 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
 
     /**
      * 進入遊戲
-     * @param Game $game
-     * @param string $lang
+     * @param $game
+     * @param $lang
      * @return string|mixed
      * @throws GameException
      */
@@ -129,7 +129,7 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
         $result = self::doCurl('gameLogin', $params);
 
         if (empty($result['data']['url'])) {
-            $this->log->error('GK 進入遊戲失敗', [
+            $this->log->error('進入遊戲失敗', [
                 'params' => $params,
                 'result' => $result,
             ]);
