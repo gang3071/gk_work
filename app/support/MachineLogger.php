@@ -482,9 +482,9 @@ class MachineLogger
                 // 以 open_table/wash_table 作为开洗分的权威字段
                 $state['bet'] = (int)($data['bet'] ?? $data['total_bet'] ?? 0);
                 $state['win'] = (int)($data['win'] ?? $data['total_win'] ?? 0);
-                $state['score'] = (int)($data['score'] ?? 0);
+                $state['score'] = $state['win'];                              // 得分 = BB 累计赢分（非 B2 机台余额）
                 $state['card_score'] = (int)($data['card_score'] ?? 0);     // 开分卡分数（可取回的分）
-                $state['machine_score'] = (int)($data['machine_score'] ?? 0);  // 机台分数（游戏中使用）
+                $state['machine_score'] = (int)($data['machine_score'] ?? 0);  // 機台分 = B2 机台当前余额
                 $state['login_status'] = (int)($data['login_status'] ?? 0);   // 登入状态 0/1
                 $state['open_table'] = (int)($data['open_table'] ?? 0);     // 开分码表（外部累计）
                 $state['wash_table'] = (int)($data['wash_table'] ?? 0);     // 洗分码表（外部累计）
