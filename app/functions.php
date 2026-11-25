@@ -3413,18 +3413,9 @@ if (!function_exists('machineOpenAnyFree')) {
                 usleep(1200000); // 1.2秒，等待心跳更新 Redis 分数
                 try {
                     $services->sendCmd($services::TURN_UP_ALL, 0, 'player', $player->id);
-                    Log::info('[machineOpenAnyFree] 开分赠点自动全部上转成功', [
-                        'player_id'  => $player->id,
-                        'machine_id' => $machine->id,
-                        'gift_score' => $giftScore,
-                    ]);
+                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_turn_up_all', '[開分贈點] 自動全部上轉成功 gift_score=' . $giftScore, ['player_id' => $player->id]);
                 } catch (\Exception $e) {
-                    Log::warning('[machineOpenAnyFree] 开分赠点自动全部上转失败', [
-                        'player_id'  => $player->id,
-                        'machine_id' => $machine->id,
-                        'gift_score' => $giftScore,
-                        'error'      => $e->getMessage(),
-                    ]);
+                    MachineLogger::warning($machine->toArray(), 'gift_turn_up_all', '[開分贈點] 自動全部上轉失敗 gift_score=' . $giftScore . ' error=' . $e->getMessage(), $services->getMachineCache(), MachineLogger::DIR_EVENT);
                     // 不影响开分结果，玩家可手动点击全部上转
                 }
             }
