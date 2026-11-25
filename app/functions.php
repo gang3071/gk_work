@@ -3410,10 +3410,32 @@ if (!function_exists('machineOpenAnyFree')) {
                 && $machine->type == GameType::TYPE_STEEL_BALL
                 && $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                 && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
-                usleep(1200000); // 1.2秒，等待心跳更新 Redis 分数
+                // 轮询等待心跳将新分数写入 Redis（sendCmd TURN_UP_ALL 内部会校验 point >= 100）
+                // openPoint 在 <1s 内返回时 MACHINE_POINT 查询尚未触发，需主动等待
+                $pollWaited = 0;
+                while ($pollWaited < 3000000 && ($services->point ?? 0) < 100) {
+                    usleep(200000); // 每 200ms 检查一次
+                    $pollWaited += 200000;
+                }
                 try {
+                    $turnBefore = $services->turn ?? 0;
                     $services->sendCmd($services::TURN_UP_ALL, 0, 'player', $player->id);
-                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_turn_up_all', '[開分贈點] 自動全部上轉成功 gift_score=' . $giftScore, ['player_id' => $player->id]);
+                    // 轮询等待心跳确认转数增加（MACHINE_TURN 响应异步写入 Redis）
+                    $confirmWaited = 0;
+                    $confirmed = false;
+                    while ($confirmWaited < 3000000) {
+                        usleep(300000); // 每 300ms 检查一次
+                        $confirmWaited += 300000;
+                        if (($services->turn ?? 0) > $turnBefore) {
+                            $confirmed = true;
+                            break;
+                        }
+                    }
+                    if ($confirmed) {
+                        MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_turn_up_all', '[開分贈點] 自動全部上轉成功 gift_score=' . $giftScore . ' turn_before=' . $turnBefore . ' turn_after=' . ($services->turn ?? 0), ['player_id' => $player->id]);
+                    } else {
+                        MachineLogger::warning($machine->toArray(), 'gift_turn_up_all', '[開分贈點] 自動全部上轉未確認（心跳未更新轉數）gift_score=' . $giftScore . ' turn_before=' . $turnBefore, $services->getMachineCache(), MachineLogger::DIR_EVENT);
+                    }
                 } catch (\Exception $e) {
                     MachineLogger::warning($machine->toArray(), 'gift_turn_up_all', '[開分贈點] 自動全部上轉失敗 gift_score=' . $giftScore . ' error=' . $e->getMessage(), $services->getMachineCache(), MachineLogger::DIR_EVENT);
                     // 不影响开分结果，玩家可手动点击全部上转
