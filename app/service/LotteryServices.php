@@ -1787,6 +1787,7 @@ LUA;
                     $playerLotteryRecord->lottery_type = Lottery::LOTTERY_TYPE_FIXED;
                     $playerLotteryRecord->lottery_multiple = $fixedAllowLottery['lottery_multiple'];
                     $playerLotteryRecord->lottery_sort = $fixedAllowLottery['lottery_sort'];
+                    $playerLotteryRecord->win_condition = (int)$condition;
                     $playerLotteryRecord->status = PlayerLotteryRecord::STATUS_COMPLETE;
                     $playerLotteryRecord->player_game_record_id = $playerGameRecord ? $playerGameRecord->id : 0;
                     $playerLotteryRecord->save();
