@@ -3403,6 +3403,32 @@ if (!function_exists('machineOpenAnyFree')) {
                 } else {
                     $services->sendCmd($services::OPEN_ANY_POINT, $totalOpenScore, 'admin', $adminId);
                 }
+
+            // 开分赠点后自动全部上转（仅小松钢珠线下）
+            // 需要等待心跳将新分数写入 Redis，才能通过 TURN_UP_ALL 的 point >= 100 校验
+            if ($giveRuleId && $giftScore > 0
+                && $machine->type == GameType::TYPE_STEEL_BALL
+                && $machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                && $machine->control_type == Machine::CONTROL_TYPE_SONG) {
+                usleep(1200000); // 1.2秒，等待心跳更新 Redis 分数
+                try {
+                    $services->sendCmd($services::TURN_UP_ALL, 0, 'player', $player->id);
+                    Log::info('[machineOpenAnyFree] 开分赠点自动全部上转成功', [
+                        'player_id'  => $player->id,
+                        'machine_id' => $machine->id,
+                        'gift_score' => $giftScore,
+                    ]);
+                } catch (\Exception $e) {
+                    Log::warning('[machineOpenAnyFree] 开分赠点自动全部上转失败', [
+                        'player_id'  => $player->id,
+                        'machine_id' => $machine->id,
+                        'gift_score' => $giftScore,
+                        'error'      => $e->getMessage(),
+                    ]);
+                    // 不影响开分结果，玩家可手动点击全部上转
+                }
+            }
+
             // ✅ Redis 缓存更新（失败不影响业务，下次读取时从 DB 刷新）
             try {
                 // ✅ 诊断日志：记录 Redis 更新前的值
