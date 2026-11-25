@@ -1575,6 +1575,41 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     }
 
     /**
+     * 开分赠点后自动全部上转，并轮询心跳确认转数增加。
+     * 只适用于小松钢珠线下机台（本类），调用方无需再做机型判断。
+     */
+    public function giftPointTurnUpAll(int $giftScore, int $playerId): void
+    {
+        // 轮询等待 Redis point >= 100（OPEN_ANY_POINT 在 <1s 返回时心跳尚未刷入分数）
+        $pollWaited = 0;
+        while ($pollWaited < 3000000 && ($this->point ?? 0) < 100) {
+            usleep(200000);
+            $pollWaited += 200000;
+        }
+
+        $turnBefore = $this->turn ?? 0;
+        $this->sendCmd(self::TURN_UP_ALL, 0, 'player', $playerId);
+
+        // 轮询等待心跳确认转数增加（MACHINE_TURN 响应异步写入 Redis）
+        $confirmWaited = 0;
+        $confirmed = false;
+        while ($confirmWaited < 3000000) {
+            usleep(300000);
+            $confirmWaited += 300000;
+            if (($this->turn ?? 0) > $turnBefore) {
+                $confirmed = true;
+                break;
+            }
+        }
+
+        if ($confirmed) {
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_turn_up_all', '[開分贈點] 自動全部上轉成功 gift_score=' . $giftScore . ' turn_before=' . $turnBefore . ' turn_after=' . ($this->turn ?? 0), ['player_id' => $playerId]);
+        } else {
+            MachineLogger::warning($this->machine->toArray(), 'gift_turn_up_all', '[開分贈點] 自動全部上轉未確認（心跳未更新轉數）gift_score=' . $giftScore . ' turn_before=' . $turnBefore, $this->getMachineCache(), MachineLogger::DIR_EVENT);
+        }
+    }
+
+    /**
      * 处理指令回复
      */
     private function handleCommandReply(string $msg, string $fun, string $fun1, int $gamingUserId): bool
