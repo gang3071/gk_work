@@ -2905,11 +2905,11 @@ if (!function_exists('machineOpenAnyFree')) {
             $money = 0;  // ✅ 初始化，避免异常处理时 Undefined variable
 
             // 赠点防御校验（事务前提前拦截，避免无效事务）
+            // 活跃赠点会话期间禁止任何上分（含普通上分），防止玩家绕过条件限制
+            if (!empty(Cache::get('gift_cache_' . $machine->id . '_' . $player->id))) {
+                throw new Exception(trans('give_point_session_active', [], 'message'));
+            }
             if ($giveRuleId && $giftScore > 0) {
-                // 活跃赠点会话检查
-                if (!empty(Cache::get('gift_cache_' . $machine->id . '_' . $player->id))) {
-                    throw new Exception(trans('give_point_session_active', [], 'message'));
-                }
                 // 每日次数限制（防止绕过 MachineOperationService 直接调用超限）
                 $giveRuleForCheck = MachineCategoryGiveRule::find($giveRuleId);
                 if ($giveRuleForCheck && (int)$giveRuleForCheck->give_rule_num > 0) {
