@@ -1442,7 +1442,9 @@ function machineWash(
         }
 
         // ✅ 硬件指令成功后才提交数据库
+        $committed = false;
         DB::commit();
+        $committed = true;
 
             // ✅ 固定彩金检查：必须在 DB::commit() 之后执行
             // 原因：若在外层事务内调用，fixedPotCheckLottery 的 DB::beginTransaction() 会退化为
@@ -1631,7 +1633,9 @@ function machineWash(
         }
 
         } catch (Exception $e) {
-            DB::rollback();
+            if (!$committed) {
+                DB::rollback();
+            }
             throw new Exception($e->getMessage());
         }
 

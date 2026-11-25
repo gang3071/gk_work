@@ -326,6 +326,7 @@ class AdminMachineController
     {
         try {
             $lang = $this->setLanguage($request);
+            $adminId = $this->getAdminId($request);
 
             // 获取并验证参数
             $machineId = $request->post('machine_id');
