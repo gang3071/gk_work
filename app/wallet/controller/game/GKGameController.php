@@ -405,7 +405,7 @@ class GKGameController
         ];
 
         $reqBase64 = json_encode($responseData);
-        $this->log->info('返回紀錄', ['response' => $responseData]);
+        $this->log->info('返回紀錄', $responseData);
 
         return (new Response(
             $httpCode,
