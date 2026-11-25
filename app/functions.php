@@ -1171,6 +1171,7 @@ function machineWash(
     // TTL=70s：SongOfflineSlot 洗分最长 handleWashPoint 50s + card_score 轮询 10s = 60s，留有余量
     $actionLockerKey = 'machine_operation_lock_' . $machine->id;
     $lock = Locker::lock($actionLockerKey, 70, true);
+    $committed = false;
 
     try {
         if (!$lock->acquire()) {
@@ -1442,7 +1443,6 @@ function machineWash(
         }
 
         // ✅ 硬件指令成功后才提交数据库
-        $committed = false;
         DB::commit();
         $committed = true;
 
