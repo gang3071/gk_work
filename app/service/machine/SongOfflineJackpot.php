@@ -258,7 +258,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 $this->lottery_record_id = 0;
             }
 
-            $oldValue = Cache::get($key);
+            // 只有需要推送到前端的字段才读旧值（用于跳过无变化的推送），其余字段不读节省Redis GET
+            $oldValue = in_array($name, $this->machineInfo) ? Cache::get($key) : null;
             try {
                 $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
                 if (!$saveResult) {
