@@ -3653,9 +3653,8 @@ if (!function_exists('machineOpenAnyFree')) {
                             $services->gaming_user_id = 0;
                         }
 
-                        // 首次赠点开分失败退款后，清除 gift_cache，玩家可重新尝试赠点上分
-                        // （追加上分不涉及 gift_cache 写入，无需清除）
-                        if (!empty($giftScore) && ($gameRecordIsNew ?? false)) {
+                        // 开分失败退款后清除 gift_cache，玩家可重新尝试赠点上分
+                        if (!empty($giftScore)) {
                             Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
                             Log::info('[machineOpenAnyFree] 硬件开分失败退款后清除 gift_cache', [
                                 'machine_id' => $machine->id,
@@ -3679,6 +3678,10 @@ if (!function_exists('machineOpenAnyFree')) {
                         try {
                             $services->has_lock = 1;
                         } catch (\Exception $lockError) { }
+                        // 退款流程失败时仍需清除 gift_cache，否则人工解锁后玩家无法再使用赠点
+                        if (!empty($giftScore)) {
+                            try { Cache::delete('gift_cache_' . $machine->id . '_' . $player->id); } catch (\Exception $cacheErr) { }
+                        }
                         Log::critical('[machineOpenAnyFree] 自动退款失败，已锁机台，需人工补偿', [
                             'player_id' => $player->id,
                             'machine_id' => $machine->id,
