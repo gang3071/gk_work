@@ -551,7 +551,7 @@ class SongJackpot extends MachineServices implements BaseMachine
                         MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'turn_change', '開獎狀態中，跳過轉數累加 彩金狀態=' . $nowRewardStatus, ['machine_data' => $this->getMachineCache()]);
                     }
                 }
-                if ($nowTurn <= 0 && !empty($gamingUserId)) {
+                if ($nowTurn <= 0 && $orgTurn > 0 && !empty($gamingUserId)) {
                     $giftCacheKey = 'gift_cache_' . $this->machine->id . '_' . $gamingUserId;
                     $giftCacheData = Cache::get($giftCacheKey);
                     if (!empty($giftCacheData)) {
@@ -894,6 +894,40 @@ class SongJackpot extends MachineServices implements BaseMachine
             MachineLogger::warning($svc->machine->toArray(), 'score_to_point', '得分轉分數 超時未回覆，重試 第' . $newAttempts . '次', $svc->getMachineCache());
             $svc->sendScoreToPointAsync($gamingUserId, $newAttempts);
         }, null, false); // false = 只触发一次，不循环
+    }
+
+    /**
+     * 开分赠点后自动全部上转，并轮询心跳确认转数增加。
+     */
+    public function giftPointTurnUpAll(int $giftScore, int $playerId): void
+    {
+        // 轮询等待 Redis point >= 100（OPEN_ANY_POINT 在 <1s 返回时心跳尚未刷入分数）
+        $pollWaited = 0;
+        while ($pollWaited < 3000000 && ($this->point ?? 0) < 100) {
+            usleep(200000);
+            $pollWaited += 200000;
+        }
+
+        $turnBefore = $this->turn ?? 0;
+        $this->sendCmd(self::TURN_UP_ALL, 0, 'player', $playerId);
+
+        // 轮询等待心跳确认转数增加（MACHINE_TURN 响应异步写入 Redis）
+        $confirmWaited = 0;
+        $confirmed = false;
+        while ($confirmWaited < 3000000) {
+            usleep(300000);
+            $confirmWaited += 300000;
+            if (($this->turn ?? 0) > $turnBefore) {
+                $confirmed = true;
+                break;
+            }
+        }
+
+        if ($confirmed) {
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_turn_up_all', '[開分贈點] 自動全部上轉成功 gift_score=' . $giftScore . ' turn_before=' . $turnBefore . ' turn_after=' . ($this->turn ?? 0), ['player_id' => $playerId]);
+        } else {
+            MachineLogger::warning($this->machine->toArray(), 'gift_turn_up_all', '[開分贈點] 自動全部上轉未確認（心跳未更新轉數）gift_score=' . $giftScore . ' turn_before=' . $turnBefore, $this->getMachineCache(), MachineLogger::DIR_EVENT);
+        }
     }
 
     /**

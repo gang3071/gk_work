@@ -516,8 +516,9 @@ class Jackpot extends MachineServices implements BaseMachine
                     $this->setActionVersion($fun);
                     break;
                 case Jackpot::MACHINE_TURN:
+                    $prevTurn = (float)($this->turn ?? 0);
                     $this->turn = $data;
-                    if ($data <= 0) {
+                    if ($data <= 0 && $prevTurn > 0) {
                         // 使用 Redis 属性（$this->gaming_user_id），而非可能过时的 DB 模型值
                         $giftUserId = (int)($this->gaming_user_id ?? 0);
                         if (!empty($giftUserId)) {
@@ -712,6 +713,33 @@ class Jackpot extends MachineServices implements BaseMachine
             MachineLogger::warning($svc->machine->toArray(), 'score_to_point', '超時未回覆，重試 第' . $newAttempts . '次', $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
             $svc->sendScoreToPointAsync($gamingUserId, $newAttempts);
         }, null, false); // false = 只触发一次，不循环
+    }
+
+    /**
+     * 开分赠点后自动全部上转，并轮询心跳确认转数增加。
+     */
+    public function giftPointTurnUpAll(int $giftScore, int $playerId): void
+    {
+        $turnBefore = $this->turn ?? 0;
+        $this->sendCmd(self::TURN_UP_ALL, 0, 'player', $playerId);
+
+        // 轮询等待心跳确认转数增加
+        $confirmWaited = 0;
+        $confirmed = false;
+        while ($confirmWaited < 3000000) {
+            usleep(300000);
+            $confirmWaited += 300000;
+            if (($this->turn ?? 0) > $turnBefore) {
+                $confirmed = true;
+                break;
+            }
+        }
+
+        if ($confirmed) {
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_turn_up_all', '[開分贈點] 自動全部上轉成功 gift_score=' . $giftScore . ' turn_before=' . $turnBefore . ' turn_after=' . ($this->turn ?? 0), ['player_id' => $playerId]);
+        } else {
+            MachineLogger::warning($this->machine->toArray(), 'gift_turn_up_all', '[開分贈點] 自動全部上轉未確認（心跳未更新轉數）gift_score=' . $giftScore . ' turn_before=' . $turnBefore, $this->getMachineCache(), MachineLogger::DIR_EVENT);
+        }
     }
 
     /**
