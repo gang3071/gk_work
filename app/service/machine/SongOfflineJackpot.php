@@ -1139,8 +1139,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // 处理转数变化（累加player_win_number、投递打码量）
         $this->processTurnChange($state['nowRewardStatus'], $gamingUserId, $state['nowTurn'], $orgTurn, $state['nowWinNumber'], $orgWinNumber);
 
-        // 转数为0时清理礼物缓存
-        $this->cleanupGiftCacheIfNeeded($state['nowTurn'], $gamingUserId);
+        // 转数为0时清理礼物缓存（需传入 orgTurn 以区分"刚打完"与"还没开始打"）
+        $this->cleanupGiftCacheIfNeeded($state['nowTurn'], $orgTurn, $gamingUserId);
 
         // 推送机台状态到前端
         $this->sendMachineNowStatusMessage($this->machine->id);
@@ -1557,10 +1557,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
     /**
      * 转数为0时清理礼物缓存
+     *
+     * 必须同时满足：nowTurn == 0 且 orgTurn > 0（转数刚从正数变为0）
+     * 若 orgTurn == 0 表示开分后转数还未开始变化，不能视为"打完"，否则会错误清除刚写入的 gift_cache。
      */
-    private function cleanupGiftCacheIfNeeded($nowTurn, int $gamingUserId): void
+    private function cleanupGiftCacheIfNeeded($nowTurn, float $orgTurn, int $gamingUserId): void
     {
-        if ($nowTurn <= 0 && !empty($gamingUserId)) {
+        if ($nowTurn <= 0 && $orgTurn > 0 && !empty($gamingUserId)) {
             $cacheKey = 'gift_cache_' . $this->machine->id . '_' . $gamingUserId;
             if (Cache::has($cacheKey)) {
                 $giftCache = Cache::get($cacheKey);
