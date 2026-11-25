@@ -1195,6 +1195,7 @@ function machineWash(
         $gamingPressure = 0; // 压分
         $gamingScore = 0; // 得分
         $money = 0; // 机台下分
+        $washRemark = ''; // 下分备注（有赠点扣回时填充）
         //斯洛 需要判斷下分限制
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
@@ -1235,8 +1236,12 @@ function machineWash(
                 $services->sendCmd($services::WIN_NUMBER, 0, 'player', $player->id, $is_system);
                 $gamingTurnPoint = $services->player_win_number ?? 0;
                 $money = $services->point ?? 0;
-                if (!empty($giftPoint) && $path == 'leave') {
+                // switch（换台）同样是放弃当前机台，赠点扣回逻辑与 leave 一致
+                if (!empty($giftPoint) && in_array($path, ['leave', 'switch'])) {
+                    $moneyBeforeGift = $money;
                     $money = max($money - $giftPoint['gift_point'], 0);
+                    $washRemark = '弃台扣回开分赠点 ' . $giftPoint['gift_point'] . ' 分，扣前 ' . $moneyBeforeGift . ' 分，实退 ' . $money . ' 分';
+                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_deduct', '弃台扣回赠點 gift_point=' . $giftPoint['gift_point'] . ' 扣前=' . $moneyBeforeGift . ' 扣後=' . $money, ['gift_cache' => $giftPoint]);
                 }
                 break;
             case GameType::TYPE_SLOT:
@@ -1316,7 +1321,7 @@ function machineWash(
             // 防止竞态条件导致创建 0 分记录但硬件有分的情况
             if ($money >= 0) {
                 $washResult = machineWashZero($player, $machine, $money, $is_system, (int)max($gamingPressure, 0),
-                    (int)max($gamingScore, 0), (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername);
+                    (int)max($gamingScore, 0), (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername, $washRemark);
                 $machine = $washResult['machine'];
             } elseif ($money == 0 && $path == 'leave') {
                 // 0 分弃台，只清理状态，不创建记录
@@ -1653,7 +1658,8 @@ function machineWash(
         }
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
-                if ($path == 'leave') {
+                // switch（换台）同样是放弃当前机台，gift_cache 应与 leave 一同清除
+                if (in_array($path, ['leave', 'switch'])) {
                     $services->gift_bet = 0;
                     Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
                 }
@@ -1707,7 +1713,8 @@ function machineWashZero(
     int     $gamingTurnPoint = 0,
     string  $action = 'leave',
     int     $adminId = 0,
-    string  $adminUsername = ''
+    string  $adminUsername = '',
+    string  $remark = ''
 ): array
 {
     try {
@@ -1765,6 +1772,9 @@ function machineWashZero(
                 $playerGameLog->chip_amount = bcmul($gamingPressure, $ratio, 2);
             } elseif ($machine->type == GameType::TYPE_STEEL_BALL) {
                 $playerGameLog->chip_amount = bcmul($machine->machineCategory?->turn_used_point ?? 0, $gamingTurnPoint);
+            }
+            if (!empty($remark)) {
+                $playerGameLog->remark = $remark;
             }
 
             // 🔍 DEBUG: 下分操作 - 保存前的完整字段值
@@ -1826,6 +1836,9 @@ function machineWashZero(
                 $playerGameLog->chip_amount = bcmul($gamingPressure, $ratio, 2);
             } elseif ($machine->type == GameType::TYPE_STEEL_BALL) {
                 $playerGameLog->chip_amount = bcmul($machine->machineCategory?->turn_used_point ?? 0, $gamingTurnPoint);
+            }
+            if (!empty($remark)) {
+                $playerGameLog->remark = $remark;
             }
             extracted($is_system, $playerGameLog, $gamingPressure, $gamingScore, $gamingTurnPoint, $adminId, $adminUsername);
 
@@ -2887,6 +2900,25 @@ if (!function_exists('machineOpenAnyFree')) {
             $walletDeducted = false;  // 标记钱包是否已扣款（提前初始化，确保 catch 块可引用）
             $money = 0;  // ✅ 初始化，避免异常处理时 Undefined variable
 
+            // 赠点防御校验（事务前提前拦截，避免无效事务）
+            if ($giveRuleId && $giftScore > 0) {
+                // 活跃赠点会话检查
+                if (!empty(Cache::get('gift_cache_' . $machine->id . '_' . $player->id))) {
+                    throw new Exception(trans('give_point_session_active', [], 'message'));
+                }
+                // 每日次数限制（防止绕过 MachineOperationService 直接调用超限）
+                $giveRuleForCheck = MachineCategoryGiveRule::find($giveRuleId);
+                if ($giveRuleForCheck && (int)$giveRuleForCheck->give_rule_num > 0) {
+                    $todayGiftCount = PlayerGiftRecord::where('player_id', $player->id)
+                        ->where('machine_category_give_rule_id', $giveRuleId)
+                        ->whereDate('created_at', date('Y-m-d'))
+                        ->count();
+                    if ($todayGiftCount >= (int)$giveRuleForCheck->give_rule_num) {
+                        throw new Exception(trans('give_rule_daily_limit_exceeded', [], 'message'));
+                    }
+                }
+            }
+
             DB::beginTransaction();
             try {
                 // SongOfflineSlot：openScore 是玩家金額（min_player_amount 的整數倍），
@@ -3160,7 +3192,7 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerGameLog->control_open_point = $machine->control_open_point;
             $playerGameLog->open_point = $logOpenScore;
             $playerGameLog->wash_point = 0;
-            $playerGameLog->gift_point = 0;
+            $playerGameLog->gift_point = $giftScore;
             $playerGameLog->game_amount = $money;  // ✅ 修复：实际扣款金额
             $playerGameLog->before_game_amount = $beforeGameAmount;
             $playerGameLog->after_game_amount = $afterGameAmount;  // ✅ 修复：扣款后余额
@@ -3174,21 +3206,41 @@ if (!function_exists('machineOpenAnyFree')) {
             // 记录赠点信息（如果有赠点规则）
             if ($giveRuleId && $giftScore > 0) {
                 $machineCategoryGiveRule = MachineCategoryGiveRule::find($giveRuleId);
-                if ($machineCategoryGiveRule) {
-                    $playersGiftRecord = new PlayerGiftRecord();
-                    $playersGiftRecord->player_game_log_id = $playerGameLog->id;
-                    $playersGiftRecord->machine_category_give_rule_id = $machineCategoryGiveRule->id;
-                    $playersGiftRecord->machine_id = $machine->id;
-                    $playersGiftRecord->player_id = $player->id;
-                    $playersGiftRecord->player_name = $player->name;
-                    $playersGiftRecord->machine_name = $machine->name;
-                    $playersGiftRecord->machine_type = $machine->type;
-                    $playersGiftRecord->open_num = $machineCategoryGiveRule->open_num;
-                    $playersGiftRecord->give_num = $machineCategoryGiveRule->give_num;
-                    $playersGiftRecord->condition = $machineCategoryGiveRule->condition;
-                    $playersGiftRecord->created_at = date('Y-m-d H:i:s');
-                    $playersGiftRecord->updated_at = date('Y-m-d H:i:s');
-                    $playersGiftRecord->save();
+                // 防御：即使绕过 MachineOperationService 直接调用，也做完整校验
+                if (!$machineCategoryGiveRule
+                    || (int)$machineCategoryGiveRule->status !== 1
+                    || (int)$machineCategoryGiveRule->machine_category_id !== (int)$machine->cate_id) {
+                    throw new Exception(trans('give_rule_not_found', [], 'message'));
+                }
+
+                $playersGiftRecord = new PlayerGiftRecord();
+                $playersGiftRecord->player_game_log_id = $playerGameLog->id;
+                $playersGiftRecord->machine_category_give_rule_id = $machineCategoryGiveRule->id;
+                $playersGiftRecord->machine_id = $machine->id;
+                $playersGiftRecord->player_id = $player->id;
+                $playersGiftRecord->player_name = $player->name;
+                $playersGiftRecord->machine_name = $machine->name;
+                $playersGiftRecord->machine_type = $machine->type;
+                $playersGiftRecord->open_num = $machineCategoryGiveRule->open_num;
+                $playersGiftRecord->give_num = $machineCategoryGiveRule->give_num;
+                $playersGiftRecord->condition = $machineCategoryGiveRule->condition;
+                $playersGiftRecord->created_at = date('Y-m-d H:i:s');
+                $playersGiftRecord->updated_at = date('Y-m-d H:i:s');
+                $playersGiftRecord->save();
+
+                // Cache::set 失败（返回 false）时必须抛出异常，否则 DB 记录落库但 Redis 无 cache，
+                // 导致玩家拿到赠点但弃台时无法扣回
+                $cacheWritten = Cache::set(
+                    'gift_cache_' . $machine->id . '_' . $player->id,
+                    [
+                        'gift_point' => $giftScore,
+                        'open_point' => $machineCategoryGiveRule->open_num,
+                        'condition'  => $machineCategoryGiveRule->condition,
+                    ],
+                    86400 * 7
+                );
+                if (!$cacheWritten) {
+                    throw new Exception('gift_cache 写入 Redis 失败，终止上分');
                 }
             }
 
@@ -3208,7 +3260,7 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerDeliveryRecord->amount_before = $beforeGameAmount;
             $playerDeliveryRecord->amount_after = $afterGameAmount;
             $playerDeliveryRecord->tradeno = '';
-            $playerDeliveryRecord->remark = '';
+            $playerDeliveryRecord->remark = $giftScore > 0 ? '含開分贈點 ' . $giftScore . ' 分' : '';
             $playerDeliveryRecord->user_id = $adminId;
             $playerDeliveryRecord->user_name = $adminUsername;
             $playerDeliveryRecord->save();
@@ -3472,6 +3524,15 @@ if (!function_exists('machineOpenAnyFree')) {
                     'player_id' => $player->id,
                     'machine_id' => $machine->id,
                 ]);
+                // gift_cache 是 Redis 操作，不受 DB 事务控制，回滚时必须手动清除
+                // 否则 PlayerGiftRecord 已回滚但 gift_cache 仍存在，玩家被永久拦截
+                if (!empty($giftScore)) {
+                    Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+                    Log::info('[machineOpenAnyFree] 事务回滚后清除 gift_cache', [
+                        'machine_id' => $machine->id,
+                        'player_id' => $player->id,
+                    ]);
+                }
             } else {
                 Log::warning('[machineOpenAnyFree] 事务已提交，无法回滚（异常发生在硬件指令阶段）', [
                     'player_id' => $player->id,
@@ -3528,6 +3589,12 @@ if (!function_exists('machineOpenAnyFree')) {
                             $playerGameLog->save();
                         }
 
+                        // 赠点开分失败：删除 PlayerGiftRecord，退还当天次数配额
+                        // 硬件未开分，礼物实际未发出，不应消耗每日次数
+                        if (isset($playersGiftRecord) && $playersGiftRecord->id) {
+                            $playersGiftRecord->delete();
+                        }
+
                         // 回滚 PlayerGameRecord 中的上分统计
                         if (isset($gameRecord)) {
                             if ($gameRecordIsNew ?? false) {
@@ -3572,6 +3639,16 @@ if (!function_exists('machineOpenAnyFree')) {
                             $services->gaming_user_id = 0;
                         }
 
+                        // 首次赠点开分失败退款后，清除 gift_cache，玩家可重新尝试赠点上分
+                        // （追加上分不涉及 gift_cache 写入，无需清除）
+                        if (!empty($giftScore) && ($gameRecordIsNew ?? false)) {
+                            Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+                            Log::info('[machineOpenAnyFree] 硬件开分失败退款后清除 gift_cache', [
+                                'machine_id' => $machine->id,
+                                'player_id' => $player->id,
+                            ]);
+                        }
+
                         Log::info('[machineOpenAnyFree] 上分失败已自动退款' . (($gameRecordIsNew ?? false) ? '并解锁机台' : '（追加上分，机台保持锁定）'), [
                             'player_id' => $player->id,
                             'machine_id' => $machine->id,
@@ -3607,37 +3684,29 @@ if (!function_exists('machineOpenAnyFree')) {
                     try {
                         $services->has_lock = 1;
 
+                        // 锁机台后仍需清除 gift_cache，否则人工解锁后玩家无法再使用赠点
+                        if (!empty($giftScore)) {
+                            Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+                            // 删除 PlayerGiftRecord，退还当天次数配额（硬件未开分，礼物未发出）
+                            if (isset($playersGiftRecord) && $playersGiftRecord->id) {
+                                try {
+                                    $playersGiftRecord->delete();
+                                } catch (\Exception $deleteErr) {
+                                    Log::error('[machineOpenAnyFree] 删除 PlayerGiftRecord 失败', [
+                                        'record_id' => $playersGiftRecord->id,
+                                        'error' => $deleteErr->getMessage(),
+                                    ]);
+                                }
+                            }
+                        }
+
                         Log::critical('[machineOpenAnyFree] 上分失败，机台已锁定（Redis），需人工补偿', [
                             'player_id' => $player->id,
                             'machine_id' => $machine->id,
                             'machine_code' => $machine->code,
                             'deducted_amount' => $money,
-                            'action' => '请客服人工补偿玩家并解锁机台',
+                            'action' => '请客服人工补偿玩家并解锁机台' . (!empty($giftScore) ? '（gift_cache 已自动清除）' : ''),
                         ]);
-
-                        // 发送 Telegram CRITICAL 告警
-                        try {
-                            $telegramConfig = config('telegram');
-                            if ($telegramConfig && !empty($telegramConfig['bot_token']) && !empty($telegramConfig['chat_id'])) {
-                                $telegram = new \app\service\TelegramService($telegramConfig['bot_token'], $telegramConfig['chat_id']);
-                                $telegram->sendAlert([
-                                    'datetime' => new \DateTime(),
-                                    'level_name' => 'CRITICAL',
-                                    'message' => '上分失败，机台已锁定',
-                                    'context' => [
-                                        'player_id' => $player->id,
-                                        'machine_id' => $machine->id,
-                                        'machine_code' => $machine->code,
-                                        'deducted_amount' => $money,
-                                        'action' => '请客服人工补偿玩家并解锁机台',
-                                    ],
-                                ]);
-                            }
-                        } catch (\Exception $telegramError) {
-                            Log::error('[machineOpenAnyFree] Telegram 告警发送失败', [
-                                'error' => $telegramError->getMessage(),
-                            ]);
-                        }
 
                     } catch (\Exception $lockError) {
                         Log::critical('[machineOpenAnyFree] 锁机台失败，双重故障', [

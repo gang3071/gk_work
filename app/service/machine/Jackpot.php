@@ -516,8 +516,17 @@ class Jackpot extends MachineServices implements BaseMachine
                     break;
                 case Jackpot::MACHINE_TURN:
                     $this->turn = $data;
-                    if ($data <= 0 && !empty($this->machine->gaming_user_id)) {
-                        Cache::delete('gift_cache_' . $this->machine->id . '_' . $this->machine->gaming_user_id);
+                    if ($data <= 0) {
+                        // 使用 Redis 属性（$this->gaming_user_id），而非可能过时的 DB 模型值
+                        $giftUserId = (int)($this->gaming_user_id ?? 0);
+                        if (!empty($giftUserId)) {
+                            $giftCacheKey = 'gift_cache_' . $this->machine->id . '_' . $giftUserId;
+                            $giftCacheData = Cache::get($giftCacheKey);
+                            if (!empty($giftCacheData)) {
+                                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_cache', '轉數打完，清理禮物快取 玩家ID=' . $giftUserId . ' gift_point=' . ($giftCacheData['gift_point'] ?? 0), ['machine_data' => $this->getMachineCache()]);
+                                Cache::delete($giftCacheKey);
+                            }
+                        }
                     }
                     $this->setActionVersion($fun);
                     break;
