@@ -1703,11 +1703,7 @@ class MachineOperationService
                 $prevGiftKey = 'gift_cache_' . $this->machine->id . '_' . $gamingUserId;
                 if (!empty(\support\Cache::get($prevGiftKey))) {
                     \support\Cache::delete($prevGiftKey);
-                    \support\Log::warning('[MachineOperationService] 检测到上一个玩家的残留 gift_cache，已自动清除', [
-                        'machine_id'  => $this->machine->id,
-                        'prev_player' => $gamingUserId,
-                        'new_player'  => $player->id,
-                    ]);
+                    MachineLogger::warning($this->machine->toArray(), MachineLogger::ACTION_OPEN, '检测到上一个玩家的残留 gift_cache，已自动清除 prev_player=' . $gamingUserId, $this->services->getMachineCache(), MachineLogger::DIR_EVENT);
                 }
             }
 
@@ -1716,10 +1712,7 @@ class MachineOperationService
                 // 机台已空闲时 gift_cache 为残留（上次 wash 异常未清除），直接清除放行
                 if ($gamingUserId == 0) {
                     \support\Cache::delete('gift_cache_' . $this->machine->id . '_' . $player->id);
-                    \support\Log::info('[MachineOperationService] 机台空闲时发现残留 gift_cache，已自动清除', [
-                        'machine_id' => $this->machine->id,
-                        'player_id'  => $player->id,
-                    ]);
+                    MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '机台空闲时发现残留 gift_cache，已自动清除 player=' . $player->id, $this->services->getMachineCache());
                 } else {
                     throw new Exception(trans('give_point_session_active', [], 'message', $this->lang));
                 }

@@ -1648,11 +1648,7 @@ function machineWash(
                 try {
                     Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
                 } catch (\Exception $cacheErr) {
-                    Log::warning('[machineWash] wash 异常时清除 gift_cache 失败', [
-                        'machine_id' => $machine->id,
-                        'player_id'  => $player->id,
-                        'error'      => $cacheErr->getMessage(),
-                    ]);
+                    MachineLogger::warning($machine->toArray(), MachineLogger::ACTION_WASH, 'wash 异常时清除 gift_cache 失败: ' . $cacheErr->getMessage(), [], MachineLogger::DIR_EVENT);
                 }
             }
             throw new Exception($e->getMessage());
@@ -2932,11 +2928,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 $prevGiftKey = 'gift_cache_' . $machine->id . '_' . $gamingUserId;
                 if (!empty(Cache::get($prevGiftKey))) {
                     Cache::delete($prevGiftKey);
-                    Log::warning('[machineOpenAnyFree] 检测到上一个玩家的残留 gift_cache，已自动清除', [
-                        'machine_id'  => $machine->id,
-                        'prev_player' => $gamingUserId,
-                        'new_player'  => $player->id,
-                    ]);
+                    MachineLogger::warning($machine->toArray(), MachineLogger::ACTION_OPEN, '检测到上一个玩家的残留 gift_cache，已自动清除 prev_player=' . $gamingUserId, $services->getMachineCache(), MachineLogger::DIR_EVENT);
                 }
             }
 
@@ -2952,12 +2944,7 @@ if (!function_exists('machineOpenAnyFree')) {
                 }
                 // 其余情况（普通开分 / 机台已空闲）→ gift_cache 为残留，自动清除
                 Cache::delete($giftCacheKey);
-                Log::info('[machineOpenAnyFree] 自动清除残留 gift_cache', [
-                    'machine_id'   => $machine->id,
-                    'player_id'    => $player->id,
-                    'gaming_user'  => $gamingUserId,
-                    'is_gift_open' => $isGiftOpen,
-                ]);
+                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '自动清除残留 gift_cache player=' . $player->id . ' gaming_user=' . $gamingUserId . ' is_gift_open=' . (int)$isGiftOpen, $services->getMachineCache());
             }
             if ($giveRuleId && $giftScore > 0) {
                 // 每日次数限制（防止绕过 MachineOperationService 直接调用超限）
