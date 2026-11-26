@@ -1696,9 +1696,33 @@ class MachineOperationService
             $giftScore = (int) $giveRule->give_num;
 
             // 赠点会话进行中拦截：转数未打完或条件未达成时不允许再次使用赠点
+            $gamingUserId = $this->services->gaming_user_id ?? 0;
+
+            // 机台上一个玩家（与当前请求玩家不同）的残留 gift_cache，自动清除
+            if ($gamingUserId != 0 && $gamingUserId != $player->id) {
+                $prevGiftKey = 'gift_cache_' . $this->machine->id . '_' . $gamingUserId;
+                if (!empty(\support\Cache::get($prevGiftKey))) {
+                    \support\Cache::delete($prevGiftKey);
+                    \support\Log::warning('[MachineOperationService] 检测到上一个玩家的残留 gift_cache，已自动清除', [
+                        'machine_id'  => $this->machine->id,
+                        'prev_player' => $gamingUserId,
+                        'new_player'  => $player->id,
+                    ]);
+                }
+            }
+
             $activeGiftCache = \support\Cache::get('gift_cache_' . $this->machine->id . '_' . $player->id);
             if (!empty($activeGiftCache)) {
-                throw new Exception(trans('give_point_session_active', [], 'message', $this->lang));
+                // 机台已空闲时 gift_cache 为残留（上次 wash 异常未清除），直接清除放行
+                if ($gamingUserId == 0) {
+                    \support\Cache::delete('gift_cache_' . $this->machine->id . '_' . $player->id);
+                    \support\Log::info('[MachineOperationService] 机台空闲时发现残留 gift_cache，已自动清除', [
+                        'machine_id' => $this->machine->id,
+                        'player_id'  => $player->id,
+                    ]);
+                } else {
+                    throw new Exception(trans('give_point_session_active', [], 'message', $this->lang));
+                }
             }
 
             // P0-2：每日次数限制
