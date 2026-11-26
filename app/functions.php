@@ -1371,7 +1371,14 @@ function machineWash(
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
                 $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
-                $services->sendCmd($services::CLEAR_LOG, 0, 'player', $player->id, $is_system);
+                // CLEAR_LOG 仅重置得分计数器，非财务关键指令。
+                // 机台回复可能是短心跳（<36字符），导致 executeOneWayCommand 超时。
+                // 软性失败：记录警告，不回滚已确认的 WASH_ZERO。
+                try {
+                    $services->sendCmd($services::CLEAR_LOG, 0, 'player', $player->id, $is_system);
+                } catch (\Exception $clearLogError) {
+                    MachineLogger::warning($machine->toArray(), 'clear_log', 'CLEAR_LOG 指令失敗（非關鍵），洗分繼續: ' . $clearLogError->getMessage(), $services->getMachineCache(), MachineLogger::DIR_EVENT);
+                }
                 break;
             case GameType::TYPE_SLOT:
                 // ⚠️ CRITICAL：洗分前二次确认机台分数，防止竞态条件
