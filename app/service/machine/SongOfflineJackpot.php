@@ -2123,10 +2123,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     if ($currentTurn >= self::MAX_TURN) {
                         throw new Exception("轉數已达上限({$currentTurn}/{self::MAX_TURN})，無法繼續上轉");
                     }
-                    Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
+                    // 等待机版回复 46 CE CB S1 S2 再继续，防止心跳异常
+                    $this->machineAction($uid, $cmd, $source, $source_id);
 
                     // ✅ 设置上转操作标记，防止turn变化被误判为消耗
-                    usleep(100000); // 等待100ms让机台处理命令
+                    usleep(100000);
                     Cache::set('turn_action_flag_' . $this->machine->id, true, 5);
                     Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_TURN)));
                     break;
