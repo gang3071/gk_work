@@ -230,16 +230,16 @@ Route::group('/single-wallet', function () {
     });
     Route::group('/pp-solt-channel', function () {
         // Pragmatic Play 单一钱包回调（Integration API Specification v3, Seamless Wallet 3.4-3.15）
-        Route::post('/authenticate', [\app\wallet\controller\game\PPGameController::class, 'authenticate']);
-        Route::post('/balance', [\app\wallet\controller\game\PPGameController::class, 'balance']);
-        Route::post('/bet', [\app\wallet\controller\game\PPGameController::class, 'bet']);
-        Route::post('/result', [\app\wallet\controller\game\PPGameController::class, 'result']);
-        Route::post('/bonusWin', [\app\wallet\controller\game\PPGameController::class, 'bonusWin']);
-        Route::post('/jackpotWin', [\app\wallet\controller\game\PPGameController::class, 'jackpotWin']);
-        Route::post('/promoWin', [\app\wallet\controller\game\PPGameController::class, 'promoWin']);
-        Route::post('/endRound', [\app\wallet\controller\game\PPGameController::class, 'endRound']);
-        Route::post('/refund', [\app\wallet\controller\game\PPGameController::class, 'refund']);
-        Route::post('/adjustment', [\app\wallet\controller\game\PPGameController::class, 'adjustment']);
+        Route::post('/authenticate.html', [\app\wallet\controller\game\PPGameController::class, 'authenticate']);
+        Route::post('/balance.html', [\app\wallet\controller\game\PPGameController::class, 'balance']);
+        Route::post('/bet.html', [\app\wallet\controller\game\PPGameController::class, 'bet']);
+        Route::post('/result.html', [\app\wallet\controller\game\PPGameController::class, 'result']);
+        Route::post('/bonusWin.html', [\app\wallet\controller\game\PPGameController::class, 'bonusWin']);
+        Route::post('/jackpotWin.html', [\app\wallet\controller\game\PPGameController::class, 'jackpotWin']);
+        Route::post('/promoWin.html', [\app\wallet\controller\game\PPGameController::class, 'promoWin']);
+        Route::post('/endRound.html', [\app\wallet\controller\game\PPGameController::class, 'endRound']);
+        Route::post('/refund.html', [\app\wallet\controller\game\PPGameController::class, 'refund']);
+        Route::post('/adjustment.html', [\app\wallet\controller\game\PPGameController::class, 'adjustment']);
     });
     Route::group('/as-channel', function () {
         Route::post('/verify-session', [\app\wallet\controller\game\ASGameController::class, 'verifySession']);

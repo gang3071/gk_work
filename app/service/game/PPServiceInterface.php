@@ -284,7 +284,6 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
             throw new GameException('PP 游戏列表获取失败: ' . ($res['description'] ?? 'unknown error'));
         }
 
-        $this->log->info('gamelist',[$res]);
         $insertData = [];
         foreach (($res['gameList'] ?? []) as $item) {
             $code = (string)($item['gameID'] ?? '');
