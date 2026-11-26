@@ -53,13 +53,13 @@ return [
         'key' => env('ATG_KEY'),
     ],
     'ATG2' => [
-        'api_domain' => env('ATG2_API_DOMAIN', env('ATG_API_DOMAIN')), // 默认使用ATG域名
+        'api_domain' => env('ATG2_API_DOMAIN', env('ATG_API_DOMAIN')), // 榛樿浣跨敤ATG鍩熷悕
         'operator' => env('ATG2_OPERATOR'),
         'providerId' => env('ATG2_PROVIDERID'),
         'key' => env('ATG2_KEY'),
     ],
     'ATG3' => [
-        'api_domain' => env('ATG3_API_DOMAIN', env('ATG_API_DOMAIN')), // 默认使用ATG域名
+        'api_domain' => env('ATG3_API_DOMAIN', env('ATG_API_DOMAIN')), // 榛樿浣跨敤ATG鍩熷悕
         'operator' => env('ATG3_OPERATOR'),
         'providerId' => env('ATG3_PROVIDERID'),
         'key' => env('ATG3_KEY'),
@@ -189,5 +189,6 @@ return [
         'country' => env('PP_COUNTRY'),
         'stylename' => env('PP_STYLE_NAME'),
         'promo_available' => env('PP_PROMO_AVAILABLE'),
+        'lobby_symbol' => env('PP_LOBBY_SYMBOL'),
     ],
 ];
