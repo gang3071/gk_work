@@ -464,7 +464,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     private function validateMessageLength(int $len, string $msg): void
     {
         // ✅ 新版工控新增：20（查询外部码表回复：46 EE xx xx EF xx xx xx S1 S2）
-        $validLengths = [10, 12, 14, 16, 20, 36, 46, 50, 58, 60];
+        // 26 = QUERY_REPLY_TURN(8) + 外部按键数据(18)，组合报文合法长度
+        $validLengths = [10, 12, 14, 16, 20, 26, 36, 46, 50, 58, 60];
 
         if (!in_array($len, $validLengths)) {
             if ($len < 10) {
