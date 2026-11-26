@@ -148,7 +148,7 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
         $params = [
             'secureLogin' => (string)($this->config['secure_login'] ?? ''),
             'symbol' => $symbol,
-            'language' => $this->mapLanguage($lang),
+            'language' => 'zt',
             'token' => $token,
             'externalPlayerId' => (string)$this->player->uuid,
             'country' => (string)($this->config['country'] ?? 'TW'),
@@ -247,7 +247,7 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
         if ($symbol === '') {
             throw new GameException('PP 大厅游戏列表为空');
         }
-        return $this->launchGameUrl($symbol, $lang);
+        return $this->launchGameUrl($symbol, 'zt');
     }
 
     /**
