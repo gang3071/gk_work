@@ -565,14 +565,17 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function processIndependentExternalButton(string $msg, int $len): bool
     {
-        // 检查B5指令
+        // 检查B5指令（含B5+B7合包：心跳46前缀丢失后仅剩B5+B7段）
         if ($len >= 10) {
             if (substr($msg, 0, 2) == 'b5') {
-                $this->handleExternalButtonData(substr($msg, 0, 10));
+                // 合包检测：b5[2字节]b7[3字节]S1S2 = 18字符
+                $extLen = ($len >= 18 && substr($msg, 6, 2) == 'b7') ? 18 : 10;
+                $this->handleExternalButtonData(substr($msg, 0, $extLen));
                 return true;
             }
             if ($len >= 12 && substr($msg, 2, 2) == 'b5') {
-                $this->handleExternalButtonData(substr($msg, 2, 10));
+                $extLen = ($len >= 20 && substr($msg, 8, 2) == 'b7') ? 18 : 10;
+                $this->handleExternalButtonData(substr($msg, 2, $extLen));
                 return true;
             }
         }
@@ -688,7 +691,33 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             while ($offset < $len) {
                 $cmd = substr($data, $offset, 2);
 
-                if ($cmd == 'b5' && ($len - $offset) >= 10) {
+                if ($cmd == 'b5' && ($len - $offset) >= 18 && substr($data, $offset + 6, 2) == 'b7') {
+                    // B5+B7 合包：心跳46前缀丢失导致，跳过S1/S2直接解析两个计数器
+                    $b5Count = hexdec(substr($data, $offset + 2, 2)) * 100 + hexdec(substr($data, $offset + 4, 2));
+                    $b7Count = hexdec(substr($data, $offset + 8, 2)) * 10000
+                        + hexdec(substr($data, $offset + 10, 2)) * 100
+                        + hexdec(substr($data, $offset + 12, 2));
+
+                    MachineLogger::warning($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5B7合包] 收到B5+B7合包（心跳訊號前缀丟失），跳過S1/S2 開分=' . $b5Count . ' 洗分=' . $b7Count, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $data);
+
+                    if ($b5Count <= 9999) {
+                        $oldCount = $this->external_open_count ?? 0;
+                        $result = $this->processCounterChange('open', $oldCount, $b5Count, $now);
+                        if ($result['should_update']) {
+                            $this->external_open_count = $b5Count;
+                        }
+                    }
+
+                    if ($b7Count <= 999999) {
+                        $oldCount = $this->external_wash_count ?? 0;
+                        $result = $this->processCounterChange('wash', $oldCount, $b7Count, $now);
+                        if ($result['should_update']) {
+                            $this->external_wash_count = $b7Count;
+                        }
+                    }
+
+                    $offset += 18;
+                } elseif ($cmd == 'b5' && ($len - $offset) >= 10) {
                     // B5 xx xx S1 S2: 外部按钮开分次数（10字符）
                     // ⚠️ count 是次数，不是金额
                     $b5Data = substr($data, $offset, 10);
