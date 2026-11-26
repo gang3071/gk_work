@@ -43,6 +43,7 @@ class GameServiceFactory
     const TYPE_TNINE = 'TNINE'; // T9
     const TYPE_TNINE_SLOT = 'TNINE_SLOT'; // T9电子 V1
     const TYPE_KT = 'KT'; // T9
+    const TYPE_AS = 'AS'; // AS电子
     const TYPE_PP = 'PP'; // Pragmatic Play
 
     /** @var Player $player */
@@ -114,6 +115,8 @@ class GameServiceFactory
                 return new KTServiceInterface($player);
             case self::TYPE_PP:
                 return new PPServiceInterface($player);
+            case self::TYPE_AS:
+                return new ASServiceInterface($player);
             default:
                 throw new Exception("未知的游戏服务类型: $type");
         }

@@ -55,6 +55,11 @@ class Events
             $domain, $port, $strategy['type']
         );
 
+        $notFoundKey = $cacheKey . ':not_found';
+        if (Cache::get($notFoundKey)) {
+            return null;
+        }
+
         if (empty($jsonData = Cache::get($cacheKey))) {
             /** @var Machine $machine */
             $machine = Machine::query()->where($strategy['domain_field'], $domain)
@@ -62,7 +67,12 @@ class Events
                 ->where('type', $strategy['type'])
                 ->first();  // 返回模型对象或null
 
-            !is_null($machine) && Cache::set($cacheKey, $machine, 3600);
+            if (!is_null($machine)) {
+                Cache::set($cacheKey, $machine, 3600);
+            } else {
+                // 负缓存：未知设备 5 分钟内不再查数据库
+                Cache::set($notFoundKey, 1, 300);
+            }
 
             return $machine;
         }
@@ -84,7 +94,7 @@ class Events
         if (!in_array($domain, config('gateway_worker.whitelist'))) {
             return Gateway::closeClient($client_id);
         }
-        $log->error('设备连接', [
+        $log->info('设备连接', [
             'domain' => $domain,
             'port' => $port,
             'GATEWAY_PORT' => $_SERVER['GATEWAY_PORT']

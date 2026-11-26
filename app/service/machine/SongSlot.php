@@ -46,6 +46,9 @@ use Webman\RedisQueue\Client;
  * * @property int $gift_condition 增点完成条件
  * * @property int $now_turn 当前转数
  * * @property int $has_lock 机台锁
+ * * @property int $start_score 开奖开始时机台得分（临时状态，存 Redis）
+ * * @property int $start_bet 开奖开始时机台压分（临时状态，存 Redis）
+ * * @property int $lottery_record_id 本次开奖记录ID（临时状态，存 Redis）
  * * @property int $pre_wash_point 预洗分点数
  * *
  * * @package app\service\machine
@@ -117,6 +120,9 @@ class SongSlot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_now_turn',
             $this->cacheDataKey . '_has_lock',
             $this->cacheDataKey . '_pre_wash_point',
+            $this->cacheDataKey . '_start_score',          // 开奖开始时机台得分（临时快照）
+            $this->cacheDataKey . '_start_bet',            // 开奖开始时机台压分（临时快照）
+            $this->cacheDataKey . '_lottery_record_id',    // 本次开奖记录ID（防止中断后更新错记录）
         ];
         $this->machineInfo = [
             'auto',
@@ -188,7 +194,12 @@ class SongSlot extends MachineServices implements BaseMachine
             if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
                 Cache::set($this->cacheDataKey . '_last_play_time', time());
             }
+            if ($name === 'gaming_user_id' && empty($value) && !empty($this->gaming_user_id)) {
+                $this->lottery_record_id = 0;
+            }
 
+            // 只有需要推送到前端的字段才读旧值（用于跳过无变化的推送），其余字段不读节省Redis GET
+            $oldValue = in_array($name, $this->machineInfo) ? Cache::get($key) : null;
             try {
                 // 保存到缓存，失败时立即重试1次
                 $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
@@ -306,7 +317,8 @@ class SongSlot extends MachineServices implements BaseMachine
 
                 // ✅ 从 Redis 读取 gaming_user_id
                 $currentGamingUserId = $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0;
-                if (in_array($name, $this->machineInfo) && !empty($currentGamingUserId)) {
+                if (in_array($name, $this->machineInfo) && !empty($currentGamingUserId)
+                    && (string)$oldValue !== (string)$value) {
                     $this->sendMachineNowInfoMessage($currentGamingUserId, $this->machine->id, $name, $info);
                 }
             }
@@ -379,10 +391,24 @@ class SongSlot extends MachineServices implements BaseMachine
                         $machineLotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
                         $machineLotteryRecord->draw_bet = $this->bet;
                         $machineLotteryRecord->use_turn = $this->now_turn;
+                        $machineLotteryRecord->odds_x = $this->machine->odds_x ?? 1;
+                        $machineLotteryRecord->odds_y = $this->machine->odds_y ?? 1;
                         $machineLotteryRecord->save();
+                        $this->lottery_record_id = $machineLotteryRecord->id;
+                        $this->start_score = $this->score;
+                        $this->start_bet = $this->bet;
                         $this->now_turn = 0;
                     }
                     if ($orgRewardStatus == 1 && $nowRewardStatus == 0) {
+                        MachineLotteryRecord::query()
+                            ->where('id', $this->lottery_record_id)
+                            ->whereNull('lottery_win')
+                            ->first()
+                            ?->update([
+                                'lottery_win' => $this->score - $this->start_score,
+                                'lottery_bet' => $this->bet - $this->start_bet,
+                            ]);
+                        $this->lottery_record_id = 0;
                         $this->now_turn = 0;
                         // 开奖结束后需剔除其他观看中玩家
                         sendSocketMessage('group-' . $this->machine->id, [

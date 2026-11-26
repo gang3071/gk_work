@@ -115,6 +115,15 @@ LUA;
     private static $redisInstance = null;
 
     /**
+     * 测试注入：替换 Redis 连接实例（生产环境不使用）
+     * @param object|null $instance 需实现 exists/hGet/hMSet/hIncrBy/zAdd 等 PhpRedis 同名方法
+     */
+    public static function setRedisInstance($instance): void
+    {
+        self::$redisInstance = $instance;
+    }
+
+    /**
      * 获取 Redis 连接（原生 PhpRedis，单例模式）
      *
      * @return \Redis
@@ -452,6 +461,54 @@ LUA;
     }
 
     /**
+     * 派彩合并进下注记录（AS 一局多笔派彩场景：一笔下注只产一条订单）
+     *
+     * 本笔派彩的 win 累加到该局下注记录，不产生独立结算单；
+     * is_final=true（回合最后一笔，即 completed=true）时按 win-bet 计算 diff 并标记已结算。
+     * SyncWorker 按 order_no 更新已有行（settlement_status=1 时写 win/diff/结算状态）。
+     *
+     * @param string $platform 平台代码
+     * @param string $betOrderNo 该局下注的 order_no
+     * @param array $data amount(元，本笔派彩), original_data, settle_type, is_final(是否回合最后一笔)
+     * @return bool 是否成功合并（false=下注记录不存在，调用方应回退独立结算单）
+     */
+    public static function saveSettleIntoBet(string $platform, string $betOrderNo, array $data): bool
+    {
+        $betKey = self::PREFIX_BET . "{$platform}:{$betOrderNo}";
+        if (!self::redis()->exists($betKey)) {
+            return false;
+        }
+
+        // 单位：元 → 分（记录字段一律存分）
+        $winInCents = (int)round((float)($data['amount'] ?? 0) * 100);
+        if ($winInCents > 0) {
+            self::redis()->hIncrBy($betKey, 'win', $winInCents);
+        }
+
+        $updates = [
+            'action_data' => json_encode($data['original_data'] ?? $data, JSON_UNESCAPED_UNICODE),
+            'status' => 'pending',  // 重新标记待同步
+        ];
+        if (!empty($data['is_final'])) {
+            $betInCents = (int)self::redis()->hGet($betKey, 'amount');
+            $winTotal = (int)self::redis()->hGet($betKey, 'win');
+            $updates = array_merge($updates, [
+                'diff' => $winTotal - $betInCents,
+                'settlement_status' => 1,
+                'settle_type' => $data['settle_type'] ?? 'settle',
+                'settle_time' => time(),
+                'platform_action_at' => date('Y-m-d H:i:s'),
+            ]);
+        }
+        self::redis()->hMSet($betKey, $updates);
+
+        // 重新入队（SyncWorker 按 order_no 更新已有行）
+        self::redis()->zAdd(self::PREFIX_SYNC_QUEUE, time(), $betKey);
+
+        return true;
+    }
+
+    /**
      * 保存结算记录到 Redis
      *
      * @param string $platform 平台代码
@@ -603,14 +660,14 @@ LUA;
      */
     public static function markAsSynced(string $redisKey, int $recordId): void
     {
-        self::redis()->hMSet($redisKey, [
+        // 使用同一连接对象执行 hMSet + zRem，避免两步用不同连接导致部分成功
+        $redis = self::redis();
+        $redis->hMSet($redisKey, [
             'status' => 'synced',
             'record_id' => $recordId,
             'synced_at' => date('Y-m-d H:i:s'),
         ]);
-
-        // 从同步队列移除
-        Redis::zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
+        $redis->zRem(self::PREFIX_SYNC_QUEUE, $redisKey);
     }
 
     /**

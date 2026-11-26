@@ -49,6 +49,7 @@ use Workerman\Timer;
  * @property int $gift_bet 玩家开分增点时押注
  * @property int $now_turn 当前转数
  * @property int $has_lock 机台锁
+ * @property int $lottery_record_id 本次开奖记录ID（临时状态，存 Redis）
  *
  * @package app\service\machine
  */
@@ -134,6 +135,7 @@ class Jackpot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_rush_status',
             $this->cacheDataKey . '_bb_status',
             $this->cacheDataKey . '_has_lock',
+            $this->cacheDataKey . '_lottery_record_id',    // 本次开奖记录ID（防止中断后更新错记录）
         ];
         $this->machineInfo = [
             'auto',
@@ -207,7 +209,12 @@ class Jackpot extends MachineServices implements BaseMachine
             if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
                 Cache::set($this->cacheDataKey . '_last_play_time', time());
             }
+            if ($name === 'gaming_user_id' && empty($value) && !empty($this->gaming_user_id)) {
+                $this->lottery_record_id = 0;
+            }
 
+            // 只有需要推送到前端的字段才读旧值（用于跳过无变化的推送），其余字段不读节省Redis GET
+            $oldValue = in_array($name, $this->machineInfo) ? Cache::get($key) : null;
             try {
                 // 保存到缓存，失败时立即重试1次
                 $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
@@ -335,7 +342,8 @@ class Jackpot extends MachineServices implements BaseMachine
                         }
                         break;
                 }
-                if (in_array($name, $this->machineInfo) && !empty($this->machine->gaming_user_id)) {
+                if (in_array($name, $this->machineInfo) && !empty($this->machine->gaming_user_id)
+                    && (string)$oldValue !== (string)$value) {
                     $this->sendMachineNowInfoMessage($this->machine->gaming_user_id, $this->machine->id, $name, $info);
                 }
             }
@@ -381,50 +389,96 @@ class Jackpot extends MachineServices implements BaseMachine
                 $rewardStatus = $this->reward_status;
                 $this->reward_status = 0;
                 if ($rewardStatus == 1) {
-                    if (!empty($this->machine->gamingPlayer)) {
-                        (new LotteryServices())->setMachine($this->machine)->setPlayer($this->machine->gamingPlayer)->fixedPotCheckLottery($this->score);
-                    }
-                    if ($this->score > 0 && !empty($this->machine->gaming_user_id)) {
-                        Client::send('play-activity', [
-                            'machine_id' => $this->machine->id,
-                            'player_id' => $this->machine->gaming_user_id,
-                            'point' => $this->score,
-                        ]);
-                    }
-                    // 开奖结束后需剔除其他观看中玩家
-                    sendSocketMessage('group-' . $this->machine->id, [
-                        'msg_type' => 'machine_reward_end',
-                        'machine_id' => $this->machine->id,
-                        'machine_code' => $this->machine->code,
-                        'gaming_user_id' => $this->machine->gaming_user_id,
-                    ]);
-                    // 钢珠报喜：检测珠数是否达到阈值并广播
-                    $broadcastResult = \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $this->score);
-                    MachineLogger::log(
-                        $this->machine->toArray(),
-                        MachineLogger::SOURCE_SYSTEM,
-                        $broadcastResult ? MachineLogger::STATUS_NORMAL : MachineLogger::STATUS_WARNING,
-                        MachineLogger::DIR_EVENT,
-                        '钢珠报喜',
-                        $broadcastResult ? '已触发广播' : '未触发广播',
-                        [
-                            'score' => $this->score,
-                            'gaming_user_id' => $this->machine->gaming_user_id,
-                            'machine_data' => $this->getMachineCache(),
-                        ]
-                    );
-                    $this->sendScoreToPointAsync($this->machine->gaming_user_id);
+                    // 彩金检查、积分通知等非核心操作隔离在独立 try-catch 中，
+                    // 任何失败都不能阻止后续的下珠指令。
+                    try {
+                        if (!empty($this->machine->gamingPlayer)) {
+                            (new LotteryServices())->setMachine($this->machine)->setPlayer($this->machine->gamingPlayer)->fixedPotCheckLottery($this->score);
+                        }
+                        if ($this->score > 0 && !empty($this->machine->gaming_user_id)) {
+                            Client::send('play-activity', [
+                                'machine_id' => $this->machine->id,
+                                'player_id' => $this->machine->gaming_user_id,
+                                'point' => $this->score,
+                            ]);
+                            // 钢珠报喜：检测珠数是否达到阈值并广播
+                            \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $this->score);
 
+                            // 钢珠下珠赠送积分（由 gk_admin 消费者根据门店开关决定是否发放）
+                            Client::send('steel-ball-points-gift', [
+                                'player_id'      => $this->machine->gaming_user_id,
+                                'machine_id'     => $this->machine->id,
+                                'department_id'  => $this->machine->department_id,
+                                'store_admin_id' => $this->machine->gamingPlayer?->store_admin_id ?? 0,
+                                'score'          => $this->score,
+                            ]);
+                        }
+                        // 记录开奖结果得分
+                        MachineLotteryRecord::query()
+                            ->where('id', $this->lottery_record_id)
+                            ->whereNull('lottery_win')
+                            ->first()
+                            ?->update(['lottery_win' => $this->score]);
+                        $this->lottery_record_id = 0;
+                        // 开奖结束后需剔除其他观看中玩家
+                        sendSocketMessage('group-' . $this->machine->id, [
+                            'msg_type' => 'machine_reward_end',
+                            'machine_id' => $this->machine->id,
+                            'machine_code' => $this->machine->code,
+                            'gaming_user_id' => $this->machine->gaming_user_id,
+                        ]);
+                        // 钢珠报喜：检测珠数是否达到阈值并广播
+                        $broadcastResult = \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $this->score);
+                        MachineLogger::log(
+                            $this->machine->toArray(),
+                            MachineLogger::SOURCE_SYSTEM,
+                            $broadcastResult ? MachineLogger::STATUS_NORMAL : MachineLogger::STATUS_WARNING,
+                            MachineLogger::DIR_EVENT,
+                            '钢珠报喜',
+                            $broadcastResult ? '已触发广播' : '未触发广播',
+                            [
+                                'score' => $this->score,
+                                'gaming_user_id' => $this->machine->gaming_user_id,
+                                'machine_data' => $this->getMachineCache(),
+                            ]
+                        );
+                    } catch (\Throwable $e) {
+                        // 记录错误但不中断流程，确保下珠指令必然执行
+                        MachineLogger::error(
+                            $this->machine->toArray(),
+                            'reward_post_process',
+                            '开奖后处理异常（下珠不受影响）: ' . $e->getMessage(),
+                            $this->getMachineCache(),
+                            MachineLogger::DIR_EVENT
+                        );
+                    }
+
+                    // 下珠指令：独立执行，确保无论上方流程是否出错都能触发
+                    $gamingUserId = (int)($this->machine->gaming_user_id ?? 0);
+                    if ($gamingUserId > 0) {
+                        $this->sendScoreToPointAsync($gamingUserId);
+                    } else {
+                        MachineLogger::warning(
+                            $this->machine->toArray(),
+                            'score_to_point',
+                            '开奖结束时无在台玩家，跳过下珠指令',
+                            $this->getMachineCache(),
+                            MachineLogger::DIR_COMMAND
+                        );
+                    }
                 }
             }
             if ($orgBbStatus == 0 && $orgRushStatus == 0 && $this->bb_status == 1 && $this->rush_status == 1 && $this->now_turn > 0) {
                 $machineLotteryRecord = new MachineLotteryRecord();
                 $machineLotteryRecord->machine_id = $this->machine->id;
-                $machineLotteryRecord->player_id = $this->machine->gaming_user_id ?? 0;
+                $machineLotteryRecord->player_id = $this->gaming_user_id ?? 0;
                 $machineLotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
                 $machineLotteryRecord->draw_bet = $this->win_number;
                 $machineLotteryRecord->use_turn = $this->now_turn;
+                $machineLotteryRecord->odds_x = $this->machine->odds_x ?? 1;
+                $machineLotteryRecord->odds_y = $this->machine->odds_y ?? 1;
                 $machineLotteryRecord->save();
+                $this->lottery_record_id = $machineLotteryRecord->id;
                 $this->now_turn = 0;
             }
             if (($orgBbStatus == 0 && $orgRushStatus == 1 && $this->bb_status == 0 && $this->rush_status == 0 && $this->now_turn > 0) || ($orgBbStatus == 1 && $this->bb_status == 0 && $this->rush_status == 1 && $this->now_turn > 0)) {
@@ -462,9 +516,19 @@ class Jackpot extends MachineServices implements BaseMachine
                     $this->setActionVersion($fun);
                     break;
                 case Jackpot::MACHINE_TURN:
+                    $prevTurn = (float)($this->turn ?? 0);
                     $this->turn = $data;
-                    if ($data <= 0 && !empty($this->machine->gaming_user_id)) {
-                        Cache::delete('gift_cache_' . $this->machine->id . '_' . $this->machine->gaming_user_id);
+                    if ($data <= 0 && $prevTurn > 0) {
+                        // 使用 Redis 属性（$this->gaming_user_id），而非可能过时的 DB 模型值
+                        $giftUserId = (int)($this->gaming_user_id ?? 0);
+                        if (!empty($giftUserId)) {
+                            $giftCacheKey = 'gift_cache_' . $this->machine->id . '_' . $giftUserId;
+                            $giftCacheData = Cache::get($giftCacheKey);
+                            if (!empty($giftCacheData)) {
+                                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_cache', '轉數打完，清理禮物快取 玩家ID=' . $giftUserId . ' gift_point=' . ($giftCacheData['gift_point'] ?? 0), ['machine_data' => $this->getMachineCache()]);
+                                Cache::delete($giftCacheKey);
+                            }
+                        }
                     }
                     $this->setActionVersion($fun);
                     break;
@@ -613,7 +677,7 @@ class Jackpot extends MachineServices implements BaseMachine
      */
     private function sendScoreToPointAsync(int $gamingUserId, int $attempts = 0): void
     {
-        $maxRetries = 3;
+        $maxRetries = 5;
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
         if (!Gateway::isUidOnline($uid)) {
@@ -627,8 +691,10 @@ class Jackpot extends MachineServices implements BaseMachine
         MachineLogger::sendCommand($this->machine->toArray(), 'score_to_point', '異步發送 第' . ($attempts + 1) . '次', $this->getMachineCache());
 
         $machineId = $this->machine->id;
+        // 间隔递增：1s→2s→3s，第4次起固定3s，给机台更多响应时间
+        $delay = min($attempts + 1, 3);
 
-        Timer::add(1, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
+        Timer::add($delay, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
             $machine = Machine::find($machineId);
             if (!$machine) return;
 
@@ -649,6 +715,33 @@ class Jackpot extends MachineServices implements BaseMachine
             MachineLogger::warning($svc->machine->toArray(), 'score_to_point', '超時未回覆，重試 第' . $newAttempts . '次', $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
             $svc->sendScoreToPointAsync($gamingUserId, $newAttempts);
         }, null, false); // false = 只触发一次，不循环
+    }
+
+    /**
+     * 开分赠点后自动全部上转，并轮询心跳确认转数增加。
+     */
+    public function giftPointTurnUpAll(int $giftScore, int $playerId): void
+    {
+        $turnBefore = $this->turn ?? 0;
+        $this->sendCmd(self::TURN_UP_ALL, 0, 'player', $playerId);
+
+        // 轮询等待心跳确认转数增加
+        $confirmWaited = 0;
+        $confirmed = false;
+        while ($confirmWaited < 3000000) {
+            usleep(300000);
+            $confirmWaited += 300000;
+            if (($this->turn ?? 0) > $turnBefore) {
+                $confirmed = true;
+                break;
+            }
+        }
+
+        if ($confirmed) {
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_turn_up_all', '[開分贈點] 自動全部上轉成功 gift_score=' . $giftScore . ' turn_before=' . $turnBefore . ' turn_after=' . ($this->turn ?? 0), ['player_id' => $playerId]);
+        } else {
+            MachineLogger::warning($this->machine->toArray(), 'gift_turn_up_all', '[開分贈點] 自動全部上轉未確認（心跳未更新轉數）gift_score=' . $giftScore . ' turn_before=' . $turnBefore, $this->getMachineCache(), MachineLogger::DIR_EVENT);
+        }
     }
 
     /**

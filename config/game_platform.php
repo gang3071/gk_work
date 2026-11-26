@@ -173,6 +173,13 @@ return [
         'hash_key' => env('KT_HASH_KEY'),
         'agent' => env('KT_AGENT'),
     ],
+    'AS' => [
+        'api_domain' => env('AS_API_DOMAIN'),
+        'partner_id' => env('AS_PARTNER_ID'),
+        'share_key' => env('AS_SHARE_KEY'),
+        'brand_id' => env('AS_BRAND_ID'),
+        'brand_domain_code' => env('AS_BRAND_DOMAIN_CODE'),
+    ],
     'PP' => [
         'api_domain' => env('PP_API_DOMAIN'),
         'secure_login' => env('PP_SECURE_LOGIN'),

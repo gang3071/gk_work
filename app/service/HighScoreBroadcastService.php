@@ -113,7 +113,7 @@ class HighScoreBroadcastService
             $messageData = self::buildMessage($player, $channel, $record);
 
             // 7. 执行广播
-            self::broadcast($channel->department_id, $messageData['message'], $messageData['lang']);
+            self::broadcast($channel->department_id, $player->store_admin_id ?? 0, $messageData['message'], $messageData['lang']);
 
             Log::info('高分广播成功', [
                 'player_id' => $record->player_id,
@@ -303,16 +303,7 @@ class HighScoreBroadcastService
      */
     private static function buildMessage(Player $player, Channel $channel, PlayGameRecord $record): array
     {
-        // 获取玩家名称并脱敏（统一使用 name 字段）
-        $rawName = $player->name ?? 'Unknown';
-        $nameLength = mb_strlen($rawName);
-        if ($nameLength <= 2) {
-            // 1-2个字：显示第1个字 + *，如 "张*"
-            $deviceName = mb_substr($rawName, 0, 1) . '*';
-        } else {
-            // 3个字及以上：显示第1个字 + ***，如 "王***"
-            $deviceName = mb_substr($rawName, 0, 1) . '***';
-        }
+        $deviceName = $player->name ?? 'Unknown';
 
         // 获取店家名称
         $storeName = '';
@@ -377,11 +368,12 @@ class HighScoreBroadcastService
      * 执行全频道广播
      *
      * @param int $departmentId 渠道ID
+     * @param int $storeAdminId
      * @param string $message 广播消息
      * @param string $lang 语言代码
      * @return void
      */
-    private static function broadcast(int $departmentId, string $message, string $lang = 'zh-TW'): void
+    private static function broadcast(int $departmentId, int $storeAdminId, string $message, string $lang = 'zh-TW'): void
     {
         try {
             // 转换语言格式：zh-TW -> zh_TW
@@ -401,6 +393,7 @@ class HighScoreBroadcastService
                 'content' => $message,
                 'timestamp' => time(),
                 'department_id' => $departmentId,
+                'store_admin_id' => $storeAdminId,
             ];
 
             // 使用全局广播频道（与机台彩金、电子游戏彩金保持一致）

@@ -102,8 +102,9 @@ class MergeBetPlatformHelper
                 // 下注记录无快照，通过当前 Redis 余额反推（兜底，可能不准确）
                 $playerId = $record['player_id'];
                 if (isset($redisBalances[$playerId])) {
-                    $record['balance_after'] = $redisBalances[$playerId];
-                    $record['balance_before'] = $record['balance_after'] + ($record['amount'] ?? 0);
+                    $record['balance_after'] = $redisBalances[$playerId]; // 已转换为"元"
+                    // amount 在 Redis 中存储为"分"，需除以100后加到"元"单位的 balance_after
+                    $record['balance_before'] = round($record['balance_after'] + ($record['amount'] ?? 0) / 100, 2);
 
                     Log::channel('game_bet_record')->warning('[enrichInsertRecords] 兜底：使用当前 Redis 余额反推', [
                         'order_no' => $record['order_no'] ?? 'unknown',

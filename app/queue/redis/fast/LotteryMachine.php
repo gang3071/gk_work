@@ -26,6 +26,19 @@ class LotteryMachine implements Consumer
         $log = Log::channel('lottery_machine');
         $log->info('开始处理机台抽奖', ['data' => $data]);
 
+        // 幂等去重：用 NX 防止重试或并发重复触发相同事件
+        $dedupKey = 'lottery_machine_dedup:' . md5(
+            ($data['machine_id'] ?? '') . ':' .
+            ($data['player_id'] ?? '') . ':' .
+            ($data['num'] ?? '') . ':' .
+            ($data['last_num'] ?? '')
+        );
+        $redis = \support\Redis::connection()->client();
+        if (!$redis->set($dedupKey, 1, ['NX', 'EX' => 60])) {
+            $log->info('重复消息，跳过处理', ['dedup_key' => $dedupKey, 'data' => $data]);
+            return;
+        }
+
         try {
             /** @var Machine $machine */
             $machine = Machine::query()->find($data['machine_id']);

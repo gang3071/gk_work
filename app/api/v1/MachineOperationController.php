@@ -48,6 +48,7 @@ class MachineOperationController
     {
         $machineId = null;
         $action = null;
+        $machine = null;
 
         try {
             // 1. 验证基础参数
@@ -115,7 +116,7 @@ class MachineOperationController
             }
 
         } catch (\Throwable $e) {
-            \app\support\MachineLogger::error($machine->toArray(), $action ?? 'execute', '机台操作失败: '.$e->getMessage());
+            \app\support\MachineLogger::error($machine?->toArray() ?? [], $action ?? 'execute', '机台操作失败: '.$e->getMessage());
 
             return json(['code' => 0, 'msg' => trans('machine_operation_failed', [], 'machine_operation', $this->setLanguage($request)) . ': ' . $e->getMessage(), 'data' => []]);
         }
@@ -136,6 +137,7 @@ class MachineOperationController
     {
         $machineId = null;
         $action = null;
+        $machine = null;
 
         try {
             // 1. 验证基础参数
@@ -179,7 +181,7 @@ class MachineOperationController
             }
 
         } catch (\Throwable $e) {
-            \app\support\MachineLogger::error($machine->toArray(), $action ?? 'executeAdmin', '机台操作失败(admin): '.$e->getMessage());
+            \app\support\MachineLogger::error($machine?->toArray() ?? [], $action ?? 'executeAdmin', '机台操作失败(admin): '.$e->getMessage());
 
             return json(['code' => 500, 'msg' => trans('machine_operation_failed', [], 'machine_operation', $this->setLanguage($request)) . ': ' . $e->getMessage(), 'data' => []]);
         }
@@ -360,7 +362,7 @@ class MachineOperationController
             }
 
             // 根据机台类型返回支持的操作
-            if ($machine->game_type == GameType::TYPE_SLOT) {
+            if ($machine->type == GameType::TYPE_SLOT) {
                 // 斯洛机操作
                 $operations = [
                     'basic' => [
@@ -414,7 +416,7 @@ class MachineOperationController
                 'msg' => 'success',
                 'data' => [
                     'machine_id' => $machine->id,
-                    'machine_type' => $machine->game_type == GameType::TYPE_SLOT ? 'slot' : 'jackpot',
+                    'machine_type' => $machine->type == GameType::TYPE_SLOT ? 'slot' : 'jackpot',
                     'control_type' => $machine->control_type === Machine::CONTROL_TYPE_MEI ? 'mei' : 'song',
                     'operations' => $operations,
                 ],

@@ -198,8 +198,16 @@ class GameRecordSyncWorker
         $updated = 0;
         $failed = 0;
 
-        // 开启单个大事务
-        Db::beginTransaction();
+        // [orderNo => redisKey]：被跳过的快速结算待结算记录，初始化在 try 块外
+        // 使 catch 块可访问，以便 Fallback 过滤应跳过的记录
+        $skippedRecords = [];
+
+        // 用同一连接对象执行 SET TRANSACTION + beginTransaction，避免读写分离场景下路由到不同连接
+        $dbConn = Db::connection();
+        // READ COMMITTED：让每个进程在查询时能看到其他进程刚提交的记录
+        // 避免 REPEATABLE READ 下多进程并发 INSERT 同一行触发唯一键冲突
+        $dbConn->statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        $dbConn->beginTransaction();
 
         try {
             // 1. 批量查询已存在的记录（一次性查询）
@@ -236,16 +244,18 @@ class GameRecordSyncWorker
             }
 
             // ✅ 批量重新读取Redis最新状态（避免竞态条件）
-            // 🚀 性能优化：使用Pipeline批量读取，减少网络往返
-            $redis = Redis::connection('work');
-            $pipe = $redis->pipeline();
+            // 🚀 性能优化：使用原生 PhpRedis pipeline，避免 Illuminate wrapper 中间层导致的歧义
+            $redisCli = Redis::connection('work')->client();
+            $pipe = $redisCli->pipeline();
 
             foreach (array_keys($uniqueKeys) as $redisKey) {
                 $pipe->hGetAll($redisKey);
             }
 
-            // 原生 PhpRedis pipeline 使用 exec() 方法执行
             $results = $pipe->exec();
+            if ($results === false || !is_array($results)) {
+                throw new \RuntimeException('Redis pipeline hGetAll failed: exec() returned false');
+            }
 
             // 组装结果
             $keysList = array_keys($uniqueKeys);
@@ -296,8 +306,14 @@ class GameRecordSyncWorker
                 ];
                 $isFastSettle = in_array($platform, $fastSettlePlatforms);
 
-                // 计算记录年龄
-                $recordAge = $betTime > 0 ? (time() - $betTime) : 0;
+                // 计算记录年龄；bet_time 缺失时视为已超时（强制落库，避免永久跳过）
+                $recordAge = $betTime > 0 ? (time() - $betTime) : 61;
+                if ($betTime == 0) {
+                    $this->log->warning('[SyncWorker] 记录缺少 bet_time，强制落库', [
+                        'order_no' => $orderNo,
+                        'platform' => $platform,
+                    ]);
+                }
 
                 if ($settlementStatus == 0) {
                     // 快速结算游戏 + 新记录（<60秒）→ 跳过，等待结算
@@ -309,11 +325,7 @@ class GameRecordSyncWorker
                             'amount' => isset($record['amount']) ? round($record['amount'] / 100, 2) : 0,
                         ]);
 
-                        // 标记回pending状态，允许下次同步
-                        $redisKey = $record['redis_key'] ?? '';
-                        if ($redisKey) {
-                            Redis::connection('work')->hSet($redisKey, 'status', 'pending');
-                        }
+                        $skippedRecords[$orderNo] = $record['redis_key'] ?? '';
                         continue;
                     }
 
@@ -337,17 +349,51 @@ class GameRecordSyncWorker
                 }
             }
 
-            // 3. 批量插入新记录
-            if (!empty($toInsert)) {
-                $inserted = $this->batchInsertRecords($toInsert, $existingRecords);
+            // 3.5. 批量将跳过记录重置为 pending（pipeline 减少 N 次 RTT）
+            // 独立 try-catch：Redis 失败不应触发 DB rollback + syncRecordsFallback
+            // 超时后 Lua 脚本会自动将 processing 记录重新入队，安全兜底
+            if (!empty($skippedRecords)) {
+                try {
+                    $redisCli = Redis::connection('work')->client();
+                    $pipe = $redisCli->pipeline();
+                    foreach ($skippedRecords as $key) {
+                        if ($key) {
+                            $pipe->hSet($key, 'status', 'pending');
+                        }
+                    }
+                    $pipe->exec();
+                } catch (\Throwable $e) {
+                    $this->log->warning('[SyncWorker] 重置 pending 状态失败，记录将在超时后自动重入队', [
+                        'error' => $e->getMessage(),
+                        'count' => count($skippedRecords),
+                    ]);
+                }
             }
 
-            // 4. 批量更新已存在记录
+            // 4. 批量插入新记录
+            if (!empty($toInsert)) {
+                $inserted = $this->batchInsertRecords($toInsert);
+            }
+
+            // 5. 批量更新已存在记录
+            // 预先记录哪些记录在本次同步前 DB 已是 SETTLED，用于后续触发器过滤
+            $preSettledOrderNos = [];
+            foreach ($toUpdate as $r) {
+                $orderNo = $r['order_no'];
+                if (($existingRecords[$orderNo]->settlement_status ?? -1) == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+                    $preSettledOrderNos[$orderNo] = true;
+                }
+            }
             if (!empty($toUpdate)) {
                 $updated = $this->batchUpdateRecords($toUpdate, $existingRecords);
             }
+            // 本轮实际新完成结算的记录（排除已结算重试），用于触发彩金/广播/打码量
+            $freshlySettled = array_values(array_filter(
+                $toUpdate,
+                fn($r) => !isset($preSettledOrderNos[$r['order_no']])
+            ));
 
-            // 4.5. ✅ 统一查询新插入记录的完整信息（避免重复查询）
+            // 6. ✅ 统一查询新插入记录的完整信息（避免重复查询）
             // 这个查询结果会被彩金检查、高分广播、打码量统计、标记已同步四个功能共享使用
             if (!empty($toInsert)) {
                 $insertedOrderNos = array_column($toInsert, 'order_no');
@@ -363,44 +409,76 @@ class GameRecordSyncWorker
                 }
             }
 
-            // 5. 批量触发彩金检查（使用已更新的 $existingRecords，不再单独查询）
-            $this->batchTriggerLottery($toInsert, $toUpdate, $existingRecords);
-
-            // 5.5. 批量触发高分广播检测（使用已更新的 $existingRecords，不再单独查询）
-            $this->batchTriggerHighScoreBroadcast($toInsert, $toUpdate, $existingRecords);
-
-            // 5.6. ✅ 批量投递打码量统计（2026-07-31）
-            // 使用已更新的 $existingRecords，不再单独查询
-            if (!empty($toInsert)) {
-                $this->batchSendBetStatistics($toInsert, $existingRecords);
+            // 6.5 修复：insertOrIgnore 跳过的已结算记录补做结算更新
+            // 场景：进程B以status=0插入，进程A的Redis是status=1但insertOrIgnore跳过了
+            //       若不补更新，DB行永远是settlement_status=0（结算数据丢失）
+            $settlementReconcile = [];
+            foreach ($toInsert as $r) {
+                $orderNo = $r['order_no'];
+                $dbRecord = $existingRecords[$orderNo] ?? null;
+                if ($dbRecord
+                    && $dbRecord->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_UNSETTLED
+                    && ($r['settlement_status'] ?? 0) == 1) {
+                    $settlementReconcile[] = $r;
+                }
+            }
+            if (!empty($settlementReconcile)) {
+                $this->batchUpdateRecords($settlementReconcile, $existingRecords);
+                // 这些记录是本轮补结算，纳入 freshlySettled 以触发彩金/广播/统计
+                $freshlySettled = array_merge($freshlySettled, $settlementReconcile);
             }
 
-            foreach ($records as $record) {
-                $orderNo = $record['order_no'];
-                $recordId = $existingRecords[$orderNo]->id ?? null;
+            // 7. 批量触发彩金检查（仅对本轮实际新结算的记录触发，避免平台重试重复触发）
+            $this->batchTriggerLottery($toInsert, $freshlySettled, $existingRecords);
 
+            // 8. 批量触发高分广播检测（同上）
+            $this->batchTriggerHighScoreBroadcast($toInsert, $freshlySettled, $existingRecords);
+
+            // 9. ✅ 批量投递打码量统计（合并 toInsert + 本轮新结算，单次调用）
+            $forStats = array_merge($toInsert, $freshlySettled);
+            if (!empty($forStats)) {
+                $this->batchSendBetStatistics($forStats, $existingRecords);
+            }
+
+            // 收集 markAsSynced 所需数据（提交前收集，提交后执行，避免 commit 失败致出队）
+            $toSyncAfterCommit = []; // [redisKey => recordId]
+            foreach ($mergedRecords as $redisKey => $record) {
+                $orderNo = $record['order_no'];
+                if (isset($skippedRecords[$orderNo])) {
+                    continue;
+                }
+                $recordId = $existingRecords[$orderNo]->id ?? null;
                 if ($recordId) {
-                    GameRecordCacheService::markAsSynced($record['redis_key'], $recordId);
+                    $toSyncAfterCommit[$redisKey] = $recordId;
                 } else {
                     $this->log->warning("无法标记为已同步，记录未找到", [
                         'order_no' => $orderNo,
-                        'redis_key' => $record['redis_key'],
+                        'redis_key' => $redisKey,
                     ]);
                 }
             }
 
             // 提交事务
-            Db::commit();
+            $dbConn->commit();
 
         } catch (\Throwable $e) {
-            Db::rollBack();
+            $dbConn->rollBack();
 
-            // 回退到逐条处理
+            // 回退到逐条处理，过滤已被标记为跳过的快速结算待结算记录
             $this->log->warning("批量同步失败，回退到逐条处理", [
                 'error' => $e->getMessage(),
             ]);
 
-            return $this->syncRecordsFallback($records);
+            $fallbackRecords = empty($skippedRecords)
+                ? $records
+                : array_values(array_filter($records, fn($r) => !isset($skippedRecords[$r['order_no'] ?? ''])));
+
+            return $this->syncRecordsFallback($fallbackRecords);
+        }
+
+        // commit 成功后才从队列移除，确保 DB 写入与出队的原子性（commit 失败则不出队）
+        foreach ($toSyncAfterCommit as $redisKey => $recordId) {
+            GameRecordCacheService::markAsSynced($redisKey, $recordId);
         }
 
         return [
@@ -413,7 +491,7 @@ class GameRecordSyncWorker
     /**
      * 批量插入新记录
      */
-    private function batchInsertRecords(array $records, $existingRecords): int
+    private function batchInsertRecords(array $records): int
     {
         if (empty($records)) {
             return 0;
@@ -429,22 +507,32 @@ class GameRecordSyncWorker
             ->get()
             ->keyBy('id');
 
-        // 2. 收集需要同步钱包的玩家ID（下注记录且有余额快照）
-        $betPlayerIds = [];
+        // 2. 收集需要同步钱包的玩家ID，以及每个玩家的最新快照（bet_time 最大者）
+        // 多笔下注在同一批次时，只用最近一笔的快照更新钱包，避免旧快照覆盖新余额
+        $latestWalletSnapshot = []; // [player_id => ['after' => float, 'bet_time' => int, 'order_no' => string]]
         foreach ($records as $record) {
             $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
             if (($record['settlement_status'] ?? 0) == 0
                 && ($record['amount'] ?? 0) > 0
                 && $snapshot['after'] !== null) {
-                $betPlayerIds[] = $record['player_id'];
+                $playerId = $record['player_id'];
+                $betTime = (int)($record['bet_time'] ?? 0);
+                if (!isset($latestWalletSnapshot[$playerId])
+                    || $betTime > $latestWalletSnapshot[$playerId]['bet_time']) {
+                    $latestWalletSnapshot[$playerId] = [
+                        'after'    => $snapshot['after'],
+                        'bet_time' => $betTime,
+                        'order_no' => $record['order_no'],
+                    ];
+                }
             }
         }
 
         // 3. 批量查询钱包（用于同步）
         $wallets = [];
-        if (!empty($betPlayerIds)) {
+        if (!empty($latestWalletSnapshot)) {
             $wallets = PlayerPlatformCash::query()
-                ->whereIn('player_id', array_unique($betPlayerIds))
+                ->whereIn('player_id', array_keys($latestWalletSnapshot))
                 ->get()
                 ->keyBy('player_id');
         }
@@ -515,32 +603,24 @@ class GameRecordSyncWorker
                 'updated_at' => $now,
             ];
 
-            // 5. 同步钱包余额（使用 Lua 脚本执行时的余额快照，而非当前 Redis 余额）
-            $snapshot = MergeBetPlatformHelper::getBalanceSnapshot($record);
+        }
 
-            // 🔍 诊断日志（调试级别）
-            $this->log->debug('[batchInsertRecords] 快照状态', [
-                'order_no' => $record['order_no'],
-                'snapshot_before' => $snapshot['before'],
-                'snapshot_after' => $snapshot['after'],
-            ]);
-
-            if (($record['settlement_status'] ?? 0) == 0
-                && ($record['amount'] ?? 0) > 0
-                && $snapshot['after'] !== null
-                && isset($wallets[$playerId])) {
-                $wallet = $wallets[$playerId];
-                $beforeBalance = $wallet->money;
-                $wallet->money = $snapshot['after'];
-                $wallet->save();
-
-                $this->log->info("批量同步钱包余额（快照）", [
-                    'player_id' => $playerId,
-                    'before' => $beforeBalance,
-                    'after' => $wallet->money,
-                    'order_no' => $record['order_no'],
-                ]);
+        // 5. 统一写入钱包余额（每个玩家只写最新快照，避免旧快照覆盖新余额）
+        foreach ($latestWalletSnapshot as $playerId => $snapInfo) {
+            $wallet = $wallets[$playerId] ?? null;
+            if (!$wallet) {
+                continue;
             }
+            $beforeBalance = $wallet->money;
+            $wallet->money = $snapInfo['after'];
+            $wallet->save();
+
+            $this->log->info("批量同步钱包余额（快照）", [
+                'player_id' => $playerId,
+                'before'    => $beforeBalance,
+                'after'     => $wallet->money,
+                'order_no'  => $snapInfo['order_no'],
+            ]);
         }
 
         if (empty($insertData)) {
@@ -548,8 +628,10 @@ class GameRecordSyncWorker
         }
 
         // 6. 批量插入（一次性插入所有记录）
+        // ⚠️ 使用 insertOrIgnore 避免唯一键冲突导致整批回滚
+        // 冲突记录（DB 中已存在）会被静默跳过，由后续的 batchUpdateRecords 或下次同步处理
         try {
-            PlayGameRecord::query()->insert($insertData);
+            PlayGameRecord::query()->insertOrIgnore($insertData);
         } catch (\Throwable $e) {
             $this->log->error('[batchInsertRecords] 插入失败', [
                 'error' => $e->getMessage(),
@@ -722,7 +804,6 @@ class GameRecordSyncWorker
             }
 
             $needUpdate = false;
-            $balanceUpdated = false;
 
             // ✅ 合并下注平台：允许未结算状态下更新bet和balance_after（DG/RSGLIVE同局多笔下注累加）
             if (MergeBetPlatformHelper::isMergePlatform($platform) && $settlementStatus == 0) {
@@ -738,19 +819,28 @@ class GameRecordSyncWorker
                     if ($balanceAfterInYuan != $existing->balance_after) {
                         $existing->balance_after = $balanceAfterInYuan;
                         $needUpdate = true;
-                        $balanceUpdated = true;
 
-                        // 收集钱包同步信息
-                        $walletSyncNeeded[$existing->player_id] = [
-                            'balance_after' => $balanceAfterInYuan,
-                            'order_no' => $orderNo,
-                        ];
+                        // 收集钱包同步信息：同一玩家多笔下注时保留 bet_time 最大者，避免旧快照覆盖新余额
+                        $betTime = (int)($record['bet_time'] ?? 0);
+                        $pid = $existing->player_id;
+                        if (!isset($walletSyncNeeded[$pid])
+                            || $betTime > $walletSyncNeeded[$pid]['bet_time']) {
+                            $walletSyncNeeded[$pid] = [
+                                'balance_after' => $balanceAfterInYuan,
+                                'order_no'      => $orderNo,
+                                'bet_time'      => $betTime,
+                            ];
+                        }
                     }
                 }
             }
 
             // ✅ 更新结算状态（所有平台）
             if ($settlementStatus == 1) {
+                // 平台重试结算回调时 DB 可能已是 SETTLED，跳过重复写入和统计触发
+                if ($existing->settlement_status == PlayGameRecord::SETTLEMENT_STATUS_SETTLED) {
+                    continue;
+                }
                 // 🎯 单位转换：Redis 存储的是"分"，MySQL 需要"元"
                 $existing->win = isset($record['win']) ? round($record['win'] / 100, 2) : 0;
                 $existing->diff = isset($record['diff']) ? round($record['diff'] / 100, 2) : 0;
@@ -770,11 +860,6 @@ class GameRecordSyncWorker
             if ($needUpdate) {
                 $existing->save();
                 $updated++;
-
-                // ✅ 标记为已同步，从 Redis 队列移除
-                if (isset($record['redis_key'])) {
-                    GameRecordCacheService::markAsSynced($record['redis_key'], $existing->id);
-                }
             }
         }
 
@@ -1191,6 +1276,25 @@ class GameRecordSyncWorker
         $orderNo = $record['order_no'];
         $playerId = $record['player_id'];
         $platformId = $record['platform_id'];
+
+        // ⚠️ Fallback 竞态修复：重新从 Redis 读取最新状态
+        // 原因：$record 是 Lua 脚本读取时的旧快照，批量路径失败时 settle 可能已完成
+        // 如果不重新读取，会把 bet 时的未结算快照写入数据库，导致永久未结算
+        $redisKey = $record['redis_key'] ?? '';
+        if ($redisKey) {
+            $latestData = Redis::connection('work')->client()->hGetAll($redisKey);
+            if (!empty($latestData)) {
+                // 保留 redis_key，其余字段用最新数据覆盖
+                $latestData['redis_key'] = $redisKey;
+                $record = $latestData;
+                $this->log->info('[Fallback] 已重新读取Redis最新状态', [
+                    'order_no' => $orderNo,
+                    'settlement_status' => $latestData['settlement_status'] ?? 0,
+                    'diff' => $latestData['diff'] ?? 0,
+                ]);
+            }
+        }
+
         $settlementStatus = $record['settlement_status'] ?? 0;
 
         // 🎯 单位转换：Redis 存储的是"分"（整数），MySQL 需要"元"（小数）

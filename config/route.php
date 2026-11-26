@@ -241,5 +241,12 @@ Route::group('/single-wallet', function () {
         Route::post('/refund', [\app\wallet\controller\game\PPGameController::class, 'refund']);
         Route::post('/adjustment', [\app\wallet\controller\game\PPGameController::class, 'adjustment']);
     });
+    Route::group('/as-channel', function () {
+        Route::post('/verify-session', [\app\wallet\controller\game\ASGameController::class, 'verifySession']);
+        Route::post('/balance', [\app\wallet\controller\game\ASGameController::class, 'balance']);
+        Route::post('/withdraw', [\app\wallet\controller\game\ASGameController::class, 'withdraw']);
+        Route::post('/deposit', [\app\wallet\controller\game\ASGameController::class, 'deposit']);
+        Route::post('/refund', [\app\wallet\controller\game\ASGameController::class, 'refund']);
+    });
 });
 Route::disableDefaultRoute();

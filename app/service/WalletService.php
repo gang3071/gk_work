@@ -3,6 +3,7 @@
 namespace app\service;
 
 use app\model\PlayerPlatformCash;
+use app\support\WalletLogger;
 use support\Log;
 use support\Redis;
 
@@ -66,7 +67,13 @@ class WalletService
                 }
             }
 
-            // 缓存未命中或强制刷新，从数据库读取
+            // forceRefresh=true：只读 DB 供调试/核查，不回写 Redis。
+            // 回写会把异步同步尚未落库的过期值覆盖掉刚完成的原子操作结果。
+            if ($forceRefresh) {
+                return round(self::getBalanceFromDB($playerId, $platformId), 2);
+            }
+
+            // 缓存未命中：从数据库加载并写入 Redis（冷启动/首次访问）
             $balance = self::getBalanceFromDB($playerId, $platformId);
 
             // ✅ 整数化：写入缓存时转换为"分"
@@ -98,7 +105,7 @@ class WalletService
      * @param int $platformId 平台ID
      * @return array ['success' => bool, 'balance' => float, 'old_balance' => float]
      */
-    public static function deduct(int $playerId, float $amount, int $platformId = self::DEFAULT_PLATFORM_ID): array
+    public static function deduct(int $playerId, float $amount, int $platformId = self::DEFAULT_PLATFORM_ID, string $reason = '', array $extra = []): array
     {
         try {
             if ($amount <= 0) {
@@ -106,7 +113,7 @@ class WalletService
             }
 
             // 使用 Lua 原子脚本扣款
-            $result = self::atomicDecrement($playerId, $amount);
+            $result = self::atomicDecrement($playerId, $amount, 0, $reason, $extra);
 
             if ($result['ok'] == 0) {
                 return [
@@ -121,7 +128,7 @@ class WalletService
             return [
                 'success' => true,
                 'balance' => round((float)$result['balance'], 2),
-                'old_balance' => 0, // Lua 脚本未返回旧余额
+                'old_balance' => round((float)($result['old'] ?? 0), 2),
             ];
 
         } catch (\Throwable $e) {
@@ -152,7 +159,7 @@ class WalletService
      * @param int $platformId 平台ID
      * @return array ['success' => bool, 'balance' => float, 'old_balance' => float]
      */
-    public static function add(int $playerId, float $amount, int $platformId = self::DEFAULT_PLATFORM_ID): array
+    public static function add(int $playerId, float $amount, int $platformId = self::DEFAULT_PLATFORM_ID, string $reason = '', array $extra = []): array
     {
         try {
             if ($amount <= 0) {
@@ -160,7 +167,7 @@ class WalletService
             }
 
             // 使用 Lua 原子脚本加款
-            $incrementResult = self::atomicIncrement($playerId, $amount);
+            $incrementResult = self::atomicIncrement($playerId, $amount, 3600, $reason, $extra);
 
             return [
                 'success' => true,
@@ -612,7 +619,7 @@ LUA;
      * @param int $ttl Redis 缓存过期时间（秒），默认 3600
      * @return array ['ok' => 1, 'balance' => 新余额(元), 'old' => 旧余额(元)]
      */
-    public static function atomicIncrement(int $playerId, float $amount, int $ttl = 3600): array
+    public static function atomicIncrement(int $playerId, float $amount, int $ttl = 3600, string $reason = '', array $extra = []): array
     {
         if ($amount <= 0) {
             throw new \InvalidArgumentException('Amount must be greater than 0');
@@ -621,16 +628,27 @@ LUA;
         try {
             $cacheKey = self::getCacheKey($playerId);
 
+            // Redis 冷启动保护：key 不存在时先从 DB 加载真实余额再执行 Lua，
+            // 防止 Redis 重启/key 被驱逐后 Lua 把余额当 0 处理。
+            // 使用 Lua NX 原子写入，防止并发请求覆盖彼此已写入的正确值。
+            if (!Redis::exists($cacheKey)) {
+                $dbBalance = self::getBalanceFromDB($playerId, self::DEFAULT_PLATFORM_ID);
+                Redis::eval(
+                    "if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1]) end return 1",
+                    1, $cacheKey, (int)round($dbBalance * 100)
+                );
+            }
+
             // ✅ 整数化：将"元"转换为"分"
             $amountInCents = (int)round($amount * 100);
 
             // 执行 Lua 脚本，原子性增加余额
             $resultJson = Redis::eval(
                 self::LUA_ATOMIC_INCREMENT,
-                1,  // KEYS 数量
-                $cacheKey,         // KEYS[1]
-                $amountInCents,    // ARGV[1] - 金额（分）
-                $ttl               // ARGV[2]
+                1,          // KEYS 数量
+                $cacheKey,  // KEYS[1]
+                $amountInCents  // ARGV[1] - 金额（分）
+                // $ttl 不传：Lua 脚本只使用 ARGV[1]，key 永不过期
             );
 
             // 解析返回的 JSON：{ok, balance, old, new}（单位：分）
@@ -658,6 +676,17 @@ LUA;
                 'new_balance' => $result['balance'],
             ]);
 
+            WalletLogger::log(
+                $playerId,
+                WalletLogger::OP_ATOMIC_INCREMENT,
+                $reason,
+                $amount,
+                $result['old'] ?? 0,
+                $result['balance'],
+                true,
+                $extra
+            );
+
             // ✅ 发布余额变化消息到 Redis Pub/Sub（触发钱包解锁）
             self::publishBalanceChange($playerId, [
                 'reason' => 'win',  // 彩金/奖金中奖
@@ -674,6 +703,16 @@ LUA;
                 'amount' => $amount,
                 'error' => $e->getMessage(),
             ]);
+            WalletLogger::log(
+                $playerId,
+                WalletLogger::OP_ATOMIC_INCREMENT,
+                $reason,
+                $amount,
+                0,
+                0,
+                false,
+                array_merge($extra, ['error_code' => $e->getMessage()])
+            );
             throw $e;
         }
     }
@@ -700,7 +739,7 @@ LUA;
      * @param int $ttl (已废弃) Redis 缓存过期时间 - 余额已改为永不过期
      * @return array ['ok' => 1, 'balance' => 新余额] 或 ['ok' => 0, 'error' => 'insufficient_balance', 'balance' => 当前余额]
      */
-    public static function atomicDecrement(int $playerId, float $amount, int $ttl = 0): array
+    public static function atomicDecrement(int $playerId, float $amount, int $ttl = 0, string $reason = '', array $extra = []): array
     {
         if ($amount <= 0) {
             throw new \InvalidArgumentException('Amount must be greater than 0');
@@ -709,16 +748,27 @@ LUA;
         try {
             $cacheKey = self::getCacheKey($playerId);
 
+            // Redis 冷启动保护：key 不存在时先从 DB 加载真实余额再执行 Lua，
+            // 防止 Redis 重启/key 被驱逐后 Lua 把余额当 0 处理导致扣款拒绝。
+            // 使用 Lua NX 原子写入，防止并发请求覆盖彼此已写入的正确值。
+            if (!Redis::exists($cacheKey)) {
+                $dbBalance = self::getBalanceFromDB($playerId, self::DEFAULT_PLATFORM_ID);
+                Redis::eval(
+                    "if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1]) end return 1",
+                    1, $cacheKey, (int)round($dbBalance * 100)
+                );
+            }
+
             // ✅ 整数化：将"元"转换为"分"
             $amountInCents = (int)round($amount * 100);
 
             // 执行 Lua 脚本，原子性减少余额
             $resultJson = Redis::eval(
                 self::LUA_ATOMIC_DECREMENT,
-                1,  // KEYS 数量
-                $cacheKey,         // KEYS[1]
-                $amountInCents,    // ARGV[1] - 金额（分）
-                $ttl               // ARGV[2]
+                1,          // KEYS 数量
+                $cacheKey,  // KEYS[1]
+                $amountInCents  // ARGV[1] - 金额（分）
+                // $ttl 不传：Lua 脚本只使用 ARGV[1]，key 永不过期
             );
 
             $result = json_decode($resultJson, true);
@@ -739,9 +789,21 @@ LUA;
                     'new_balance' => $newBalance,
                 ]);
 
-                // 格式化返回值
+                WalletLogger::log(
+                    $playerId,
+                    WalletLogger::OP_ATOMIC_DECREMENT,
+                    $reason,
+                    $amount,
+                    $oldBalance,
+                    $newBalance,
+                    true,
+                    $extra
+                );
+
+                // 格式化返回值（三个字段统一转换为元）
                 $result['balance'] = $newBalance;
                 $result['old'] = $oldBalance;
+                $result['new'] = $newBalance;
             } else {
                 // ✅ 整数化：余额不足时也转换
                 $result['balance'] = round((int)($result['balance'] ?? 0) / 100, 2);
@@ -752,6 +814,17 @@ LUA;
                     'amount_cents' => $amountInCents,
                     'current_balance' => $result['balance'],
                 ]);
+
+                WalletLogger::log(
+                    $playerId,
+                    WalletLogger::OP_ATOMIC_DECREMENT,
+                    $reason,
+                    $amount,
+                    $result['balance'],
+                    $result['balance'],
+                    false,
+                    array_merge($extra, ['error_code' => $result['error'] ?? 'insufficient_balance'])
+                );
             }
 
             return $result;
@@ -762,6 +835,16 @@ LUA;
                 'amount' => $amount,
                 'error' => $e->getMessage(),
             ]);
+            WalletLogger::log(
+                $playerId,
+                WalletLogger::OP_ATOMIC_DECREMENT,
+                $reason,
+                $amount,
+                0,
+                0,
+                false,
+                array_merge($extra, ['error_code' => $e->getMessage()])
+            );
             throw $e;
         }
     }
@@ -797,7 +880,7 @@ LUA;
      *   'balance' => 当前余额(元)
      * ]
      */
-    public static function atomicWash(int $playerId, int $minWashAmount = 100, int $ttl = 0): array
+    public static function atomicWash(int $playerId, int $minWashAmount = 100, int $ttl = 0, string $reason = WalletLogger::REASON_MACHINE_WASH, array $extra = []): array
     {
         try {
             $cacheKey = self::getCacheKey($playerId);
@@ -805,13 +888,22 @@ LUA;
             // ✅ 整数化：将"元"转换为"分"
             $minWashAmountInCents = $minWashAmount * 100;
 
+            // 冷启动保护：key 不存在时从 DB 加载余额，使用 Lua NX 原子写入
+            if (!Redis::exists($cacheKey)) {
+                $dbBalance = self::getBalanceFromDB($playerId, self::DEFAULT_PLATFORM_ID);
+                Redis::eval(
+                    "if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1]) end return 1",
+                    1, $cacheKey, (int)round($dbBalance * 100)
+                );
+            }
+
             // 执行 Lua 脚本，原子性完成洗分操作
+            // $ttl 不传：余额 key 永不过期（系统设计要求）
             $resultJson = Redis::eval(
                 self::LUA_ATOMIC_WASH,
                 1,  // KEYS 数量
                 $cacheKey,              // KEYS[1]
-                $minWashAmountInCents,  // ARGV[1] - 最小洗分金额（分）
-                $ttl                    // ARGV[2]
+                $minWashAmountInCents   // ARGV[1] - 最小洗分金额（分）
             );
 
             $result = json_decode($resultJson, true);
@@ -840,6 +932,17 @@ LUA;
                     'wash_amount' => $result['wash_amount'],
                     'new_balance' => $result['balance'],
                 ]);
+
+                WalletLogger::log(
+                    $playerId,
+                    WalletLogger::OP_ATOMIC_WASH,
+                    $reason,
+                    $result['wash_amount'],
+                    $result['old_balance'],
+                    $result['balance'],
+                    true,
+                    $extra
+                );
             } else {
                 Log::warning('WalletService::atomicWash 失败', [
                     'player_id' => $playerId,
@@ -848,6 +951,17 @@ LUA;
                     'wash_amount' => $result['wash_amount'] ?? 0,
                     'min_required' => $result['min_required'] ?? $minWashAmount,
                 ]);
+
+                WalletLogger::log(
+                    $playerId,
+                    WalletLogger::OP_ATOMIC_WASH,
+                    $reason,
+                    $result['wash_amount'] ?? 0,
+                    $result['balance'] ?? 0,
+                    $result['balance'] ?? 0,
+                    false,
+                    array_merge($extra, ['error_code' => $result['error'] ?? 'unknown'])
+                );
             }
 
             return $result;
@@ -857,6 +971,16 @@ LUA;
                 'player_id' => $playerId,
                 'error' => $e->getMessage(),
             ]);
+            WalletLogger::log(
+                $playerId,
+                WalletLogger::OP_ATOMIC_WASH,
+                $reason,
+                0,
+                0,
+                0,
+                false,
+                array_merge($extra, ['error_code' => $e->getMessage()])
+            );
             throw $e;
         }
     }
@@ -875,8 +999,10 @@ LUA;
     {
         try {
             // 只更新 player_platform_cash 表（player 表没有 money 字段）
+            // ⚠️ 必须加 platform_id 过滤，否则会覆盖该玩家在其他平台的余额
             \support\Db::table('player_platform_cash')
                 ->where('player_id', $playerId)
+                ->where('platform_id', self::DEFAULT_PLATFORM_ID)
                 ->update(['money' => $newBalance]);
         } catch (\Throwable $e) {
             // 数据库同步失败不影响 Redis（Redis 是唯一实时标准）

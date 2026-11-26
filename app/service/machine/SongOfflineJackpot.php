@@ -75,6 +75,7 @@ use yzh52521\WebmanLock\Locker;
  * @property int $keeping 保留状态（0=未保留 1=保留中）
  * @property int $keeping_user_id 保留玩家ID
  * @property int $last_keep_at 最后进入保留时间
+ * @property int $lottery_record_id 本次开奖记录ID（临时状态，存 Redis）
  *
  * @package app\service\machine
  * @author Claude Code
@@ -190,6 +191,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_keeping',        // 保留状态（0=未保留 1=保留中）
             $this->cacheDataKey . '_keeping_user_id',// 保留玩家ID
             $this->cacheDataKey . '_last_keep_at',   // 最后进入保留时间
+            $this->cacheDataKey . '_lottery_record_id',    // 本次开奖记录ID（防止中断后更新错记录）
         ];
 
         // 推送到前端的关键字段
@@ -252,7 +254,12 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             if ($name === 'gaming_user_id' && !empty($value) && empty($this->gaming_user_id)) {
                 Cache::set($this->cacheDataKey . '_last_play_time', time());
             }
+            if ($name === 'gaming_user_id' && empty($value) && !empty($this->gaming_user_id)) {
+                $this->lottery_record_id = 0;
+            }
 
+            // 只有需要推送到前端的字段才读旧值（用于跳过无变化的推送），其余字段不读节省Redis GET
+            $oldValue = in_array($name, $this->machineInfo) ? Cache::get($key) : null;
             try {
                 $saveResult = Cache::set($this->cacheDataKey . '_' . $name, $value);
                 if (!$saveResult) {
@@ -387,7 +394,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 }
 
                 $currentGamingUserId = $machineCacheInfo[$this->cacheDataKey . '_gaming_user_id'] ?? 0;
-                if (in_array($name, $this->machineInfo) && !empty($currentGamingUserId)) {
+                if (in_array($name, $this->machineInfo) && !empty($currentGamingUserId)
+                    && (string)$oldValue !== (string)$value) {
                     $this->sendMachineNowInfoMessage($currentGamingUserId, $this->machine->id, $name, $info);
                 }
             }
@@ -557,14 +565,17 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function processIndependentExternalButton(string $msg, int $len): bool
     {
-        // 检查B5指令
+        // 检查B5指令（含B5+B7合包：心跳46前缀丢失后仅剩B5+B7段）
         if ($len >= 10) {
             if (substr($msg, 0, 2) == 'b5') {
-                $this->handleExternalButtonData(substr($msg, 0, 10));
+                // 合包检测：b5[2字节]b7[3字节]S1S2 = 18字符
+                $extLen = ($len >= 18 && substr($msg, 6, 2) == 'b7') ? 18 : 10;
+                $this->handleExternalButtonData(substr($msg, 0, $extLen));
                 return true;
             }
             if ($len >= 12 && substr($msg, 2, 2) == 'b5') {
-                $this->handleExternalButtonData(substr($msg, 2, 10));
+                $extLen = ($len >= 20 && substr($msg, 8, 2) == 'b7') ? 18 : 10;
+                $this->handleExternalButtonData(substr($msg, 2, $extLen));
                 return true;
             }
         }
@@ -680,7 +691,33 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             while ($offset < $len) {
                 $cmd = substr($data, $offset, 2);
 
-                if ($cmd == 'b5' && ($len - $offset) >= 10) {
+                if ($cmd == 'b5' && ($len - $offset) >= 18 && substr($data, $offset + 6, 2) == 'b7') {
+                    // B5+B7 合包：心跳46前缀丢失导致，跳过S1/S2直接解析两个计数器
+                    $b5Count = hexdec(substr($data, $offset + 2, 2)) * 100 + hexdec(substr($data, $offset + 4, 2));
+                    $b7Count = hexdec(substr($data, $offset + 8, 2)) * 10000
+                        + hexdec(substr($data, $offset + 10, 2)) * 100
+                        + hexdec(substr($data, $offset + 12, 2));
+
+                    MachineLogger::warning($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5B7合包] 收到B5+B7合包（心跳訊號前缀丟失），跳過S1/S2 開分=' . $b5Count . ' 洗分=' . $b7Count, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $data);
+
+                    if ($b5Count <= 9999) {
+                        $oldCount = $this->external_open_count ?? 0;
+                        $result = $this->processCounterChange('open', $oldCount, $b5Count, $now);
+                        if ($result['should_update']) {
+                            $this->external_open_count = $b5Count;
+                        }
+                    }
+
+                    if ($b7Count <= 999999) {
+                        $oldCount = $this->external_wash_count ?? 0;
+                        $result = $this->processCounterChange('wash', $oldCount, $b7Count, $now);
+                        if ($result['should_update']) {
+                            $this->external_wash_count = $b7Count;
+                        }
+                    }
+
+                    $offset += 18;
+                } elseif ($cmd == 'b5' && ($len - $offset) >= 10) {
                     // B5 xx xx S1 S2: 外部按钮开分次数（10字符）
                     // ⚠️ count 是次数，不是金额
                     $b5Data = substr($data, $offset, 10);
@@ -692,14 +729,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                     $calculatedS1 = self::calculateS1($b5Content);
                     if ($s1 != $calculatedS1) {
-                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S1校驗失敗 預期=' . $calculatedS1 . ' 實際=' . $s1, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S1校驗失敗 預期=' . $calculatedS1 . ' 實際=' . $s1, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $data);
                         $offset += 10;
                         continue;
                     }
 
                     $calculatedS2 = self::calculateS2($b5Content, $calculatedS1);
                     if ($s2 != $calculatedS2) {
-                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S2校驗失敗 預期=' . $calculatedS2 . ' 實際=' . $s2, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                        MachineLogger::error($this->machine->toArray(), 'b5_protocol', '[小松鋼珠線下-B5協議] S2校驗失敗 預期=' . $calculatedS2 . ' 實際=' . $s2, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $data);
                         $offset += 10;
                         continue;
                     }
@@ -1131,8 +1168,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // 处理转数变化（累加player_win_number、投递打码量）
         $this->processTurnChange($state['nowRewardStatus'], $gamingUserId, $state['nowTurn'], $orgTurn, $state['nowWinNumber'], $orgWinNumber);
 
-        // 转数为0时清理礼物缓存
-        $this->cleanupGiftCacheIfNeeded($state['nowTurn'], $gamingUserId);
+        // 转数为0时清理礼物缓存（需传入 orgTurn 以区分"刚打完"与"还没开始打"）
+        $this->cleanupGiftCacheIfNeeded($state['nowTurn'], $orgTurn, $gamingUserId);
 
         // 推送机台状态到前端
         $this->sendMachineNowStatusMessage($this->machine->id);
@@ -1219,6 +1256,12 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $this->last_play_time = time();
         }
 
+        // 开奖中途帧会携带非零 score，但结束帧（nowRewardStatus=0）的 score 为 0。
+        // 把开奖期间最后一个非零 score 存入 lottery_score，供 handleLotteryEnd 使用。
+        if ($nowRewardStatus == 1 && $nowScore > 0) {
+            $this->lottery_score = $nowScore;
+        }
+
         // 设置查询指令的actionVersion（心跳包含所有查询数据）
         $this->setActionVersion(self::MACHINE_POINT);
         $this->setActionVersion(self::MACHINE_SCORE);
@@ -1246,13 +1289,17 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     private function handleLotteryStart(int $nowRewardStatus, int $orgRewardStatus, int $gamingUserId): void
     {
         if ($nowRewardStatus == 1 && $orgRewardStatus == 0) {
+            $this->lottery_score = 0; // 新一轮开奖开始，清除上轮残留（双保险）
             $machineLotteryRecord = new MachineLotteryRecord();
             $machineLotteryRecord->machine_id = $this->machine->id;
             $machineLotteryRecord->player_id = $gamingUserId;
             $machineLotteryRecord->department_id = $this->machine->gamingPlayer->department_id ?? 0;
             $machineLotteryRecord->draw_bet = $this->win_number;
             $machineLotteryRecord->use_turn = $this->now_turn;
+            $machineLotteryRecord->odds_x = $this->machine->odds_x ?? 1;
+            $machineLotteryRecord->odds_y = $this->machine->odds_y ?? 1;
             $machineLotteryRecord->save();
+            $this->lottery_record_id = $machineLotteryRecord->id;
         }
     }
 
@@ -1279,31 +1326,77 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     private function handleLotteryEnd(int $nowRewardStatus, int $orgRewardStatus, $nowScore, int $gamingUserId): void
     {
         if ($nowRewardStatus == 0 && $orgRewardStatus == 1) {
-            // 触发彩池抽奖
-            if (!empty($this->machine->gamingPlayer)) {
-                (new LotteryServices())
-                    ->setMachine($this->machine)
-                    ->setPlayer($this->machine->gamingPlayer)
-                    ->fixedPotCheckLottery($nowScore);
+            // 彩金检查、积分通知等非核心操作隔离在独立 try-catch 中，
+            // 任何失败都不能阻止后续的下珠指令。
+            try {
+                // 结束帧的 nowScore 通常为 0（硬件不在结束帧重复发得分）。
+                // 用开奖过程中累积的 lottery_score 兜底，确保彩金检查使用真实得分。
+                $lotteryScore = ($nowScore > 0) ? $nowScore : (int)($this->lottery_score ?? 0);
+                $this->lottery_score = 0; // 本轮使用完毕，重置防止下轮污染（先重置再记日志，避免异常导致残留）
+                // 记录结束帧原始数据，用于确认硬件实际发来的 score 值
+                MachineLogger::receiveResponse($this->machine->toArray(), 'lottery_end_score', '開獎結束幀得分原始數據 nowScore=' . $nowScore . ' lotteryScore=' . $lotteryScore, $this->getMachineCache());
+
+                // 触发彩池抽奖
+                if (!empty($this->machine->gamingPlayer)) {
+                    (new LotteryServices())
+                        ->setMachine($this->machine)
+                        ->setPlayer($this->machine->gamingPlayer)
+                        ->fixedPotCheckLottery($lotteryScore);
+                }
+
+                // 线下版钢珠机不参与机台活动，不发送 play-activity 队列
+                // 但保留钢珠报喜功能（广播功能，非活动）
+                if ($lotteryScore > 0) {
+                    // 钢珠报喜：检测珠数是否达到阈值并广播
+                    \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $lotteryScore);
+
+                    // 钢珠下珠赠送积分（由 gk_admin 消费者根据门店开关决定是否发放）
+                    \Webman\RedisQueue\Client::send('steel-ball-points-gift', [
+                        'player_id'      => $gamingUserId,
+                        'machine_id'     => $this->machine->id,
+                        'department_id'  => $this->machine->department_id,
+                        'store_admin_id' => $this->machine->gamingPlayer?->store_admin_id ?? 0,
+                        'score'          => $lotteryScore,
+                    ]);
+                }
+
+                // 记录开奖结果得分
+                MachineLotteryRecord::query()
+                    ->where('id', $this->lottery_record_id)
+                    ->whereNull('lottery_win')
+                    ->first()
+                    ?->update(['lottery_win' => $lotteryScore]);
+                $this->lottery_record_id = 0;
+
+                // 通知前端开奖结束
+                sendSocketMessage('group-' . $this->machine->id, [
+                    'msg_type' => 'machine_reward_end',
+                    'machine_id' => $this->machine->id,
+                    'machine_code' => $this->machine->code,
+                    'gaming_user_id' => $gamingUserId,
+                ]);
+            } catch (\Throwable $e) {
+                MachineLogger::error(
+                    $this->machine->toArray(),
+                    'reward_post_process',
+                    '开奖后处理异常（下珠不受影响）: ' . $e->getMessage(),
+                    $this->getMachineCache(),
+                    MachineLogger::DIR_EVENT
+                );
             }
 
-            // 线下版钢珠机不参与机台活动，不发送 play-activity 队列
-            // 但保留钢珠报喜功能（广播功能，非活动）
-            if ($nowScore > 0) {
-                // 钢珠报喜：检测珠数是否达到阈值并广播
-                \app\service\SteelBallBroadcastService::checkAndBroadcast($this->machine, $nowScore);
+            // 下珠指令：独立执行，确保无论上方流程是否出错都能触发
+            if ($gamingUserId > 0) {
+                $this->sendScoreToPointAsync($gamingUserId);
+            } else {
+                MachineLogger::warning(
+                    $this->machine->toArray(),
+                    'score_to_point',
+                    '开奖结束时无在台玩家，跳过下珠指令',
+                    $this->getMachineCache(),
+                    MachineLogger::DIR_COMMAND
+                );
             }
-
-            // 通知前端开奖结束
-            sendSocketMessage('group-' . $this->machine->id, [
-                'msg_type' => 'machine_reward_end',
-                'machine_id' => $this->machine->id,
-                'machine_code' => $this->machine->code,
-                'gaming_user_id' => $gamingUserId,
-            ]);
-
-            // 自动执行"得分→分数"转换
-            $this->sendScoreToPointAsync($gamingUserId);
         }
     }
 
@@ -1312,7 +1405,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function sendScoreToPointAsync(int $gamingUserId, int $attempts = 0): void
     {
-        $maxRetries = 3;
+        $maxRetries = 5;
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
         if (!Gateway::isUidOnline($uid)) {
@@ -1326,8 +1419,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         MachineLogger::sendCommand($this->machine->toArray(), 'score_to_point', '得分轉分數 異步發送 第' . ($attempts + 1) . '次', $this->getMachineCache());
 
         $machineId = $this->machine->id;
+        // 间隔递增：1s→2s→3s，第4次起固定3s，给机台更多响应时间
+        $delay = min($attempts + 1, 3);
 
-        Timer::add(1, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
+        Timer::add($delay, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
             $machine = Machine::find($machineId);
             if (!$machine) return;
 
@@ -1493,15 +1588,62 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
     /**
      * 转数为0时清理礼物缓存
+     *
+     * 必须同时满足：nowTurn == 0 且 orgTurn > 0（转数刚从正数变为0）
+     * 若 orgTurn == 0 表示开分后转数还未开始变化，不能视为"打完"，否则会错误清除刚写入的 gift_cache。
      */
-    private function cleanupGiftCacheIfNeeded($nowTurn, int $gamingUserId): void
+    private function cleanupGiftCacheIfNeeded($nowTurn, float $orgTurn, int $gamingUserId): void
     {
-        if ($nowTurn <= 0 && !empty($gamingUserId)) {
+        if ($nowTurn <= 0 && $orgTurn > 0 && !empty($gamingUserId)) {
             $cacheKey = 'gift_cache_' . $this->machine->id . '_' . $gamingUserId;
             if (Cache::has($cacheKey)) {
+                $giftCache = Cache::get($cacheKey);
+                // 玩家打完转数，属正常结束，赠点无需扣回，清理缓存
+                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_cache', '[小松鋼珠線下-禮物快取] 轉數打完，清理禮物快取 玩家ID=' . $gamingUserId . ' gift_point=' . ($giftCache['gift_point'] ?? 0), ['machine_data' => $this->getMachineCache()]);
                 Cache::delete($cacheKey);
-                MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_cache', '[小松鋼珠線下-禮物快取] 轉數為0，清理禮物快取 玩家ID=' . $gamingUserId, ['machine_data' => $this->getMachineCache()]);
             }
+        }
+    }
+
+    /**
+     * 开分赠点后自动全部上转，并轮询心跳确认转数增加。
+     * 只适用于小松钢珠线下机台（本类），调用方无需再做机型判断。
+     */
+    public function giftPointTurnUpAll(int $giftScore, int $playerId): void
+    {
+        // 主动发送 MACHINE_POINT 查询刷新分数（不依赖被动心跳）
+        // OPEN_ANY_POINT 确认后机台已有分数，但 $this->point 只在心跳/MACHINE_POINT 回复时更新
+        // 直接查询可立即获得 46EA 回复并写入 $this->point，无需等 1-3s 心跳
+        try {
+            $this->sendCmd(self::MACHINE_POINT, 0, 'player', $playerId);
+        } catch (\Exception $e) {
+            // 查询失败时退化为被动轮询心跳（最多 3s）
+            $pollWaited = 0;
+            while ($pollWaited < 3000000 && ($this->point ?? 0) < 100) {
+                usleep(200000);
+                $pollWaited += 200000;
+            }
+        }
+
+        $turnBefore = $this->turn ?? 0;
+        $this->sendCmd(self::TURN_UP_ALL, 0, 'player', $playerId);
+
+        // 轮询等待心跳确认转数增加（MACHINE_TURN 响应异步写入 Redis）
+        $confirmWaited = 0;
+        $confirmed = false;
+        while ($confirmWaited < 3000000) {
+            usleep(300000);
+            $confirmWaited += 300000;
+            if (($this->turn ?? 0) > $turnBefore) {
+                $confirmed = true;
+                break;
+            }
+        }
+
+        if ($confirmed) {
+            MachineLogger::log($this->machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_turn_up_all', '[開分贈點] 自動全部上轉成功 gift_score=' . $giftScore . ' turn_before=' . $turnBefore . ' turn_after=' . ($this->turn ?? 0), ['player_id' => $playerId]);
+        } else {
+            MachineLogger::warning($this->machine->toArray(), 'gift_turn_up_all', '[開分贈點] 自動全部上轉未確認（心跳未更新轉數）gift_score=' . $giftScore . ' turn_before=' . $turnBefore, $this->getMachineCache(), MachineLogger::DIR_EVENT);
         }
     }
 
@@ -1632,7 +1774,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 // 防止异常值
                 if (abs($delta) > 100) {
-                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '檢測到異常的中洞兌獎次數，拒絕更新 舊值=' . $oldWinNumber . ' 新值=' . $winNumber . ' 差值=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '檢測到異常的中洞兌獎次數，拒絕更新 舊值=' . $oldWinNumber . ' 新值=' . $winNumber . ' 差值=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 } else {
                     $this->win_number = $winNumber;
                 }
@@ -1666,15 +1808,16 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 MachineLogger::receiveResponse($this->machine->toArray(), 'recv_turn', '[小松鋼珠線下-新版查詢] 收到轉數查詢回覆 轉數=' . $turn, $this->getMachineCache());
                 break;
 
-            // 查询累积转数响应（新版）：46 ED xx xx xx S1 S2
+            // 查询累积转数响应（新版）：46 ED [ratio] [win_hi] [win_lo] S1 S2
+            // 第5字节是扣趴（同心跳格式），转数只有2字节（同 46D0 心跳）
             case self::QUERY_REPLY_WIN_NUMBER:  // 46ed
-                $winNumber = self::parseScore(substr($msg, 4, 6));
+                $winNumber = self::parseScore('00' . substr($msg, 6, 4));
                 $oldWinNumber = $this->win_number;
                 $delta = $winNumber - $oldWinNumber;
 
                 // 防止异常值
                 if (abs($delta) > 100) {
-                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '[小松鋼珠線下-新版查詢] 檢測到異常的中洞兌獎次數，拒絕更新 舊值=' . $oldWinNumber . ' 新值=' . $winNumber . ' 差值=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                    MachineLogger::error($this->machine->toArray(), 'win_number_anomaly', '[小松鋼珠線下-新版查詢] 檢測到異常的中洞兌獎次數，拒絕更新 舊值=' . $oldWinNumber . ' 新值=' . $winNumber . ' 差值=' . $delta, $this->getMachineCache(), MachineLogger::DIR_RESPONSE, $msg);
                 } else {
                     $this->win_number = $winNumber;
                     MachineLogger::receiveResponse($this->machine->toArray(), 'recv_win_number', '[小松鋼珠線下-新版查詢] 收到累積中洞兌獎次數回覆 次數=' . $winNumber, $this->getMachineCache());
