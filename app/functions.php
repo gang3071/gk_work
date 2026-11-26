@@ -2932,19 +2932,17 @@ if (!function_exists('machineOpenAnyFree')) {
                 }
             }
 
-            // 当前玩家自己的 gift_cache 检查
-            // 拦截条件：本次为赠点开分（$giveRuleId 有值）+ 机台有活跃 gaming session
-            // 若本次为普通开分，gift_cache 视为残留（上次 wash 异常未清除），直接清除放行
+            // 当前玩家自己的 gift_cache 检查：有活跃 gaming session 时拦截一切上分（含普通上分）
+            // gift_cache 是 wash 时回扣赠点的凭据，不可提前删除
             $giftCacheKey = 'gift_cache_' . $machine->id . '_' . $player->id;
             if (!empty(Cache::get($giftCacheKey))) {
-                $isGiftOpen = !empty($giveRuleId) && $giftScore > 0;
-                if ($isGiftOpen && $gamingUserId != 0) {
-                    // 本次也是赠点开分，且机台仍有 gaming session → 拦截重复使用
+                if ($gamingUserId == 0) {
+                    // 机台已空闲但 gift_cache 仍存在 → 上次异常导致的残留，自动清除
+                    Cache::delete($giftCacheKey);
+                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '机台空闲时发现残留 gift_cache，已自动清除 player=' . $player->id, $services->getMachineCache());
+                } else {
                     throw new Exception(trans('give_point_session_active', [], 'message'));
                 }
-                // 其余情况（普通开分 / 机台已空闲）→ gift_cache 为残留，自动清除
-                Cache::delete($giftCacheKey);
-                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '自动清除残留 gift_cache player=' . $player->id . ' gaming_user=' . $gamingUserId . ' is_gift_open=' . (int)$isGiftOpen, $services->getMachineCache());
             }
             if ($giveRuleId && $giftScore > 0) {
                 // 每日次数限制（防止绕过 MachineOperationService 直接调用超限）
