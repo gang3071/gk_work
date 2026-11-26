@@ -609,8 +609,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         // 分离主指令和外部按钮数据
         [$mainCmd, $externalData] = $this->separateCommandWithExternal($msg, $len);
 
-        // 校验主指令的S1/S2
-        if (!$this->validateChecksumS1S2($mainCmd)) {
+        // 校验主指令的S1/S2（短格式查询回复8字符无独立S1S2，校验在外部数据末尾，跳过）
+        if (mb_strlen($mainCmd) > 8 && !$this->validateChecksumS1S2($mainCmd)) {
             throw new Exception('指令S1/S2校驗失敗');
         }
 
@@ -650,6 +650,15 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 if (preg_match('/^b[57]/i', $possibleExt) && $this->validateChecksumS1S2($possibleMain)) {
                     return [$possibleMain, $possibleExt];
                 }
+            }
+        }
+
+        // 短格式查询回复（46ea/46eb/46ec/46ed）无独立S1S2，整体校验由外部数据末尾的S1S2承担
+        $shortQueryReplies = ['46ea', '46eb', '46ec', '46ed'];
+        if ($len >= 26 && in_array(strtolower(substr($msg, 0, 4)), $shortQueryReplies)) {
+            $possibleExt = substr($msg, 8);
+            if (preg_match('/^b[57]/i', $possibleExt)) {
+                return [substr($msg, 0, 8), $possibleExt];
             }
         }
 
