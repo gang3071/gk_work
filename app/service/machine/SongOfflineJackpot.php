@@ -1770,9 +1770,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 MachineLogger::receiveResponse($this->machine->toArray(), 'recv_turn', '[小松鋼珠線下-新版查詢] 收到轉數查詢回覆 轉數=' . $turn, $this->getMachineCache());
                 break;
 
-            // 查询累积转数响应（新版）：46 ED xx xx xx S1 S2
+            // 查询累积转数响应（新版）：46 ED [ratio] [win_hi] [win_lo] S1 S2
+            // 第5字节是扣趴（同心跳格式），转数只有2字节（同 46D0 心跳）
             case self::QUERY_REPLY_WIN_NUMBER:  // 46ed
-                $winNumber = self::parseScore(substr($msg, 4, 6));
+                $winNumber = self::parseScore('00' . substr($msg, 6, 4));
                 $oldWinNumber = $this->win_number;
                 $delta = $winNumber - $oldWinNumber;
 
