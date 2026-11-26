@@ -1405,7 +1405,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
      */
     private function sendScoreToPointAsync(int $gamingUserId, int $attempts = 0): void
     {
-        $maxRetries = 3;
+        $maxRetries = 5;
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
         if (!Gateway::isUidOnline($uid)) {
@@ -1419,8 +1419,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         MachineLogger::sendCommand($this->machine->toArray(), 'score_to_point', '得分轉分數 異步發送 第' . ($attempts + 1) . '次', $this->getMachineCache());
 
         $machineId = $this->machine->id;
+        // 间隔递增：1s→2s→3s，第4次起固定3s，给机台更多响应时间
+        $delay = min($attempts + 1, 3);
 
-        Timer::add(1, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
+        Timer::add($delay, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
             $machine = Machine::find($machineId);
             if (!$machine) return;
 

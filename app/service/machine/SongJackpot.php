@@ -852,7 +852,7 @@ class SongJackpot extends MachineServices implements BaseMachine
      */
     private function sendScoreToPointAsync(int $gamingUserId, int $attempts = 0): void
     {
-        $maxRetries = 3;
+        $maxRetries = 5;
         $uid = $this->machine->domain . ':' . $this->machine->port;
 
         if (!Gateway::isUidOnline($uid)) {
@@ -867,9 +867,10 @@ class SongJackpot extends MachineServices implements BaseMachine
         MachineLogger::sendCommand($this->machine->toArray(), 'score_to_point', '得分轉分數 異步發送 第' . ($attempts + 1) . '次', $this->getMachineCache());
 
         $machineId = $this->machine->id;
+        // 间隔递增：1s→2s→3s，第4次起固定3s，给机台更多响应时间
+        $delay = min($attempts + 1, 3);
 
-        // 1秒后检查是否收到回复
-        Timer::add(1, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
+        Timer::add($delay, function () use ($machineId, $gamingUserId, $attempts, $maxRetries, $sentVersion) {
             $machine = Machine::find($machineId);
             if (!$machine) {
                 return;
@@ -879,12 +880,10 @@ class SongJackpot extends MachineServices implements BaseMachine
             $currentVersion = $svc->getActionVersion(self::SCORE_TO_POINT);
 
             if ($currentVersion > $sentVersion) {
-                // 机台已回复，成功
                 MachineLogger::receiveResponse($svc->machine->toArray(), 'score_to_point', '得分轉分數 確認成功 第' . ($attempts + 1) . '次', $svc->getMachineCache());
                 return;
             }
 
-            // 未收到回复
             $newAttempts = $attempts + 1;
             if ($newAttempts >= $maxRetries) {
                 MachineLogger::error($svc->machine->toArray(), 'score_to_point', '得分轉分數 重試耗盡 嘗試次數=' . $newAttempts, $svc->getMachineCache(), MachineLogger::DIR_RESPONSE);
