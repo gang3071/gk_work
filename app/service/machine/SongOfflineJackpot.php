@@ -472,7 +472,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
 
             $hasB5B7 = (stripos($msg, 'b5') !== false || stripos($msg, 'b7') !== false);
-            MachineLogger::receiveResponse($this->machine->toArray(), 'message_parse', '收到非標準長度訊息，嘗試解析', $this->getMachineCache());
+            MachineLogger::receiveResponse($this->machine->toArray(), 'message_parse', '收到非標準長度訊息，嘗試解析 長度=' . $len . ' 內容=' . $msg, $this->getMachineCache());
         }
     }
 
