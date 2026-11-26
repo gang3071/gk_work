@@ -472,7 +472,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
 
             $hasB5B7 = (stripos($msg, 'b5') !== false || stripos($msg, 'b7') !== false);
-            MachineLogger::receiveResponse($this->machine->toArray(), 'message_parse', '收到非標準長度訊息，嘗試解析 長度=' . $len . ' 內容=' . $msg, $this->getMachineCache());
+            if (!$hasB5B7) {
+                // 含 b5/b7 外部按键数据的组合报文属正常，不记警告
+                MachineLogger::receiveResponse($this->machine->toArray(), 'message_parse', '收到非標準長度訊息，嘗試解析 長度=' . $len . ' 內容=' . $msg, $this->getMachineCache());
+            }
         }
     }
 
