@@ -2139,19 +2139,17 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     }
                     $this->machineAction($uid, $cmd, $source, $source_id);
 
-                    // ✅ 设置上转操作标记
+                    // 等待机版回复 46 EC，确认转数已更新
                     usleep(100000);
-                    Cache::set('turn_action_flag_' . $this->machine->id, true, 5);
-                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_TURN)));
+                    $this->machineAction($uid, self::MACHINE_TURN, $source, $source_id);
                     break;
 
                 case self::TURN_DOWN_ALL:
                     $this->machineAction($uid, $cmd, $source, $source_id);
 
-                    // ✅ 设置下转操作标记
+                    // 等待机版回复 46 EC，确认转数已更新
                     usleep(100000);
-                    Cache::set('turn_action_flag_' . $this->machine->id, true, 5);
-                    Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_TURN)));
+                    $this->machineAction($uid, self::MACHINE_TURN, $source, $source_id);
                     break;
 
                 case self::TURN_TO_POINT:
