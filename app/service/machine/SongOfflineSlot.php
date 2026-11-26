@@ -2604,6 +2604,11 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
             }
             $this->machine_score = $machineScore;     // 机台分数（心跳B2字段）
 
+            // 分数变化标志：card_score 或 machine_score 变动时设置，洗分侧等待其稳定
+            if ((!$suppressStaleHeartbeat && $cardScore !== $oldCardScore) || $machineScore !== $oldMachineScore) {
+                \support\Cache::set("slot_score_changing_{$this->machine->id}", time(), 3);
+            }
+
             // ========== 异常高压分保护（心跳 BA 单次增量 > 100 视为异常） ==========
             $betJump = $totalBet - $oldTotalBet;
             $betAnomalyThreshold = 150;

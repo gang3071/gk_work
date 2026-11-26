@@ -452,6 +452,8 @@ return [
     'missing_parameter' => '缺少参数: {param}',
     'invalid_wash_action' => '缺少或无效的参数: action (必须是 leave/down/switch)',
     'wash_failed' => '洗分失败',
+    'machine_score_changing' => '机台分数变动中，无法洗分，请稍后重试',
+    'wash_score_race' => '洗分取消：机台分数异动，请稍后重试',
     'invalid_open_score' => '缺少或无效的参数: open_score (必须大于0)',
     'open_machine_failed' => '上分失败',
 

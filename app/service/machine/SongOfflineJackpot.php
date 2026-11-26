@@ -1250,6 +1250,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $nowRewardStatus = (substr($msg, 10, 2) == 'd5') ? 1 : 0; // D5=开奖中
 
         // 更新Redis状态
+        $oldPoint = $this->point ?? 0;
+        $oldTurn = $this->turn ?? 0;
         $this->point = $nowPoint;
         $this->auto = $nowAuto;
         $this->win_number = $nowWinNumber;
@@ -1261,6 +1263,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
         // 记录机台实时状态日志（放在 Redis 更新后，getMachineCache() 才能读到本次心跳的新值）
         $this->logMachineStatus($gamingUserId, $nowAuto, $nowRewardStatus, $nowPoint, $nowScore, $nowTurn, $nowWinNumber, $nowRatio, $orgTurn, $orgWinNumber, $msg);
+
+        // 分数变化标志：point 或 turn 变动时设置，洗分侧检测到后直接拒绝
+        if ($nowPoint !== $oldPoint || $nowTurn !== $oldTurn) {
+            \support\Cache::set("steel_ball_score_changing_{$this->machine->id}", time(), 3);
+        }
 
         // 开奖中持续刷新活动时间，防止机台因闲置进入保留状态导致保留时间被扣除
         // processTurnChange 在开奖中会 return，不会更新 last_play_time，

@@ -1201,6 +1201,16 @@ function machineWash(
         //斯洛 需要判斷下分限制
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
+                $isOfflineSongSteelBall = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
+                    && $machine->control_type == Machine::CONTROL_TYPE_SONG);
+
+                // 分数变动中直接拒绝洗分（防止玩家在下分窗口内互转 point/turn）
+                if ($isOfflineSongSteelBall) {
+                    if (\support\Cache::get("steel_ball_score_changing_{$machine->id}")) {
+                        throw new Exception(trans('machine_score_changing', [], 'message'));
+                    }
+                }
+
                 // 弃台需要下转,下珠
                 if ($path == 'leave') {
                     // ✅ 清除累计打码量（2026-07-30）
@@ -1235,9 +1245,17 @@ function machineWash(
                     }
                 }
                 $services->sendCmd($services::MACHINE_POINT, 0, 'player', $player->id, $is_system);
+                // 快照立刻从 MACHINE_POINT 回复中取，不能在 sleep 或其他指令后读
+                // 钢珠心跳会更新 $this->point，WIN_NUMBER 执行期间可能被覆盖，$money 须同源
+                if ($isOfflineSongSteelBall) {
+                    $pointSnap = $services->point ?? 0;
+                    $money = $pointSnap;
+                }
                 $services->sendCmd($services::WIN_NUMBER, 0, 'player', $player->id, $is_system);
                 $gamingTurnPoint = $services->player_win_number ?? 0;
-                $money = $services->point ?? 0;
+                if (!$isOfflineSongSteelBall) {
+                    $money = $services->point ?? 0;
+                }
                 // switch（换台）同样是放弃当前机台，赠点扣回逻辑与 leave 一致
                 if (!empty($giftPoint) && in_array($path, ['leave', 'switch'])) {
                     $moneyBeforeGift = $money;
@@ -1265,10 +1283,24 @@ function machineWash(
                     $services->sendCmd($services::STOP_THREE, 0, 'player', $player->id, $is_system);
                 }
 
+                // 分数变化中直接拒绝洗分（防止玩家在下分窗口内互转分数）
+                if ($isOfflineSong) {
+                    if (\support\Cache::get("slot_score_changing_{$machine->id}")) {
+                        throw new Exception(trans('machine_score_changing', [], 'message'));
+                    }
+                }
+
                 // ⚠️ CRITICAL：读取分数后等待硬件响应稳定
                 $services->sendCmd($services::READ_SCORE, 0, 'player', $player->id, $is_system);
 
-                // 短暂延迟，确保硬件响应完全写入 Redis（避免读到中间状态）
+                // 快照立刻从 READ_SCORE 回复中取（sendCmd 返回即回复已写入 Redis）
+                // 不能放在 sleep 之后，心跳进程会在 100ms 内覆盖 card_score/machine_score
+                if ($isOfflineSong) {
+                    $cardScoreSnap = $services->card_score ?? 0;
+                    $machineScoreSnap = $services->machine_score ?? 0;
+                }
+
+                // 短暂延迟，确保 point 值稳定后再读取
                 usleep(100000);  // 100ms
 
                 $money = $services->point;  // 读取稳定后的值
@@ -1365,6 +1397,17 @@ function machineWash(
         // ✅ 硬件清零指令（在事务内执行，失败可回滚）
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
+                // 二次确认：WASH_ZERO 前再读一次分数，防止玩家在读分窗口内互转 point/turn
+                if ($isOfflineSongSteelBall) {
+                    $services->sendCmd($services::MACHINE_POINT, 0, 'player', $player->id, $is_system);
+                    $freshPoint = $services->point ?? 0;
+                    if ($freshPoint !== ($pointSnap ?? 0)) {
+                        MachineLogger::warning($machine->toArray(), 'wash_score_race',
+                            "[鋼珠洗分] 分數快照異動 分數:" . ($pointSnap ?? 0) . "→{$freshPoint}，洗分取消",
+                            $services->getMachineCache(), MachineLogger::DIR_EVENT);
+                        throw new Exception(trans('wash_score_race', [], 'message'));
+                    }
+                }
                 $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
                 // CLEAR_LOG 仅重置得分计数器，非财务关键指令。
                 // 机台回复可能是短心跳（<36字符），导致 executeOneWayCommand 超时。
@@ -1379,13 +1422,28 @@ function machineWash(
                 // ⚠️ CRITICAL：洗分前二次确认机台分数，防止竞态条件
                 // 如果此时 point = 0 但 money > 0，说明被心跳更新了，需要报错
                 $services->sendCmd($services::READ_SCORE, 0, 'player', $player->id, $is_system);
+                // 立刻从指令回复中捕获最新值（EA C4 回复同时更新 card_score 和 machine_score）
+                // 不能延迟读取，心跳进程可能随时覆盖 Redis 中的值
                 $realPoint = $services->point;
+                $freshCardScore = $services->card_score ?? 0;
+                $freshMachineScore = $services->machine_score ?? 0;
 
                 MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_RESPONSE, 'wash_zero', '二次確認機台分數 實際分數='.$realPoint.' 記錄金額='.$money, ['machine_data' => $services->getMachineCache()]);
 
                 if ($money > 0 && $realPoint == 0) {
                     // 数据库记录了下分，但硬件已经是 0，数据不一致！
                     throw new Exception("洗分失败：数据不一致（记录{$money}分，硬件0分）");
+                }
+
+                // 二次比对快照：确认 card_score/machine_score 在读分到 WASH_ZERO 之间未被互转
+                // 使用指令回复直接捕获的值（freshCardScore/freshMachineScore），而非 Redis 缓存
+                if ($isOfflineSong) {
+                    if ($freshCardScore !== ($cardScoreSnap ?? 0) || $freshMachineScore !== ($machineScoreSnap ?? 0)) {
+                        MachineLogger::warning($machine->toArray(), 'wash_score_race',
+                            "[Slot洗分] 分數快照異動 卡分:" . ($cardScoreSnap ?? 0) . "→{$freshCardScore} 機分:" . ($machineScoreSnap ?? 0) . "→{$freshMachineScore}，洗分取消",
+                            $services->getMachineCache(), MachineLogger::DIR_EVENT);
+                        throw new Exception(trans('wash_score_race', [], 'message'));
+                    }
                 }
 
                 if ($realPoint > 0) {

@@ -443,6 +443,8 @@ return [
     'wash_failed' => 'Wash failed',
     'invalid_open_score' => 'Missing or invalid parameter: open_score (must be greater than 0)',
     'open_machine_failed' => 'Open machine failed',
+    'machine_score_changing' => 'Machine score is changing, cannot cash out, please try again later',
+    'wash_score_race' => 'Cash out cancelled: machine score changed, please try again later',
 
     // Fixed lottery hints
     'lottery_hint_with_next' => 'You have reached the {current_name} claim condition. If you cash out now, you can receive {current_amount} game points. When you reach {next_condition} points, you can claim {next_name} ({next_amount} game points). After clicking confirm, the reward will be directly credited to your wallet',
