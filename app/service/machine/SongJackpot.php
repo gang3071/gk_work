@@ -971,11 +971,11 @@ class SongJackpot extends MachineServices implements BaseMachine
                         throw new Exception(trans('machine_point_insufficient', ['{code}' => $this->machine->code],
                             'message'));
                     }
-                    Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
+                    // 等待机版回复 46 CE CB S1 S2 再继续，防止心跳异常
+                    $this->machineAction($uid, $cmd, $source, $source_id);
 
                     // 上转操作后，主动获取转数以更新基准点
-                    usleep(100000); // 等待100ms让机台处理命令
-                    // 设置标记：表示这是上转下转后的主动获取
+                    usleep(100000);
                     Cache::set('turn_action_flag_' . $this->machine->id, true, 5);
                     Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_TURN)));
                     break;
@@ -1014,15 +1014,20 @@ class SongJackpot extends MachineServices implements BaseMachine
                         throw new Exception(trans('machine_sore_exist',
                             ['{code}' => $this->machine->code, '{score}' => $this->score], 'message'));
                     }
-                    $auto = $this->auto;
-                    if ($auto == 1) {
-                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::AUTO_STOP)));
-                    } else {
-                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::AUTO_UP_TURN)));
-                    }
+                    // 等待机版回复（启动→46 CE CD，停止→46 CE CE），防止状态未同步
+                    $actualAutoCmd = ($this->auto == 1) ? self::AUTO_STOP : self::AUTO_UP_TURN;
+                    $this->machineAction($uid, $actualAutoCmd, $source, $source_id);
+                    break;
+                case self::REWARD_SWITCH:
+                case self::MACHINE_OPEN:
+                case self::MACHINE_CLOSE:
+                case self::PUSH_THREE:
+                case self::PUSH_ONE:
+                    $this->machineAction($uid, $cmd, $source, $source_id);
                     break;
                 case self::CLEAR_LOG:
                     MachineLogger::sendCommand($this->machine->toArray(), 'clear_log', '清除日誌開始', $this->getMachineCache(), '', $source === 'player' ? MachineLogger::SOURCE_PLAYER : MachineLogger::SOURCE_ADMIN, ['id' => $source_id, 'uuid' => $this->machine->gamingPlayer->uuid ?? '']);
+                    $this->machineAction($uid, $cmd, $source, $source_id);
                     break;
                 default:
                     Gateway::sendToUid($uid, hex2bin($this->createCmd($cmd, $data)));
