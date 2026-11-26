@@ -1153,8 +1153,9 @@ function doSettlement($id, int $userId = 0, string $userName = ''): void
  * @param string $path
  * @param int $is_system
  * @param bool $hasLottery
+ * @param int $adminId
+ * @param string $adminUsername
  * @return PlayerLotteryRecord|array|bool
- * @throws Exception
  * @throws PushException
  */
 function machineWash(
