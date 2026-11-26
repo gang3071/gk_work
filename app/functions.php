@@ -2913,8 +2913,18 @@ if (!function_exists('machineOpenAnyFree')) {
 
             // 赠点防御校验（事务前提前拦截，避免无效事务）
             // 活跃赠点会话期间禁止任何上分（含普通上分），防止玩家绕过条件限制
-            if (!empty(Cache::get('gift_cache_' . $machine->id . '_' . $player->id))) {
-                throw new Exception(trans('give_point_session_active', [], 'message'));
+            $giftCacheKey = 'gift_cache_' . $machine->id . '_' . $player->id;
+            if (!empty(Cache::get($giftCacheKey))) {
+                // 机台空闲时发现 gift_cache → 上次异常导致的残留，自动清除
+                if (($services->gaming_user_id ?? 0) == 0) {
+                    Cache::delete($giftCacheKey);
+                    Log::info('[machineOpenAnyFree] 机台空闲时发现残留 gift_cache，已自动清除', [
+                        'machine_id' => $machine->id,
+                        'player_id'  => $player->id,
+                    ]);
+                } else {
+                    throw new Exception(trans('give_point_session_active', [], 'message'));
+                }
             }
             if ($giveRuleId && $giftScore > 0) {
                 // 每日次数限制（防止绕过 MachineOperationService 直接调用超限）
