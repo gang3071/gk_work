@@ -132,7 +132,7 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
 
     // ==================== GameURL API（3.1.2，亚洲区必须） ====================
 
-    public function gameLogin(Game $game, string $lang = 'zh-CN'): mixed
+    public function gameLogin(Game $game, string $lang = 'zh-tw'): mixed
     {
         $this->checkPlayer();
         return $this->launchGameUrl((string)($game->game_extend->code ?? ''), $lang);
@@ -151,7 +151,7 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
             'language' => $this->mapLanguage($lang),
             'token' => $token,
             'externalPlayerId' => (string)$this->player->uuid,
-            'country' => (string)($this->config['country'] ?? 'CN'),
+            'country' => (string)($this->config['country'] ?? 'TW'),
             'currency' => (string)$this->player->currency,
             'platform' => 'MOBILE',
             'technology' => 'H5',
@@ -187,10 +187,26 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
         return $res;
     }
 
-    /** PP language 为 String(2)：zh-CN → zh */
+    /**
+     * PP language：ISO 639-1 标准（如 en、fr、it），带地区变体用 IETF 形态（如 pt-br，文档明确允许）。
+     * 中文按简繁区分符号：zh-CN/zh-Hans/zh-SG → zh-cn（简体）；zh-TW/zh-HK/zh-MO/zh-Hant → zh-tw（繁体）。
+     */
     private function mapLanguage(string $lang): string
     {
-        return substr(strtolower(str_replace('_', '-', $lang)), 0, 2);
+        $normalized = strtolower(str_replace('_', '-', trim($lang)));
+        // 内部语种码 / 中文简繁 → PP 符号
+        $map = [
+            'zh' => 'zh-cn', 'zh-cn' => 'zh-cn', 'zh-hans' => 'zh-cn', 'zh-sg' => 'zh-cn',
+            'zh-tw' => 'zh-tw', 'zh-hant' => 'zh-tw', 'zh-hk' => 'zh-tw', 'zh-mo' => 'zh-tw',
+            'jp' => 'ja', 'ja' => 'ja',
+            'kr' => 'ko', 'kr-ko' => 'ko', 'ko' => 'ko',
+            'km' => 'km', 'km-kh' => 'km',
+        ];
+        if (isset($map[$normalized])) {
+            return $map[$normalized];
+        }
+        // 带地区变体的 IETF 形态原样保留（如 pt-br），否则取 ISO 639-1 两字母
+        return str_contains($normalized, '-') ? $normalized : substr($normalized, 0, 2);
     }
 
     /** PlayerGamePlatform 绑定（同 KT 范式） */
@@ -232,7 +248,7 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
     public function lobbyLogin(array $data = []): string
     {
         $this->checkPlayer();
-        $lang = (string)($data['lang'] ?? 'zh-CN');
+        $lang = (string)($data['lang'] ?? 'zh-tw');
         $symbol = (string)($this->config['lobby_symbol'] ?? '');
         if ($symbol === '') {
             $lobby = $this->getLobbyGames('all');
@@ -350,7 +366,7 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
      * @param string $categories all/new/hot（逗号分隔）
      * @return array ['all' => [...], 'new' => [...], 'hot' => [...]]（按请求类别返回）
      */
-    public function getLobbyGames(string $categories = 'all', string $country = ''): array
+    public function getLobbyGames(string $categories = 'all', string $country = 'TW'): array
     {
         $params = [
             'secureLogin' => (string)($this->config['secure_login'] ?? ''),
