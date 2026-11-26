@@ -138,6 +138,9 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
             'promo' => (string)($this->config['promo_available'] ?? 'y'),
             'playMode' => 'REAL',
         ];
+        if (($stylename = (string)($this->config['stylename'] ?? '')) !== '') {
+            $params['stylename'] = $stylename;
+        }
         $params['hash'] = $this->makeHash($params);
         $res = $this->doGameUrlRequest($params);
         if ((string)($res['error'] ?? '1') !== '0' || empty($res['gameURL'])) {

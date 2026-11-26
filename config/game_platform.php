@@ -187,6 +187,7 @@ return [
         'provider_id' => env('PP_PROVIDER_ID'),
         'game_url_path' => env('PP_GAME_URL_PATH'),
         'country' => env('PP_COUNTRY'),
+        'stylename' => env('PP_STYLE_NAME'),
         'promo_available' => env('PP_PROMO_AVAILABLE'),
     ],
 ];
