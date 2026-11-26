@@ -2134,18 +2134,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                         throw new Exception("轉數已达上限({$currentTurn}/{self::MAX_TURN})，無法繼續上轉");
                     }
                     $this->machineAction($uid, $cmd, $source, $source_id);
-
-                    // 等待机版回复 46 EC，确认转数已更新
-                    usleep(100000);
-                    $this->machineAction($uid, self::MACHINE_TURN, $source, $source_id);
                     break;
 
                 case self::TURN_DOWN_ALL:
                     $this->machineAction($uid, $cmd, $source, $source_id);
-
-                    // 等待机版回复 46 EC，确认转数已更新
-                    usleep(100000);
-                    $this->machineAction($uid, self::MACHINE_TURN, $source, $source_id);
                     break;
 
                 case self::TURN_TO_POINT:
@@ -2782,8 +2774,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             while (true) {
                 $actionTime = $this->getActionVersion($cmd);
-                $checkCount++;
-
                 // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
                 if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
                     try {
