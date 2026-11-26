@@ -61,7 +61,7 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
         $url = $this->config['api_domain'] . $this->path[$path];
 
         $username = $params['username'] ?? '';
-        $time = Carbon::now('-04:00')->format('Ymd');  // 美東時間 GMT-4
+        $time = Carbon::now('-04:00')->format('Ymd');  // 美東時間 UTC-4
         $stringB = md5($this->config['website'] . $username . $this->config['key'] . $time);
         $stringA = $this->randomString();  // 8-16 位隨機字串
         $stringC = $this->randomString();  // 8-16 位隨機字串
@@ -227,7 +227,7 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
                 }
             }
         } catch (Exception $e) {
-            $this->log->error('handleGameHistories异常', [
+            $this->log->error('handleGameHistories 異常', [
                 'error_message' => $e->getMessage(),
                 'error_code' => $e->getCode(),
                 'file' => $e->getFile(),
@@ -251,7 +251,7 @@ class GKServiceInterface extends GameServiceFactory implements GameServiceInterf
             'date_start' => Carbon::now()->format('Y/m/d'),
             'date_end' => Carbon::now()->format('Y/m/d'),
             'gamekind' => 5,  // 2:直播 3:指定賽事 ID 的直播 5:Slot Game
-            'subgamekind' => '0071',
+            'subgamekind' => '0071',  // 遊戲編號
             'start_hhmmss' => Carbon::now()->subMinutes(5)->format('H:i:s'),  // 選填
             'end_hhmmss' => Carbon::now()->format('H:i:s'),  // 選填
             'lang' => $this->language['zh-CN'],  // 選填

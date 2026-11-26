@@ -104,15 +104,18 @@ class GKGameController
                 return self::error(self::API_CODE_INVALID_PARAM);
             }
 
+            /********** 交易序號 目前用不到 **********
             $note = json_decode($params['note'], true);
 
             if (empty($note['WagersID'])) {
                 return self::error(self::API_CODE_INVALID_PARAM);
             }
 
+            $idempotent = $note['WagersID'];  // 冪等唯一值
+            *******************************************/
+
             $player = $this->service->player;
             $orderNo = $params['remitno'];  // 局號
-            // $idempotent = $note['WagersID'];  // 冪等唯一值
 
             if (! empty($params['withdrawal'])) {
                 // 下注
@@ -146,7 +149,7 @@ class GKGameController
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
                     'amount' => $amount,
-                    'game_code' => $note['gameName'] ?? '',
+                    'game_code' => $params['gameID'] ?? $note['gameName'] ?? '',
                     'transaction_type' => TransactionType::BET,
                     'original_data' => $params,
                 ];
@@ -169,10 +172,10 @@ class GKGameController
                     GameRecordCacheService::saveBet($this->platform, [
                         'order_no' => $orderNo,
                         'player_id' => $player->id,
-                        'platform_id' => $this->service->platform->id,
-                        'amount' => $amount,
-                        'game_code' => $note['gameName'] ?? '',
-                        'original_data' => $params,
+                        'platform_id' => $luaParams['platform_id'],
+                        'amount' => $luaParams['amount'],
+                        'game_code' => $luaParams['game_code'],
+                        'original_data' => $luaParams['original_data'],
                         'balance_before' => $result['old_balance'] ?? 0,
                         'balance_after' => $result['balance'],
                     ]);
@@ -207,13 +210,14 @@ class GKGameController
                 ]);
 
                 $betAmount = getBetAmountWithFallback($this->platform, $orderNo, $player->id, $this->service->platform->id);
-                $win = bcadd($amount, $betAmount, 2);
+                $diff = bcsub($amount, $betAmount, 2);
 
                 $luaParams = [
                     'order_no' => $orderNo,
                     'platform_id' => $this->service->platform->id,
-                    'amount' => $win,
+                    'amount' => $amount,
                     'diff' => $amount,
+                    'game_code' => $params['gameID'] ?? $note['gameName'] ?? '',
                     'transaction_type' => TransactionType::SETTLE,
                     'original_data' => $params
                 ];
@@ -237,11 +241,11 @@ class GKGameController
                     GameRecordCacheService::saveSettle($this->platform, [
                         'order_no' => $orderNo,
                         'player_id' => $player->id,
-                        'platform_id' => $this->service->platform->id,
-                        'amount' => $win,
-                        'diff' => $amount,
-                        'game_code' => $note['gameName'] ?? '',
-                        'original_data' => $params,
+                        'platform_id' => $luaParams['platform_id'],
+                        'amount' => $amount,
+                        'diff' => $diff,
+                        'game_code' => $luaParams['game_code'],
+                        'original_data' => $luaParams['original_data'],
                         'balance_before' => $result['old_balance'] ?? 0,
                         'balance_after' => $result['balance'],
                     ]);
@@ -255,7 +259,7 @@ class GKGameController
 
                     $this->log->info('結算成功', [
                         'order_no' => $orderNo,
-                        'win_amount' => $win,
+                        'win_amount' => $amount,
                         'balance_before' => $result['old_balance'],
                         'balance_after' => $result['balance'],
                     ]);
@@ -308,15 +312,18 @@ class GKGameController
                 return self::error(self::API_CODE_INVALID_PARAM);
             }
 
+            /********** 交易序號 目前用不到 **********
             $note = json_decode($params['note'], true);
 
             if (empty($note['WagersID'])) {
                 return self::error(self::API_CODE_INVALID_PARAM);
             }
 
+            $idempotent = $note['WagersID'];  // 冪等唯一值
+            *******************************************/
+
             $player = $this->service->player;
             $orderNo = $params['remitno'];  // 局號
-            // $idempotent = $note['WagersID'];  // 冪等唯一值
             $refundAmount = getBetAmountWithFallback($this->platform, $orderNo, $player->id, $this->service->platform->id);
 
             $luaParams = [
@@ -345,9 +352,9 @@ class GKGameController
                 GameRecordCacheService::saveCancel($this->platform, [
                     'order_no' => $orderNo,
                     'player_id' => $player->id,
-                    'platform_id' => $this->service->platform->id,
-                    'refund_amount' => $refundAmount,
-                    'original_data' => $params,
+                    'platform_id' => $luaParams['platform_id'],
+                    'refund_amount' => $luaParams['refund_amount'],
+                    'original_data' => $luaParams['original_data'],
                     'balance_before' => $result['old_balance'] ?? 0,
                     'balance_after' => $result['balance'],
                 ]);
@@ -376,7 +383,7 @@ class GKGameController
 
             return self::success('', [
                 'balance' => $result['balance'] ?? WalletService::getBalance($player->id),
-                // 'currencyType' => $params['currencyType'],
+                'currencyType' => $params['currencyType'] ?? 'NTD',
                 'remitno' => $orderNo
             ]);
         } catch (Exception $e) {
