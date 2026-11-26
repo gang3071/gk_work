@@ -25,6 +25,8 @@ use support\Response;
  * 5 签名错误 / 6 玩家冻结 / 7 参数错误 / 100 内部错误需重试 / 130 EndRound 内部错误）。
  * 资金链路：RedisLuaScripts::atomicBet/atomicSettle/atomicCancel（原子扣款/派彩/退款）→
  * GameRecordCacheService 记录 → GameRecordSyncWorker 异步落 MySQL。
+ * 注单模型（同 AS 范式，一局一单）：注单单号 = 局号 roundId；Result 派彩以 reference 为资金幂等键，
+ * 记录经 saveSettleIntoBet 按单号合并进下注单（win 累加、is_final 收口），下注 + 结算只产一条订单。
  * 幂等：Bet/Result/BonusWin/JackpotWin/PromoWin/Adjustment/Refund 均以 reference 为交易唯一键，
  * 重试只返回实际玩家余额（文档 3.6/3.7 等）；transactionId 首次生成后缓存 pp:tx:{op}:{reference}。
  */
@@ -37,9 +39,6 @@ class PPGameController
 
     /** 幂等 transactionId 缓存 TTL（秒） */
     private const TX_TTL = 86400;
-
-    /** 同局下注累计器 TTL（秒），与下注记录 3h 对齐 */
-    private const ROUND_BET_TTL = 10800;
 
     private GameServiceInterface|SingleWalletServiceInterface $service;
 
@@ -144,6 +143,8 @@ class PPGameController
 
             $reference = (string)$params['reference'];
             $amount = round((float)$params['amount'], 2);
+            // 注单单号 = 局号（同 AS 范式：一局一单，派彩按单号合并进下注单）
+            $orderNo = (string)$params['roundId'];
 
             // 幂等：同 reference 重复下注只创建一个交易，重试返回实际余额（3.6）
             if ($existingTx = $this->existingTransactionId('bet', $reference)) {
@@ -151,7 +152,7 @@ class PPGameController
             }
 
             $luaParams = [
-                'order_no' => $reference,
+                'order_no' => $orderNo,
                 'platform_id' => $this->platformId(),
                 'amount' => $amount,
                 'game_code' => (string)$params['gameId'],
@@ -179,11 +180,12 @@ class PPGameController
                 return $this->ppResponse([], 100, 'Internal error');
             }
 
-            // 按局累计下注（同 roundId 多笔 bet 时，Result 的 diff = win − 该局总注）
-            $this->accumulateRoundBet($player->id, (string)$params['roundId'], $amount);
+            // reference→单号映射：Refund 只带原下注 reference（3.11），据此反查单号
+            // （AS 的 refund 自带 roundId 直接用；PP 没有，用映射替代）
+            Redis::connection()->setex('pp:bet:ref:' . $reference, self::TX_TTL, $orderNo);
 
             GameRecordCacheService::saveBet(self::PLATFORM, [
-                'order_no' => $reference,
+                'order_no' => $orderNo,
                 'player_id' => $player->id,
                 'platform_id' => $this->platformId(),
                 'amount' => $amount,
@@ -232,6 +234,7 @@ class PPGameController
                 return $err;
             }
             $reference = (string)$params['reference'];
+            $roundId = (string)$params['roundId'];
             $totalWin = round((float)$params['amount'] + $promoWin, 2);
 
             // 幂等：同 reference 重复派彩只创建一个交易（3.7）
@@ -239,13 +242,12 @@ class PPGameController
                 return $this->winResponse($existingTx, $player);
             }
 
-            $roundBet = round($this->roundBetCents($player->id, (string)$params['roundId']) / 100, 2);
-            $diff = round($totalWin - $roundBet, 2);
+            // 资金幂等键 = reference（同 AS deposit 的 txnId）；记录按单号 roundId 合并进下注单
             $luaParams = [
                 'order_no' => $reference,
                 'platform_id' => $this->platformId(),
                 'amount' => $totalWin,
-                'diff' => $diff,
+                'diff' => $totalWin,
                 'transaction_type' => TransactionType::SETTLE,
                 'game_code' => (string)$params['gameId'],
                 'original_data' => $params,
@@ -268,18 +270,33 @@ class PPGameController
                 return $this->ppResponse([], 100, 'Internal error');
             }
 
-            GameRecordCacheService::saveSettle(self::PLATFORM, [
-                'order_no' => $reference,
-                'player_id' => $player->id,
-                'platform_id' => $this->platformId(),
+            // 派彩按单号合并进下注单（同 AS deposit）：一笔下注只产一条订单，
+            // win 累加，Result 即回合收口（is_final）
+            $merged = GameRecordCacheService::saveSettleIntoBet(self::PLATFORM, $roundId, [
                 'amount' => $totalWin,
-                'diff' => $diff,
                 'settle_type' => 'settle',
-                'game_code' => (string)$params['gameId'],
+                'is_final' => true,
                 'original_data' => $params,
-                'balance_before' => $result['old_balance'] ?? 0,
-                'balance_after' => $result['balance'],
             ]);
+            if (!$merged) {
+                // 找不到该局下注记录：回退独立结算单（同 AS 范式，数据不丢失）
+                $this->logger->warning('PP result 合并失败：下注记录不存在，回退独立结算单', [
+                    'reference' => $reference,
+                    'order_no' => $roundId,
+                ]);
+                GameRecordCacheService::saveSettle(self::PLATFORM, [
+                    'order_no' => $reference,
+                    'player_id' => $player->id,
+                    'platform_id' => $this->platformId(),
+                    'amount' => $totalWin,
+                    'diff' => $totalWin,
+                    'settle_type' => 'settle',
+                    'game_code' => (string)$params['gameId'],
+                    'original_data' => $params,
+                    'balance_before' => $result['old_balance'] ?? 0,
+                    'balance_after' => $result['balance'],
+                ]);
+            }
             WalletService::checkMachineCrashAfterTransaction($player->id, (float)$result['balance'], $result['old_balance'] ?? null);
             logGameInteraction(self::PLATFORM, 'result', $params, ['result' => $result]);
 
@@ -425,9 +442,12 @@ class PPGameController
             }
             $reference = (string)$params['reference'];
 
+            // 注单单号 = 局号（同 AS 范式，退款按单号就地撤销）；
+            // PP 的 Refund 只带原下注 reference（3.11），经下注时写入的映射反查单号
+            $orderNo = $this->resolveBetOrder($reference);
+
             // 原赌注不存在：无操作直接成功（3.11）
-            $betRecord = Redis::connection()->hGetAll('game:record:bet:' . self::PLATFORM . ':' . $reference);
-            if (empty($betRecord)) {
+            if ($orderNo === '') {
                 return $this->refundResponse($this->transactionId('refund', $reference));
             }
 
@@ -436,18 +456,18 @@ class PPGameController
                 return $this->refundResponse($existingTx);
             }
 
-            // 退款额：amount 参数优先，缺省退原注全额
+            // 退款额：amount 参数优先，缺省退原注全额（下注记录 amount 即原注）
             if (isset($params['amount']) && $params['amount'] !== '' && is_numeric($params['amount']) && (float)$params['amount'] > 0) {
                 $refundAmount = round((float)$params['amount'], 2);
             } else {
-                $refundAmount = round((float)getBetAmountWithFallback(self::PLATFORM, $reference, $player->id, $this->platformId(), $this->logger), 2);
+                $refundAmount = round((float)getBetAmountWithFallback(self::PLATFORM, $orderNo, $player->id, $this->platformId(), $this->logger), 2);
             }
             if ($refundAmount <= 0) {
                 return $this->refundResponse($this->transactionId('refund', $reference));
             }
 
             $luaParams = [
-                'order_no' => $reference,
+                'order_no' => $orderNo,
                 'platform_id' => $this->platformId(),
                 'refund_amount' => $refundAmount,
                 'transaction_type' => TransactionType::CANCEL_REFUND,
@@ -463,7 +483,8 @@ class PPGameController
 
             if (($result['ok'] ?? 0) !== 1) {
                 $error = $result['error'] ?? 'unknown';
-                if (in_array($error, ['duplicate_order', 'duplicate_cancel'], true)) {
+                if (in_array($error, ['duplicate_order', 'duplicate_cancel', 'order_not_found'], true)) {
+                    // 原单找不到 / 重复退款：不做任何操作直接成功（3.11）
                     return $this->refundResponse($this->transactionId('refund', $reference));
                 }
                 $this->logger->error('PP refund Lua 失败', ['params' => $params, 'result' => $result]);
@@ -471,7 +492,7 @@ class PPGameController
             }
 
             GameRecordCacheService::saveCancel(self::PLATFORM, [
-                'order_no' => $reference,
+                'order_no' => $orderNo,
                 'player_id' => $player->id,
                 'platform_id' => $this->platformId(),
                 'refund_amount' => $refundAmount,
@@ -744,18 +765,22 @@ class PPGameController
         return $existing ? (string)$existing : null;
     }
 
-    /** 同局（player+roundId）下注累计（分），Result 据此算 diff = win − 该局总注 */
-    private function accumulateRoundBet(int $playerId, string $roundId, float $amount): void
+    /**
+     * 解析原下注的注单单号（一局一单后单号 = 局号）：
+     * PP 的 Refund 只带原下注 reference（3.11），经下注时写入的映射 pp:bet:ref:{reference} 反查；
+     * 映射缺失时兼容合并前旧单（记录按 reference 直接存放）。找不到返回 ''。
+     */
+    private function resolveBetOrder(string $reference): string
     {
-        $key = 'pp:round:bet:' . $playerId . ':' . $roundId;
         $redis = Redis::connection();
-        $redis->incrBy($key, (int)round($amount * 100));
-        $redis->expire($key, self::ROUND_BET_TTL);
-    }
-
-    private function roundBetCents(int $playerId, string $roundId): int
-    {
-        return (int)Redis::connection()->get('pp:round:bet:' . $playerId . ':' . $roundId);
+        $orderNo = (string)$redis->get('pp:bet:ref:' . $reference);
+        if ($orderNo !== '') {
+            return $orderNo;
+        }
+        if ($redis->exists('game:record:bet:' . self::PLATFORM . ':' . $reference)) {
+            return $reference;
+        }
+        return '';
     }
 
     /** 异常统一出口：日志 + Telegram 告警 + 内部错误码（默认 100，EndRound 用 130） */
