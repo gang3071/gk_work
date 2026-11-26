@@ -1749,6 +1749,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // 查询转数响应
             case self::GET_MACHINE_TURN:  // 46de
+                $prevTurnDe = (float)($this->turn ?? 0);
                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                 $this->turn = $turn;
 
@@ -1761,6 +1762,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 }
 
                 $this->setActionVersion(self::MACHINE_TURN);
+                // 查询响应也需检查转数归零，防止心跳先于此写入 orgTurn=0 导致清理不触发
+                $this->cleanupGiftCacheIfNeeded($turn, $prevTurnDe, $gamingUserId);
                 break;
 
             // 查询累积转数响应（文档：46 D0 XX xx xx，3字节数据）
@@ -1802,10 +1805,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // 查询转数响应（新版）：46 EC xx xx S1 S2
             case self::QUERY_REPLY_TURN:  // 46ec
+                $prevTurnEc = (float)($this->turn ?? 0);
                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                 $this->turn = $turn;
                 $this->setActionVersion(self::MACHINE_TURN);
                 MachineLogger::receiveResponse($this->machine->toArray(), 'recv_turn', '[小松鋼珠線下-新版查詢] 收到轉數查詢回覆 轉數=' . $turn, $this->getMachineCache());
+                // 查询响应也需检查转数归零，防止心跳先于此写入 orgTurn=0 导致清理不触发
+                $this->cleanupGiftCacheIfNeeded($turn, $prevTurnEc, $gamingUserId);
                 break;
 
             // 查询累积转数响应（新版）：46 ED [ratio] [win_hi] [win_lo] S1 S2
