@@ -141,6 +141,8 @@ class PPGameController
                 return $this->ppResponse([], 1, 'Insufficient balance');
             }
 
+            $this->logger->info('bet',[$params]);
+
             $reference = (string)$params['reference'];
             $amount = round((float)$params['amount'], 2);
             // 注单单号 = 局号（同 AS 范式：一局一单，派彩按单号合并进下注单）
@@ -229,6 +231,9 @@ class PPGameController
                 }
                 $promoWin = round((float)$params['promoWinAmount'], 2);
             }
+
+            $this->logger->info('result',[$params]);
+
             $player = Player::query()->where('uuid', $params['userId'])->first();
             if ($err = $this->guardPlayer($player)) {
                 return $err;
