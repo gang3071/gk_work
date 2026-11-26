@@ -536,9 +536,14 @@ class MachineOperationService
         // - 小淞Slot: 4字符（eac4, ead8）
         // - 双美机台: 2-4字符（21, 23, 2E00）
         // - 小淞钢珠: 4-6字符（46cc, 46cea2, 46cebe）
-        // ✅ 使用完整指令码，不截断
-        // ⚠️ 注意：必须转为小写，因为服务类常量定义都是小写
-        $actionKey = strtolower($cmdNormalized);
+        // ✅ 大小写必须与服务类常量一致，否则 getActionVersion/setActionVersion 的 Redis key 不匹配
+        // - Song/Slot 常量全小写（46cea2）→ lowercase
+        // - 双美 (MEI) 常量全大写（'4C', '4A'）→ uppercase
+        if ($this->machine->control_type === Machine::CONTROL_TYPE_MEI) {
+            $actionKey = strtoupper($cmdNormalized);
+        } else {
+            $actionKey = strtolower($cmdNormalized);
+        }
 
         $machineId = $this->machine->id;
 

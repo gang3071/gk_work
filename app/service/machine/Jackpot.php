@@ -762,6 +762,8 @@ class Jackpot extends MachineServices implements BaseMachine
         int    $isSystem = 0
     ): bool
     {
+        // 双美指令常量均为大写（'4C', '4A'等），sendRawCmdWithReply 传入小写时需统一
+        $cmd = strtoupper($cmd);
         $uid = $this->machine->domain . ':' . $this->machine->port;
         try {
             if (!Gateway::isUidOnline($uid)) {
