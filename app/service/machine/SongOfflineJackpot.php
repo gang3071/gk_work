@@ -2181,12 +2181,17 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     if ($this->score > 0) {
                         throw new Exception(trans('machine_sore_exist', ['{code}' => $this->machine->code, '{score}' => $this->score], 'message'));
                     }
-                    $auto = $this->auto;
-                    if ($auto == 1) {
-                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::AUTO_STOP)));
-                    } else {
-                        Gateway::sendToUid($uid, hex2bin($this->createCmd(self::AUTO_UP_TURN)));
-                    }
+                    // 等待机版回复（启动→46 CE CD，停止→46 CE CE），防止状态未同步
+                    $actualCmd = ($this->auto == 1) ? self::AUTO_STOP : self::AUTO_UP_TURN;
+                    $this->machineAction($uid, $actualCmd, $source, $source_id);
+                    break;
+
+                case self::REWARD_SWITCH:
+                case self::MACHINE_OPEN:
+                case self::MACHINE_CLOSE:
+                case self::PUSH_THREE:
+                case self::PUSH_ONE:
+                    $this->machineAction($uid, $cmd, $source, $source_id);
                     break;
 
                 case self::CHECK:
