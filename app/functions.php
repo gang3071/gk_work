@@ -1643,6 +1643,18 @@ function machineWash(
             if (!$committed) {
                 DB::rollback();
             }
+            // wash 失败时也清除 gift_cache，防止残留阻塞下一次上分（DB 已回滚，gift_cache 也无效）
+            if (in_array($path ?? 'down', ['leave', 'switch'])) {
+                try {
+                    Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
+                } catch (\Exception $cacheErr) {
+                    Log::warning('[machineWash] wash 异常时清除 gift_cache 失败', [
+                        'machine_id' => $machine->id,
+                        'player_id'  => $player->id,
+                        'error'      => $cacheErr->getMessage(),
+                    ]);
+                }
+            }
             throw new Exception($e->getMessage());
         }
 
@@ -2913,10 +2925,26 @@ if (!function_exists('machineOpenAnyFree')) {
 
             // 赠点防御校验（事务前提前拦截，避免无效事务）
             // 活跃赠点会话期间禁止任何上分（含普通上分），防止玩家绕过条件限制
+            $gamingUserId = $services->gaming_user_id ?? 0;
+
+            // 机台上一个玩家（与当前请求玩家不同）的残留 gift_cache，自动清除
+            if ($gamingUserId != 0 && $gamingUserId != $player->id) {
+                $prevGiftKey = 'gift_cache_' . $machine->id . '_' . $gamingUserId;
+                if (!empty(Cache::get($prevGiftKey))) {
+                    Cache::delete($prevGiftKey);
+                    Log::warning('[machineOpenAnyFree] 检测到上一个玩家的残留 gift_cache，已自动清除', [
+                        'machine_id'  => $machine->id,
+                        'prev_player' => $gamingUserId,
+                        'new_player'  => $player->id,
+                    ]);
+                }
+            }
+
+            // 当前玩家自己的 gift_cache：机台空闲时为残留（自动清除），否则为活跃会话（拦截）
             $giftCacheKey = 'gift_cache_' . $machine->id . '_' . $player->id;
             if (!empty(Cache::get($giftCacheKey))) {
-                // 机台空闲时发现 gift_cache → 上次异常导致的残留，自动清除
-                if (($services->gaming_user_id ?? 0) == 0) {
+                if ($gamingUserId == 0) {
+                    // 机台已空闲但 gift_cache 仍存在 → 上次异常导致的残留，自动清除
                     Cache::delete($giftCacheKey);
                     Log::info('[machineOpenAnyFree] 机台空闲时发现残留 gift_cache，已自动清除', [
                         'machine_id' => $machine->id,
