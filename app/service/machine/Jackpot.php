@@ -762,6 +762,8 @@ class Jackpot extends MachineServices implements BaseMachine
         int    $isSystem = 0
     ): bool
     {
+        // 双美指令常量均为大写（'4C', '4A'等），sendRawCmdWithReply 传入小写时需统一
+        $cmd = strtoupper($cmd);
         $uid = $this->machine->domain . ':' . $this->machine->port;
         try {
             if (!Gateway::isUidOnline($uid)) {
@@ -859,7 +861,7 @@ class Jackpot extends MachineServices implements BaseMachine
                 self::WASH_ZERO
             ])) {
                 $this->has_lock = 1;
-                MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令執行異常-機台已鎖定: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
+                MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令執行異常-機台已鎖定 cmd=' . $cmd . ' reason=' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
 
                 sendMachineException($this->machine, Notice::TYPE_MACHINE_LOCK, $this->machine->gaming_user_id);
             }
@@ -1146,8 +1148,9 @@ class Jackpot extends MachineServices implements BaseMachine
         } catch (Exception $e) {
             $attempts++;
             if ($attempts >= $maxRetries) {
+                $reason = '硬體未回覆，重試耗盡 cmd=' . $cmd . ' 嘗試次數=' . $attempts;
                 MachineLogger::error($this->machine->toArray(), $this->getCmdActionName($cmd), '機台動作重試耗盡，硬體始終未回覆 嘗試次數=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
-                throw new Exception(trans('machine_action_fail', [], 'message'));
+                throw new Exception($reason);
             }
             usleep(50000);
             $this->machineAction($uid, $cmd, $source, $source_id, $attempts);
