@@ -720,6 +720,20 @@ class Jackpot extends MachineServices implements BaseMachine
      */
     public function giftPointTurnUpAll(int $giftScore, int $playerId): void
     {
+        // 主动发送 MACHINE_POINT 查询刷新分数（不依赖被动心跳）
+        // OPEN_ANY_POINT 确认后机台已有分数，但 $this->point 只在心跳/MACHINE_POINT 回复时更新
+        // 直接查询可立即获得 46EA 回复并写入 $this->point，无需等 1-3s 心跳
+        try {
+            $this->sendCmd(self::MACHINE_POINT, 0, 'player', $playerId);
+        } catch (\Exception $e) {
+            // 查询失败时退化为被动轮询心跳（最多 3s）
+            $pollWaited = 0;
+            while ($pollWaited < 3000000 && ($this->point ?? 0) < 100) {
+                usleep(200000);
+                $pollWaited += 200000;
+            }
+        }
+
         $turnBefore = $this->turn ?? 0;
         $this->sendCmd(self::TURN_UP_ALL, 0, 'player', $playerId);
 
