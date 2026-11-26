@@ -1288,12 +1288,6 @@ function machineWash(
                 }
 
                 MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '下分準備就緒 累計下注='.$gamingPressure.' 累計得分='.$gamingScore, ['machine_data' => $services->getMachineCache()]);
-
-                if (!empty($giftPoint)) {
-                    if ($money < $giftPoint['open_point'] * $giftPoint['condition']) {
-                        $money = max($money - $giftPoint['gift_point'], 0);
-                    }
-                }
                 break;
         }
 
@@ -2923,28 +2917,31 @@ if (!function_exists('machineOpenAnyFree')) {
             // 活跃赠点会话期间禁止任何上分（含普通上分），防止玩家绕过条件限制
             $gamingUserId = $services->gaming_user_id ?? 0;
 
-            // 机台上一个玩家（与当前请求玩家不同）的残留 gift_cache，自动清除
-            if ($gamingUserId != 0 && $gamingUserId != $player->id) {
-                $prevGiftKey = 'gift_cache_' . $machine->id . '_' . $gamingUserId;
-                if (!empty(Cache::get($prevGiftKey))) {
-                    Cache::delete($prevGiftKey);
-                    MachineLogger::warning($machine->toArray(), MachineLogger::ACTION_OPEN, '检测到上一个玩家的残留 gift_cache，已自动清除 prev_player=' . $gamingUserId, $services->getMachineCache(), MachineLogger::DIR_EVENT);
+            // 开分赠点仅钢珠机支持，gift_cache 检查只对钢珠机执行
+            if ($machine->type == GameType::TYPE_STEEL_BALL) {
+                // 机台上一个玩家（与当前请求玩家不同）的残留 gift_cache，自动清除
+                if ($gamingUserId != 0 && $gamingUserId != $player->id) {
+                    $prevGiftKey = 'gift_cache_' . $machine->id . '_' . $gamingUserId;
+                    if (!empty(Cache::get($prevGiftKey))) {
+                        Cache::delete($prevGiftKey);
+                        MachineLogger::warning($machine->toArray(), MachineLogger::ACTION_OPEN, '检测到上一个玩家的残留 gift_cache，已自动清除 prev_player=' . $gamingUserId, $services->getMachineCache(), MachineLogger::DIR_EVENT);
+                    }
                 }
-            }
 
-            // 当前玩家自己的 gift_cache 检查：有活跃 gaming session 时拦截一切上分（含普通上分）
-            // gift_cache 是 wash 时回扣赠点的凭据，不可提前删除
-            $giftCacheKey = 'gift_cache_' . $machine->id . '_' . $player->id;
-            if (!empty(Cache::get($giftCacheKey))) {
-                if ($gamingUserId == 0) {
-                    // 机台已空闲但 gift_cache 仍存在 → 上次异常导致的残留，自动清除
-                    Cache::delete($giftCacheKey);
-                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '机台空闲时发现残留 gift_cache，已自动清除 player=' . $player->id, $services->getMachineCache());
-                } else {
-                    throw new Exception(trans('give_point_session_active', [], 'message'));
+                // 当前玩家自己的 gift_cache 检查：有活跃 gaming session 时拦截一切上分（含普通上分）
+                // gift_cache 是 wash 时回扣赠点的凭据，不可提前删除
+                $giftCacheKey = 'gift_cache_' . $machine->id . '_' . $player->id;
+                if (!empty(Cache::get($giftCacheKey))) {
+                    if ($gamingUserId == 0) {
+                        // 机台已空闲但 gift_cache 仍存在 → 上次异常导致的残留，自动清除
+                        Cache::delete($giftCacheKey);
+                        MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_OPEN, '机台空闲时发现残留 gift_cache，已自动清除 player=' . $player->id, $services->getMachineCache());
+                    } else {
+                        throw new Exception(trans('give_point_session_active', [], 'message'));
+                    }
                 }
             }
-            if ($giveRuleId && $giftScore > 0) {
+            if ($giveRuleId && $giftScore > 0 && $machine->type == GameType::TYPE_STEEL_BALL) {
                 // 每日次数限制（防止绕过 MachineOperationService 直接调用超限）
                 $giveRuleForCheck = MachineCategoryGiveRule::find($giveRuleId);
                 if ($giveRuleForCheck && (int)$giveRuleForCheck->give_rule_num > 0) {
@@ -3243,7 +3240,7 @@ if (!function_exists('machineOpenAnyFree')) {
             $playerGameLog->save();
 
             // 记录赠点信息（如果有赠点规则）
-            if ($giveRuleId && $giftScore > 0) {
+            if ($giveRuleId && $giftScore > 0 && $machine->type == GameType::TYPE_STEEL_BALL) {
                 $machineCategoryGiveRule = MachineCategoryGiveRule::find($giveRuleId);
                 // 防御：即使绕过 MachineOperationService 直接调用，也做完整校验
                 if (!$machineCategoryGiveRule

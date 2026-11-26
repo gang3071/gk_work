@@ -1680,8 +1680,8 @@ class MachineOperationService
         $adminId = $this->operatorType === self::OPERATOR_ADMIN ? $this->operatorId : 0;
         $adminUsername = $params['admin_username'] ?? '';
 
-        // P2 + P0-2：赠点规则合法性校验及每日次数限制
-        if ($giveRuleId) {
+        // P2 + P0-2：赠点规则合法性校验及每日次数限制（仅钢珠机支持开分赠点）
+        if ($giveRuleId && $this->machine->type === GameType::TYPE_STEEL_BALL) {
             $giveRule = MachineCategoryGiveRule::find($giveRuleId);
             if (!$giveRule) {
                 throw new Exception(trans('give_rule_not_found', [], 'message', $this->lang));
