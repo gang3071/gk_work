@@ -25,8 +25,8 @@ use support\Response;
  * 5 签名错误 / 6 玩家冻结 / 7 参数错误 / 100 内部错误需重试 / 130 EndRound 内部错误）。
  * 资金链路：RedisLuaScripts::atomicBet/atomicSettle/atomicCancel（原子扣款/派彩/退款）→
  * GameRecordCacheService 记录 → GameRecordSyncWorker 异步落 MySQL。
- * 注单模型（同 AS 范式，一局一单）：注单单号 = 局号 roundId；Result 派彩以 reference 为资金幂等键，
- * 记录经 saveSettleIntoBet 按单号合并进下注单（win 累加、is_final 收口），下注 + 结算只产一条订单。
+ * 注单模型（同 AS 范式，一局一单）：注单单号 = 局号 roundId，Bet/Result/Refund 共用同一单号；
+ * Result 派彩经 atomicSettle 按单号直接更新下注单（win/diff 重算、标记已结算），下注 + 结算只产一条订单。
  * 幂等：Bet/Result/BonusWin/JackpotWin/PromoWin/Adjustment/Refund 均以 reference 为交易唯一键，
  * 重试只返回实际玩家余额（文档 3.6/3.7 等）；transactionId 首次生成后缓存 pp:tx:{op}:{reference}。
  */
@@ -239,17 +239,17 @@ class PPGameController
                 return $err;
             }
             $reference = (string)$params['reference'];
-            $roundId = (string)$params['roundId'];
             $totalWin = round((float)$params['amount'] + $promoWin, 2);
+            // 注单单号 = 局号（同 AS 范式：一局一单，与 Bet 同单号）
+            $orderNo = (string)$params['roundId'];
 
             // 幂等：同 reference 重复派彩只创建一个交易（3.7）
             if ($existingTx = $this->existingTransactionId('result', $reference)) {
                 return $this->winResponse($existingTx, $player);
             }
 
-            // 资金幂等键 = reference（同 AS deposit 的 txnId）；记录按单号 roundId 合并进下注单
             $luaParams = [
-                'order_no' => $reference,
+                'order_no' => $orderNo,
                 'platform_id' => $this->platformId(),
                 'amount' => $totalWin,
                 'diff' => $totalWin,
@@ -275,33 +275,21 @@ class PPGameController
                 return $this->ppResponse([], 100, 'Internal error');
             }
 
-            // 派彩按单号合并进下注单（同 AS deposit）：一笔下注只产一条订单，
-            // win 累加，Result 即回合收口（is_final）
-            $merged = GameRecordCacheService::saveSettleIntoBet(self::PLATFORM, $roundId, [
+            // 派彩直接更新下注单（Lua 已按单号写 win/diff 并收口）：
+            // saveSettle 只补充结算字段并重新入队（不覆盖 Lua 写入的 win/diff）；
+            // 下注单不存在时 Lua 走独立结算记录，saveSettle 落该兜底单
+            GameRecordCacheService::saveSettle(self::PLATFORM, [
+                'order_no' => $orderNo,
+                'player_id' => $player->id,
+                'platform_id' => $this->platformId(),
                 'amount' => $totalWin,
+                'diff' => $totalWin,
                 'settle_type' => 'settle',
-                'is_final' => true,
+                'game_code' => (string)$params['gameId'],
                 'original_data' => $params,
+                'balance_before' => $result['old_balance'] ?? 0,
+                'balance_after' => $result['balance'],
             ]);
-            if (!$merged) {
-                // 找不到该局下注记录：回退独立结算单（同 AS 范式，数据不丢失）
-                $this->logger->warning('PP result 合并失败：下注记录不存在，回退独立结算单', [
-                    'reference' => $reference,
-                    'order_no' => $roundId,
-                ]);
-                GameRecordCacheService::saveSettle(self::PLATFORM, [
-                    'order_no' => $reference,
-                    'player_id' => $player->id,
-                    'platform_id' => $this->platformId(),
-                    'amount' => $totalWin,
-                    'diff' => $totalWin,
-                    'settle_type' => 'settle',
-                    'game_code' => (string)$params['gameId'],
-                    'original_data' => $params,
-                    'balance_before' => $result['old_balance'] ?? 0,
-                    'balance_after' => $result['balance'],
-                ]);
-            }
             WalletService::checkMachineCrashAfterTransaction($player->id, (float)$result['balance'], $result['old_balance'] ?? null);
             logGameInteraction(self::PLATFORM, 'result', $params, ['result' => $result]);
 
