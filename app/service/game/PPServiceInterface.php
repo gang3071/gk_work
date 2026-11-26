@@ -132,7 +132,7 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
 
     // ==================== GameURL API（3.1.2，亚洲区必须） ====================
 
-    public function gameLogin(Game $game, string $lang = 'zh-tw'): mixed
+    public function gameLogin(Game $game, string $lang = 'zt'): mixed
     {
         $this->checkPlayer();
         return $this->launchGameUrl((string)($game->game_extend->code ?? ''), $lang);
@@ -195,16 +195,6 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
     {
         $normalized = strtolower(str_replace('_', '-', trim($lang)));
         // 内部语种码 / 中文简繁 → PP 符号
-        $map = [
-            'zh' => 'zh-cn', 'zh-cn' => 'zh-cn', 'zh-hans' => 'zh-cn', 'zh-sg' => 'zh-cn',
-            'zh-tw' => 'zh-tw', 'zh-hant' => 'zh-tw', 'zh-hk' => 'zh-tw', 'zh-mo' => 'zh-tw',
-            'jp' => 'ja', 'ja' => 'ja',
-            'kr' => 'ko', 'kr-ko' => 'ko', 'ko' => 'ko',
-            'km' => 'km', 'km-kh' => 'km',
-        ];
-        if (isset($map[$normalized])) {
-            return $map[$normalized];
-        }
         // 带地区变体的 IETF 形态原样保留（如 pt-br），否则取 ISO 639-1 两字母
         return str_contains($normalized, '-') ? $normalized : substr($normalized, 0, 2);
     }
@@ -248,7 +238,7 @@ class PPServiceInterface extends GameServiceFactory implements GameServiceInterf
     public function lobbyLogin(array $data = []): string
     {
         $this->checkPlayer();
-        $lang = (string)($data['lang'] ?? 'zh-tw');
+        $lang = (string)($data['lang'] ?? 'zt');
         $symbol = (string)($this->config['lobby_symbol'] ?? '');
         if ($symbol === '') {
             $lobby = $this->getLobbyGames('all');
