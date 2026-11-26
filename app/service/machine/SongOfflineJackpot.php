@@ -2129,7 +2129,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     // ✅ 设置上转操作标记，防止turn变化被误判为消耗
                     usleep(100000);
                     Cache::set('turn_action_flag_' . $this->machine->id, true, 5);
-                    // Gateway::sendToUid($uid, hex2bin($this->createCmd(self::MACHINE_TURN)));
                     break;
 
                 case self::POINT_TO_TURN:
