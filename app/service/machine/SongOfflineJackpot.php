@@ -472,7 +472,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
 
             $hasB5B7 = (stripos($msg, 'b5') !== false || stripos($msg, 'b7') !== false);
-            MachineLogger::receiveResponse($this->machine->toArray(), 'message_parse', '收到非標準長度訊息，嘗試解析', $this->getMachineCache());
+            MachineLogger::receiveResponse($this->machine->toArray(), 'message_parse', '收到非標準長度訊息，嘗試解析 長度=' . $len . ' 內容=' . $msg, $this->getMachineCache());
         }
     }
 
@@ -1236,9 +1236,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $nowAuto = (substr($msg, 2, 2) == 'c6') ? 1 : 0;
         $nowRewardStatus = (substr($msg, 10, 2) == 'd5') ? 1 : 0; // D5=开奖中
 
-        // 记录机台实时状态日志
-        $this->logMachineStatus($gamingUserId, $nowAuto, $nowRewardStatus, $nowPoint, $nowScore, $nowTurn, $nowWinNumber, $nowRatio, $orgTurn, $orgWinNumber, $msg);
-
         // 更新Redis状态
         $this->point = $nowPoint;
         $this->auto = $nowAuto;
@@ -1248,6 +1245,9 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $this->reward_status = $nowRewardStatus;
         $this->now_turn = $nowWinNumber;
         $this->ratio = $nowRatio;
+
+        // 记录机台实时状态日志（放在 Redis 更新后，getMachineCache() 才能读到本次心跳的新值）
+        $this->logMachineStatus($gamingUserId, $nowAuto, $nowRewardStatus, $nowPoint, $nowScore, $nowTurn, $nowWinNumber, $nowRatio, $orgTurn, $orgWinNumber, $msg);
 
         // 开奖中持续刷新活动时间，防止机台因闲置进入保留状态导致保留时间被扣除
         // processTurnChange 在开奖中会 return，不会更新 last_play_time，
@@ -1281,6 +1281,15 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     private function logMachineStatus(int $gamingUserId, int $nowAuto, int $nowRewardStatus, $nowPoint, $nowScore, $nowTurn, $nowWinNumber, $nowRatio, float $orgTurn, int $orgWinNumber, string $msg): void
     {
         MachineLogger::heartbeat($this->machine->toArray(), $this->getMachineCache());
+        MachineLogger::log(
+            $this->machine->toArray(),
+            MachineLogger::SOURCE_SYSTEM,
+            MachineLogger::STATUS_NORMAL,
+            MachineLogger::DIR_RESPONSE,
+            'heartbeat',
+            '[小松鋼珠線下-心跳] 分=' . $nowPoint . ' 得分=' . $nowScore . ' 轉數=' . $nowTurn . ' 中洞=' . $nowWinNumber . ' 扣趴=' . $nowRatio . ' 開獎=' . $nowRewardStatus . ' 自動=' . $nowAuto . ' 玩家=' . $gamingUserId,
+            ['machine_data' => $this->getMachineCache()]
+        );
     }
 
     /**
@@ -1749,6 +1758,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // 查询转数响应
             case self::GET_MACHINE_TURN:  // 46de
+                $prevTurnDe = (float)($this->turn ?? 0);
                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                 $this->turn = $turn;
 
@@ -1761,6 +1771,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 }
 
                 $this->setActionVersion(self::MACHINE_TURN);
+                // 查询响应也需检查转数归零，防止心跳先于此写入 orgTurn=0 导致清理不触发
+                $this->cleanupGiftCacheIfNeeded($turn, $prevTurnDe, $gamingUserId);
                 break;
 
             // 查询累积转数响应（文档：46 D0 XX xx xx，3字节数据）
@@ -1802,10 +1814,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // 查询转数响应（新版）：46 EC xx xx S1 S2
             case self::QUERY_REPLY_TURN:  // 46ec
+                $prevTurnEc = (float)($this->turn ?? 0);
                 $turn = self::parseScore('00' . substr($msg, 4, 4));
                 $this->turn = $turn;
                 $this->setActionVersion(self::MACHINE_TURN);
                 MachineLogger::receiveResponse($this->machine->toArray(), 'recv_turn', '[小松鋼珠線下-新版查詢] 收到轉數查詢回覆 轉數=' . $turn, $this->getMachineCache());
+                // 查询响应也需检查转数归零，防止心跳先于此写入 orgTurn=0 导致清理不触发
+                $this->cleanupGiftCacheIfNeeded($turn, $prevTurnEc, $gamingUserId);
                 break;
 
             // 查询累积转数响应（新版）：46 ED [ratio] [win_hi] [win_lo] S1 S2
