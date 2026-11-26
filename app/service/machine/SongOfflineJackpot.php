@@ -2125,10 +2125,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                     }
                     // 等待机版回复 46 CE CB S1 S2 再继续，防止心跳异常
                     $this->machineAction($uid, $cmd, $source, $source_id);
-
-                    // 等待机版回复 46 EC（转数查询回复），确认转数已更新
-                    usleep(100000);
-                    $this->machineAction($uid, self::MACHINE_TURN, $source, $source_id);
                     break;
 
                 case self::POINT_TO_TURN:
