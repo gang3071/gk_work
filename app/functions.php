@@ -1157,6 +1157,7 @@ function doSettlement($id, int $userId = 0, string $userName = ''): void
  * @param string $adminUsername
  * @return PlayerLotteryRecord|array|bool
  * @throws PushException
+ * @throws Exception
  */
 function machineWash(
     Player  $player,
@@ -1237,18 +1238,18 @@ function machineWash(
                     }
                 }
 
-                // Song 线下钢珠：分数读取、礼金扣减、DB记录全部在 songOfflineSteelBallWash 内完成，此处跳过
-                if ($isOfflineSongSteelBall) break;
-
-                $services->sendCmd($services::MACHINE_POINT, 0, 'player', $player->id, $is_system);
-                $money = $services->point ?? 0;
-                $services->sendCmd($services::WIN_NUMBER, 0, 'player', $player->id, $is_system);
-                $gamingTurnPoint = $services->player_win_number ?? 0;
-                if (!empty($giftPoint) && in_array($path, ['leave', 'switch'])) {
-                    $moneyBeforeGift = $money;
-                    $money = max($money - $giftPoint['gift_point'], 0);
-                    $washRemark = '弃台扣回开分赠点 ' . $giftPoint['gift_point'] . ' 分，扣前 ' . $moneyBeforeGift . ' 分，实退 ' . $money . ' 分';
-                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_deduct', '弃台扣回赠點 gift_point=' . $giftPoint['gift_point'] . ' 扣前=' . $moneyBeforeGift . ' 扣後=' . $money, ['gift_cache' => $giftPoint]);
+                // 非 Song 线下钢珠：预读分数快照和礼金扣减（Song 线下全部在 songOfflineSteelBallWash 内完成）
+                if (!$isOfflineSongSteelBall) {
+                    $services->sendCmd($services::MACHINE_POINT, 0, 'player', $player->id, $is_system);
+                    $money = $services->point ?? 0;
+                    $services->sendCmd($services::WIN_NUMBER, 0, 'player', $player->id, $is_system);
+                    $gamingTurnPoint = $services->player_win_number ?? 0;
+                    if (!empty($giftPoint) && in_array($path, ['leave', 'switch'])) {
+                        $moneyBeforeGift = $money;
+                        $money = max($money - $giftPoint['gift_point'], 0);
+                        $washRemark = '弃台扣回开分赠点 ' . $giftPoint['gift_point'] . ' 分，扣前 ' . $moneyBeforeGift . ' 分，实退 ' . $money . ' 分';
+                        MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_deduct', '弃台扣回赠點 gift_point=' . $giftPoint['gift_point'] . ' 扣前=' . $moneyBeforeGift . ' 扣後=' . $money, ['gift_cache' => $giftPoint]);
+                    }
                 }
                 break;
             case GameType::TYPE_SLOT:
@@ -1567,8 +1568,8 @@ function machineWash(
                     '玩家洗分/离场，本局押分清零',
                     [
                         'player_id'       => $player->id,
-                        'gaming_pressure' => $gamingPressure ?? 0,
-                        'gaming_score'    => $gamingScore    ?? 0,
+                        'gaming_pressure' => $gamingPressure,
+                        'gaming_score'    => $gamingScore,
                         'bet_raw'         => (float)$services->bet,
                         'player_pressure' => (float)$services->player_pressure,
                         'path'            => $path ?? 'wash',
@@ -1736,7 +1737,7 @@ function machineWash(
         } catch (\Exception $lockError) {
             \support\Log::critical('[machineWash] 锁释放失败', [
                 'machine_id' => $machine->id,
-                'lock_key' => $actionLockerKey ?? null,
+                'lock_key' => $actionLockerKey,
                 'error' => $lockError->getMessage(),
             ]);
         }
