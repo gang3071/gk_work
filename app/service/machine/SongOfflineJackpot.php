@@ -469,7 +469,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
         if (!in_array($len, $validLengths)) {
             if ($len < 10) {
-                throw new Exception('指令長度錯誤: ' . $len);
+                throw new Exception('指令長度錯誤: ' . $len . ' 原始指令=' . $msg);
             }
 
             $hasB5B7 = (stripos($msg, 'b5') !== false || stripos($msg, 'b7') !== false);
