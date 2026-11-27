@@ -2208,7 +2208,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 if (\support\Cache::get("wash_cf_{$this->machine->id}")) {
                     \support\Cache::delete("wash_cf_{$this->machine->id}");
                     \support\Cache::set("wash_cf_no_gift_clear_{$this->machine->id}", true, 10);
-                    throw new Exception($e->getMessage() . $cmd);
+                    throw new Exception($e->getMessage());
                 }
                 $wasAlreadyLocked = $this->has_lock == 1;
                 $this->has_lock = 1;
