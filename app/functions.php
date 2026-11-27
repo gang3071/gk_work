@@ -1854,6 +1854,8 @@ function machineWashSongOffline(
             ->first();
 
         $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
+        $game_amount     = 0;
+        $afterGameAmount = $beforeGameAmount;
 
         if ($money > 0) {
             $wash_point   = $money;
