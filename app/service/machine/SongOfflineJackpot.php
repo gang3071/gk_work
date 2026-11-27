@@ -611,7 +611,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
         // 校验主指令的S1/S2（短格式查询回复8字符无独立S1S2，校验在外部数据末尾，跳过）
         if (mb_strlen($mainCmd) > 8 && !$this->validateChecksumS1S2($mainCmd)) {
-            throw new Exception('指令S1/S2校驗失敗');
+            throw new Exception('指令S1/S2校驗失敗 原始指令=' . $mainCmd);
         }
 
         // 验证分机号
@@ -1938,7 +1938,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             // ✅ P0-14修复：SCORE_TO_POINT 已移至 handleCommandReply()（6位指令用$fun匹配）
 
             default:
-                throw new Exception('不存在的指令: ' . $action);
+                throw new Exception('不存在的指令: ' . $action . ' 原始指令=' . $msg);
         }
 
         return true;
