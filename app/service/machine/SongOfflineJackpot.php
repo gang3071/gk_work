@@ -2783,7 +2783,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     ): void
     {
         $maxRetries = 3;
-        $expirationTime = 8000000; // 最後一次主動查詢在7秒，8秒給1秒回覆視窗後超時
+        $expirationTime = 5000000; // 最後一次主動查詢在4秒，5秒給1秒回覆視窗後超時
 
         try {
             $beforeActionTime = $this->setActionVersion($cmd);
@@ -2797,8 +2797,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $sleep = 50000; // 50ms检查一次
             $checkCount = 0;
 
-            // ✅ 主动查询分数的时间节点（微秒）：1秒、2秒、3秒、5秒、7秒（间隔：1+1+1+2+2）
-            $queryIntervals = [1000000, 2000000, 3000000, 5000000, 7000000];
+            // 主动查询分数的时间节点（微秒）：1秒、2秒、3秒、4秒（5秒超时前各查一次）
+            $queryIntervals = [1000000, 2000000, 3000000, 4000000];
             $queryIndex = 0;
 
             while (true) {
