@@ -1740,13 +1740,13 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             case self::WASH_ZERO:
                 $cmd = substr($msg, 0, 6);
 
-                // CF 回复：本次无法下分（转数处理中），不做握手，设 flag 由调用侧抛异常
+                // CF 回复：本次无法下分（转数处理中），不做握手，设 flag
+                // washPoint 循环每 50ms 检查此 flag，检测到后立即中断并阻止重试
                 if (strtolower(substr($cmd, 4, 2)) === 'cf') {
                     MachineLogger::warning($this->machine->toArray(), 'wash_cf',
                         '[小松鋼珠線下-下分回覆] 收到CF回覆，本次無法下分（轉數處理中）',
                         $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
                     \support\Cache::set("wash_cf_{$this->machine->id}", true, 10);
-                    $this->setActionVersion($cmd); // 解除 machineAction 阻塞
                     break;
                 }
 
@@ -2784,6 +2784,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $queryIndex = 0;
 
             while (true) {
+                // CF 回复：machine 本次无法下分（转数处理中），立即中断等待，不重试
+                if (\support\Cache::get("wash_cf_{$this->machine->id}")) {
+                    MachineLogger::warning($this->machine->toArray(), 'wash_point',
+                        '[小松鋼珠線下-下分CF] 偵測到CF旗標，中斷等待迴圈',
+                        $this->getMachineCache(), MachineLogger::DIR_EVENT);
+                    throw new Exception('__wash_cf__');
+                }
+
                 $actionTime = $this->getActionVersion($cmd);
                 // ✅ 主动查询分数：在指定时间节点发送查询指令，提高响应速度
                 if ($queryIndex < count($queryIntervals) && $handleDuration >= $queryIntervals[$queryIndex]) {
@@ -2806,8 +2814,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 }
 
                 if ($handleDuration >= $expirationTime) {
-                    // ✅ 超时日志：记录详细状态
-                    MachineLogger::error($this->machine->toArray(), 'wash_point', '[小松鋼珠線下-下分超時] 等待機台回覆超時 嘗試次數=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_EVENT);
+                    MachineLogger::warning($this->machine->toArray(), 'wash_point', '[小松鋼珠線下-下分超時] 等待機台回覆超時 嘗試次數=' . $attempts, $this->getMachineCache(), MachineLogger::DIR_EVENT);
                     throw new Exception(trans('machine_action_fail', [], 'message'));
                 }
 
@@ -2816,6 +2823,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
         } catch (Exception $e) {
             $attempts++;
+
+            // CF 回复：不重试，直接向上抛出 machine_turn_processing 错误
+            if ($e->getMessage() === '__wash_cf__' || \support\Cache::get("wash_cf_{$this->machine->id}")) {
+                MachineLogger::warning($this->machine->toArray(), 'wash_point',
+                    '[小松鋼珠線下-下分CF] CF旗標阻斷重試，退出washPoint',
+                    $this->getMachineCache(), MachineLogger::DIR_EVENT);
+                throw new Exception(trans('machine_turn_processing', [], 'message'));
+            }
 
             // ✅ 重试日志
             if ($attempts < $maxRetries) {
