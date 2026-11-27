@@ -1745,8 +1745,19 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
             // 下分回复（三次握手）
             case self::WASH_ZERO:
-                Redis::publish($this->machine->domain . ':' . $this->machine->port, '设备返回的消息');
                 $cmd = substr($msg, 0, 6);
+
+                // CF 回复：本次无法下分（转数处理中），不做握手，设 flag 由调用侧抛异常
+                if (strtolower(substr($cmd, 4, 2)) === 'cf') {
+                    MachineLogger::warning($this->machine->toArray(), 'wash_cf',
+                        '[小松鋼珠線下-下分回覆] 收到CF回覆，本次無法下分（轉數處理中）',
+                        $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                    \support\Cache::set("wash_cf_{$this->machine->id}", true, 10);
+                    $this->setActionVersion($cmd); // 解除 machineAction 阻塞
+                    break;
+                }
+
+                Redis::publish($this->machine->domain . ':' . $this->machine->port, '设备返回的消息');
 
                 MachineLogger::receiveResponse($this->machine->toArray(), 'wash', '收到下分回覆', $this->getMachineCache());
 

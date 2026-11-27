@@ -443,6 +443,7 @@ return [
     'invalid_wash_action' => '缺少或無效的參數: action (必須是 leave/down/switch)',
     'wash_failed' => '洗分失敗',
     'machine_score_changing' => '機台分數變動中，無法洗分，請稍後重試',
+    'machine_turn_processing' => '機台轉數處理中，請稍後嘗試',
     'wash_score_race' => '洗分取消：機台分數異動，請稍後重試',
     'invalid_open_score' => '缺少或無效的參數: open_score (必須大於0)',
     'open_machine_failed' => '上分失敗',

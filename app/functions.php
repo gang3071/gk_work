@@ -1409,6 +1409,13 @@ function machineWash(
                     }
                 }
                 $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+                // CF 回复：机台本次无法下分（转数处理中），抛异常触发 DB rollback
+                // 注：CF 时机台未执行任何操作，gift_cache 仍有效，catch 块不应删除
+                if ($isOfflineSongSteelBall && \support\Cache::get("wash_cf_{$machine->id}")) {
+                    \support\Cache::delete("wash_cf_{$machine->id}");
+                    \support\Cache::set("wash_cf_no_gift_clear_{$machine->id}", true, 10);
+                    throw new Exception(trans('machine_turn_processing', [], 'message'));
+                }
                 // CLEAR_LOG 仅重置得分计数器，非财务关键指令。
                 // 机台回复可能是短心跳（<36字符），导致 executeOneWayCommand 超时。
                 // 软性失败：记录警告，不回滚已确认的 WASH_ZERO。
@@ -1696,8 +1703,13 @@ function machineWash(
             if (!$committed) {
                 DB::rollback();
             }
-            // wash 失败时也清除 gift_cache，防止残留阻塞下一次上分（DB 已回滚，gift_cache 也无效）
-            if (in_array($path ?? 'down', ['leave', 'switch'])) {
+            // wash 失败时清除 gift_cache（DB 已回滚，gift_cache 也无效）
+            // 例外：CF 回复（机台未执行任何操作），gift_cache 仍有效，保留供玩家重试使用
+            $skipGiftClear = \support\Cache::get("wash_cf_no_gift_clear_{$machine->id}");
+            if ($skipGiftClear) {
+                \support\Cache::delete("wash_cf_no_gift_clear_{$machine->id}");
+            }
+            if (!$skipGiftClear && in_array($path ?? 'down', ['leave', 'switch'])) {
                 try {
                     Cache::delete('gift_cache_' . $machine->id . '_' . $player->id);
                 } catch (\Exception $cacheErr) {

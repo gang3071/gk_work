@@ -438,6 +438,7 @@ return [
     'invalid_open_score' => '缺少或無效的參數: open_score (必須大於0)',
     'open_machine_failed' => '上分失敗',
     'machine_score_changing' => 'スコアが変動中のため、精算できません。しばらくしてからもう一度お試しください',
+    'machine_turn_processing' => '機台がターン数を処理中です。しばらくしてからもう一度お試しください',
     'wash_score_race' => '精算取消：スコアが変動しました。しばらくしてからもう一度お試しください',
 
     // 固定彩金提示

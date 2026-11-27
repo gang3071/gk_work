@@ -444,6 +444,7 @@ return [
     'invalid_open_score' => 'Missing or invalid parameter: open_score (must be greater than 0)',
     'open_machine_failed' => 'Open machine failed',
     'machine_score_changing' => 'Machine score is changing, cannot cash out, please try again later',
+    'machine_turn_processing' => 'Machine is processing turns, please try again later',
     'wash_score_race' => 'Cash out cancelled: machine score changed, please try again later',
 
     // Fixed lottery hints
