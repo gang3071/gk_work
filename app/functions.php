@@ -1403,8 +1403,8 @@ function machineWash(
 
                     // DB 记录（以实际下分数为准）
                     if ($money > 0 || $path === 'leave') {
-                        $washResult = machineWashZero($player, $machine, $money, $is_system, (int)max($gamingPressure, 0),
-                            (int)max($gamingScore, 0), (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername, $washRemark);
+                        $washResult = machineWashSongOffline($player, $machine, (int)$money, $is_system,
+                            (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername, $washRemark);
                         $machine = $washResult['machine'];
                     } elseif ($money == 0) {
                         MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH,
@@ -1768,6 +1768,142 @@ function machineWash(
             ]);
         }
     }
+}
+
+/**
+ * Song 线下钢珠/Slot 专用洗分记录
+ *
+ * 与 machineWashZero 的区别：
+ * - $money 为 WASH_ZERO 硬件回覆的实际下分数，非预读快照
+ * - 钢珠 chip_amount 固定用 turn_used_point × gamingTurnPoint，无 Slot 分支
+ * - 无 gamingPressure / gamingScore 参数（钢珠流程不需要）
+ *
+ * @throws Exception
+ */
+function machineWashSongOffline(
+    Player  $player,
+    Machine $machine,
+    int     $money,
+    int     $is_system = 0,
+    int     $gamingTurnPoint = 0,
+    string  $action = 'leave',
+    int     $adminId = 0,
+    string  $adminUsername = '',
+    string  $remark = ''
+): array
+{
+    try {
+        $services = MachineServices::createServices($machine);
+        $control_open_point = !empty($machine->control_open_point) ? $machine->control_open_point : 100;
+
+        /** @var PlayerGameRecord $gameRecord */
+        $gameRecord = PlayerGameRecord::query()->where('machine_id', $machine->id)
+            ->where('player_id', $player->id)
+            ->where('status', PlayerGameRecord::STATUS_START)
+            ->orderBy('created_at', 'desc')
+            ->first();
+
+        $beforeGameAmount = \app\service\WalletService::getBalance($player->id);
+
+        if ($money > 0) {
+            $wash_point   = $money;
+            $game_amount  = floor($money * ($machine->odds_x ?? 1) / ($machine->odds_y ?? 1));
+            $afterGameAmount = $beforeGameAmount + $game_amount;
+
+            if (!empty($gameRecord)) {
+                $gameRecord->wash_point         = bcadd($gameRecord->wash_point, $wash_point, 2);
+                $gameRecord->wash_amount        = bcadd($gameRecord->wash_amount, $game_amount, 2);
+                $gameRecord->after_game_amount  = $afterGameAmount;
+                if ($action === 'leave') {
+                    $gameRecord->status = PlayerGameRecord::STATUS_END;
+                    $diff = bcsub($gameRecord->wash_amount, $gameRecord->open_amount, 2);
+                    nationalPromoterSettlement([
+                        ['player_id' => $player->id, 'bet' => 0, 'diff' => $diff]
+                    ]);
+                    if (!empty($player->recommend_id)) {
+                        $recommendPromoter = Player::query()->find($player->recommend_id);
+                        $gameRecord->national_damage_ratio = $recommendPromoter->national_promoter->level_list->damage_rebate_ratio ?? 0;
+                    }
+                }
+                $gameRecord->save();
+            }
+
+            $playerGameLog = addPlayerGameLog($player, $machine, $gameRecord, $control_open_point);
+            $playerGameLog->wash_point          = $wash_point;
+            $playerGameLog->game_amount         = $game_amount;
+            $playerGameLog->before_game_amount  = $beforeGameAmount;
+            $playerGameLog->after_game_amount   = $afterGameAmount;
+            $playerGameLog->action              = ($action === 'leave' ? PlayerGameLog::ACTION_LEAVE : PlayerGameLog::ACTION_DOWN);
+            $playerGameLog->chip_amount         = bcmul($machine->machineCategory?->turn_used_point ?? 0, $gamingTurnPoint);
+            if (!empty($remark)) {
+                $playerGameLog->remark = $remark;
+            }
+            extracted($is_system, $playerGameLog, 0, 0, $gamingTurnPoint, $adminId, $adminUsername);
+
+            $playerDeliveryRecord = new PlayerDeliveryRecord;
+            $playerDeliveryRecord->player_id       = $player->id;
+            $playerDeliveryRecord->department_id   = $player->department_id;
+            $playerDeliveryRecord->target          = $playerGameLog->getTable();
+            $playerDeliveryRecord->target_id       = $playerGameLog->id;
+            $playerDeliveryRecord->machine_id      = $machine->id;
+            $playerDeliveryRecord->machine_name    = $machine->name;
+            $playerDeliveryRecord->machine_type    = $machine->type;
+            $playerDeliveryRecord->code            = $machine->code;
+            $playerDeliveryRecord->type            = PlayerDeliveryRecord::TYPE_MACHINE_DOWN;
+            $playerDeliveryRecord->source          = 'game_machine';
+            $playerDeliveryRecord->amount          = $game_amount;
+            $playerDeliveryRecord->amount_before   = $beforeGameAmount;
+            $playerDeliveryRecord->amount_after    = $afterGameAmount;
+            $playerDeliveryRecord->tradeno         = $playerGameLog->tradeno ?? '';
+            $playerDeliveryRecord->remark          = $playerGameLog->remark ?? '';
+            $playerDeliveryRecord->user_id         = $adminId;
+            $playerDeliveryRecord->user_name       = $adminUsername;
+            $playerDeliveryRecord->save();
+
+            $services->last_point_at    = time();
+            $services->player_wash_point = bcadd($services->player_wash_point ?? '0', $wash_point ?? '0');
+
+            \app\service\WalletService::checkMachineCrashAfterTransaction($player->id, $afterGameAmount, $beforeGameAmount);
+        } else {
+            $playerGameLog = addPlayerGameLog($player, $machine, $gameRecord, $control_open_point);
+            $playerGameLog->wash_point         = 0;
+            $playerGameLog->game_amount        = 0;
+            $playerGameLog->before_game_amount = $beforeGameAmount;
+            $playerGameLog->after_game_amount  = $beforeGameAmount;
+            $playerGameLog->action             = ($action === 'leave' ? PlayerGameLog::ACTION_LEAVE : PlayerGameLog::ACTION_DOWN);
+            $playerGameLog->chip_amount        = bcmul($machine->machineCategory?->turn_used_point ?? 0, $gamingTurnPoint);
+            if (!empty($remark)) {
+                $playerGameLog->remark = $remark;
+            }
+            extracted($is_system, $playerGameLog, 0, 0, $gamingTurnPoint, $adminId, $adminUsername);
+
+            if (!empty($gameRecord)) {
+                $gameRecord->after_game_amount = $beforeGameAmount;
+                if ($action === 'leave') {
+                    $gameRecord->status = PlayerGameRecord::STATUS_END;
+                    $diff = bcsub($gameRecord->wash_amount, $gameRecord->open_amount, 2);
+                    nationalPromoterSettlement([
+                        ['player_id' => $player->id, 'bet' => 0, 'diff' => $diff]
+                    ]);
+                    if (!empty($player->recommend_id)) {
+                        $recommendPromoter = Player::query()->find($player->recommend_id);
+                        $gameRecord->national_damage_ratio = $recommendPromoter->national_promoter->level_list->damage_rebate_ratio ?? 0;
+                    }
+                }
+                $gameRecord->save();
+            }
+            $services->last_point_at = time();
+        }
+    } catch (Exception $e) {
+        throw new Exception($e->getMessage());
+    }
+
+    return [
+        'machine'        => $machine,
+        'game_amount'    => $money > 0 ? $game_amount : 0,
+        'before_balance' => $beforeGameAmount,
+        'after_balance'  => $money > 0 ? $afterGameAmount : $beforeGameAmount,
+    ];
 }
 
 /**
