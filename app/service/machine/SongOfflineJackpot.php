@@ -149,7 +149,6 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
     public $cacheData = [];
     public $expirationTime = 5000000;  // 5秒超时
-    public int $washedPoint = 0;       // WASH_ZERO 回覆中实际下分数（供 functions.php 读取）
 
     private string $extensionNumber = '46'; // 分机号（默认46H=70号）
     // ⚠️ P1-4修复：去重时间改用 Cache 存储，支持跨请求去重
@@ -193,6 +192,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             $this->cacheDataKey . '_keeping_user_id',// 保留玩家ID
             $this->cacheDataKey . '_last_keep_at',   // 最后进入保留时间
             $this->cacheDataKey . '_lottery_record_id',    // 本次开奖记录ID（防止中断后更新错记录）
+            $this->cacheDataKey . '_washed_point',         // WASH_ZERO 回覆的实际下分数（跨进程通信用）
         ];
 
         // 推送到前端的关键字段
@@ -2786,6 +2786,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
         $expirationTime = 5000000; // 最後一次主動查詢在4秒，5秒給1秒回覆視窗後超時
 
         try {
+            $this->washedPoint = 0; // 清除上次残留，防止超时重试时读到旧值
             $beforeActionTime = $this->setActionVersion($cmd);
             $sendCmd = $this->createCmd($cmd . 'c1', 0);
 
