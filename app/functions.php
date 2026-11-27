@@ -1673,6 +1673,18 @@ function machineWash(
             if (!$committed) {
                 DB::rollback();
             }
+            // Song 线下钢珠：WASH_ZERO 可能已在机台物理执行（出珠），但回覆未到导致超时。
+            // DB 已回滚，玩家余额和洗分记录均未写入，机台分数可能已为 0。
+            // 记录以便运营人工核查补款（机台再次洗分会读到 0 分而报错）。
+            if ($isOfflineSongSteelBall) {
+                MachineLogger::error(
+                    $machine->toArray(),
+                    MachineLogger::ACTION_WASH,
+                    '[Song线下钢珠] 洗分异常：WASH_ZERO 可能已物理执行，但 DB 已回滚，玩家未入账，需人工核查',
+                    ['player_id' => $player->id, 'path' => $path ?? 'down', 'error' => $e->getMessage()],
+                    MachineLogger::DIR_EVENT
+                );
+            }
             // wash 失败时清除 gift_cache（DB 已回滚，gift_cache 也无效）
             // 例外：CF 回复（机台未执行任何操作），gift_cache 仍有效，保留供玩家重试使用
             $skipGiftClear = \support\Cache::get("wash_cf_no_gift_clear_{$machine->id}");
