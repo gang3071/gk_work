@@ -2203,6 +2203,10 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
         } catch (Exception $e) {
             if (in_array($cmd, [self::OPEN_ANY_POINT, self::WASH_ZERO])) {
+                // CF 回复（转数处理中）：机台实际未执行任何操作，不锁机，直接向上抛
+                if (\support\Cache::get("wash_cf_{$this->machine->id}")) {
+                    throw new Exception($e->getMessage() . $cmd);
+                }
                 $wasAlreadyLocked = $this->has_lock == 1;
                 $this->has_lock = 1;
                 MachineLogger::error($this->machine->toArray(), 'machine_lock', '指令執行異常-機台已鎖定 指令碼='.$cmd.' '.$e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_COMMAND);
