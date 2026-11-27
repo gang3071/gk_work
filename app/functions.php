@@ -1685,7 +1685,7 @@ function machineWash(
                         'player_id'    => $player->id,
                         'path'         => $path ?? 'down',
                         'last_point'   => $services->point ?? 0,   // 洗分前最后一次心跳读到的分数
-                        'washed_point' => $services->washedPoint ?? 0, // WASH_ZERO 回覆分数（0=未收到回覆）
+                        'washed_point' => $services->washed_point ?? 0, // WASH_ZERO 回覆分数（0=未收到回覆）
                         'error'        => $e->getMessage(),
                     ],
                     MachineLogger::DIR_EVENT
@@ -1789,7 +1789,7 @@ function songOfflineSteelBallWash(
 
     // 下分：从回覆中取实际下分数，无需提前读分数快照
     $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
-    $money = $services->washedPoint ?? 0;
+    $money = $services->washed_point ?? 0;
 
     MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL,
         MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH,
