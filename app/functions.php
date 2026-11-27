@@ -1204,13 +1204,6 @@ function machineWash(
                 $isOfflineSongSteelBall = ($machine->machine_source == Machine::MACHINE_SOURCE_OFFLINE
                     && $machine->control_type == Machine::CONTROL_TYPE_SONG);
 
-                // 分数变动中直接拒绝洗分（防止玩家在下分窗口内互转 point/turn）
-                if ($isOfflineSongSteelBall) {
-                    if (\support\Cache::get("steel_ball_score_changing_{$machine->id}")) {
-                        throw new Exception(trans('machine_score_changing', [], 'message'));
-                    }
-                }
-
                 // 弃台需要下转,下珠
                 if ($path == 'leave') {
                     // ✅ 清除累计打码量（2026-07-30）
