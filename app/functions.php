@@ -1681,7 +1681,13 @@ function machineWash(
                     $machine->toArray(),
                     MachineLogger::ACTION_WASH,
                     '[Song线下钢珠] 洗分异常：WASH_ZERO 可能已物理执行，但 DB 已回滚，玩家未入账，需人工核查',
-                    ['player_id' => $player->id, 'path' => $path ?? 'down', 'error' => $e->getMessage()],
+                    [
+                        'player_id'    => $player->id,
+                        'path'         => $path ?? 'down',
+                        'last_point'   => $services->point ?? 0,   // 洗分前最后一次心跳读到的分数
+                        'washed_point' => $services->washedPoint ?? 0, // WASH_ZERO 回覆分数（0=未收到回覆）
+                        'error'        => $e->getMessage(),
+                    ],
                     MachineLogger::DIR_EVENT
                 );
             }
