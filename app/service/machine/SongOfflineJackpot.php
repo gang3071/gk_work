@@ -149,6 +149,7 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
     public $cacheData = [];
     public $expirationTime = 5000000;  // 5秒超时
+    public int $washedPoint = 0;       // WASH_ZERO 回覆中实际下分数（供 functions.php 读取）
 
     private string $extensionNumber = '46'; // 分机号（默认46H=70号）
     // ⚠️ P1-4修复：去重时间改用 Cache 存储，支持跨请求去重
@@ -465,7 +466,8 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
     {
         // ✅ 新版工控新增：20（查询外部码表回复：46 EE xx xx EF xx xx xx S1 S2）
         // 26 = QUERY_REPLY_TURN(8) + 外部按键数据(18)，组合报文合法长度
-        $validLengths = [10, 12, 14, 16, 20, 26, 36, 46, 50, 58, 60];
+        // 18 = WASH_ZERO 回覆含 4 字节下分数（46 CC [code] [4B score] S1 S2 = 9 bytes）
+        $validLengths = [10, 12, 14, 16, 18, 20, 26, 36, 46, 50, 58, 60];
 
         if (!in_array($len, $validLengths)) {
             if ($len < 10) {
@@ -1752,7 +1754,16 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
 
                 Redis::publish($this->machine->domain . ':' . $this->machine->port, '设备返回的消息');
 
-                MachineLogger::receiveResponse($this->machine->toArray(), 'wash', '收到下分回覆', $this->getMachineCache());
+                // 解析 WASH_ZERO 实际下分数：cmd(3B) + score(3B或4B) + S1S2(2B)
+                // 3B 分数（msg=16chars）：hexdec(b0)*10000 + hexdec(b1)*100 + hexdec(b2)
+                // 4B 分数（msg=18chars）：hexdec(b0)*1000000 + hexdec(b1)*10000 + hexdec(b2)*100 + hexdec(b3)
+                $scoreHex = substr($msg, 6, strlen($msg) - 10); // 去掉 cmd(6) 和 S1S2(4)
+                $scoreBytes = str_split($scoreHex, 2);
+                $this->washedPoint = count($scoreBytes) >= 4
+                    ? hexdec($scoreBytes[0]) * 1000000 + hexdec($scoreBytes[1]) * 10000 + hexdec($scoreBytes[2]) * 100 + hexdec($scoreBytes[3])
+                    : hexdec($scoreBytes[0]) * 10000 + hexdec($scoreBytes[1]) * 100 + (hexdec($scoreBytes[2] ?? '00'));
+
+                MachineLogger::receiveResponse($this->machine->toArray(), 'wash', '收到下分回覆 實際下分=' . $this->washedPoint, $this->getMachineCache());
 
                 $this->setActionVersion($cmd);
                 $s1 = substr($msg, -4, 2);

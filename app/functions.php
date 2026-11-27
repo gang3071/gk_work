@@ -1237,20 +1237,16 @@ function machineWash(
                         }
                     }
                 }
-                $services->sendCmd($services::MACHINE_POINT, 0, 'player', $player->id, $is_system);
-                // 快照立刻从 MACHINE_POINT 回复中取，不能在 sleep 或其他指令后读
-                // 钢珠心跳会更新 $this->point，WIN_NUMBER 执行期间可能被覆盖，$money 须同源
-                if ($isOfflineSongSteelBall) {
-                    $pointSnap = $services->point ?? 0;
-                    $money = $pointSnap;
+                // Song 线下钢珠：$money 以 WASH_ZERO 回覆中的实际下分数为准，此处不预读
+                // 非 Song 线下：仍从 MACHINE_POINT 读取快照
+                if (!$isOfflineSongSteelBall) {
+                    $services->sendCmd($services::MACHINE_POINT, 0, 'player', $player->id, $is_system);
+                    $money = $services->point ?? 0;
                 }
                 $services->sendCmd($services::WIN_NUMBER, 0, 'player', $player->id, $is_system);
                 $gamingTurnPoint = $services->player_win_number ?? 0;
-                if (!$isOfflineSongSteelBall) {
-                    $money = $services->point ?? 0;
-                }
-                // switch（换台）同样是放弃当前机台，赠点扣回逻辑与 leave 一致
-                if (!empty($giftPoint) && in_array($path, ['leave', 'switch'])) {
+                // 非 Song 线下礼金扣减在此处理（Song 线下移至 WASH_ZERO 之后）
+                if (!$isOfflineSongSteelBall && !empty($giftPoint) && in_array($path, ['leave', 'switch'])) {
                     $moneyBeforeGift = $money;
                     $money = max($money - $giftPoint['gift_point'], 0);
                     $washRemark = '弃台扣回开分赠点 ' . $giftPoint['gift_point'] . ' 分，扣前 ' . $moneyBeforeGift . ' 分，实退 ' . $money . ' 分';
@@ -1338,21 +1334,19 @@ function machineWash(
         DB::beginTransaction();
         try {
             $washResult = null;
-            // ⚠️ CRITICAL：只有 money > 0 时才创建洗分记录
-            // 防止竞态条件导致创建 0 分记录但硬件有分的情况
-            if ($money >= 0) {
-                $washResult = machineWashZero($player, $machine, $money, $is_system, (int)max($gamingPressure, 0),
-                    (int)max($gamingScore, 0), (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername, $washRemark);
-                $machine = $washResult['machine'];
-            } elseif ($money == 0 && $path == 'leave') {
-                // 0 分弃台，只清理状态，不创建记录
-                MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '0分棄台不建立洗分記錄', ['machine_data' => $services->getMachineCache()]);
-            } elseif ($money == 0 && $path == 'down') {
-                // 🚨 0 分下分，说明发生了竞态条件！
-                // READ_SCORE 时读到 100 分，但心跳更新成了 0
-                // 这种情况不能静默成功，必须报错让玩家重试
-                MachineLogger::error($machine->toArray(), MachineLogger::ACTION_WASH, '競態：下分時讀到0分 path='.$path, $services->getMachineCache(), MachineLogger::DIR_RESPONSE);
-                throw new Exception("下分失败：机台分数正在更新中，请稍后重试");
+            // Song 线下钢珠：$money 来自 WASH_ZERO 回覆，此时尚不可知，DB 记录延后到 WASH_ZERO 之后
+            if (!($isOfflineSongSteelBall ?? false)) {
+                // ⚠️ CRITICAL：只有 money > 0 时才创建洗分记录
+                if ($money >= 0) {
+                    $washResult = machineWashZero($player, $machine, $money, $is_system, (int)max($gamingPressure, 0),
+                        (int)max($gamingScore, 0), (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername, $washRemark);
+                    $machine = $washResult['machine'];
+                } elseif ($money == 0 && $path == 'leave') {
+                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '0分棄台不建立洗分記錄', ['machine_data' => $services->getMachineCache()]);
+                } elseif ($money == 0 && $path == 'down') {
+                    MachineLogger::error($machine->toArray(), MachineLogger::ACTION_WASH, '競態：下分時讀到0分 path='.$path, $services->getMachineCache(), MachineLogger::DIR_RESPONSE);
+                    throw new Exception("下分失败：机台分数正在更新中，请稍后重试");
+                }
             }
         if ($path == 'leave') {
             if ($services->keeping == 1) {
@@ -1390,18 +1384,34 @@ function machineWash(
         // ✅ 硬件清零指令（在事务内执行，失败可回滚）
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
-                // 二次确认：WASH_ZERO 前再读一次分数，防止玩家在读分窗口内互转 point/turn
+                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+
+                // Song 线下钢珠：以 WASH_ZERO 回覆中的实际下分数为准做 DB 记录
                 if ($isOfflineSongSteelBall) {
-                    $services->sendCmd($services::MACHINE_POINT, 0, 'player', $player->id, $is_system);
-                    $freshPoint = $services->point ?? 0;
-                    if ($freshPoint !== ($pointSnap ?? 0)) {
-                        MachineLogger::warning($machine->toArray(), 'wash_score_race',
-                            "[鋼珠洗分] 分數快照異動 分數:" . ($pointSnap ?? 0) . "→{$freshPoint}，洗分取消",
-                            $services->getMachineCache(), MachineLogger::DIR_EVENT);
-                        throw new Exception(trans('wash_score_race', [], 'message'));
+                    $money = $services->washedPoint ?? 0;
+                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH,
+                        '以WASH_ZERO回覆分數入賬 money=' . $money, ['machine_data' => $services->getMachineCache()]);
+
+                    // 礼金扣回（弃台/换台时，扣除已赠分数）
+                    if (!empty($giftPoint) && in_array($path, ['leave', 'switch'])) {
+                        $moneyBeforeGift = $money;
+                        $money = max($money - $giftPoint['gift_point'], 0);
+                        $washRemark = '弃台扣回开分赠点 ' . $giftPoint['gift_point'] . ' 分，扣前 ' . $moneyBeforeGift . ' 分，实退 ' . $money . ' 分';
+                        MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, 'gift_deduct',
+                            '弃台扣回赠點 gift_point=' . $giftPoint['gift_point'] . ' 扣前=' . $moneyBeforeGift . ' 扣後=' . $money, ['gift_cache' => $giftPoint]);
+                    }
+
+                    // DB 记录（以实际下分数为准）
+                    if ($money > 0 || $path === 'leave') {
+                        $washResult = machineWashZero($player, $machine, $money, $is_system, (int)max($gamingPressure, 0),
+                            (int)max($gamingScore, 0), (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername, $washRemark);
+                        $machine = $washResult['machine'];
+                    } elseif ($money == 0) {
+                        MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH,
+                            '機台下分0分，不建立洗分記錄', ['machine_data' => $services->getMachineCache()]);
                     }
                 }
-                $services->sendCmd($services::WASH_ZERO, 0, 'player', $player->id, $is_system);
+
                 // CLEAR_LOG 仅重置得分计数器，非财务关键指令。
                 // 机台回复可能是短心跳（<36字符），导致 executeOneWayCommand 超时。
                 // 软性失败：记录警告，不回滚已确认的 WASH_ZERO。
