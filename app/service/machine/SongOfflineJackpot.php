@@ -2746,14 +2746,14 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
                 }
 
                 if ($handleDuration >= $expirationTime) {
-                    throw new Exception(trans('machine_action_fail', [], 'message'));
+                    throw new Exception('開分超時（機台10秒無回覆） cmd=' . $cmd);
                 }
                 usleep($sleep);
                 $handleDuration += $sleep;
             }
-        } catch (Exception) {
-            MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分失敗: 超時', $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
-            throw new Exception(trans('machine_action_fail', [], 'message'));
+        } catch (Exception $e) {
+            MachineLogger::error($this->machine->toArray(), MachineLogger::ACTION_OPEN, '開分失敗: ' . $e->getMessage(), $this->getMachineCache(), MachineLogger::DIR_RESPONSE);
+            throw new Exception($e->getMessage());
         }
     }
 
