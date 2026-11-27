@@ -1859,7 +1859,7 @@ function machineWashSongOffline(
 
         if ($money > 0) {
             $wash_point   = $money;
-            $game_amount  = floor($money * ($machine->odds_x ?? 1) / ($machine->odds_y ?? 1));
+            $game_amount  = (int)floor($money * ($machine->odds_x ?? 1) / ($machine->odds_y ?? 1));
             $afterGameAmount = $beforeGameAmount + $game_amount;
 
             if (!empty($gameRecord)) {
@@ -1913,7 +1913,7 @@ function machineWashSongOffline(
             $playerDeliveryRecord->save();
 
             $services->last_point_at    = time();
-            $services->player_wash_point = bcadd($services->player_wash_point ?? '0', $wash_point ?? '0');
+            $services->player_wash_point = bcadd($services->player_wash_point ?? '0', (string)$wash_point);
 
             \app\service\WalletService::checkMachineCrashAfterTransaction($player->id, $afterGameAmount, $beforeGameAmount);
         } else {
