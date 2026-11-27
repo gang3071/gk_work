@@ -1198,6 +1198,8 @@ function machineWash(
         $gamingScore = 0; // 得分
         $money = 0; // 机台下分
         $washRemark = ''; // 下分备注（有赠点扣回时填充）
+        $isOfflineSong = false; // 线下 Song Slot 标志（TYPE_SLOT case 内赋真值）
+        $isOfflineSongSteelBall = false; // 线下 Song 钢珠标志（TYPE_STEEL_BALL case 内赋真值）
         //斯洛 需要判斷下分限制
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
