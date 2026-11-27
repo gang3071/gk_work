@@ -1337,11 +1337,6 @@ function machineWash(
                     $washResult = machineWashZero($player, $machine, $money, $is_system, (int)max($gamingPressure, 0),
                         (int)max($gamingScore, 0), (int)max($gamingTurnPoint, 0), $path, $adminId, $adminUsername, $washRemark);
                     $machine = $washResult['machine'];
-                } elseif ($money == 0 && $path == 'leave') {
-                    MachineLogger::log($machine->toArray(), MachineLogger::SOURCE_SYSTEM, MachineLogger::STATUS_NORMAL, MachineLogger::DIR_EVENT, MachineLogger::ACTION_WASH, '0分棄台不建立洗分記錄', ['machine_data' => $services->getMachineCache()]);
-                } elseif ($money == 0 && $path == 'down') {
-                    MachineLogger::error($machine->toArray(), MachineLogger::ACTION_WASH, '競態：下分時讀到0分 path='.$path, $services->getMachineCache(), MachineLogger::DIR_RESPONSE);
-                    throw new Exception("下分失败：机台分数正在更新中，请稍后重试");
                 }
             }
         if ($path == 'leave') {
@@ -1815,7 +1810,7 @@ function songOfflineSteelBallWash(
     // 清零转数计数器
     $services->player_win_number = 0;
 
-    $beforeBalance = $washResult['before_balance'] ?? \app\service\WalletService::getBalance($player->id);
+    $beforeBalance = $washResult !== null ? $washResult['before_balance'] : \app\service\WalletService::getBalance($player->id);
     return $washResult ?? [
         'machine'        => $machine,
         'game_amount'    => 0,
