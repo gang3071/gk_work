@@ -2203,8 +2203,11 @@ class SongOfflineJackpot extends MachineServices implements BaseMachine
             }
         } catch (Exception $e) {
             if (in_array($cmd, [self::OPEN_ANY_POINT, self::WASH_ZERO])) {
-                // CF 回复（转数处理中）：机台实际未执行任何操作，不锁机，直接向上抛
+                // CF 回复（转数处理中）：机台实际未执行任何操作，不锁机
+                // 立即清除旗标（防止重试误判）并保留 gift_cache 供玩家重试使用
                 if (\support\Cache::get("wash_cf_{$this->machine->id}")) {
+                    \support\Cache::delete("wash_cf_{$this->machine->id}");
+                    \support\Cache::set("wash_cf_no_gift_clear_{$this->machine->id}", true, 10);
                     throw new Exception($e->getMessage() . $cmd);
                 }
                 $wasAlreadyLocked = $this->has_lock == 1;
