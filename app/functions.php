@@ -1334,7 +1334,7 @@ function machineWash(
         try {
             $washResult = null;
             // Song 线下钢珠：DB记录在 WASH switch 内的 songOfflineSteelBallWash 完成，此处跳过
-            if (!($isOfflineSongSteelBall ?? false)) {
+            if (!($isOfflineSongSteelBall)) {
                 // ⚠️ CRITICAL：只有 money > 0 时才创建洗分记录
                 if ($money >= 0) {
                     $washResult = machineWashZero($player, $machine, $money, $is_system, (int)max($gamingPressure, 0),
@@ -1551,7 +1551,7 @@ function machineWash(
         switch ($machine->type) {
             case GameType::TYPE_STEEL_BALL:
                 // Song 线下钢珠已在 songOfflineSteelBallWash 内清零
-                if (!($isOfflineSongSteelBall ?? false)) {
+                if (!($isOfflineSongSteelBall)) {
                     $services->player_win_number = 0;
                 }
                 break;
