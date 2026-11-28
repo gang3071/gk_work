@@ -927,7 +927,7 @@ class SongOfflineSlot extends MachineServices implements BaseMachine
         $flags = $this->detectMachineStatusFlags($fields['status_value']);
 
         // 记录解析结果
-        MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[小松斯洛線下-機台情況] 查詢回覆 開分='.self::descStatus($fields['open_status']).' 洗分='.self::descStatus($fields['wash_status']).' 重試次數='.$fields['retry_count'], $this->getMachineCache());
+        MachineLogger::receiveResponse($this->machine->toArray(), 'status_query', '[小松斯洛線下-機台情況] 查詢回覆 開分='.self::descStatus($fields['open_status']).' 洗分='.self::descStatus($fields['wash_status']).' 洗分帳='.$fields['wash_score'].'分 重試次數='.$fields['retry_count'], $this->getMachineCache());
 
         // ✅ 提前更新版本号：让 sendRawCmdWithReply 轮询立即感知到回复，
         // 避免 updateMachineStatus（含钱包操作）延迟导致轮询超时
